@@ -10,7 +10,7 @@ An `agent` step starts one AI coding CLI through an adapter, feeds it the prompt
 
 - `agent` holds the runner and the `Adapter` contract.
 - An adapter supplies the profile of one CLI (binary, fixed arguments, login variables) and reads its output stream.
-- `agent/claude` is the only adapter. Other agents return later as their own packages.
+- `agent/claude` and `agent/opencode` are the adapters. Each other agent is its own package. OpenCode has no sandbox, so a sandboxed step with it is refused. Its guard is a plugin file that beehave writes into the run folder and that OpenCode loads. beehave runs no JavaScript.
 - `cmd/beehave` holds the table that maps an agent name to the constructor of its adapter. It puts the adapter in the `Spec` of each run. A run with no adapter does not start.
 - `agent/agenttest` is the conformance suite. It starts a fake CLI and checks the profile, the arguments and the call reader of an adapter. Every new adapter calls it from its tests.
 

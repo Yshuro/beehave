@@ -115,7 +115,7 @@ const skyTimeout = 30 * time.Minute
 const stepAgent = claude.Name
 
 // agentEntries returns the agent entries. env is the environment of the caller, which the usage read of an agent passes to its CLI.
-// The opencode agent has no adapter yet, so its entry has no constructor.
+// The opencode entry has no doctor fix text.
 func agentEntries(env map[string]string) map[model.Agent]agentAdapter {
 	return map[model.Agent]agentAdapter{
 		claude.Name: {
@@ -123,7 +123,7 @@ func agentEntries(env map[string]string) map[model.Agent]agentAdapter {
 			configFix: claude.ConfigFix,
 			tokenFix:  claude.TokenFix,
 		},
-		opencode.Name: {},
+		opencode.Name: {build: func() agent.Adapter { return opencode.New() }},
 	}
 }
 
