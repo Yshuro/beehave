@@ -48,11 +48,16 @@ type Link struct {
 // ErrConfig is returned by ForMachine for a setting that could change the ssh command line.
 var ErrConfig = errors.New("invalid ssh host setting")
 
-// Options is the [host.ssh] table of a machine. An empty field leaves the choice to the ssh config of the user.
+// Options is the block of a machine: the keys of the ssh or the slurm block. An empty field leaves the choice to the ssh config of the user.
+// Block is the name of the block, "ssh" or "slurm". It names the key in a refusal.
 type Options struct {
+	Block                               string
 	Address, User, Identity, KnownHosts string
 	Port                                int
 }
+
+// key returns the name of a key of the block as the user writes it, for a refusal.
+func (o Options) key(name string) string { return "host." + o.Block + "." + name }
 
 const (
 	maxPort = 65535
@@ -77,7 +82,7 @@ func ForMachine(target string, o Options, ssh proc.Runner) (*Link, error) {
 
 // checkWords refuses a target, address or user that could become an ssh option, and a port or identity that ssh would read wrongly.
 func checkWords(target string, o Options) error {
-	words := []struct{ name, word string }{{"the ssh target", target}, {"host.ssh.address", o.Address}, {"host.ssh.user", o.User}}
+	words := []struct{ name, word string }{{"the ssh target", target}, {o.key("address"), o.Address}, {o.key("user"), o.User}}
 	for i, w := range words {
 		if (w.word != "" || i == 0) && !wordPattern.MatchString(w.word) {
 			return fmt.Errorf("%w: %s %q must start with a letter or digit and hold letters, digits, dots, dashes, at signs and underscores", ErrConfig, w.name, w.word)
@@ -85,7 +90,7 @@ func checkWords(target string, o Options) error {
 	}
 
 	if o.Port < 0 || o.Port > maxPort || strings.ContainsFunc(o.Identity, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) {
-		return fmt.Errorf("%w: `host.ssh.port` is 1 to 65535 and `host.ssh.identity` holds no space", ErrConfig)
+		return fmt.Errorf("%w: `%s` is 1 to 65535 and `%s` holds no space", ErrConfig, o.key("port"), o.key("identity"))
 	}
 
 	return nil
@@ -96,7 +101,7 @@ func machineOptions(target string, o Options) ([]string, error) {
 		return nil, err
 	}
 
-	policy, err := hostKeyPolicy(o.KnownHosts)
+	policy, err := hostKeyPolicy(o)
 	if err != nil {
 		return nil, err
 	}
@@ -130,15 +135,15 @@ func appendIf(options []string, key, value string) []string {
 }
 
 // hostKeyPolicy maps the known_hosts setting to the ssh value. The setting has no value that turns the check off.
-func hostKeyPolicy(setting string) (string, error) {
-	switch setting {
+func hostKeyPolicy(o Options) (string, error) {
+	switch o.KnownHosts {
 	case "", model.KnownHostsStrict:
 		return "yes", nil
 	case model.KnownHostsAcceptNew:
 		return model.KnownHostsAcceptNew, nil
 	}
 
-	return "", fmt.Errorf("%w: `host.ssh.known_hosts` must be %s or %s. A host key that changed is always refused", ErrConfig, model.KnownHostsStrict, model.KnownHostsAcceptNew)
+	return "", fmt.Errorf("%w: `%s` must be %s or %s. A host key that changed is always refused", ErrConfig, o.key("known_hosts"), model.KnownHostsStrict, model.KnownHostsAcceptNew)
 }
 
 // New returns the link to target. The first argument of an ssh call is target: the name of the host in the ssh config.

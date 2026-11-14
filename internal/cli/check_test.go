@@ -38,13 +38,16 @@ func registry() config.Adapters {
 		Claims:   map[model.ClaimsName]*config.Entry{local.Claims: {}, beads.Claims: beadsEntry()},
 		Forges:   map[model.ForgeName]*config.Entry{forgegithub.Name: githubEntry()},
 		Hosts: map[model.HostProvider]*config.Entry{
-			skypilot.Name: {Idle: true, HostBlock: "skypilot"},
-			ssh.Name:      {HostBlock: "ssh"},
-			slurm.Name:    {HostBlock: "ssh"},
+			skypilot.Name: {Idle: true, Block: hostBlock(skypilot.Block())},
+			ssh.Name:      {Block: hostBlock(ssh.Block())},
+			slurm.Name:    {Block: hostBlock(slurm.Block())},
 		},
 		Agents: map[model.Agent]*config.Entry{claude.Name: {}, opencode.Name: {}},
 	}
 }
+
+// hostBlock returns the address of a declared host block, for the registry entry that holds it.
+func hostBlock(declared config.Block) *config.Block { return &declared }
 
 func writeConfig(t *testing.T, dir, name, content string) {
 	t.Helper()
@@ -142,6 +145,23 @@ func TestCheckConfig_ReportsAProjectWhoseAdaptersCannotBeBuilt(t *testing.T) {
 	require.Equal(t, 2, code)
 	require.Equal(t, []string{"a", "b"}, built)
 	require.Equal(t, filepath.Join(dir, "projects", "b.star")+": no gh on the path\n", stderr)
+}
+
+func TestCheckConfig_ShowsTheFilePositionOfAnAdapterRefusalOnce(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	text := "project(repo = \"o/n\", tracker = \"github\", forge = \"github\", claims = \"beads\", beads = beads(prefix = \"p\"), base_branch = \"main\", gate = \"g\", test_report = \"r.xml\")\n"
+	writeConfig(t, dir, "projects/a.star", text)
+
+	file := filepath.Join(dir, "projects", "a.star")
+
+	code, stderr := runWithAdapters(t, func(context.Context, model.Project) error {
+		return errors.New("invalid ssh host setting: " + file + ":11:18: `host.ssh.port` must be from 1 to 65535")
+	}, dir)
+
+	require.Equal(t, 2, code)
+	require.Equal(t, "invalid ssh host setting: "+file+":11:18: `host.ssh.port` must be from 1 to 65535\n", stderr)
 }
 
 func TestCheckConfig_RefusesABeadsClaimsProjectWithoutABeadsBlock(t *testing.T) {
