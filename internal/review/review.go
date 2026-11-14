@@ -5,6 +5,7 @@ package review
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
 )
@@ -14,6 +15,11 @@ const (
 	ListLimit   = 1000
 	SearchLimit = 200
 	RecentDays  = 3
+
+	// FollowUpWindow is how long after our review a FOLLOW-UP row waits before it is due.
+	FollowUpWindow = 24 * time.Hour
+	// LetGoMarks is the number of ready marks by reviewers after which a draft goes: the second mark.
+	LetGoMarks = 2
 )
 
 const (
@@ -36,6 +42,8 @@ type Reader interface {
 	PRChecks(ctx context.Context, pr int) ([]model.Check, error)
 	Title(ctx context.Context, number int) (string, error)
 	CheckNotStarted(ctx context.Context, link string) (bool, error)
+	// ReadyMarks returns the login of each account that marked the pull request ready for review, in order.
+	ReadyMarks(ctx context.Context, pr int) ([]string, error)
 }
 
 // Own reads the review state of our open pull requests in one call.

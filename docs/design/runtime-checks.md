@@ -232,6 +232,19 @@ A row with a verdict of ours is also a ledger in the JSON output:
 
 The poll derives the ledger again each time and stores nothing.
 
+### The deadline and the second ready mark
+
+A `FOLLOW-UP` row has a deadline of 24 hours after the time of our review:
+
+| Field | Meaning |
+|---|---|
+| `deadline` | The time of our review plus 24 hours |
+| `due` | True when now is at or after the deadline |
+
+At 23h59 the row is not due. At 24h00 it is due. The printed row shows `deadline=` and `due=`. If the time of our review is missing or is not a time, the poll stops with an `UnreadError`.
+
+A draft row also shows `ready_marks` and `let_go`. `ready_marks` counts the times that someone other than the author marked the pull request ready. `let_go` is true from the second mark. The poll reads the marks of a draft only.
+
 ### Sweep
 
 `Sweep` lists our open pull requests with their change requests, open threads and base branch. A base branch that is not the integration branch gets a flag.

@@ -35,6 +35,7 @@ type world struct {
 	checks         map[int][]model.Check
 	titles         map[int]string
 	notStarted     map[string]bool
+	ready          map[int][]string // the logins that marked each pull request ready
 	own            []model.OwnPull
 	stacks         map[int]string
 	defaultBranch  string
@@ -48,7 +49,7 @@ func newWorld() *world {
 		lists: map[string][]int{}, views: map[int]model.PullRequest{}, reviews: map[int][]model.Review{},
 		issueComments: map[int][]model.Comment{}, reviewComments: map[int][]model.Comment{},
 		searches: map[model.SearchKind][]int{}, checks: map[int][]model.Check{}, titles: map[int]string{},
-		notStarted: map[string]bool{}, stacks: map[int]string{}, fails: map[string]bool{},
+		notStarted: map[string]bool{}, ready: map[int][]string{}, stacks: map[int]string{}, fails: map[string]bool{},
 	}
 }
 
@@ -110,6 +111,10 @@ func (w *world) Title(_ context.Context, n int) (string, error) { return w.title
 
 func (w *world) CheckNotStarted(_ context.Context, link string) (bool, error) {
 	return w.notStarted[link], w.fail("CheckNotStarted")
+}
+
+func (w *world) ReadyMarks(_ context.Context, pr int) ([]string, error) {
+	return w.ready[pr], w.fail("ReadyMarks")
 }
 
 func (w *world) OwnPulls(context.Context, string) ([]model.OwnPull, error) {

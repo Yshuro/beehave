@@ -204,6 +204,40 @@ func (f *Forge) Committers(ctx context.Context, pr int) ([]model.Committer, erro
 	return committers, nil
 }
 
+// timelineRow is one event of the timeline of a pull request. Actor is nil when the account is gone.
+type timelineRow struct {
+	Event string `json:"event"`
+	Actor *struct {
+		Login string `json:"login"`
+	} `json:"actor"`
+}
+
+// ReadyMarks returns the login of each account that marked a pull request ready for review, in the order of the marks. A mark by an account that is gone has an empty login.
+func (f *Forge) ReadyMarks(ctx context.Context, pr int) ([]string, error) {
+	rows, err := readPages[timelineRow](ctx, f, "issues/"+strconv.Itoa(pr)+"/timeline")
+	if err != nil {
+		return nil, forge.Refusal(fmt.Sprintf("could not read the ready marks of pull request %d", pr), err)
+	}
+
+	marks := []string{}
+
+	for _, row := range rows {
+		if row.Event == "ready_for_review" {
+			marks = append(marks, row.login())
+		}
+	}
+
+	return marks, nil
+}
+
+func (r timelineRow) login() string {
+	if r.Actor == nil {
+		return ""
+	}
+
+	return r.Actor.Login
+}
+
 // PRList runs gh pr list with the limit and the arguments, which must name --json. An answer that fills the limit may be cut off and is refused.
 func (f *Forge) PRList(ctx context.Context, limit int, args ...string) ([]model.PullRequest, error) {
 	shown := strings.Join(args, " ")

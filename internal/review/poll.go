@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
@@ -13,7 +14,7 @@ import (
 func Poll(ctx context.Context, f Reader, own Own, me string, now time.Time) ([]Row, error) {
 	since := now.UTC().AddDate(0, 0, -RecentDays).Format(time.DateOnly)
 	steps := []func() ([]Row, error){
-		func() ([]Row, error) { return reviewRows(ctx, f, me) },
+		func() ([]Row, error) { return reviewRows(ctx, f, me, now) },
 		func() ([]Row, error) { return ownRows(ctx, own, me) },
 		func() ([]Row, error) { return replyRows(ctx, f, me, since) },
 		func() ([]Row, error) { return checkRows(ctx, f, me) },
@@ -67,13 +68,13 @@ func rowsOf[T any](items []T, build func(T) (Row, error)) ([]Row, error) {
 }
 
 // reviewRows classifies every open pull request that others wrote and that asks for, or had, our review.
-func reviewRows(ctx context.Context, f Reader, me string) ([]Row, error) {
+func reviewRows(ctx context.Context, f Reader, me string, now time.Time) ([]Row, error) {
 	found, err := reviewable(ctx, f, me)
 	if err != nil {
 		return nil, err
 	}
 
-	return rowsOf(found, func(number int) (Row, error) { return classify(ctx, f, me, number) })
+	return rowsOf(found, func(number int) (Row, error) { return classify(ctx, f, me, number, now) })
 }
 
 // reviewable lists the numbers of the three listings, sorted and without duplicates.
@@ -94,7 +95,7 @@ func reviewable(ctx context.Context, f Reader, me string) ([]int, error) {
 	return slices.Compact(found), nil
 }
 
-func classify(ctx context.Context, f Reader, me string, number int) (Row, error) {
+func classify(ctx context.Context, f Reader, me string, number int, now time.Time) (Row, error) {
 	view, reviews, err := readPull(ctx, f, number)
 	if err != nil {
 		return Row{}, err
@@ -102,15 +103,66 @@ func classify(ctx context.Context, f Reader, me string, number int) (Row, error)
 
 	row, when := newRow(number, view, reviews, me)
 
-	if row.Kind == KindCurrent || row.Kind == KindWaiting {
-		if row, err = withReply(ctx, f, me, row, when); err != nil {
-			return Row{}, err
-		}
+	if row, err = withFacts(ctx, f, me, row, when, now); err != nil {
+		return Row{}, err
 	}
 
 	if row.Kind == KindCurrent && requested(view, me) {
 		row.Kind = KindReReview
 	}
+
+	return row, nil
+}
+
+// withFacts adds what the poll reads beyond the reviews: the deadline of a FOLLOW-UP row, the ready marks of a draft, and a reply on a row that waits for one.
+func withFacts(ctx context.Context, f Reader, me string, row Row, reviewed string, now time.Time) (Row, error) {
+	if row.Kind == KindFollowUp {
+		if err := withDeadline(&row, reviewed, now); err != nil {
+			return Row{}, err
+		}
+	}
+
+	row, err := withReadyMarks(ctx, f, row)
+	if err != nil || (row.Kind != KindCurrent && row.Kind != KindWaiting) {
+		return row, err
+	}
+
+	return withReply(ctx, f, me, row, reviewed)
+}
+
+// withDeadline gives a FOLLOW-UP row its deadline, the time of our review plus FollowUpWindow, and whether it is due at now. A review time that is missing or not a time stops the poll:
+// a deadline that cannot be computed must not read as a row that has just started.
+func withDeadline(row *Row, reviewed string, now time.Time) error {
+	at, err := time.Parse(time.RFC3339, reviewed)
+	if err != nil {
+		return unread(err, "cannot read the time of our review of #%d (%q)", row.Number, reviewed)
+	}
+
+	deadline := at.Add(FollowUpWindow)
+	due := !now.Before(deadline)
+	row.Deadline, row.Due = deadline.UTC().Format(time.RFC3339), &due
+
+	return nil
+}
+
+// withReadyMarks counts the times a reviewer marked a draft ready, and lets the draft go at the second mark. Only a draft is read. A mark by the author or by an account that is gone is not a reviewer's mark.
+func withReadyMarks(ctx context.Context, f Reader, row Row) (Row, error) {
+	if row.IsDraft == nil || !*row.IsDraft {
+		return row, nil
+	}
+
+	marks, err := f.ReadyMarks(ctx, row.Number)
+	if err != nil {
+		return Row{}, unread(err, "cannot read the ready marks of #%d", row.Number)
+	}
+
+	for _, login := range marks {
+		if login != "" && !strings.EqualFold(login, row.Author) {
+			row.ReadyMarks++
+		}
+	}
+
+	row.LetGo = row.ReadyMarks >= LetGoMarks
 
 	return row, nil
 }

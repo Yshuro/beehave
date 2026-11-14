@@ -29,6 +29,18 @@ type Opener interface {
 	Unstack(ctx context.Context, pr int) error
 }
 
+// AssigneeReads is the optional side of a forge that reads who holds an issue. A forge that lacks it cannot serve the assignee watch of preflight.
+// IssueAssignees returns the logins that hold the issue. An empty repo is the repository of the forge, and any other repo is read on that repository. A failed read is an error, never an empty list.
+type AssigneeReads interface {
+	IssueAssignees(ctx context.Context, repo string, number int) ([]string, error)
+}
+
+// ReadyReads is the optional side of a forge that reads when a pull request was marked ready for review.
+// ReadyMarks returns the login of each account that marked the pull request ready, in order. A failed read is an error, never an empty list.
+type ReadyReads interface {
+	ReadyMarks(ctx context.Context, pr int) ([]string, error)
+}
+
 // Boarder is the optional side of a forge that keeps project boards. A forge that lacks it cannot be used by board_sync.
 // PlaceCard puts the card on the board and sets its Status column. The same call again changes nothing, and a column that the board lacks is refused before any write.
 // CardStatus reads the Status column of the card from the board. It is an error when the card is not on the board.
