@@ -199,6 +199,23 @@ func TestPreflight_AForeignPullRequestThatIsHeldOrADraftIsStillForeign(t *testin
 	}
 }
 
+func TestPreflight_AForeignPullRequestWhoseIssueAForeignLoginHoldsStopsAsAssigned(t *testing.T) {
+	t.Parallel()
+
+	p := open()
+	p.author = "someone"
+	p.body = "Closes #7"
+
+	f := p.fake(t)
+	f.issues["#7"] = []string{"maintainer"}
+
+	result := check(t, f, preflight.Request{PR: 1, Own: []string{"owner"}, Foreign: true})
+
+	assert.Equal(t, preflight.Assigned, result.Stop, "the assignee stop comes before the foreign return")
+	assert.False(t, result.Foreign)
+	assert.Contains(t, result.Lines[0], "the linked issue #7")
+}
+
 func TestPreflight_AnOwnPullRequestIsNotForeignAndStillMeetsTheBaseCheck(t *testing.T) {
 	t.Parallel()
 
