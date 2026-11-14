@@ -3,9 +3,11 @@ package flow
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -23,25 +25,42 @@ func capFile(t *testing.T, flow string) string {
 	return file
 }
 
-func TestResume_TheCostSumOfAnItemSurvivesTheResumeSoAStepPastTheCapIsRefusedAgain(t *testing.T) {
+func TestResume_TheCostSumOfAnItemSurvivesARestartSoAStepPastTheCapWaitsAgain(t *testing.T) {
 	t.Parallel()
 
 	rig := newAgentRig(t)
 	rig.h.opts.MaxRunBudget = 5
 	rig.reply("", costing(3))
 
-	file := capFile(t, threeFlow)
-	engine := rig.h.engine(t)
-	client := rig.h.client(t, testVersion)
+	first := holdOnCap(t, rig, capFile(t, threeFlow))
+	require.Len(t, rig.h.agents.seen(), 2, "a and b ran, c waits at the cap")
 
-	_, err := engine.RunFile(testItem, testProject, file)
-	require.ErrorContains(t, err, "the agent steps of the item run spent $6")
-	require.Len(t, rig.h.agents.seen(), 2, "a and b ran, c was refused at the cap")
+	looks := func(engine *Engine) int {
+		steps, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
+		require.NoError(t, err)
 
-	_, err = resumeAndJoin(t, engine, client)
+		count := 0
 
-	require.ErrorContains(t, err, "the agent steps of the item run spent $6", "the resume replays the recorded costs of a and b: the sum is not reset")
-	assert.Len(t, rig.h.agents.seen(), 2, "no agent started after the resume: c is refused again")
+		for _, step := range steps {
+			if strings.Contains(step.StepName, "/budget1.") {
+				count++
+			}
+		}
+
+		return count
+	}
+
+	second := rig.h.engine(t)
+	seen := looks(second)
+
+	// The recovered run replays the recorded looks and reads the cap again: the sum of a and b is not reset, so c waits once more.
+	eventually(t, func() bool { return looks(second) > seen })
+
+	stop := stoppedRun(t, rig.h.client(t, testVersion), testRun)
+
+	require.NotNil(t, stop)
+	assert.InDelta(t, first.Spent, stop.Spent, 0, "the replay reads the recorded costs of a and b")
+	assert.Len(t, rig.h.agents.seen(), 2, "no agent started after the restart: c waits again")
 }
 
 func TestResume_TheRoundsOfALoopAreNotCountedAgainAfterTheResume(t *testing.T) {

@@ -45,6 +45,6 @@ Tests need Go and the beehave source: `go test ./cmd/beehave -run TestScripts/pi
 The example needs no engine change. These points need one to be better, and the example does not work around them with shell:
 
 - **No bulk item creation.** `item_create` makes one item for each call, and each call is a recorded step of the parent. The example makes one item for each chunk to keep the history small. A `spawn` of a plan (a list of keys with bodies) would let one day be one child run with no step in the parent.
-- **No cap for a tree of runs.** `agents.max_run_budget_usd` is a real cap for one run. It does not count the children of a run. The agent step returns `cost_usd`, so a workflow can add the real cost in Starlark. The SQL estimate is a choice: `budget.sh` reserves the cost of a day before the call, so the budget stops a day before it spends.
+- **The SQL estimate is a choice.** `agents.max_run_budget_usd` caps one run and `agents.max_tree_budget_usd` caps a run with its children. `budget.sh` reserves the cost of a day before the call, so the budget stops a day before it spends.
 - **No structured stop.** `run_chunks` finds a budget stop with the text of the failure (`BUDGET`). The engine gives no coded stop reason.
 - **No run of a range as a schedule.** Cron starts the daily run. The engine has no timer that starts a workflow.

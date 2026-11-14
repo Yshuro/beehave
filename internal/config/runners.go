@@ -39,6 +39,9 @@ type agents struct {
 	// MaxRunBudgetUSD is the most dollars that the agent steps of one item run spend in all, failed runs included. An agent step does not start when the sum is at or past it, so the last step can pass it by its own cost.
 	// A child workflow that the run spawns starts its own sum. 0 means no cap.
 	MaxRunBudgetUSD float64
+	// MaxTreeBudgetUSD is the most dollars that the agent steps of an item tree spend in all: the root run and every run it spawns. An agent step does not start when the sum is at or past it.
+	// A spawned run uses the cap of its root. 0 means no cap.
+	MaxTreeBudgetUSD float64
 	// RetentionDays is the age in days at which `beehave run` deletes a finished run, with its recorded steps. The default is 7. 0 keeps every finished run.
 	// A failed or canceled run is never deleted, because `beehave resume` can reopen it.
 	RetentionDays int
@@ -56,7 +59,7 @@ type runnersFile struct {
 
 // The schemas of the constructors of the runners file.
 func agentsSpec() spec {
-	return spec{"agents", []string{"max_concurrent?", "max_review_concurrent?", "max_turns?", "max_budget_usd?", "review_poll_minutes?", "max_run_budget_usd?", "retention_days?"}}
+	return spec{"agents", []string{"max_concurrent?", "max_review_concurrent?", "max_turns?", "max_budget_usd?", "review_poll_minutes?", "max_run_budget_usd?", "retention_days?", "max_tree_budget_usd?"}}
 }
 
 func poolSpec() spec { return spec{"pool", []string{"five_hour_max?", "seven_day_max?"}} }
@@ -81,13 +84,13 @@ func loadRunnersFile(path string, adapters Adapters) (agents, Pool, []model.Runn
 }
 
 func (f *runnersFile) addAgents(at syntax.Position, kwargs []starlark.Tuple) error {
-	budget, runBudget := number(f.agents.MaxBudgetUSD), number(f.agents.MaxRunBudgetUSD)
+	budget, runBudget, treeBudget := number(f.agents.MaxBudgetUSD), number(f.agents.MaxRunBudgetUSD), number(f.agents.MaxTreeBudgetUSD)
 
-	if err := agentsSpec().unpack(at, kwargs, &f.agents.MaxConcurrent, &f.agents.MaxReviewConcurrent, &f.agents.MaxTurns, &budget, &f.agents.ReviewPollMinutes, &runBudget, &f.agents.RetentionDays); err != nil {
+	if err := agentsSpec().unpack(at, kwargs, &f.agents.MaxConcurrent, &f.agents.MaxReviewConcurrent, &f.agents.MaxTurns, &budget, &f.agents.ReviewPollMinutes, &runBudget, &f.agents.RetentionDays, &treeBudget); err != nil {
 		return err
 	}
 
-	f.agents.MaxBudgetUSD, f.agents.MaxRunBudgetUSD = float64(budget), float64(runBudget)
+	f.agents.MaxBudgetUSD, f.agents.MaxRunBudgetUSD, f.agents.MaxTreeBudgetUSD = float64(budget), float64(runBudget), float64(treeBudget)
 
 	return nil
 }

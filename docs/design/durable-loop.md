@@ -187,9 +187,19 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 
 - A child workflow that the run spawns starts its own sum at 0. The cap applies to each sum alone.
 - Before an agent step starts, the engine adds the `cost_usd` that the earlier agent steps of the item run recorded, and the cost of each run that failed.
-- If the sum is at or past the cap, the step fails before it starts. The error names the cap and the spent sum.
+- If the sum is at or past the cap, the step waits before it starts. The run stays open and the step is not a failure. The stop names the cap and the spent sum.
 - The check runs only when a step starts, so one step can pass the cap by its own cost. The cap of the step (`max_budget_usd`) or the global cap limits that. With neither set, a step has no limit.
-- The check is a recorded step named `budget`, so a step that started under the cap does not fail on a replay after the cap changes.
+- Each look at the caps is a recorded step named `budget`, and a stop is followed by a durable sleep before the next look. A step that started under the cap does not stop on a replay after the cap changes.
+- The check reads the cap from the config of the engine that runs it. To resume a held round, raise the cap (or set it to 0) and restart the engine.
+- A cost that is unknown for an earlier step still fails the step: the cap cannot be checked against it.
+
+**The cap of an item tree: `agents.max_tree_budget_usd`** (or `BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD`). It caps the sum for the root run and every run it spawns.
+
+- The sum is read from the step records of the root run and of each run below it, so a restart keeps it.
+- A spawned run uses the cap of its root. It does not start a new sum and cannot raise the cap.
+- The rule and the wait are the same as for the run cap. Both caps apply when both are set.
+
+**The stop in the status.** `beehave status <run id> --json` shows `cap_stop` with `scope` (`run` or `tree`), `cap_usd`, `spent_usd` and `note` on the run, and on the line of the held agent step, while the run reads `running`.
 - The sum comes from recorded costs, so a replay gives the same answer. A resume does not: `beehave resume` of a failed agent step rewinds past the record of the cost of the failed run. The sum then lacks that cost, so each resume can add up to the cost of one run past the cap.
 
 #### Not covered

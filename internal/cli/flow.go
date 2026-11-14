@@ -142,10 +142,10 @@ func (f flowCommands) options(stderr io.Writer, flag string) (config.Config, flo
 func (f flowCommands) engineOptions(cfg config.Config, state string) flow.Options {
 	return flow.Options{
 		StateDir: state, Version: f.version, MaxConcurrent: cfg.Agents.MaxConcurrent, MaxReviewConcurrent: cfg.Agents.MaxReviewConcurrent, Env: f.env,
-		MaxRunBudget: cfg.Agents.MaxRunBudgetUSD,
-		ReviewPoll:   time.Duration(cfg.Agents.ReviewPollMinutes) * time.Minute,
-		Retention:    time.Duration(cfg.Agents.RetentionDays) * 24 * time.Hour,
-		KeepRuns:     cfg.Agents.RetentionDays == 0,
+		MaxRunBudget: cfg.Agents.MaxRunBudgetUSD, MaxTreeBudget: cfg.Agents.MaxTreeBudgetUSD,
+		ReviewPoll: time.Duration(cfg.Agents.ReviewPollMinutes) * time.Minute,
+		Retention:  time.Duration(cfg.Agents.RetentionDays) * 24 * time.Hour,
+		KeepRuns:   cfg.Agents.RetentionDays == 0,
 	}
 }
 
