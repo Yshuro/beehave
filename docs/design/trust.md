@@ -272,7 +272,7 @@ Run these as the owner, in order. No step creates an account.
 
 ## Open decisions
 
-- The ruleset `main` keeps the role bypass `always` and requires signed commits. The engine does not sign its commits. So `integration/*` lands in `main` by a squash on github.com, where GitHub signs the commit. The trust work does not change `main`.
+- The ruleset `main` keeps the role bypass `always` and requires signed commits. The engine does not sign its commits. So `integration/*` lands in `main` as a merge commit that the owner makes on github.com with the role bypass, where GitHub signs the commit. The trust work does not change `main`.
 - A lane cannot change `.github/workflows/`. The owner lands such a change by hand. To let lanes change CI, the forge must pin the source of a status, and that needs an App token source.
 - The agent sandbox on Linux waits on #199. Until it passes, an agent step on Linux can refuse to start. That is fail-closed.
 - On GitLab, whether a commit status from the API counts under "Pipelines must succeed" on lower tiers is not documented. No GitLab adapter exists yet.
