@@ -113,7 +113,26 @@ func TestPreflight_AFailedReadOfALinkedIssueIsNotClean(t *testing.T) {
 	_, err := preflight.Check(context.Background(), f, preflight.Request{PR: 1, Own: own}, "hold")
 
 	require.ErrorIs(t, err, errDown)
-	assert.Equal(t, "cannot read the assignees of #7, linked from #1", err.Error())
+	assert.Equal(t, "cannot read the assignees of #7, linked from #1. Check the access to that repository, then run again.", err.Error())
+}
+
+func TestPreflight_ALinkNumberThatOverflowsIsAReadErrorNamingTheLink(t *testing.T) {
+	t.Parallel()
+
+	p := open()
+	p.author = "owner"
+	p.body = "Closes #99999999999999999999"
+
+	f := p.fake(t)
+
+	_, err := preflight.Check(context.Background(), f, preflight.Request{PR: 1, Own: own}, "hold")
+
+	var read *preflight.ReadError
+
+	require.ErrorAs(t, err, &read)
+	assert.Equal(t, "#99999999999999999999", read.Link)
+	assert.Contains(t, err.Error(), "#99999999999999999999")
+	assert.Empty(t, f.asked, "no link is read when one cannot be parsed")
 }
 
 func TestPreflight_AnAssigneeListThatIsMissingIsNotClean(t *testing.T) {
@@ -135,13 +154,15 @@ func TestPreflight_AHolderWhoKnowsTheItemIsClassifiedKnows(t *testing.T) {
 	tests := map[string]struct {
 		author    string
 		reviewers []string
+		requested []string
 		holder    string
 		knows     string
 	}{
-		"the_holder_opened_it":     {"Maintainer", nil, "maintainer", "knows=yes"},
-		"the_holder_reviews_it":    {"owner", []string{"other", "MAINTAINER"}, "maintainer", "knows=yes"},
-		"the_holder_is_a_stranger": {"owner", []string{"other"}, "maintainer", "knows=no"},
-		"nobody_reviews":           {"owner", nil, "maintainer", "knows=no"},
+		"the_holder_opened_it":                {"Maintainer", nil, nil, "maintainer", "knows=yes"},
+		"the_holder_reviews_it":               {"owner", []string{"other", "MAINTAINER"}, nil, "maintainer", "knows=yes"},
+		"the_holder_was_only_asked_to_review": {"owner", nil, []string{"other", "MAINTAINER"}, "maintainer", "knows=yes"},
+		"the_holder_is_a_stranger":            {"owner", []string{"other"}, []string{"third"}, "maintainer", "knows=no"},
+		"nobody_reviews":                      {"owner", nil, nil, "maintainer", "knows=no"},
 	}
 
 	for name, tt := range tests {
@@ -149,7 +170,7 @@ func TestPreflight_AHolderWhoKnowsTheItemIsClassifiedKnows(t *testing.T) {
 			t.Parallel()
 
 			p := open()
-			p.author, p.reviewers, p.body = tt.author, tt.reviewers, "Closes #7"
+			p.author, p.reviewers, p.requested, p.body = tt.author, tt.reviewers, tt.requested, "Closes #7"
 
 			f := p.fake(t)
 			f.issues["#7"] = []string{tt.holder}

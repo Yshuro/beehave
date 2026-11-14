@@ -22,8 +22,8 @@ func (l link) String() string {
 	return l.repo + "#" + strconv.Itoa(l.number)
 }
 
-// links returns the issues the body names, once each, in the order of the body.
-func links(body string) []link {
+// links returns the issues the body names, once each, in the order of the body. A number that is not an int is an error that names the link.
+func links(pr int, body string) ([]link, error) {
 	var found []link
 
 	seen := map[link]bool{}
@@ -31,7 +31,7 @@ func links(body string) []link {
 	for _, match := range linkPattern.FindAllStringSubmatch(body, -1) {
 		number, err := strconv.Atoi(match[3])
 		if err != nil {
-			continue
+			return nil, &ReadError{PR: pr, Link: match[1] + match[2] + "#" + match[3], Cause: err}
 		}
 
 		next := link{repo: match[1] + match[2], number: number}
@@ -41,7 +41,7 @@ func links(body string) []link {
 		}
 	}
 
-	return found
+	return found, nil
 }
 
 // heldStop is the stop for an item that somebody else holds: an assignee first, then the author of an open pull request.
@@ -78,7 +78,17 @@ func holderOf(ctx context.Context, r Reader, v view, own []string) (holder, wher
 		return holder, fmt.Sprintf("#%d", v.pr), nil
 	}
 
-	for _, next := range links(v.body) {
+	return linkedHolder(ctx, r, v, own)
+}
+
+// linkedHolder reads each issue that the body links and returns the first foreign login on one of them, and the link.
+func linkedHolder(ctx context.Context, r Reader, v view, own []string) (holder, where string, err error) {
+	found, err := links(v.pr, v.body)
+	if err != nil {
+		return "", "", err
+	}
+
+	for _, next := range found {
 		logins, err := r.IssueAssignees(ctx, next.repo, next.number)
 		if err != nil {
 			return "", "", &ReadError{PR: v.pr, Link: next.String(), Cause: err}

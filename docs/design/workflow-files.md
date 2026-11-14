@@ -270,6 +270,7 @@ It checks, in this order:
 The assignee check reads the pull request and each linked issue once. A link is a `Closes`, `Fixes`, `Resolves`, `Part of`, `Refs` or `Related` keyword with `#N`, `owner/repo#N` or the URL of an issue. The call reads a link to another repository on that repository.
 
 - A read that fails ends the step with an error. A failed read is not a clean item.
+- The read of the assignees of an issue is optional for a forge. A forge without it is refused when the body has a link.
 - The reason of ASSIGNED names the holder and ends with `knows=yes` or `knows=no`. The value is `yes` only when the holder opened the pull request or reviews it.
 - The reason also gives the recovery: leave the item to the holder, or ask the holder first.
 

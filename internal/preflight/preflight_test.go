@@ -75,6 +75,8 @@ type pull struct {
 	body      string
 	assigned  []string
 	reviewers []string
+	// requested holds the logins that were asked to review and have not yet.
+	requested []string
 }
 
 func open() pull { return pull{state: "OPEN", base: "main"} }
@@ -104,7 +106,7 @@ func (p pull) fake(t *testing.T) *fake {
 	data, err := json.Marshal(map[string]any{
 		"number": 1, "state": p.state, "isDraft": p.draft, "mergedAt": nil,
 		"headRefOid": head, "headRefName": "feature", "baseRefName": p.base, "labels": labels, "author": map[string]string{"login": p.author},
-		"body": p.body, "assignees": accounts(p.assigned), "reviews": reviews, "reviewRequests": []string{},
+		"body": p.body, "assignees": accounts(p.assigned), "reviews": reviews, "reviewRequests": accounts(p.requested),
 	})
 	require.NoError(t, err)
 

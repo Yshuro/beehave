@@ -109,7 +109,7 @@ func (e *ReadError) Error() string {
 	}
 
 	if e.Link != "" {
-		return fmt.Sprintf("cannot read the assignees of %s, linked from #%d", e.Link, e.PR)
+		return fmt.Sprintf("cannot read the assignees of %s, linked from #%d. Check the access to that repository, then run again.", e.Link, e.PR)
 	}
 
 	return fmt.Sprintf("cannot read #%d", e.PR)

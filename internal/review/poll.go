@@ -153,7 +153,7 @@ func withReadyMarks(ctx context.Context, f Reader, row Row) (Row, error) {
 
 	marks, err := f.ReadyMarks(ctx, row.Number)
 	if err != nil {
-		return Row{}, unread(err, "cannot read the ready marks of #%d", row.Number)
+		return Row{}, unread(err, "cannot read the ready marks of #%d. Check the access to the repository, then run again", row.Number)
 	}
 
 	for _, login := range marks {
