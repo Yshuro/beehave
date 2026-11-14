@@ -103,8 +103,8 @@ func TestBudget_AChildInheritsTheRootCap(t *testing.T) {
 }
 
 // capRestart runs three steps of 3 dollars under a cap that stops the third, reads the stop on the run and on the line of the step, raises the cap and
-// starts a new engine, and checks that the run finishes with no cancel and that no step ran twice.
-func capRestart(t *testing.T, set func(h *harness, limit float64), scope string) {
+// starts a new engine, and checks that the run finishes with no cancel and that no step ran twice. The cap after the stop is `after`: 0 removes the cap.
+func capRestart(t *testing.T, set func(h *harness, limit float64), scope string, after float64) {
 	t.Helper()
 
 	rig := newAgentRig(t)
@@ -140,7 +140,7 @@ func capRestart(t *testing.T, set func(h *harness, limit float64), scope string)
 	require.NoError(t, first.Shutdown())
 	require.Error(t, (<-done).err, "the stopped engine ends the call and leaves the run open")
 
-	set(rig.h, 20)
+	set(rig.h, after)
 
 	second := engineOn(t, rig.h, deps)
 	handle, err := dbos.RetrieveWorkflow[ItemResult](second.ctx, testRun)
@@ -157,11 +157,23 @@ func capRestart(t *testing.T, set func(h *harness, limit float64), scope string)
 func TestBudget_ATreeCapStopWaitsForARaiseAndARestartFinishesTheRound(t *testing.T) {
 	t.Parallel()
 
-	capRestart(t, func(h *harness, limit float64) { h.opts.MaxTreeBudget = limit }, scopeTree)
+	capRestart(t, func(h *harness, limit float64) { h.opts.MaxTreeBudget = limit }, scopeTree, 20)
+}
+
+func TestBudget_ATreeCapSetToZeroAfterAStopLetsTheRoundFinish(t *testing.T) {
+	t.Parallel()
+
+	capRestart(t, func(h *harness, limit float64) { h.opts.MaxTreeBudget = limit }, scopeTree, 0)
+}
+
+func TestBudget_ARunCapSetToZeroAfterAStopLetsTheRoundFinish(t *testing.T) {
+	t.Parallel()
+
+	capRestart(t, func(h *harness, limit float64) { h.opts.MaxRunBudget = limit }, scopeRun, 0)
 }
 
 func TestBudget_ARunCapStopWaitsForARaiseAndARestartFinishesTheRound(t *testing.T) {
 	t.Parallel()
 
-	capRestart(t, func(h *harness, limit float64) { h.opts.MaxRunBudget = limit }, scopeRun)
+	capRestart(t, func(h *harness, limit float64) { h.opts.MaxRunBudget = limit }, scopeRun, 20)
 }
