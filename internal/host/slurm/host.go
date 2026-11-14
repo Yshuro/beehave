@@ -12,6 +12,9 @@ import (
 	"github.com/tobocop2/beehave/internal/proc"
 )
 
+// Name is the name the Slurm host provider is chosen by. The host is a Slurm cluster whose head node beehave reaches over ssh.
+const Name model.HostProvider = "slurm"
+
 // Host is a Slurm cluster that the owner provides and beehave reaches over ssh, at the head node. It creates and deletes nothing.
 //
 // Up checks that the head node answers and runs Slurm, and changes nothing. Down sends nothing. A caller releases the host with Teardown,
@@ -22,19 +25,17 @@ type Host struct {
 	link *link.Link
 }
 
-// NewHost returns the host for the cluster. target is the ssh alias of the head node, or a label when `host.ssh.address` names it.
+// NewHost returns the host for the cluster. target is the ssh alias of the head node, or a label when `host.slurm.address` names it.
 // It runs nothing, so a check of the config needs no network. A setting that could change a command line is refused.
-// Jobs run in the login folder of the head node, so `host.ssh.work_root` is refused: a folder that Slurm does not use would hide the logs and the work.
+// Jobs run in the login folder of the head node, so `host.slurm.work_root` is refused: a folder that Slurm does not use would hide the logs and the work.
 func NewHost(target string, config model.HostConfig, ssh proc.Runner, opts ...Option) (*Host, error) {
-	switch {
-	case config.MaxRun < time.Second:
-		return nil, fmt.Errorf("%w: `host.max_run` must be at least one second", link.ErrConfig)
-	case config.SSH.WorkRoot != "":
-		return nil, fmt.Errorf("%w: `host.ssh.work_root` is not used with the slurm provider. Jobs run in the login folder of the head node. Remove the key", link.ErrConfig)
+	values, err := checkConfig(config)
+	if err != nil {
+		return nil, err
 	}
 
 	l, err := link.ForMachine(target, link.Options{
-		Address: config.SSH.Address, User: config.SSH.User, Identity: config.SSH.Identity, KnownHosts: config.SSH.KnownHosts, Port: config.SSH.Port,
+		Block: string(Name), Address: values.address, User: values.user, Identity: values.identity, KnownHosts: values.knownHosts, Port: values.port,
 	}, ssh)
 	if err != nil {
 		return nil, err
@@ -43,6 +44,23 @@ func NewHost(target string, config model.HostConfig, ssh proc.Runner, opts ...Op
 	opts = append([]Option{func(s *settings) { s.limit = config.MaxRun }}, opts...)
 
 	return &Host{Queue: New(l, config, noSlot{}, opts...), link: l}, nil
+}
+
+// checkConfig reads the block of the config and returns it. It refuses a run limit under a second and a work root.
+func checkConfig(config model.HostConfig) (block, error) {
+	values, err := decodeBlock(config.Block)
+	if err != nil {
+		return block{}, err
+	}
+
+	switch {
+	case config.MaxRun < time.Second:
+		return block{}, fmt.Errorf("%w: `host.max_run` must be at least one second", link.ErrConfig)
+	case values.workRoot != "":
+		return block{}, fmt.Errorf("%w: `host.slurm.work_root` is not used with the slurm provider. Jobs run in the login folder of the head node. Remove the key", link.ErrConfig)
+	}
+
+	return values, nil
 }
 
 // Up checks that the head node answers and that Slurm lists its nodes. It is the first call. It is idempotent.
