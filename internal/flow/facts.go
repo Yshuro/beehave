@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"maps"
 	"strings"
 
 	"go.starlark.net/starlark"
@@ -32,12 +33,27 @@ func (s *script) facts(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 
 // factsOutputs holds the fields of the facts struct. An empty fact is an empty list, an empty dict or empty text, never a missing field, so a prompt can range over it.
 func factsOutputs(p model.Project) map[string]any {
-	return map[string]any{
+	facts := map[string]any{
 		repoKeyword: p.Repo, "source": p.Source, "forge": string(p.Forge), "tracker": string(p.Tracker), "base_branch": p.BaseBranch, "gate": gateText(p), "gate_steps": gateStepNames(p), "build_host": p.BuildHost,
 		"people": orEmptyDict(p.People), "epics": orEmptyDict(p.Epics),
 		"gate_files": orEmptyList(p.GateFiles), "conventions": orEmptyList(p.Conventions), "brief_rules": orEmptyList(p.BriefRules), "stacked_rules": orEmptyList(p.StackedRules),
 		"limits": orEmptyList(p.Limits), "traps": orEmptyList(p.Traps), "token_rules": orEmptyList(p.TokenRules), "changelog": p.Changelog,
 		"board_number": p.Board.Number, "board_owner": p.Board.Owner, "board_started": p.Board.Started, "board_merged": p.Board.Merged,
+	}
+
+	maps.Copy(facts, roundOutputs(p.Rounds))
+
+	return facts
+}
+
+// roundOutputs holds the round_* fields of the facts struct. A key that the file leaves out is empty text, an empty list, 0 or false.
+func roundOutputs(r model.Rounds) map[string]any {
+	return map[string]any{
+		"round_base": r.Base, "round_next_base": r.NextBase, "round_owner": r.Owner, "round_owner_email": r.OwnerEmail, "round_source_checkout": r.SourceCheckout,
+		"round_lane_cap": r.LaneCap, "round_fix_rounds": r.FixRounds, "round_integration_pr": r.IntegrationPR, "round_merge": r.Merge,
+		"round_acceptance": r.Acceptance, "round_base_result": r.BaseResult, "round_base_reds": orEmptyList(r.BaseReds), "round_base_reds_file": r.BaseRedsFile,
+		"round_lane_kind": r.LaneKind, "round_allow_paths": orEmptyList(r.AllowPaths), "round_wait_hours": r.WaitHours,
+		"round_label": r.Label, "round_items": orEmptyList(r.Items),
 	}
 }
 

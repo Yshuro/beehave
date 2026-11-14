@@ -219,6 +219,12 @@ func (s *fakeSteering) Cancel(item string) error {
 	return s.err
 }
 
+func (s *fakeSteering) CancelRun(runID string) error {
+	s.calls = append(s.calls, "cancel-run "+runID)
+
+	return s.err
+}
+
 func (s *fakeSteering) Close() error {
 	s.closeOK = true
 
@@ -847,4 +853,39 @@ func TestFlowCommands_FailWhenThereIsNoConfigFolderToFind(t *testing.T) {
 
 	assert.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "cannot find the home folder")
+}
+
+func TestRoundItem_RunCancelAndStatusAcceptARoundIdWithASlash(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+
+	code, stdout, stderr := rig.execute(t.Context(), "run", "round/integration/s1")
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "item round/integration/s1 finished\n", stdout)
+	assert.Equal(t, []string{"round/integration/s1@p"}, rig.runner.items)
+
+	code, _, stderr = rig.execute(t.Context(), "cancel", "round/integration/s1")
+	require.Equal(t, 0, code, stderr)
+
+	code, _, stderr = rig.execute(t.Context(), "status", "--item", "round/integration/s1")
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, rig.steering.calls, "cancel round/integration/s1")
+}
+
+func TestCancel_RunStopsTheOneRunByItsIdAndRefusesAnItemBesideIt(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+
+	code, _, stderr := rig.execute(t.Context(), "cancel", "--run", "round-integration/s1-r1-p1")
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, []string{"cancel-run round-integration/s1-r1-p1"}, rig.steering.calls)
+
+	rig = newRig(t)
+
+	code, _, stderr = rig.execute(t.Context(), "cancel", "--run", "item-12-r1", "12")
+	assert.NotEqual(t, 0, code)
+	assert.Contains(t, stderr, "give a run id with --run and no item")
+	assert.Empty(t, rig.steering.calls)
 }

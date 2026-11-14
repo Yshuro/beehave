@@ -1,0 +1,20 @@
+# The check accepts a workflow that reads the round settings of the rounds block from facts(), and refuses a round field that facts() does not have.
+isolate
+
+exec beehavereal check workflow ok.star
+! stdout .
+! stderr .
+
+! exec beehavereal check workflow bad.star
+stderr 'round_nope is not a field of the result of facts'
+
+-- ok.star --
+def main(item):
+    f = facts()
+    command(run = ["echo", f.round_base, f.round_owner, f.round_label] + f.round_items + f.round_base_reds + f.round_allow_paths, name = "show")
+    if f.round_merge and f.round_lane_cap > 0 and f.round_fix_rounds > 0 and f.round_wait_hours >= 0 and f.round_integration_pr == 0:
+        command(run = ["echo", f.round_next_base, f.round_owner_email, f.round_source_checkout, f.round_acceptance, f.round_base_result, f.round_base_reds_file, f.round_lane_kind], name = "more")
+-- bad.star --
+def main(item):
+    f = facts()
+    command(run = ["echo", f.round_nope], name = "show")

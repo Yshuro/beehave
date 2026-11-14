@@ -92,6 +92,8 @@ func (e *Engine) readQueue(ctx context.Context, project, holdLabel string) (queu
 		return queued{}, fmt.Errorf("read the open items of project %s: %w", project, err)
 	}
 
+	items = e.selected(project, items)
+
 	pulls, err := e.deps.Queue.OpenPulls(ctx, project)
 	if err != nil {
 		return queued{}, fmt.Errorf("read the open pull requests of project %s: %w", project, err)
@@ -107,6 +109,20 @@ func (e *Engine) readQueue(ctx context.Context, project, holdLabel string) (queu
 	rows, err := e.queueRows(items, joinPulls(pulls, holdLabel))
 
 	return queued{Rows: rows, Free: free}, err
+}
+
+// selected keeps the items that the round settings of the project select. A project with no rounds block keeps every item.
+func (e *Engine) selected(project string, items []model.Item) []model.Item {
+	if e.deps.Facts == nil {
+		return items
+	}
+
+	rounds := e.deps.Facts(project).Rounds
+	if !rounds.Configured() {
+		return items
+	}
+
+	return slices.DeleteFunc(slices.Clone(items), func(item model.Item) bool { return !rounds.Selects(item) })
 }
 
 // queueRows gives one row for each item, sorted by severity and then by item id.

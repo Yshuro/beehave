@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -23,8 +24,14 @@ const cancelsDir = "canceled"
 // A marker that is still there at the next start shows a release that no process finished.
 
 func cancelPath(dir, id string) string {
-	return filepath.Join(dir, cancelsDir, id)
+	return filepath.Join(dir, cancelsDir, runFile(id))
 }
+
+// runFile is the file name of a run id. The id of a round run holds "/", so the name carries the escaped form; runOfFile reads it back.
+func runFile(id string) string { return url.PathEscape(id) }
+
+// runOfFile returns the run id that a file name from runFile holds.
+func runOfFile(name string) (string, error) { return url.PathUnescape(name) }
 
 // tempPrefix starts the name of a marker that is not complete. The sweep skips such a file.
 const tempPrefix = "."
@@ -71,17 +78,32 @@ func readMarkers(dir string, entries []os.DirEntry, logger *slog.Logger) map[str
 			continue
 		}
 
-		in, err := readCancel(dir, entry.Name())
+		id, in, err := readMarker(dir, entry.Name())
 		if err != nil {
-			logger.Warn("skipped a cancel marker that cannot be read", "error", err)
+			logger.Warn("skipped a cancel marker", "error", err)
 
 			continue
 		}
 
-		pending[entry.Name()] = in
+		pending[id] = in
 	}
 
 	return pending
+}
+
+// readMarker reads the cancel marker with this file name and returns the run id it holds.
+func readMarker(dir, name string) (string, ItemInput, error) {
+	id, err := runOfFile(name)
+	if err != nil {
+		return "", ItemInput{}, fmt.Errorf("bad file name: %w", err)
+	}
+
+	in, err := readCancel(dir, id)
+	if err != nil {
+		return "", ItemInput{}, fmt.Errorf("cannot be read: %w", err)
+	}
+
+	return id, in, nil
 }
 
 // readCancel reads the cancel marker of one run.

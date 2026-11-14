@@ -74,8 +74,15 @@ type Steering interface {
 	JoinRun(ctx context.Context, item, project, file string) (flow.ItemResult, error)
 	// ResumeOnThisBuild moves a run that another build started to this build, from its last finished step.
 	ResumeOnThisBuild(item string) error
-	Cancel(item string) error
+	Canceling
 	Close() error
+}
+
+// Canceling stops runs.
+type Canceling interface {
+	Cancel(item string) error
+	// CancelRun stops the one open run with this run id, even when it is not the latest run of its item.
+	CancelRun(runID string) error
 }
 
 // Flow opens the engine and the client over the validated config. A nil factory leaves its commands out.
@@ -534,6 +541,9 @@ func (f flowCommands) statusCommand() *cobra.Command {
 
 // jsonFlag is the name of the flag that makes the per-run view print JSON.
 const jsonFlag = "json"
+
+// cancelRunFlag names the run that beehave cancel stops.
+const cancelRunFlag = "run"
 
 // itemFlag is the name of the flag that makes status list the lanes of one item.
 const itemFlag = "item"
@@ -1098,18 +1108,43 @@ func (f flowCommands) resumeCommand() *cobra.Command {
 	return command
 }
 
+// cancelArgs takes one item, or no item and a run id in --run.
+func cancelArgs(cmd *cobra.Command, args []string, runID string) error {
+	if !cmd.Flags().Changed(cancelRunFlag) {
+		return oneItem(cmd, args)
+	}
+
+	if len(args) > 0 || strings.TrimSpace(runID) == "" {
+		return errors.New("give a run id with --run and no item: beehave cancel --run <run id>")
+	}
+
+	return nil
+}
+
+// cancelOne stops the run that --run names, or the open run of the item.
+func cancelOne(cmd *cobra.Command, client Canceling, args []string, runID string) error {
+	if cmd.Flags().Changed(cancelRunFlag) {
+		return client.CancelRun(runID)
+	}
+
+	return client.Cancel(args[0])
+}
+
 func (f flowCommands) cancelCommand() *cobra.Command {
-	var flag string
+	var flag, runID string
 
 	command := &cobra.Command{
-		Use:   "cancel <item>",
-		Short: "Stop the open run of an item",
-		Args:  oneItem,
+		Use:   "cancel <item> | --run <run id>",
+		Short: "Stop the open run of an item, or one run by its id",
+		Long: "Stop the open run of an item. With --run, stop the one run with that id, even when it is not the latest run of its item. " +
+			"Use --run for the pass run of a round: beehave status lists the run ids.",
+		Args: func(cmd *cobra.Command, args []string) error { return cancelArgs(cmd, args, runID) },
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return f.withClient(cmd, flag, func(client Steering) error { return client.Cancel(args[0]) })
+			return f.withClient(cmd, flag, func(client Steering) error { return cancelOne(cmd, client, args, runID) })
 		},
 	}
 	addConfigFlag(command, &flag)
+	command.Flags().StringVar(&runID, cancelRunFlag, "", "the id of the one run to stop, such as item-12-r1 or the pass run id of a round")
 
 	return command
 }

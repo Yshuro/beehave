@@ -12,6 +12,12 @@ import (
 
 const runPrefix = "item-"
 
+// passPrefix starts the id of a pass run of a round, round-<base>-r<k>-p<n>, and passName is the workflow name of a pass run.
+const (
+	passPrefix = "round-"
+	passName   = "round"
+)
+
 const attemptMarker = "-r"
 
 // ErrBadItem is returned when an item id is not an item id: digits, or a prefix, a dash and a name.

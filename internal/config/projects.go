@@ -55,7 +55,8 @@ type rawProject struct {
 	Epics                                                                       table
 	GateFiles, Conventions, BriefRules, StackedRules, Limits, Traps, TokenRules paths
 
-	Board *rawBoard
+	Board  *rawBoard
+	Rounds *rawRounds
 
 	Schedules schedules
 }
@@ -81,7 +82,7 @@ func loadProject(path string, registry Adapters) (Project, error) {
 
 // projectSpec is the schema of the project call. The arguments after the fixed ones are the adapter blocks that the registry declares, each optional and named as its block.
 func projectSpec(declared []Block) spec {
-	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "board?", "schedules?"}
+	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "board?", "rounds?", "schedules?"}
 
 	for _, block := range declared {
 		args = append(args, block.Name+"?")
@@ -91,7 +92,7 @@ func projectSpec(declared []Block) spec {
 }
 
 func projectSpecs(declared, hostDeclared []Block) []spec {
-	specs := []spec{projectSpec(declared), hostSpec(hostDeclared), boardSpec(), scheduleSpec()}
+	specs := []spec{projectSpec(declared), hostSpec(hostDeclared), boardSpec(), roundsSpec(), scheduleSpec()}
 
 	for _, block := range append(slices.Clone(declared), hostDeclared...) {
 		specs = append(specs, block.spec())
@@ -127,6 +128,7 @@ func nestedBuiltins(file *loader, declared, hostDeclared []Block) []*starlark.Bu
 	builtins := []*starlark.Builtin{
 		blocks(file, hostSpec(hostDeclared), true, newHost(hostDeclared)),
 		blocks(file, boardSpec(), true, newBoard),
+		blocks(file, roundsSpec(), true, newRounds),
 		blocks(file, scheduleSpec(), false, newSchedule),
 	}
 
@@ -143,14 +145,14 @@ func nestedBuiltins(file *loader, declared, hostDeclared []Block) []*starlark.Bu
 func newProject(at syntax.Position, kwargs []starlark.Tuple, declared []Block) (*rawProject, error) {
 	raw := &rawProject{At: at, Tracker: defaultTracker, Claims: defaultClaims, BuildHost: hostNames{LocalHost}}
 
-	host, board, held := nested[rawHost]{want: hostSpecName}, nested[rawBoard]{want: boardSpec().name}, holders(declared)
+	host, board, rounds, held := nested[rawHost]{want: hostSpecName}, nested[rawBoard]{want: boardSpec().name}, nested[rawRounds]{want: roundsSpec().name}, holders(declared)
 	dests := []any{
 		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer,
-		&raw.People, &raw.Epics, &raw.GateFiles, &raw.Conventions, &raw.BriefRules, &raw.StackedRules, &raw.Limits, &raw.Traps, &raw.TokenRules, &raw.Changelog, &board, &raw.Schedules,
+		&raw.People, &raw.Epics, &raw.GateFiles, &raw.Conventions, &raw.BriefRules, &raw.StackedRules, &raw.Limits, &raw.Traps, &raw.TokenRules, &raw.Changelog, &board, &rounds, &raw.Schedules,
 	}
 
 	err := projectSpec(declared).unpack(at, kwargs, append(dests, blockDests(held)...)...)
-	raw.Host, raw.Board = host.block, board.block
+	raw.Host, raw.Board, raw.Rounds = host.block, board.block, rounds.block
 	raw.Blocks = heldBlocks(declared, held)
 
 	return raw, err
