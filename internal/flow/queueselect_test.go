@@ -68,36 +68,34 @@ func TestFactsOutputs_TheRoundFieldsAreAlwaysPresentAndEmptyWhenTheProjectHasNoR
 	assert.Equal(t, 0, empty["round_lane_cap"])
 	assert.Equal(t, false, empty["round_merge"])
 	assert.Equal(t, []string{}, empty["round_base_reds"])
-	assert.Equal(t, []string{}, empty["round_items"])
+	assert.Equal(t, []string{}, empty["round_allow_paths"])
 
-	set := factsOutputs(model.Project{Rounds: model.Rounds{Base: "integration/s1", Merge: true, LaneCap: 3, Label: "x", Items: []string{"1"}}})
+	set := factsOutputs(model.Project{Rounds: model.Rounds{Base: "integration/s1", Merge: true, LaneCap: 3}})
 
 	assert.Equal(t, "integration/s1", set["round_base"])
 	assert.Equal(t, 3, set["round_lane_cap"])
 	assert.Equal(t, true, set["round_merge"])
-	assert.Equal(t, "x", set["round_label"])
-	assert.Equal(t, []string{"1"}, set["round_items"])
 }
 
 func TestFacts_TheRoundSettingsReachTheWorkflowAsFlatFieldsAndAreEmptyWhenTheProjectHasNoRounds(t *testing.T) {
 	t.Parallel()
 
-	const body = "def main(item):\n    f = facts()\n    fail(\"R=%s/%d/%r/%s/%d/%d\" % (f.round_base, f.round_lane_cap, f.round_merge, f.round_label, len(f.round_items), len(f.round_base_reds)))\n"
+	const body = "def main(item):\n    f = facts()\n    fail(\"R=%s/%d/%r/%d\" % (f.round_base, f.round_lane_cap, f.round_merge, len(f.round_base_reds)))\n"
 
 	h := newHarness(t)
 	h.facts = func(string) model.Project {
-		return model.Project{Rounds: model.Rounds{Base: "integration/s1", LaneCap: 4, Merge: true, Label: "x", BaseReds: []string{"a", "b"}}}
+		return model.Project{Rounds: model.Rounds{Base: "integration/s1", LaneCap: 4, Merge: true, BaseReds: []string{"a", "b"}}}
 	}
 	h.flowIs(t, body)
 
 	outcome := <-runInBackground(h.engine(t), testItem)
 
-	require.ErrorContains(t, outcome.err, "R=integration/s1/4/True/x/0/2")
+	require.ErrorContains(t, outcome.err, "R=integration/s1/4/True/2")
 
 	none := newHarness(t)
 	none.flowIs(t, body)
 
 	outcome = <-runInBackground(none.engine(t), testItem)
 
-	require.ErrorContains(t, outcome.err, "R=/0/False//0/0")
+	require.ErrorContains(t, outcome.err, "R=/0/False/0")
 }

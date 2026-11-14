@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
@@ -868,9 +869,24 @@ func TestRoundItem_RunCancelAndStatusAcceptARoundIdWithASlash(t *testing.T) {
 	code, _, stderr = rig.execute(t.Context(), "cancel", "round/integration/s1")
 	require.Equal(t, 0, code, stderr)
 
-	code, _, stderr = rig.execute(t.Context(), "status", "--item", "round/integration/s1")
+	assert.Equal(t, []string{"cancel round/integration/s1"}, rig.steering.calls)
+
+	rig.steering.infos = []flow.RunInfo{
+		{ID: "item-round/integration/s1-r1", State: "done", Item: "round/integration/s1", Project: "p"},
+		{ID: "round-integration/s1-r1-p1", State: "running", Item: "round/integration/s1", Project: "p"},
+	}
+
+	code, stdout, stderr = rig.execute(t.Context(), "status", "--json")
 	require.Equal(t, 0, code, stderr)
-	assert.Contains(t, rig.steering.calls, "cancel round/integration/s1")
+
+	var list struct {
+		Runs []runFields `json:"runs"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(stdout), &list), stdout)
+	require.Len(t, list.Runs, 2)
+	assert.Equal(t, "round-integration/s1-r1-p1", list.Runs[1].ID, "the pass run is listed beside the item run")
+	assert.Equal(t, "round/integration/s1", list.Runs[1].Item)
 }
 
 func TestCancel_RunStopsTheOneRunByItsIdAndRefusesAnItemBesideIt(t *testing.T) {

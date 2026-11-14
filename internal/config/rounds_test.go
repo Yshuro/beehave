@@ -3,6 +3,7 @@ package config_test
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -111,6 +112,27 @@ func TestLoadFolder_ARoundsCountBelowOneIsRefusedWithTheKey(t *testing.T) {
 
 		require.NotEmpty(t, problems, key)
 		require.Contains(t, problems[0].Error(), want, key)
+	}
+}
+
+func TestLoadFolder_ARoundsCountAtItsLimitIsAcceptedAndOnePastItIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for key, limit := range map[string]int{"lane_cap": 1, "fix_rounds": 1, "wait_hours": 1, "integration_pr": 0} {
+		build := func(value int) string {
+			counts := map[string]string{"lane_cap": "1", "fix_rounds": "1", "wait_hours": "1", "integration_pr": "0"}
+			counts[key] = strconv.Itoa(value)
+
+			return "\n" + call(localProject+`, rounds = rounds(base = "b", owner = "o", label = "x", lane_cap = `+counts["lane_cap"]+`, fix_rounds = `+counts["fix_rounds"]+
+				`, wait_hours = `+counts["wait_hours"]+`, integration_pr = `+counts["integration_pr"]+`)`)
+		}
+
+		_, atLimit := loadProjectText(t, build(limit))
+		require.Empty(t, atLimit, key)
+
+		_, pastLimit := loadProjectText(t, build(limit-1))
+		require.NotEmpty(t, pastLimit, key)
+		require.Contains(t, pastLimit[0].Error(), "`rounds."+key+"` is "+strconv.Itoa(limit-1), key)
 	}
 }
 

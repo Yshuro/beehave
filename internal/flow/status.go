@@ -18,6 +18,9 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
+// errNoRunID is returned when no run has the run id that --run names.
+var errNoRunID = errors.New("no run has this id")
+
 // errNoRun is returned when an item has no run.
 var errNoRun = errors.New("the item has no run")
 
@@ -526,13 +529,17 @@ func (c *Client) CancelRun(id string) error {
 
 // runWithID reads the one run with this run id.
 func (c *Client) runWithID(id string) (run, error) {
+	if !runIDForm.MatchString(id) {
+		return run{}, fmt.Errorf("%w: %q. Give a run id that beehave status lists, such as item-12-r1", errBadRunID, id)
+	}
+
 	rows, err := dbos.ListWorkflows(c.flow, dbos.WithFilterWorkflowIDs(id), dbos.WithFilterLoadInput(true), dbos.WithFilterLoadOutput(true))
 	if err != nil {
 		return run{}, fmt.Errorf("read run %s: %w", id, err)
 	}
 
 	if len(rows) == 0 {
-		return run{}, fmt.Errorf("%w: no run has the id %s. beehave status lists the run ids", errNoRun, id)
+		return run{}, fmt.Errorf("%w: %s. Run beehave status to see the run ids", errNoRunID, id)
 	}
 
 	return run{Status: rows[0]}, nil

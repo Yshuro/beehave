@@ -31,7 +31,7 @@ func TestItemKind_ARoundIdHoldsTheSlashesOfItsBase(t *testing.T) {
 func TestItemKind_AMalformedRoundIdIsNoItem(t *testing.T) {
 	t.Parallel()
 
-	for _, item := range []string{"round/", "round//s1", "round/s1/", "round/../x", "round/./x", "round/a b", "round/a:b", "round", "Round/x", "round/-x"} {
+	for _, item := range []string{"round/", "round//s1", "round/s1/", "round/../x", "round/./x", "round/a b", "round/a:b", "round", "Round/x", "round/-x", "round/a!", "round/a/b b", "round/ab!", "round/é"} {
 		assert.Empty(t, model.ItemKind(item), item)
 	}
 }

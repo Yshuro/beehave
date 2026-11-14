@@ -10,9 +10,6 @@ const (
 	KindRound = "round"
 )
 
-// RoundPrefix starts the id of the item of a round.
-const RoundPrefix = KindRound + "/"
-
 const (
 	idSeparator = '-'
 	underscore  = '_'
@@ -24,7 +21,7 @@ func ItemKind(item string) string {
 		return KindForge
 	}
 
-	if base, found := strings.CutPrefix(item, RoundPrefix); found {
+	if kind, base, found := strings.Cut(item, "/"); found && kind == KindRound {
 		if ValidBase(base) {
 			return KindRound
 		}
@@ -65,7 +62,7 @@ func ValidBase(text string) bool {
 	}
 
 	for segment := range strings.SplitSeq(text, "/") {
-		if segment == "" || strings.IndexFunc(segment[:1], NotAlnum) >= 0 || strings.IndexFunc(segment, notIDRune) >= 0 {
+		if segment == "" || NotAlnum(rune(segment[0])) || strings.IndexFunc(segment[1:], notIDRune) >= 0 {
 			return false
 		}
 	}

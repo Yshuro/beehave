@@ -111,13 +111,60 @@ func TestRoundRun_CancelRunStopsARunUnderAPassId(t *testing.T) {
 	<-done
 }
 
+func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBuild(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.flowIs(t, waitFlow)
+	engine := harness.engine(t)
+	other := harness.client(t, otherBuild)
+	same := harness.client(t, testVersion)
+
+	done := runInBackground(engine, testItem)
+	waitForTheOwner(t, harness)
+	pollRunState(t, same, "item-12-r1", runRunning)
+
+	require.ErrorIs(t, other.CancelRun("item-12-r1"), errStranded, "an open run of another build is not stopped")
+	assert.Equal(t, runRunning, stateOfRun(t, same, "item-12-r1"))
+
+	require.NoError(t, same.CancelRun("item-12-r1"))
+	harness.tick(t)
+	<-done
+
+	require.ErrorIs(t, other.CancelRun("item-12-r1"), errWrongState, "a finished run of another build has nothing to cancel")
+	require.ErrorIs(t, same.CancelRun("item-12-r1"), errWrongState)
+}
+
 func TestRoundRun_CancelRunRefusesAnIdNoRunHas(t *testing.T) {
 	t.Parallel()
 
 	harness := newHarness(t)
 	client := harness.client(t, testVersion)
 
-	require.ErrorIs(t, client.CancelRun("round-nothing-r1-p1"), errNoRun)
+	err := client.CancelRun("round-nothing-r1-p1")
+
+	require.ErrorIs(t, err, errNoRunID)
+	require.ErrorContains(t, err, "round-nothing-r1-p1")
+	require.ErrorContains(t, err, "beehave status")
+	require.NotContains(t, err.Error(), "item has")
+}
+
+func TestRoundRun_CancelRunRefusesAnIdOfNoFormTheEngineMakes(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	client := harness.client(t, testVersion)
+
+	for _, id := range []string{"", "item-12", "item-12-r0", "item-12-r1x", "round-x-r1", "round-x-r1-p0", "round-x-p1", "phase-12-r1", "xitem-12-r1", "12"} {
+		err := client.CancelRun(id)
+
+		require.ErrorIs(t, err, errBadRunID, id)
+		require.ErrorContains(t, err, "Give a run id", id)
+	}
+
+	for _, id := range []string{"item-12-r1", "item-round/integration/s1-r2", testPassID} {
+		require.NotErrorIs(t, client.CancelRun(id), errBadRunID, id)
+	}
 }
 
 func pollRunState(t *testing.T, client *Client, id string, want RunState) {

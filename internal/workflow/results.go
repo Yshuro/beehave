@@ -75,7 +75,7 @@ func factsResultFields() map[string][]string {
 		"brief_rules", "stacked_rules", "limits", "traps", "token_rules", "changelog",
 		"board_number", "board_owner", "board_started", "board_merged",
 		"round_base", "round_next_base", "round_owner", "round_owner_email", "round_source_checkout", "round_lane_cap", "round_fix_rounds", "round_integration_pr", "round_merge",
-		"round_acceptance", "round_base_result", "round_base_reds", "round_base_reds_file", "round_lane_kind", "round_allow_paths", "round_wait_hours", "round_label", "round_items",
+		"round_acceptance", "round_base_result", "round_base_reds", "round_base_reds_file", "round_lane_kind", "round_allow_paths", "round_wait_hours",
 	}}
 }
 

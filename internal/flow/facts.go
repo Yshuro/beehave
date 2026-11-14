@@ -53,7 +53,6 @@ func roundOutputs(r model.Rounds) map[string]any {
 		"round_lane_cap": r.LaneCap, "round_fix_rounds": r.FixRounds, "round_integration_pr": r.IntegrationPR, "round_merge": r.Merge,
 		"round_acceptance": r.Acceptance, "round_base_result": r.BaseResult, "round_base_reds": orEmptyList(r.BaseReds), "round_base_reds_file": r.BaseRedsFile,
 		"round_lane_kind": r.LaneKind, "round_allow_paths": orEmptyList(r.AllowPaths), "round_wait_hours": r.WaitHours,
-		"round_label": r.Label, "round_items": orEmptyList(r.Items),
 	}
 }
 

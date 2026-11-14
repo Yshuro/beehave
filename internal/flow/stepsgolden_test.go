@@ -35,7 +35,7 @@ var goldenShapes = map[string][]string{
 		"board_sync: number,status",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
-		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,round_acceptance,round_allow_paths,round_base,round_base_reds,round_base_reds_file,round_base_result,round_fix_rounds,round_integration_pr,round_items,round_label,round_lane_cap,round_lane_kind,round_merge,round_next_base,round_owner,round_owner_email,round_source_checkout,round_wait_hours,source,stacked_rules,token_rules,tracker,traps",
+		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,round_acceptance,round_allow_paths,round_base,round_base_reds,round_base_reds_file,round_base_result,round_fix_rounds,round_integration_pr,round_lane_cap,round_lane_kind,round_merge,round_next_base,round_owner,round_owner_email,round_source_checkout,round_wait_hours,source,stacked_rules,token_rules,tracker,traps",
 		"gate: head,passed,report,required,steps,tree",
 		"gather: results",
 		"host_teardown: down,reason",
