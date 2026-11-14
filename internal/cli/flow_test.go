@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"path/filepath"
@@ -215,6 +216,12 @@ func (s *fakeSteering) Resume(item string) error {
 
 func (s *fakeSteering) Cancel(item string) error {
 	s.calls = append(s.calls, "cancel "+item)
+
+	return s.err
+}
+
+func (s *fakeSteering) CancelRun(runID string) error {
+	s.calls = append(s.calls, "cancel-run "+runID)
 
 	return s.err
 }
@@ -847,4 +854,54 @@ func TestFlowCommands_FailWhenThereIsNoConfigFolderToFind(t *testing.T) {
 
 	assert.Equal(t, 1, code)
 	assert.Contains(t, stderr.String(), "cannot find the home folder")
+}
+
+func TestRoundItem_RunCancelAndStatusAcceptARoundIdWithASlash(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+
+	code, stdout, stderr := rig.execute(t.Context(), "run", "round/integration/s1")
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "item round/integration/s1 finished\n", stdout)
+	assert.Equal(t, []string{"round/integration/s1@p"}, rig.runner.items)
+
+	code, _, stderr = rig.execute(t.Context(), "cancel", "round/integration/s1")
+	require.Equal(t, 0, code, stderr)
+
+	assert.Equal(t, []string{"cancel round/integration/s1"}, rig.steering.calls)
+
+	rig.steering.infos = []flow.RunInfo{
+		{ID: "item-round/integration/s1-r1", State: "done", Item: "round/integration/s1", Project: "p"},
+		{ID: "round-integration/s1-r1-p1", State: "running", Item: "round/integration/s1", Project: "p"},
+	}
+
+	code, stdout, stderr = rig.execute(t.Context(), "status", "--json")
+	require.Equal(t, 0, code, stderr)
+
+	var list struct {
+		Runs []runFields `json:"runs"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(stdout), &list), stdout)
+	require.Len(t, list.Runs, 2)
+	assert.Equal(t, "round-integration/s1-r1-p1", list.Runs[1].ID, "the pass run is listed beside the item run")
+	assert.Equal(t, "round/integration/s1", list.Runs[1].Item)
+}
+
+func TestCancel_RunStopsTheOneRunByItsIdAndRefusesAnItemBesideIt(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+
+	code, _, stderr := rig.execute(t.Context(), "cancel", "--run", "round-integration/s1-r1-p1")
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, []string{"cancel-run round-integration/s1-r1-p1"}, rig.steering.calls)
+
+	rig = newRig(t)
+
+	code, _, stderr = rig.execute(t.Context(), "cancel", "--run", "item-12-r1", "12")
+	assert.NotEqual(t, 0, code)
+	assert.Contains(t, stderr, "give a run id with --run and no item")
+	assert.Empty(t, rig.steering.calls)
 }

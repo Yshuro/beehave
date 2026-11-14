@@ -371,12 +371,14 @@ func TestMarkCancel_LeavesNoTemporaryFileAndAFolderThatCannotBeWrittenIsAnError(
 
 	dir := t.TempDir()
 	require.NoError(t, markCancel(dir, testRun, ItemInput{Item: testItem, Project: testProject}))
-	require.Error(t, markCancel(dir, "bad/run", ItemInput{}), "the rename into a missing folder fails")
+	require.NoError(t, os.Mkdir(cancelPath(dir, "blocked"), ownersMode))
+	require.Error(t, markCancel(dir, "blocked", ItemInput{}), "the rename onto a folder fails")
 
 	entries, err := os.ReadDir(filepath.Join(dir, cancelsDir))
 	require.NoError(t, err)
-	require.Len(t, entries, 1, "no temporary file stays after a write or a failed rename")
-	assert.Equal(t, testRun, entries[0].Name())
+	require.Len(t, entries, 2, "the marker and the blocking folder stay; no temporary file stays after a failed rename")
+	assert.Equal(t, "blocked", entries[0].Name())
+	assert.Equal(t, runFile(testRun), entries[1].Name())
 
 	folder := filepath.Join(dir, cancelsDir)
 
@@ -662,4 +664,20 @@ func TestScrub_KeepsTheCauseOfAChangedError(t *testing.T) {
 	assert.NotContains(t, changed.Error(), testSecret)
 	require.NoError(t, engine.scrub(nil))
 	require.ErrorIs(t, engine.scrub(errFake), errFake)
+}
+
+func TestPendingCancels_LogsAndSkipsAMarkerWhoseFileNameIsNotAnEscapedRunId(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, markCancel(dir, testRun, ItemInput{Item: testItem, Project: testProject}))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, cancelsDir, "%zz"), nil, ownerMode))
+
+	var out bytes.Buffer
+
+	pending, err := pendingCancels(dir, newLogger(&out))
+
+	require.NoError(t, err)
+	assert.Len(t, pending, 1)
+	assert.Contains(t, out.String(), "bad file name")
 }

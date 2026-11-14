@@ -25,7 +25,7 @@ var errNoOwner = errors.New("the run recorded no claim")
 
 // ownerPath is the file that holds the token of the claim that beehave resume took for a run.
 func ownerPath(dir, id string) string {
-	return filepath.Join(dir, ownersDir, id)
+	return filepath.Join(dir, ownersDir, runFile(id))
 }
 
 // saveOwner records the token of a fresh claim for a run. The run replays its recorded claim step, whose token was released, so the fresh token wins.

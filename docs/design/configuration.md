@@ -55,6 +55,24 @@ The optional `board = board(number, started, merged, owner)` value is the GitHub
 | `started`, `merged` | The Status columns that a workflow sets. |
 | `owner` | The login that owns the board. It defaults to the owner of the repository. |
 
+#### `rounds`
+
+The optional `rounds = rounds(...)` value holds the settings of one round. With no `rounds` value, the project has no round settings and the queue lists every open item. The workflow reads each key as the fact `round_<key>`.
+
+| Argument | Rule |
+| --- | --- |
+| `base` | Required. The branch of the round, such as `integration/r2`. The round id is `round/<base>`. |
+| `owner` | Required. The login of the owner. |
+| `lane_cap`, `fix_rounds` | Required. A whole number of 1 or more. |
+| `label`, `items` | Required: set exactly one. `label` is the tracker label that marks the items of the round. `items` is a list of item ids. The loader refuses a block with neither, with both, or with a blank label or an id that is not an item. |
+| `next_base`, `owner_email`, `source_checkout`, `acceptance`, `base_result` | Optional text. Empty when left out. |
+| `integration_pr` | Optional. A whole number of 0 or more. 0 means the round finds the pull request. |
+| `wait_hours` | Optional. A whole number of 1 or more when set. |
+| `merge` | Optional bool. The default is false. |
+| `base_reds`, `allow_paths` | Optional lists. |
+| `base_reds_file` | Optional. The default is `base-reds.md`. |
+| `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
+
 #### `schedules`
 
 The optional project key `schedules` is a list of `schedule(name, cron, workflow, item, timezone, catch_up)`. This key declares and validates the schedules only: no engine fires them yet.

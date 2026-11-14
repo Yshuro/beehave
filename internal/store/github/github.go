@@ -103,12 +103,17 @@ func (i ghIssue) item(number, title string) model.Item {
 		hold = hold || label.Name == holdLabel
 	}
 
+	var labels []string
+	for _, label := range i.Labels {
+		labels = append(labels, label.Name)
+	}
+
 	logins := make([]string, len(i.Assignees))
 	for index, user := range i.Assignees {
 		logins[index] = user.Login
 	}
 
-	return model.Item{ID: number, Severity: severity, Hold: hold, Assignee: strings.Join(logins, ","), Title: title}
+	return model.Item{ID: number, Severity: severity, Hold: hold, Assignee: strings.Join(logins, ","), Title: title, Labels: labels}
 }
 
 // severityOf gives the first label that names a severity, or P? when none does.

@@ -74,6 +74,10 @@ The engine predeclares `agent`, `batch_merge`, `command`, `earlier_calls`, `env`
 | `changelog` | Text. |
 | `board_number` | The board number, 0 when the project has none. |
 | `board_owner`, `board_started`, `board_merged` | The other values of the board. |
+| `round_base`, `round_next_base`, `round_owner`, `round_owner_email`, `round_source_checkout`, `round_acceptance`, `round_base_result`, `round_base_reds_file`, `round_lane_kind` | The text values of the `rounds(...)` block. Empty when the project has none. |
+| `round_lane_cap`, `round_fix_rounds`, `round_integration_pr`, `round_wait_hours` | The whole numbers of the `rounds(...)` block, 0 when the project has none. |
+| `round_merge` | Bool, false when the project has none. |
+| `round_base_reds`, `round_allow_paths` | Lists of the `rounds(...)` block. |
 
 - A fact that the project file leaves out is empty text, an empty dict or an empty list, never a missing field.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.

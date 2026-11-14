@@ -18,6 +18,9 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
+// errNoRunID is returned when no run has the run id that --run names.
+var errNoRunID = errors.New("no run has this id")
+
 // errNoRun is returned when an item has no run.
 var errNoRun = errors.New("the item has no run")
 
@@ -127,7 +130,7 @@ func (c *Client) Close() error {
 
 // Status lists every run of every item, oldest first.
 func (c *Client) Status() ([]RunInfo, error) {
-	rows, err := dbos.ListWorkflows(c.flow, dbos.WithFilterWorkflowIDPrefix(runPrefix), dbos.WithFilterName(itemName), dbos.WithFilterLoadInput(true), dbos.WithFilterLoadOutput(true))
+	rows, err := dbos.ListWorkflows(c.flow, dbos.WithFilterWorkflowIDPrefix(runPrefix, passPrefix), dbos.WithFilterName(itemName, passName), dbos.WithFilterLoadInput(true), dbos.WithFilterLoadOutput(true))
 	if err != nil {
 		return nil, fmt.Errorf("list the runs: %w", err)
 	}
@@ -500,6 +503,46 @@ func (c *Client) Cancel(item string) error {
 	}
 
 	return c.cancelRun(item, last)
+}
+
+// CancelRun stops the open run with this run id, a pass run included. The run need not be the latest run of its item.
+func (c *Client) CancelRun(id string) error {
+	target, err := c.runWithID(id)
+	if err != nil {
+		return err
+	}
+
+	switch {
+	case target.Status.ApplicationVersion != c.version && !target.terminal():
+		return strandedError(target, c.version)
+	case target.terminal():
+		return fmt.Errorf("%w: %s is %s and has nothing to cancel", errWrongState, id, stateOf(target.Status.Status))
+	}
+
+	in, err := target.input()
+	if err != nil {
+		return err
+	}
+
+	return c.cancelRun(in.Item, target)
+}
+
+// runWithID reads the one run with this run id.
+func (c *Client) runWithID(id string) (run, error) {
+	if !runIDForm.MatchString(id) {
+		return run{}, fmt.Errorf("%w: %q. Give a run id that beehave status lists, such as item-12-r1", errBadRunID, id)
+	}
+
+	rows, err := dbos.ListWorkflows(c.flow, dbos.WithFilterWorkflowIDs(id), dbos.WithFilterLoadInput(true), dbos.WithFilterLoadOutput(true))
+	if err != nil {
+		return run{}, fmt.Errorf("read run %s: %w", id, err)
+	}
+
+	if len(rows) == 0 {
+		return run{}, fmt.Errorf("%w: %s. Run beehave status to see the run ids", errNoRunID, id)
+	}
+
+	return run{Status: rows[0]}, nil
 }
 
 // cancelRun cancels an open run and its children, and gives back what the run held when no engine runs.

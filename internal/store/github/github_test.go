@@ -79,10 +79,10 @@ func TestGithubOpenItems_SkipsEpicsAndReadsLabels(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, []model.Item{
 		{ID: "1", Severity: model.SeverityUnknown, Title: "plain"},
-		{ID: "3", Severity: model.SeverityP2, Hold: true, Assignee: "ann,bob", Title: "has two"},
-		{ID: "4", Severity: model.SeverityP3, Title: "holding"},
-		{ID: "5", Severity: model.SeverityP1, Title: "not an epic: x"},
-		{ID: "6", Severity: model.SeverityUnknown, Title: "no hold"},
+		{ID: "3", Severity: model.SeverityP2, Hold: true, Assignee: "ann,bob", Title: "has two", Labels: []string{"P2", "P1", "hold"}},
+		{ID: "4", Severity: model.SeverityP3, Title: "holding", Labels: []string{"holder", "P3"}},
+		{ID: "5", Severity: model.SeverityP1, Title: "not an epic: x", Labels: []string{"P1"}},
+		{ID: "6", Severity: model.SeverityUnknown, Title: "no hold", Labels: []string{"Hold", "P4"}},
 	}, items)
 	assert.Equal(t, []string{"issue", "list", "--repo", ghRepo, "--state", "open", "--limit", "1000", "--json", "number,title,labels,assignees"}, run.Calls[0])
 }
