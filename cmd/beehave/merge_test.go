@@ -368,6 +368,24 @@ func TestOpened_ADisableIsPassedThroughOrGivesAnError(t *testing.T) {
 	assert.Equal(t, "off 5", queue.called)
 }
 
+type markForge struct{ forge.Forge }
+
+func (markForge) ReadyMarks(_ context.Context, pr int) ([]string, error) {
+	return []string{"reviewer", fmt.Sprintf("pr%d", pr)}, nil
+}
+
+func TestOpened_TheReadyMarksArePassedThroughOrGiveAnError(t *testing.T) {
+	t.Parallel()
+
+	marks, err := opened{noTreeForge{}}.ReadyMarks(t.Context(), 5)
+	require.ErrorIs(t, err, errNoOptionalRead)
+	assert.Nil(t, marks)
+
+	marks, err = opened{markForge{}}.ReadyMarks(t.Context(), 5)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"reviewer", "pr5"}, marks)
+}
+
 func TestOpened_AQueuedMergeIsPassedThroughOrGivesAnError(t *testing.T) {
 	t.Parallel()
 

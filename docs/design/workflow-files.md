@@ -260,11 +260,19 @@ It checks, in this order:
 
 1. Merged or closed.
 2. The head branch.
-3. The author. An open pull request by a login that is not in `own["logins"]` gives CLAIMED, exit code 10. An empty `own` checks no author.
-4. The `hold` label.
-5. A draft.
-6. The expected head.
-7. The expected base.
+3. The assignees. A login that is not in `own["logins"]` and holds the pull request, or an issue that the pull request body links, gives ASSIGNED, exit code 11. An empty `own` checks no assignee.
+4. The author. An open pull request by a login that is not in `own["logins"]` gives CLAIMED, exit code 10. An empty `own` checks no author.
+5. The `hold` label.
+6. A draft.
+7. The expected head.
+8. The expected base.
+
+The assignee check reads the pull request and each linked issue once. A link is a `Closes`, `Fixes`, `Resolves`, `Part of`, `Refs` or `Related` keyword with `#N`, `owner/repo#N` or the URL of an issue. The call reads a link to another repository on that repository.
+
+- A read that fails ends the step with an error. A failed read is not a clean item.
+- The read of the assignees of an issue is optional for a forge. A forge without it is refused when the body has a link.
+- The reason of ASSIGNED names the holder and ends with `knows=yes` or `knows=no`. The value is `yes` only when the holder opened the pull request or reviews it.
+- The reason also gives the recovery: leave the item to the holder, or ask the holder first.
 
 - A keyword that the call leaves out checks nothing of its kind. An item with no pull request passes.
 - A stop is a result and not an error, so the workflow decides what to do with it. `code` is the exit code of the stop.

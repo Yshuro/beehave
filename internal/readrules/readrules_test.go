@@ -66,8 +66,12 @@ var rules = map[string]rule{
 	"internal/merge.Logs.FailedLog":           {Exempt: "the log of a failed check helps the reader; a log that cannot be read leaves the row without text and the check stays red"},
 	"internal/merge.Body.PRBody":              {Proof: "TestEditBody_AFailedReadWritesNothing", Needle: "failRead"},
 
-	"internal/preflight.Reader.PRView":    {Proof: "TestCheck_AFailedReadIsARefusalThatKeepsItsCause", Needle: "viewErr"},
-	"internal/preflight.Reader.BranchRef": {Proof: "TestCheck_AFailedReadIsARefusalThatKeepsItsCause", Needle: "branchErr"},
+	"internal/preflight.Reader.PRView":            {Proof: "TestCheck_AFailedReadIsARefusalThatKeepsItsCause", Needle: "viewErr"},
+	"internal/preflight.Reader.BranchRef":         {Proof: "TestCheck_AFailedReadIsARefusalThatKeepsItsCause", Needle: "branchErr"},
+	"internal/preflight.Reader.IssueAssignees":    {Proof: "TestPreflight_AFailedReadOfALinkedIssueIsNotClean", Needle: "unread"},
+	"internal/review.Reader.ReadyMarks":           {Proof: "TestPoll_AFailedReadOfTheReadyMarksOfADraftStopsThePoll", Needle: "ReadyMarks"},
+	"internal/forge.AssigneeReads.IssueAssignees": {NotHeld: inAdapter},
+	"internal/forge.ReadyReads.ReadyMarks":        {NotHeld: inAdapter},
 
 	"internal/review.Reader.PRList":            {Proof: "TestPoll_AFailedReadStopsWithAnUnreadError", Needle: "PRList"},
 	"internal/review.Reader.PRView":            {Proof: "TestPoll_AFailedReadStopsWithAnUnreadError", Needle: "PRView"},

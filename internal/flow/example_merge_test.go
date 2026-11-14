@@ -87,6 +87,10 @@ func (w *shipWorld) IssueState(context.Context, int) (string, error) {
 	return "", errFake
 }
 
+func (w *shipWorld) IssueAssignees(context.Context, string, int) ([]string, error) {
+	return nil, nil
+}
+
 func (w *shipWorld) ClosingRefs(context.Context, int) (model.ClosingRefs, error) {
 	return model.ClosingRefs{}, errFake
 }

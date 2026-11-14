@@ -17,13 +17,18 @@ const shaLength = 40
 
 // fields returns what the checks read from the pull request.
 func fields() []string {
-	return []string{"number", "state", "isDraft", "mergedAt", "headRefOid", "headRefName", "baseRefName", "labels", "headRepository", "author"}
+	return []string{
+		"number", "state", "isDraft", "mergedAt", "headRefOid", "headRefName", "baseRefName", "labels", "headRepository", "author",
+		"body", "assignees", "reviews", "reviewRequests",
+	}
 }
 
 // Reader is the part of the forge that preflight reads. The caller passes the forge of the project.
+// IssueAssignees returns the logins that hold an issue. An empty repo is the repository of the pull request, and any other repo is read on that repository.
 type Reader interface {
 	PRView(ctx context.Context, pr int, fields ...string) (model.PullRequest, error)
 	BranchRef(ctx context.Context, branch string) (sha string, found bool, err error)
+	IssueAssignees(ctx context.Context, repo string, number int) ([]string, error)
 }
 
 // Stop is the reason a caller must not go on, or Unchanged. The value of a Stop is its exit code.
@@ -41,11 +46,12 @@ const (
 	Draft       Stop = 8
 	Held        Stop = 9
 	Claimed     Stop = 10
+	Assigned    Stop = 11
 )
 
 // Stops returns every value of Stop.
 func Stops() []Stop {
-	return []Stop{Unchanged, Refused, Merged, Closed, HeadMoved, BaseChanged, BranchGone, Draft, Held, Claimed}
+	return []Stop{Unchanged, Refused, Merged, Closed, HeadMoved, BaseChanged, BranchGone, Draft, Held, Claimed, Assigned}
 }
 
 // Code returns the exit code of the stop. A value outside the set is Refused.
@@ -61,6 +67,7 @@ func (s Stop) String() string {
 	names := map[Stop]string{
 		Unchanged: "UNCHANGED", Refused: "REFUSED", Merged: "MERGED", Closed: "CLOSED", HeadMoved: "HEAD MOVED",
 		BaseChanged: "BASE CHANGED", BranchGone: "BRANCH GONE", Draft: "DRAFT", Held: "HELD", Claimed: "CLAIMED",
+		Assigned: "ASSIGNED",
 	}
 	if name, ok := names[s]; ok {
 		return name
@@ -70,7 +77,7 @@ func (s Stop) String() string {
 }
 
 // Request names the pull request. ExpectHead is the full SHA the caller expects, ExpectBase the branch it gated against; an empty one is not checked.
-// Own lists the logins of the caller. An open pull request by any other login claims the item. An empty list checks no author.
+// Own lists the logins of the caller. An open pull request by any other login claims the item, and so does an assignee of the pull request or of a linked issue that is not in the list. An empty list checks no author and no assignee.
 type Request struct {
 	PR         int
 	ExpectHead string
@@ -92,12 +99,17 @@ func (r Result) OK() bool { return r.Stop == Unchanged }
 type ReadError struct {
 	PR     int
 	Branch string
+	Link   string
 	Cause  error
 }
 
 func (e *ReadError) Error() string {
 	if e.Branch != "" {
 		return fmt.Sprintf("cannot read the branch %s of #%d", e.Branch, e.PR)
+	}
+
+	if e.Link != "" {
+		return fmt.Sprintf("cannot read the assignees of %s, linked from #%d. Check the access to that repository, then run again.", e.Link, e.PR)
 	}
 
 	return fmt.Sprintf("cannot read #%d", e.PR)
@@ -116,13 +128,17 @@ type view struct {
 	base   string
 	labels string
 	author string
+	body   string
+	// assignees hold the pull request. reviewers are the logins that reviewed it or were asked to.
+	assignees []string
+	reviewers []string
 }
 
-// Check judges the pull request against the request. The order is the state, the branch, the author, the labels, the draft flag, then the head and the base.
+// Check judges the pull request against the request. The order is the state, the branch, the assignees, the author, the labels, the draft flag, then the head and the base.
 // A merged pull request still shows a head that looks fine, so the state comes first.
 // A pull request that carries the whole label hold is held. An empty hold holds nothing.
 func Check(ctx context.Context, r Reader, req Request, hold string) (Result, error) {
-	v, err := read(ctx, r, req.PR)
+	v, err := read(ctx, r, req)
 	if err != nil {
 		return Result{}, err
 	}
@@ -152,8 +168,8 @@ func judge(ctx context.Context, r Reader, v view, req Request, hold string) (Sto
 		return stop, lines, err
 	}
 
-	if stop, lines := claimStop(v, req.Own); stop != Unchanged {
-		return stop, lines, nil
+	if stop, lines, err := heldStop(ctx, r, v, req); err != nil || stop != Unchanged {
+		return stop, lines, err
 	}
 
 	if stop, lines := labelStop(v, hold); stop != Unchanged {
@@ -166,16 +182,24 @@ func judge(ctx context.Context, r Reader, v view, req Request, hold string) (Sto
 }
 
 // read reads the pull request. A missing state, draft flag, branch name or label list is a refusal, because a null would pass as an open, ready pull request.
-func read(ctx context.Context, r Reader, pr int) (view, error) {
+// A missing assignee list is a refusal too, when the caller names its own logins: a null would pass as a pull request that nobody holds.
+func read(ctx context.Context, r Reader, req Request) (view, error) {
+	pr := req.PR
+
 	pull, err := r.PRView(ctx, pr, fields()...)
 	if err != nil {
 		return view{}, &ReadError{PR: pr, Cause: err}
 	}
 
-	if pull.State == nil || pull.IsDraft == nil || pull.HeadRefName == nil || pull.Labels == nil {
+	if !complete(pull, req) {
 		return view{}, &ReadError{PR: pr}
 	}
 
+	return viewOf(pr, pull), nil
+}
+
+// viewOf copies the fields of a complete pull request.
+func viewOf(pr int, pull model.PullRequest) view {
 	return view{
 		pr:     pr,
 		state:  *pull.State,
@@ -185,7 +209,44 @@ func read(ctx context.Context, r Reader, pr int) (view, error) {
 		base:   model.OrNull(model.Deref(pull.BaseRefName)),
 		labels: labelNames(pull),
 		author: pull.Author.Login,
-	}, nil
+		body:   pull.Body,
+
+		assignees: logins(pull.Assignees),
+		reviewers: reviewers(pull),
+	}
+}
+
+// complete reports whether the pull request holds every field the checks decide on.
+func complete(pull model.PullRequest, req Request) bool {
+	if pull.State == nil || pull.IsDraft == nil || pull.HeadRefName == nil || pull.Labels == nil {
+		return false
+	}
+
+	return len(req.Own) == 0 || pull.Assignees != nil
+}
+
+func logins(accounts []model.Account) []string {
+	names := make([]string, len(accounts))
+	for i, account := range accounts {
+		names[i] = account.Login
+	}
+
+	return names
+}
+
+// reviewers lists the logins that sent a review or were asked for one.
+func reviewers(pull model.PullRequest) []string {
+	var names []string
+
+	for _, review := range pull.Reviews {
+		names = append(names, review.Author.Login)
+	}
+
+	for _, ask := range pull.ReviewRequests {
+		names = append(names, ask.Login)
+	}
+
+	return names
 }
 
 // labelNames joins the label names with commas. A label with no name reads as null.

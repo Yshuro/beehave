@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -29,6 +30,21 @@ type fake struct {
 	branchErr  error
 	fields     []string
 	branches   []string
+	// issues maps repo#number to the logins that hold the issue; a key in unread fails. asked lists the keys that were read.
+	issues map[string][]string
+	unread map[string]bool
+	asked  []string
+}
+
+func (f *fake) IssueAssignees(_ context.Context, repo string, number int) ([]string, error) {
+	key := repo + "#" + strconv.Itoa(number)
+	f.asked = append(f.asked, key)
+
+	if f.unread[key] {
+		return nil, errDown
+	}
+
+	return f.issues[key], nil
 }
 
 func (f *fake) PRView(_ context.Context, _ int, fields ...string) (model.PullRequest, error) {
@@ -55,6 +71,12 @@ type pull struct {
 	base   string
 	gone   bool
 	author string
+	// body is the text of the pull request, assigned holds it, reviewers reviewed it.
+	body      string
+	assigned  []string
+	reviewers []string
+	// requested holds the logins that were asked to review and have not yet.
+	requested []string
 }
 
 func open() pull { return pull{state: "OPEN", base: "main"} }
@@ -67,13 +89,28 @@ func (p pull) fake(t *testing.T) *fake {
 		labels = append(labels, map[string]string{"name": name})
 	}
 
+	accounts := func(names []string) []map[string]string {
+		list := []map[string]string{}
+		for _, name := range names {
+			list = append(list, map[string]string{"login": name})
+		}
+
+		return list
+	}
+
+	reviews := []map[string]any{}
+	for _, name := range p.reviewers {
+		reviews = append(reviews, map[string]any{"author": map[string]string{"login": name}, "state": "COMMENTED"})
+	}
+
 	data, err := json.Marshal(map[string]any{
 		"number": 1, "state": p.state, "isDraft": p.draft, "mergedAt": nil,
 		"headRefOid": head, "headRefName": "feature", "baseRefName": p.base, "labels": labels, "author": map[string]string{"login": p.author},
+		"body": p.body, "assignees": accounts(p.assigned), "reviews": reviews, "reviewRequests": accounts(p.requested),
 	})
 	require.NoError(t, err)
 
-	return &fake{view: string(data), branchGone: p.gone}
+	return &fake{view: string(data), branchGone: p.gone, issues: map[string][]string{}, unread: map[string]bool{}}
 }
 
 func summary(state, draft, base, labels string) string {
@@ -161,7 +198,10 @@ func TestCheck_ReadsThePullRequestOnceWithTheFieldsTheChecksNeed(t *testing.T) {
 	f := open().fake(t)
 	check(t, f, preflight.Request{PR: 1})
 
-	assert.Equal(t, []string{"number", "state", "isDraft", "mergedAt", "headRefOid", "headRefName", "baseRefName", "labels", "headRepository", "author"}, f.fields)
+	assert.Equal(t, []string{
+		"number", "state", "isDraft", "mergedAt", "headRefOid", "headRefName", "baseRefName", "labels", "headRepository", "author",
+		"body", "assignees", "reviews", "reviewRequests",
+	}, f.fields)
 	assert.Equal(t, []string{"feature"}, f.branches)
 }
 
@@ -381,6 +421,7 @@ func TestStop_IsAClosedSetWithTheCodesACallerBranchesOn(t *testing.T) {
 	codes := map[preflight.Stop]int{
 		preflight.Unchanged: 0, preflight.Refused: 2, preflight.Merged: 3, preflight.Closed: 4, preflight.HeadMoved: 5,
 		preflight.BaseChanged: 6, preflight.BranchGone: 7, preflight.Draft: 8, preflight.Held: 9, preflight.Claimed: 10,
+		preflight.Assigned: 11,
 	}
 	for stop, code := range codes {
 		assert.Equal(t, code, stop.Code(), stop.String())

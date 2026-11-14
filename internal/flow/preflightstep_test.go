@@ -202,7 +202,7 @@ func (goneBranch) BranchRef(context.Context, string) (string, bool, error) { ret
 func preflightPull(t *testing.T, head string, over map[string]any) model.PullRequest {
 	t.Helper()
 
-	row := map[string]any{"labels": []any{}, "author": map[string]any{"login": "owner"}}
+	row := map[string]any{"labels": []any{}, "assignees": []any{}, "author": map[string]any{"login": "owner"}}
 	for key, value := range over {
 		row[key] = value
 	}
