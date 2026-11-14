@@ -56,7 +56,7 @@ func resultFields() map[string][]string {
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
 		mergeName:        {"state", reasonField},
-		preflightName:    {"ok", "stop", "code", reasonField},
+		preflightName:    {"ok", "stop", "code", reasonField, "foreign", "pr", "head", "author"},
 		queueName:        {"rows", "free"},
 		spawnName:        {"runs"},
 		waitName:         {"answer", "answers", "timed_out"},

@@ -95,6 +95,7 @@ var rules = map[string]rule{
 
 	"internal/flow.queueReader.OpenItems": {Proof: "TestQueue_AFailedReadFailsTheStepAndReturnsNoGuess", Needle: "itemsErr"},
 	"internal/flow.queueReader.OpenPulls": {Proof: "TestQueue_AFailedReadFailsTheStepAndReturnsNoGuess", Needle: "pullsErr"},
+	"internal/flow.queueReader.PullState": {Proof: "TestQueue_AFailedReadOfTheRecordedPullRequestFailsTheStepAndReturnsNoGuess", Needle: "stateErr"},
 	"internal/flow.reader.Comments":       {Proof: "TestItemRead_AFailedReadFailsTheStep", Needle: "err"},
 	"internal/flow.reader.Parent":         {Proof: "TestItemRead_AFailedReadFailsTheStep", Needle: "err"},
 	"internal/flow.orchestrators.Others":  {Proof: "TestRun_FailsWhenTheOtherOrchestratorsCannotBeListed", Needle: "fakeOthers"},

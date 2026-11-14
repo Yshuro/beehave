@@ -59,6 +59,9 @@ func ItemTargets() []string { return []string{"self", "parent"} }
 // ChildrenValues lists the values of the children argument of a merge call.
 func ChildrenValues() []string { return []string{"refuse", "retarget"} }
 
+// ForeignModes lists the values of the foreign argument of a preflight call.
+func ForeignModes() []string { return []string{"review"} }
+
 // ForbidKinds lists the values that an element of the forbid_commands argument takes: the names of the finding kinds.
 // The check and the run both read it.
 func ForbidKinds() []string { return model.FindingKindNames() }
@@ -389,7 +392,7 @@ func itemSignatures() map[string][]Param {
 		prAssignName:   {filled("assignee"), opt("linked", KindBool), label},
 		prCommentName:  {filled("text"), filled("key"), forbidText(), label},
 		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), label},
-		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), label},
+		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), one("foreign", ForeignModes()), label},
 		mergeName: {
 			req("head", KindText), opt("repo", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("approved", KindBool),
 			{Name: treeKeyword, Kind: KindText, AsValue: true},

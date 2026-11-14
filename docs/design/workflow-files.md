@@ -254,7 +254,7 @@ The four steps that post public text (`item_create`, `item_comment`, `pr_comment
 
 ### `preflight`
 
-`preflight(head, base, hold, own, id, name)` reads the pull request of the item `id`, or of the item of the run when `id` is left out. It returns `ok`, `stop`, `code` and `reason`.
+`preflight(head, base, hold, own, id, foreign, name)` reads the pull request of the item `id`, or of the item of the run when `id` is left out. It returns `ok`, `stop`, `code`, `reason`, `foreign`, `pr`, `head` and `author`. The last four are `False`, `0` and two empty texts unless the pull request is foreign.
 
 It checks, in this order:
 
@@ -275,6 +275,8 @@ The assignee check reads the pull request and each linked issue once. A link is 
 - The reason also gives the recovery: leave the item to the holder, or ask the holder first.
 
 - A keyword that the call leaves out checks nothing of its kind. An item with no pull request passes.
+- `foreign = "review"` is the only value of `foreign`. With it, an open pull request by a login that is not in `own["logins"]` is not a stop. The call returns after the author check, before the `hold`, draft, head and base checks, with `foreign` set to `True` and `pr`, `head` and `author` set to the pull request, its head commit and its login. A merged or closed pull request still stops.
+- The foreign path is off. A build that gets a foreign result from the call turns it into the stop REFUSED, exit code 2, on every project, so a workflow never sees `foreign` as `True`. No setting changes this.
 - A stop is a result and not an error, so the workflow decides what to do with it. `code` is the exit code of the stop.
 - A stop also goes into the `stopped` field of the result of the run (step, exit code and reason).
 - A read that fails ends the step with an error. A build with no preflight reader fails the call.
@@ -303,10 +305,11 @@ Each row has `item`, `state`, `severity` and `pr`. The state:
 | --- | --- |
 | `running` | The item has an open run. |
 | `failed` | Its last attempt ended without success. |
-| `done` | Its last run succeeded. |
+| `done` | Its last run succeeded, and no other row applies. |
 | `hold` | The tracker holds the item, or its pull request has the label that `hold` names. |
 | `ready` | Otherwise. A held item is never `ready`. |
 
+- A run that succeeded is offered again, with the state `ready` or `hold`, when its value holds `reason = "foreign"`, a `pr` number and a non-empty `findings` list, and the forge shows that pull request as merged. The call reads the state of that number and does not look the pull request up again. A read that fails ends the step with an error.
 - The rows sort by severity, then by item id as byte strings.
 - `pr` is the number of the lowest open pull request whose head branch is the item id, or 0.
 - `free` is the cap of the `items` queue less the runs that the library lists on it as pending or enqueued, so the engine keeps no count.

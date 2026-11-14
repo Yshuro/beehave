@@ -160,6 +160,51 @@ func TestCheck_AnOpenPullRequestOfAnotherAuthorClaimsTheItem(t *testing.T) {
 	assert.True(t, unchecked.OK(), "an empty own list checks no author")
 }
 
+func TestPreflight_AForeignPullRequestIsReviewedNotClaimed(t *testing.T) {
+	t.Parallel()
+
+	p := open()
+	p.author = "someone"
+	p.base = "release"
+
+	foreign := check(t, p.fake(t), preflight.Request{PR: 1, Own: []string{"owner"}, ExpectBase: "main", Foreign: true})
+
+	assert.True(t, foreign.OK(), "a foreign pull request is not a stop in this mode")
+	assert.True(t, foreign.Foreign)
+	assert.Equal(t, 1, foreign.PR)
+	assert.Equal(t, head, foreign.Head)
+	assert.Equal(t, "someone", foreign.Author)
+	assert.Equal(t, preflight.Unchanged, foreign.Stop, "the foreign return comes before the base check, so a base that is not the round base does not stop it")
+
+	claimed := check(t, p.fake(t), preflight.Request{PR: 1, Own: []string{"owner"}, ExpectBase: "main"})
+	assert.Equal(t, preflight.Claimed, claimed.Stop, "without the foreign mode the same pull request still claims the item")
+	assert.False(t, claimed.Foreign)
+}
+
+func TestPreflight_AnOwnPullRequestIsNotForeignAndStillMeetsTheBaseCheck(t *testing.T) {
+	t.Parallel()
+
+	p := open()
+	p.author = "owner"
+	p.base = "release"
+
+	own := check(t, p.fake(t), preflight.Request{PR: 1, Own: []string{"owner"}, ExpectBase: "main", Foreign: true})
+
+	assert.False(t, own.Foreign)
+	assert.Equal(t, preflight.BaseChanged, own.Stop)
+}
+
+func TestPreflight_AForeignPullRequestThatMergedStopsAsMerged(t *testing.T) {
+	t.Parallel()
+
+	p := pull{state: "MERGED", base: "main", author: "someone"}
+
+	merged := check(t, p.fake(t), preflight.Request{PR: 1, Own: []string{"owner"}, Foreign: true})
+
+	assert.Equal(t, preflight.Merged, merged.Stop, "only an open pull request is foreign")
+	assert.False(t, merged.Foreign)
+}
+
 func TestCheck_TheAuthorMatchIgnoresCase(t *testing.T) {
 	t.Parallel()
 
