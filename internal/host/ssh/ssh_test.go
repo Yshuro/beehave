@@ -443,6 +443,34 @@ func TestWait_AStaleLogCancelsTheUnitWithAMarkerThenStopsIt(t *testing.T) {
 	assert.Len(t, bank.calls, 1)
 }
 
+func TestWait_AJobGoesStaleAfterExactlyTheConfiguredMinutes(t *testing.T) {
+	t.Parallel()
+
+	const staleMinutes = 7
+
+	cfg := config()
+	cfg.StaleMinutes = staleMinutes
+
+	m := sshtest.New(hosttest.Working)
+	h, _, clock := newHost(t, m, cfg)
+
+	id, err := h.Submit(t.Context(), model.JobSpec{Name: "x", Command: "x"})
+	require.NoError(t, err)
+
+	u := m.Units[string(id)]
+	u.Live = 1 << 20
+	u.LogSizes = []int{10}
+
+	started := clock.now
+	state, err := h.Wait(t.Context(), id)
+	waited := clock.now.Sub(started)
+
+	require.NoError(t, err)
+	assert.Equal(t, model.JobStale, state)
+	assert.GreaterOrEqual(t, waited, staleMinutes*time.Minute, "the wait does not end before the configured minutes")
+	assert.Less(t, waited, staleMinutes*time.Minute+time.Minute, "the wait ends at the configured minutes, not at the default of 20")
+}
+
 func TestCancel_WritesTheMarkerThenStopsThenWaitsThenBanks(t *testing.T) {
 	t.Parallel()
 

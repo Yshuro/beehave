@@ -75,6 +75,9 @@ flowchart TD
     slurm --> jobwait
     sshhost --> link
     sshhost --> jobwait
+    skypilot --> config
+    slurm --> config
+    sshhost --> config
     link --> proc
     jobwait --> host
     agent --> proc

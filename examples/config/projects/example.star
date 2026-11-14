@@ -82,4 +82,14 @@ project(
     #         known_hosts = "strict",       # "strict" (default) or "accept-new"; a host key that changes is always refused
     #     ),
     # ),
+    # The same for a Slurm cluster. The slurm block takes the keys of the ssh block, except work_root.
+    # host = host(
+    #     provider = "slurm",
+    #     disk_floor_gb = 50,
+    #     slurm = slurm(
+    #         address = "head.example.org", # the name or IP of the head node; the default is the ssh alias in build_host
+    #         user = "ci",
+    #         known_hosts = "strict",
+    #     ),
+    # ),
 )

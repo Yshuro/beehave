@@ -147,6 +147,23 @@ func TestCheckConfig_ReportsAProjectWhoseAdaptersCannotBeBuilt(t *testing.T) {
 	require.Equal(t, filepath.Join(dir, "projects", "b.star")+": no gh on the path\n", stderr)
 }
 
+func TestCheckConfig_ShowsTheFilePositionOfAnAdapterRefusalOnce(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	text := "project(repo = \"o/n\", tracker = \"github\", forge = \"github\", claims = \"beads\", beads = beads(prefix = \"p\"), base_branch = \"main\", gate = \"g\", test_report = \"r.xml\")\n"
+	writeConfig(t, dir, "projects/a.star", text)
+
+	file := filepath.Join(dir, "projects", "a.star")
+
+	code, stderr := runWithAdapters(t, func(context.Context, model.Project) error {
+		return errors.New("invalid ssh host setting: " + file + ":11:18: `host.ssh.port` must be from 1 to 65535")
+	}, dir)
+
+	require.Equal(t, 2, code)
+	require.Equal(t, "invalid ssh host setting: "+file+":11:18: `host.ssh.port` must be from 1 to 65535\n", stderr)
+}
+
 func TestCheckConfig_RefusesABeadsClaimsProjectWithoutABeadsBlock(t *testing.T) {
 	t.Parallel()
 

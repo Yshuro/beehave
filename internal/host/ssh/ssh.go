@@ -113,7 +113,7 @@ func (h *Host) settingsOf(opts []Option) settings {
 }
 
 func linkOptions(s block) link.Options {
-	return link.Options{Address: s.address, User: s.user, Identity: s.identity, KnownHosts: s.knownHosts, Port: s.port}
+	return link.Options{Block: string(Name), Address: s.address, User: s.user, Identity: s.identity, KnownHosts: s.knownHosts, Port: s.port}
 }
 
 // checkConfig reads the block of the config and returns it. It refuses a work root that systemd or the shell would change: systemd expands a percent sign in a path, and a dollar sign is no path.

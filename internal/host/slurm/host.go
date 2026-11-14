@@ -35,7 +35,7 @@ func NewHost(target string, config model.HostConfig, ssh proc.Runner, opts ...Op
 	}
 
 	l, err := link.ForMachine(target, link.Options{
-		Address: values.address, User: values.user, Identity: values.identity, KnownHosts: values.knownHosts, Port: values.port,
+		Block: string(Name), Address: values.address, User: values.user, Identity: values.identity, KnownHosts: values.knownHosts, Port: values.port,
 	}, ssh)
 	if err != nil {
 		return nil, err

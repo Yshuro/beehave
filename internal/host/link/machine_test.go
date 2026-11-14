@@ -47,6 +47,43 @@ func TestForMachine_NoPolicyMeansStrictAndNeverNo(t *testing.T) {
 	assert.NotContains(t, line, "StrictHostKeyChecking=no")
 }
 
+func TestForMachine_ARefusalNamesTheKeyOfTheBlockThatTheUserWrote(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		opts link.Options
+		keys []string
+	}{
+		"an address":     {opts: link.Options{Address: "-x"}, keys: []string{"address"}},
+		"a user":         {opts: link.Options{User: "a b"}, keys: []string{"user"}},
+		"an identity":    {opts: link.Options{Identity: "/k/a b"}, keys: []string{"port", "identity"}},
+		"a port":         {opts: link.Options{Port: 70000}, keys: []string{"port", "identity"}},
+		"a host key use": {opts: link.Options{KnownHosts: "no"}, keys: []string{"known_hosts"}},
+	}
+
+	for _, block := range []string{"ssh", "slurm"} {
+		other := map[string]string{"ssh": "slurm", "slurm": "ssh"}[block]
+
+		for name, tc := range cases {
+			t.Run(block+" "+name, func(t *testing.T) {
+				t.Parallel()
+
+				tc.opts.Block = block
+
+				_, err := link.ForMachine("gates", tc.opts, proctest.Always(model.CommandResult{}))
+
+				require.ErrorIs(t, err, link.ErrConfig)
+
+				for _, key := range tc.keys {
+					assert.Contains(t, err.Error(), "host."+block+"."+key)
+				}
+
+				assert.NotContains(t, err.Error(), "host."+other+".")
+			})
+		}
+	}
+}
+
 func TestForMachine_RefusesAWordThatCouldBecomeAnOption(t *testing.T) {
 	t.Parallel()
 

@@ -214,6 +214,16 @@ func TestNew_RefusesASettingThatCouldChangeACommandLine(t *testing.T) {
 	require.ErrorIs(t, err, link.ErrConfig)
 }
 
+func TestNew_ALinkRefusalNamesTheSSHKey(t *testing.T) {
+	t.Parallel()
+
+	_, err := ssh.New("gates", configWith(model.TextEntry(ssh.BlockAddress, "-oProxyCommand=x")), proctest.Always(model.CommandResult{}))
+
+	require.ErrorIs(t, err, link.ErrConfig)
+	assert.Contains(t, err.Error(), "host.ssh.address")
+	assert.NotContains(t, err.Error(), "host.slurm.")
+}
+
 func TestNew_BuildsNoConnection(t *testing.T) {
 	t.Parallel()
 

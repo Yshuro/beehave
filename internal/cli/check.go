@@ -391,7 +391,12 @@ func adapterProblems(ctx context.Context, cfg config.Config, adapters func(conte
 	for _, name := range slices.Sorted(maps.Keys(cfg.Projects)) {
 		project := cfg.Projects[name]
 		if err := adapters(ctx, project.Project); err != nil {
-			problems = append(problems, fmt.Errorf("%s: %w", project.Path, err))
+			// A refusal of a block already holds the file and the position of the call, so the file is not named a second time.
+			if !strings.Contains(err.Error(), project.Path) {
+				err = fmt.Errorf("%s: %w", project.Path, err)
+			}
+
+			problems = append(problems, err)
 		}
 	}
 

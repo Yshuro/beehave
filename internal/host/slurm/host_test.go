@@ -143,6 +143,18 @@ func TestNewHost_ARefusedWorkRootSaysWhyAndWhatToDo(t *testing.T) {
 	assert.Contains(t, err.Error(), "login folder")
 }
 
+func TestNewHost_ALinkRefusalNamesTheSlurmKey(t *testing.T) {
+	t.Parallel()
+
+	cfg := hostConfigWith(model.TextEntry(BlockAddress, "-oProxyCommand=x"))
+
+	_, err := NewHost(slurmtest.Target, cfg, &spy{inner: slurmtest.New(hosttest.Working).SSH()})
+
+	require.ErrorIs(t, err, link.ErrConfig)
+	assert.Contains(t, err.Error(), "host.slurm.address")
+	assert.NotContains(t, err.Error(), "host.ssh.")
+}
+
 func TestUp_ChecksTheHeadNodeAnswersAndChangesNothing(t *testing.T) {
 	t.Parallel()
 
