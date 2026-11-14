@@ -192,6 +192,7 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 - Each look at the caps is a recorded step named `budget`, and a stop is followed by a durable sleep before the next look. A step that started under the cap does not stop on a replay after the cap changes.
 - The check reads the cap from the config of the engine that runs it. To resume a held round, raise the cap (or set it to 0) and restart the engine.
 - A cost that is unknown for an earlier step still fails the step: the cap cannot be checked against it.
+- The sum comes from recorded costs, so a replay gives the same answer. A resume does not: `beehave resume` of a failed agent step rewinds past the record of the cost of the failed run. The sum then lacks that cost, so each resume can add up to the cost of one run past the cap.
 
 **The cap of an item tree: `agents.max_tree_budget_usd`** (or `BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD`). It caps the sum for the root run and every run it spawns.
 
@@ -200,7 +201,6 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 - The rule and the wait are the same as for the run cap. Both caps apply when both are set.
 
 **The stop in the status.** `beehave status <run id> --json` shows `cap_stop` with `scope` (`run` or `tree`), `cap_usd`, `spent_usd` and `note` on the run, and on the line of the held agent step, while the run reads `running`.
-- The sum comes from recorded costs, so a replay gives the same answer. A resume does not: `beehave resume` of a failed agent step rewinds past the record of the cost of the failed run. The sum then lacks that cost, so each resume can add up to the cost of one run past the cap.
 
 #### Not covered
 
@@ -585,6 +585,7 @@ A line of the list also shows these facts when the run has them. Each is a tab-s
 | Note | Meaning |
 |---|---|
 | `spent $S of $C` | The cost so far against `agents.max_run_budget_usd`: the sum of the `cost_usd` of the read steps and of the failed runs. It is the same sum that the run cap checks. `spent $S` when no cap is set. |
+| `stopped at the <scope> cap $C, spent $S` | A cap holds an agent step of the open run back. The scope is `run` or `tree`. The step waits until the cap is raised and beehave restarts. |
 | `now <step>` | The step that an open run is in. A run that asks a question shows the question in place of the step and, when the `wait` has a `timeout`, `answer by <time>`. |
 | `gate pass at <head>` or `gate fail at <head>` | The newest gate result and the head it judged. |
 | `fix U of C` and `review U of C` | The count of the agent calls of the lanes `rework` and `review` against the cap that those calls name with the keyword `rounds`. A call that names none shows the count alone. |

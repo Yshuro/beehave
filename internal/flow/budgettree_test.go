@@ -1,11 +1,14 @@
 package flow
 
 import (
+	"context"
 	"testing"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/agent"
 )
 
 // treeFlow runs one agent step in the parent and then in a child that spawn starts. The child runs two agent steps.
@@ -100,6 +103,85 @@ func TestBudget_AChildInheritsTheRootCap(t *testing.T) {
 
 	require.NoError(t, engine.Shutdown())
 	<-done
+}
+
+// deepTree runs a tree of three item runs: item 1 is the root, item 2 its child and item 3 the grandchild. Each run records the cost of 2 dollars the way an
+// agent call does, and starts the run below it. The engine starts a child by spawn, and a run that spawn started cannot spawn, so only a workflow of the
+// test builds the third level. It returns the engine, whose store holds the finished tree.
+func deepTree(t *testing.T, rig *agentRig) *Engine {
+	t.Helper()
+
+	opts := rig.h.opts
+	state, err := openStore(opts)
+	require.NoError(t, err)
+
+	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
+	require.NoError(t, err)
+
+	engine := newEngine(opts, rig.h.deps(), state, held)
+	require.NoError(t, engine.open(t.Context(), opts, state))
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	below := map[string]string{"1": "2", "2": "3"}
+
+	var tier func(ctx dbos.Context, in ItemInput) (string, error)
+
+	tier = func(ctx dbos.Context, in ItemInput) (string, error) {
+		_, err := runStep(engine, ctx, "agent#1/spent0", func(context.Context) (recorded[agentFields], error) {
+			return recorded[agentFields]{Outputs: agentFields{Spend: agent.Spend{Cost: 2}}}, nil
+		})
+
+		next, more := below[in.Item]
+		if err != nil || !more {
+			return in.Item, err
+		}
+
+		handle, err := dbos.RunWorkflow(ctx, tier, ItemInput{Item: next, Project: in.Project}, dbos.WithWorkflowID(runID(next, 1)))
+		if err != nil {
+			return "", err
+		}
+
+		return handle.GetResult()
+	}
+
+	dbos.RegisterWorkflow(engine.ctx, tier, dbos.WithWorkflowName(itemName))
+	require.NoError(t, dbos.Launch(engine.ctx))
+
+	handle, err := dbos.RunWorkflow(engine.ctx, tier, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(runID("1", 1)))
+	require.NoError(t, err)
+
+	_, err = handle.GetResult()
+	require.NoError(t, err)
+
+	return engine
+}
+
+func TestBudget_TheTreeSumReachesAGrandchildAndTheCapStopsTheTree(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.h.opts.MaxTreeBudget = 5
+	engine := deepTree(t, rig)
+
+	// A step of the grandchild asks for the sum of its tree. The climb from the grandchild passes the child and ends at the root.
+	root, err := rootRun(engine.ctx, runID("3", 1))
+	require.NoError(t, err)
+	assert.Equal(t, runID("1", 1), root)
+
+	// Only the cost of the grandchild takes the sum from 4 to 6, past the cap of 5.
+	spent, err := runAndBelowSpend(engine.ctx, root)
+	require.NoError(t, err)
+	assert.InDelta(t, 6.0, spent.Cost, 0, "the sum holds the root, the child and the grandchild")
+
+	stop, err := overCap("q", engine.treeCap(), spent)
+	require.NoError(t, err)
+	require.NotNil(t, stop, "the cap stops the tree")
+	assert.Equal(t, scopeTree, stop.Scope)
+	assert.InDelta(t, 6.0, stop.Spent, 0)
+
+	child, err := runAndBelowSpend(engine.ctx, runID("2", 1))
+	require.NoError(t, err)
+	assert.InDelta(t, 4.0, child.Cost, 0, "a run sums itself and every run below it")
 }
 
 // capRestart runs three steps of 3 dollars under a cap that stops the third, reads the stop on the run and on the line of the step, raises the cap and
