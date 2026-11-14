@@ -135,7 +135,7 @@ func TestPreflight_AForeignKeywordThatIsNotReviewFailsAtItsLine(t *testing.T) {
 	assert.Empty(t, fake.asked)
 }
 
-func TestPreflight_AForeignPullRequestRefusesTheItemOnEveryProject(t *testing.T) {
+func TestPreflight_AForeignPullRequestRefusesTheItem(t *testing.T) {
 	t.Parallel()
 
 	foreign := preflight.Result{Foreign: true, PR: 7, Head: strings.Repeat("a", 40), Author: "someone", Lines: []string{"OK: foreign"}}

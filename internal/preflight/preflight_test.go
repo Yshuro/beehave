@@ -181,6 +181,24 @@ func TestPreflight_AForeignPullRequestIsReviewedNotClaimed(t *testing.T) {
 	assert.False(t, claimed.Foreign)
 }
 
+func TestPreflight_AForeignPullRequestThatIsHeldOrADraftIsStillForeign(t *testing.T) {
+	t.Parallel()
+
+	for name, p := range map[string]pull{
+		"held":  {state: "OPEN", labels: []string{"hold"}, base: "main", author: "someone"},
+		"draft": {state: "OPEN", draft: true, base: "main", author: "someone"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := check(t, p.fake(t), preflight.Request{PR: 1, Own: []string{"owner"}, Foreign: true})
+
+			assert.True(t, got.Foreign)
+			assert.Equal(t, preflight.Unchanged, got.Stop, "the foreign return comes before the hold and draft checks")
+		})
+	}
+}
+
 func TestPreflight_AnOwnPullRequestIsNotForeignAndStillMeetsTheBaseCheck(t *testing.T) {
 	t.Parallel()
 

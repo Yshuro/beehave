@@ -321,6 +321,19 @@ func TestQueue_AForeignRowThatIsNotOwedAnotherVisitStaysDone(t *testing.T) {
 	}
 }
 
+func TestQueue_AForeignRowThatRecordedNoPullRequestStaysDoneAndReadsNoState(t *testing.T) {
+	t.Parallel()
+
+	h, q := queueHarness(t, []model.Item{queueItem("21", model.SeverityP1)})
+	q.states = map[int]string{0: "MERGED"}
+
+	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, foreignChild("foreign", 0, openFinding)))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"21:done:P1:0", "free=2"}, seenBy(t, h))
+	assert.Empty(t, q.stateAsked, "a record with no pull request number reads no pull request state")
+}
+
 func TestQueue_AFailedReadOfTheRecordedPullRequestFailsTheStepAndReturnsNoGuess(t *testing.T) {
 	t.Parallel()
 
