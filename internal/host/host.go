@@ -27,15 +27,26 @@ type Host interface {
 	Up(ctx context.Context) error
 	Status(ctx context.Context) (model.HostStatus, error)
 	Down(ctx context.Context) error
+	Jobs
+	// WorkRoot is the one absolute path under which the host keeps its repositories. It is the same in every call.
+	WorkRoot(ctx context.Context) (string, error)
+	Drain(ctx context.Context) error
+	Resume(ctx context.Context) error
+}
+
+// Jobs is the part of Host that acts on one job by its id: it starts a job, waits for it, stops it, proves that a lost one no longer runs, and reads its log.
+type Jobs interface {
 	Submit(ctx context.Context, spec model.JobSpec) (model.JobID, error)
 	Wait(ctx context.Context, id model.JobID) (model.JobState, error)
 	Cancel(ctx context.Context, id model.JobID) error
-	// WorkRoot is the one absolute path under which the host keeps its repositories. It is the same in every call.
-	WorkRoot(ctx context.Context) (string, error)
+	// LostProof stops a job whose wait ended as lost, then reads whether the job can no longer run.
+	// It never waits for the job and never banks. It is safe to call again.
+	// No proof is not a failed call: a link that is down gives an empty Kind and a nil error, and Cause holds the reason.
+	// An error is a fault that the read cannot recover from, such as an id that Submit did not return.
+	// It runs after Wait returned an error that wraps ErrLost, at any time and from any handle of the host.
+	LostProof(ctx context.Context, id model.JobID) (model.LostProof, error)
 	// Log is the end of the log of a job: the last part of what the job wrote.
 	Log(ctx context.Context, id model.JobID) (string, error)
-	Drain(ctx context.Context) error
-	Resume(ctx context.Context) error
 }
 
 // The refusals of the guards.

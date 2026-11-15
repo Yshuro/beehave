@@ -27,7 +27,7 @@ func TestLoadFolder_SSHAndSlurmHostsKeepTheirBlockUnread(t *testing.T) {
 
 	project, problems := loadProjectText(t, call(clusterProject+", host = "+sshCall("")))
 	require.Empty(t, problems)
-	require.Equal(t, &model.HostConfig{Provider: "ssh", StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, DiskFloorGB: 50}, project.Host, "a host with no block holds none")
+	require.Equal(t, &model.HostConfig{Provider: "ssh", StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, LostJobWait: time.Hour, DiskFloorGB: 50}, project.Host, "a host with no block holds none")
 
 	project, problems = loadProjectText(t, call(clusterProject+", host = "+sshCall(`, ssh = ssh(user = "ci")`)))
 	require.Empty(t, problems)
@@ -49,15 +49,15 @@ func TestLoadFolder_HostTableDefaultsAndKeys(t *testing.T) {
 	project, problems := loadProjectText(t, call(clusterProject+", host = "+hostCall("")))
 
 	require.Empty(t, problems)
-	require.Equal(t, &model.HostConfig{Provider: "skypilot", IdleMinutes: 60, StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, DiskFloorGB: 50}, project.Host)
+	require.Equal(t, &model.HostConfig{Provider: "skypilot", IdleMinutes: 60, StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, LostJobWait: time.Hour, DiskFloorGB: 50}, project.Host)
 
-	project, problems = loadProjectText(t, call(clusterProject+`, host = host(provider = "skypilot", idle_minutes = 30, stale_minutes = 5, max_run = "12h", bank_budget = "45s", disk_floor_gb = 20, disk_wait_minutes = 15,
+	project, problems = loadProjectText(t, call(clusterProject+`, host = host(provider = "skypilot", idle_minutes = 30, stale_minutes = 5, max_run = "12h", bank_budget = "45s", lost_job_wait = "2h", disk_floor_gb = 20, disk_wait_minutes = 15,
   private_remote = "git@example.com:org/repo.git",
   skypilot = skypilot(cloud = "gcp", region = "us-central1", instance_type = "n2-standard-8"))`))
 
 	require.Empty(t, problems)
 	require.Equal(t, &model.HostConfig{
-		Provider: "skypilot", IdleMinutes: 30, StaleMinutes: 5, MaxRun: 12 * time.Hour, BankBudget: 45 * time.Second, DiskFloorGB: 20, DiskWaitMinutes: 15, PrivateRemote: "git@example.com:org/repo.git",
+		Provider: "skypilot", IdleMinutes: 30, StaleMinutes: 5, MaxRun: 12 * time.Hour, BankBudget: 45 * time.Second, LostJobWait: 2 * time.Hour, DiskFloorGB: 20, DiskWaitMinutes: 15, PrivateRemote: "git@example.com:org/repo.git",
 		Block: project.Host.Block,
 	}, project.Host)
 	require.Equal(t, `{cloud="gcp" instance_type="n2-standard-8" region="us-central1"}`, project.Host.Block.String())
@@ -130,6 +130,52 @@ func TestLoadFolder_HostTableRefusals(t *testing.T) {
 			require.ErrorContains(t, problems[0], tc.words)
 		})
 	}
+}
+
+func TestHostConfig_LostJobWaitDefaultsToSixtyMinutes(t *testing.T) {
+	t.Parallel()
+
+	hosts := map[string]string{
+		"skypilot": hostCall(""),
+		"ssh":      sshCall(""),
+		"slurm":    `host(provider = "slurm", disk_floor_gb = 50)`,
+	}
+
+	for name, text := range hosts {
+		project, problems := loadProjectText(t, call(clusterProject+", host = "+text))
+		require.Empty(t, problems, name)
+		require.Equal(t, time.Hour, project.Host.LostJobWait, "%s: a host with no lost_job_wait waits 60 minutes", name)
+	}
+
+	for _, tc := range []struct {
+		text string
+		want time.Duration
+	}{
+		{"90m", 90 * time.Minute},
+		{"1m", time.Minute},
+		{"24h", 24 * time.Hour},
+	} {
+		project, problems := loadProjectText(t, call(clusterProject+", host = "+sshCall(`, lost_job_wait = "`+tc.text+`"`)))
+		require.Empty(t, problems, tc.text)
+		require.Equal(t, tc.want, project.Host.LostJobWait, tc.text)
+	}
+}
+
+func TestHostConfig_ALostJobWaitThatIsNotAnAcceptableDurationIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, text := range []string{"soon", "", "30s", "59s", "0s", "-5m", "24h1s", "25h"} {
+		_, problems := loadProjectText(t, call(clusterProject+", host = "+hostCall(`, lost_job_wait = "`+text+`"`)))
+
+		require.Len(t, problems, 1, text)
+		require.ErrorIs(t, problems[0], config.ErrRefused, text)
+		require.ErrorContains(t, problems[0], "`host.lost_job_wait` must be a duration from 1m to 24h, such as \"60m\"; got `"+text+"`. Fix the value.", text)
+	}
+
+	_, problems := loadProjectText(t, call(clusterProject+", host = "+hostCall(", lost_job_wait = 60")))
+
+	require.Len(t, problems, 1)
+	require.ErrorContains(t, problems[0], `for parameter "lost_job_wait": got int, want string`)
 }
 
 func TestLoadFolder_ABlockValueIsAnOpaqueValue(t *testing.T) {

@@ -258,6 +258,39 @@ func (c check) equal(got, want any, what string) {
 	}
 }
 
+// LostJob is a job whose wait ended as lost, with the switches of the link to its machine. A provider test builds it over its fake machine.
+// Proof is the kind of proof that the adapter gives once the link is back: model.LostStopped, model.LostEnded or model.LostGone, or empty for an adapter that reads none yet.
+type LostJob struct {
+	ID       model.JobID
+	LinkDown func()
+	LinkUp   func()
+	Proof    string
+}
+
+// CheckLostProof checks the proof read of a lost job. While the link is down the read gives no proof and no error: an unreachable machine is no proof that the job ended.
+// Once the link is back the read gives the proof of the adapter, and it gives the same one when it runs again.
+func CheckLostProof(r Reporter, h host.Host, job LostJob) {
+	r.Helper()
+
+	c := check{r: r}
+	ctx, cancel := deadline()
+	defer cancel()
+
+	job.LinkDown()
+
+	down, err := h.LostProof(ctx, job.ID)
+	c.noError(err, "LostProof while the link is down")
+	c.equal(down.Kind, "", "the proof while the link is down")
+
+	job.LinkUp()
+
+	for _, what := range []string{"the proof once the link is back", "the proof in a second read"} {
+		got, err := h.LostProof(ctx, job.ID)
+		c.noError(err, "LostProof once the link is back")
+		c.equal(got.Kind, job.Proof, what)
+	}
+}
+
 // CheckHostWorks checks the lifecycle of an absent host: up, a passing and a failing job, drain, resume, down.
 func CheckHostWorks(r Reporter, h host.Host) {
 	r.Helper()

@@ -55,6 +55,10 @@ func (s *stubHost) Wait(context.Context, model.JobID) (model.JobState, error) {
 
 func (*stubHost) Cancel(context.Context, model.JobID) error { return nil }
 
+func (*stubHost) LostProof(context.Context, model.JobID) (model.LostProof, error) {
+	return model.LostProof{}, nil
+}
+
 func (*stubHost) Drain(context.Context) error { return nil }
 
 func (*stubHost) Resume(context.Context) error { return nil }

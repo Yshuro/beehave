@@ -164,6 +164,12 @@ func (h *Host) Down(ctx context.Context) error {
 	return err
 }
 
+// LostProof gives no proof. The proof for this provider is the state of the cluster, read with `sky status --refresh` and the identity of the launch,
+// and that read is issue #401. Until it lands, a lost job on this provider waits for the owner. A list of the cloud is never a proof.
+func (*Host) LostProof(context.Context, model.JobID) (model.LostProof, error) {
+	return model.LostProof{Note: "the SkyPilot adapter reads no proof of a lost job yet: the read of the cluster state is issue #401"}, nil
+}
+
 // Teardown banks the work of the head node to `host.private_remote` and then deletes the cluster. It is host.Teardown with git and find on the head node.
 // A head node with unbanked work, or one whose work cannot be read, stays up, and the error says why.
 func (h *Host) Teardown(ctx context.Context) error {
