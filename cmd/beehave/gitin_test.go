@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -119,14 +121,27 @@ func TestGitFailure_AToolThatCannotStartNamesTheSetupError(t *testing.T) {
 }
 
 func TestGitIn_ReturnsWhenAChildOfGitKeepsTheOutputOpen(t *testing.T) {
+	state := t.TempDir()
+	pidFile := filepath.Join(state, "child.pid")
+	release := filepath.Join(state, "release")
+	// The child holds the output pipe of git until the test creates the release file. Git ends only after the child wrote its pid, so the child runs when git ends.
+	script := "#!/bin/sh\n" +
+		"sh -c 'echo $$ > \"$1\"; while [ ! -e \"$2\" ]; do sleep 0.05; done' child '" + pidFile + "' '" + release + "' &\n" +
+		"while [ ! -s '" + pidFile + "' ]; do sleep 0.01; done\n" +
+		"exit 0\n"
 	bin := t.TempDir()
-	script := "#!/bin/sh\nsleep 6 &\nexit 0\n"
 	require.NoError(t, exectest.Write(filepath.Join(bin, "git"), script))
 	t.Setenv("PATH", strings.Join([]string{bin, "/usr/bin", "/bin"}, string(os.PathListSeparator)))
+	t.Cleanup(func() { assert.NoError(t, os.WriteFile(release, nil, 0o600)) })
 
-	start := time.Now()
 	_, err := gitIn(t.Context(), t.TempDir(), "status")
 
 	require.Error(t, err, "the runner reports the pipe that the child kept open")
-	assert.Less(t, time.Since(start), 4*time.Second, "the call waited for the child that holds the output pipe")
+
+	text, readErr := os.ReadFile(pidFile) //nolint:gosec // a file of the test
+	require.NoError(t, readErr)
+
+	pid, convErr := strconv.Atoi(strings.TrimSpace(string(text)))
+	require.NoError(t, convErr)
+	require.NoError(t, syscall.Kill(pid, 0), "the call waited for the child that holds the output pipe: the child is gone")
 }
