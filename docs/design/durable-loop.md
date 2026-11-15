@@ -161,7 +161,7 @@ Every agent call returns `cost_usd`: the total cost in dollars that the agent CL
 
 The three outputs `cost_usd`, `cost_estimated` and `cost_unknown` form one cost. Every place that shows, records or sums a cost carries all three: the step lines, the cost record of a failed run and the sum of the run. A sum that holds an estimate shows `(estimate)`. A sum that holds an unknown cost shows `(some cost unknown)`.
 
-When a run has a cost cap and its CLI does not cap dollars itself, the run does not start if its model has no price. A run cap stops the next step after a cost that is unknown, because the cap cannot be checked.
+When a run has a cost cap and its CLI does not cap dollars itself, the run does not start if its model has no price. A run cap and a tree cap stop the next step after a cost that is unknown, because the cap cannot be checked. A cost is unknown when its model has no price, or when its recorded cost cannot be read. The stop message names which.
 
 The cost is recorded in the phase and in the read step of the agent call. A replay returns the recorded cost and never asks the CLI again. A run that fails before its result line leaves no cost.
 

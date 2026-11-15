@@ -6,13 +6,16 @@ package agent
 // Cost is the dollars. Estimated is true when some of them are an estimate that beehave made from the tokens and the price table, not a cost that the CLI reported.
 // Unknown is true when some run used tokens of a model that has no price: Cost then holds no dollars for that run, and is not the cost of it. A run that
 // cost nothing has neither mark.
+//
+// Unreadable is true when a recorded cost cannot be read, which also sets Unknown. It names the cause of an unknown cost, and no record holds it.
 type Spend struct {
-	Cost      float64 `json:"cost_usd,omitempty"`
-	Estimated bool    `json:"cost_estimated,omitempty"`
-	Unknown   bool    `json:"cost_unknown,omitempty"`
+	Cost       float64 `json:"cost_usd,omitempty"`
+	Estimated  bool    `json:"cost_estimated,omitempty"`
+	Unknown    bool    `json:"cost_unknown,omitempty"`
+	Unreadable bool    `json:"-"`
 }
 
 // Plus is the sum of two spends: the dollars add, and each mark is set when either side sets it.
 func (s Spend) Plus(other Spend) Spend {
-	return Spend{Cost: s.Cost + other.Cost, Estimated: s.Estimated || other.Estimated, Unknown: s.Unknown || other.Unknown}
+	return Spend{Cost: s.Cost + other.Cost, Estimated: s.Estimated || other.Estimated, Unknown: s.Unknown || other.Unknown, Unreadable: s.Unreadable || other.Unreadable}
 }

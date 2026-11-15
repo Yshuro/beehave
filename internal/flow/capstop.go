@@ -113,6 +113,9 @@ func (s *script) checkCaps(name string) (capCheck, error) {
 // the cap cannot be checked against a cost that is not known.
 func overCap(name string, c capLimit, spent agent.Spend) (*CapStop, error) {
 	switch {
+	case spent.Unreadable:
+		return nil, fmt.Errorf("the agent step %s does not start: the cap for %s is $%s, but a recorded cost of an earlier agent step cannot be read, "+
+			"so the cap cannot be checked. Repair or remove that record, or set %s (or %s) to 0 for no cap", name, c.subject, dollars(c.limit), c.key, c.env)
 	case spent.Unknown:
 		return nil, fmt.Errorf("the agent step %s does not start: the cap for %s is $%s, but the cost is unknown for an earlier agent step "+
 			"(its model has no price), so the cap cannot be checked. "+

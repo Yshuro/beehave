@@ -123,7 +123,10 @@ func spendOutputs(spend agent.Spend) map[string]any {
 // spendOf reads the cost that the outputs of an agent call hold. A cost that is missing reads as no cost and no mark, as a run that cost nothing does.
 // A cost that is there but is no number that costOf can read marks the spend unknown: a silent 0 would hide the spend from the cap.
 func spendOf(outputs map[string]any) agent.Spend {
-	var cost float64
+	var (
+		cost       float64
+		unreadable bool
+	)
 
 	unknown, _ := outputs[unknownField].(bool) //nolint:errcheck // a missing mark reads as false
 
@@ -131,12 +134,29 @@ func spendOf(outputs map[string]any) agent.Spend {
 		var readable bool
 
 		cost, readable = costOf(raw)
-		unknown = unknown || !readable
+		unreadable = !readable
 	}
 
 	estimated, _ := outputs[estimatedField].(bool) //nolint:errcheck // a missing mark reads as false
 
-	return agent.Spend{Cost: cost, Estimated: estimated, Unknown: unknown}
+	return agent.Spend{Cost: cost, Estimated: estimated, Unknown: unknown || unreadable, Unreadable: unreadable}
+}
+
+// recordedSpend reads the cost of the recorded output of an agent step through spendOf, the reader of the run cap. An output that is not text, or is not
+// the record of a step, marks the spend unreadable: the record holds a cost that cannot be read.
+func recordedSpend(output any) agent.Spend {
+	text, ok := output.(string)
+	if !ok {
+		return agent.Spend{Unknown: true, Unreadable: true}
+	}
+
+	var step recorded[map[string]any]
+
+	if json.Unmarshal([]byte(text), &step) != nil {
+		return agent.Spend{Unknown: true, Unreadable: true}
+	}
+
+	return spendOf(step.Outputs)
 }
 
 // costOf reads a dollar amount that is a float64 on a first run and a json.Number on a replay. It reports false, with 0 dollars, for a value that is
@@ -160,11 +180,9 @@ func costOf(v any) (float64, bool) {
 // floatBits is the bit size of a dollar amount.
 const floatBits = 64
 
-// agentFields are the fields that every agent call returns, as the view of a run reads them. A test decodes agentOutputs into it.
-// The output verdict is declared by the call, so a reader takes it by its name.
+// agentFields are the fields that every agent call returns, as the view of a run reads them, except the cost, which only spendOf reads.
+// A test decodes agentOutputs into it. The output verdict is declared by the call, so a reader takes it by its name.
 type agentFields struct {
-	agent.Spend
-
 	Text       string `json:"text"`
 	Session    string `json:"session"`
 	Transcript string `json:"transcript"`
