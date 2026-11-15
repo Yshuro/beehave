@@ -53,6 +53,21 @@ type GateResult struct {
 	Head   string     `json:"head"`
 	Tree   string     `json:"tree"`
 	Steps  []GateStep `json:"steps"`
+	// Checks is what the log of a candidate job that passed says. It is nil for a gate with no candidate job.
+	Checks *GateChecks `json:"checks,omitempty"`
+}
+
+// GateChecks is the new-tests check and the secret scan of a candidate gate, as the log of its host job gave them.
+// NewTests holds the names of the new tests, at most the cap of the job, and New is the full count. Failed holds one line for each new test that failed a check.
+// Secrets is the exit code of the secret scan, or nil when the log has no single line for it. Complete is false for a cut log. Problem says why a check could not run.
+type GateChecks struct {
+	NewTests    []string `json:"new_tests"`
+	Failed      []string `json:"failed"`
+	New         int      `json:"new"`
+	FailedCount int      `json:"failed_count"`
+	Secrets     *int     `json:"secrets_rc,omitempty"`
+	Complete    bool     `json:"complete"`
+	Problem     string   `json:"problem,omitempty"`
 }
 
 // GateStep is the result of one step of a gate. Status is "pass", "fail" or "unknown".
@@ -86,10 +101,11 @@ type GateJob struct {
 }
 
 // gate runs the gate of an item. Key reads the key of that gate and starts nothing.
-// Submit starts the host job and returns at once. Run then waits for that job and judges the result; given an empty GateJob it starts the job itself.
+// Submit starts the host job and returns at once. A base names the base branch of a candidate head: the job then also runs the secret scan and the new-tests check.
+// An empty base is a sync head or a landing gate, and the job runs the gate command only. Run then waits for that job and judges the result; given an empty GateJob it starts the job itself.
 // host is the build host that the run recorded in host_up. An empty host is the default build host of the project.
 type gate interface {
-	Submit(ctx context.Context, project, item, host string) (GateJob, error)
+	Submit(ctx context.Context, project, item, host, base string) (GateJob, error)
 	Run(ctx context.Context, project, item, host string, job GateJob) (GateResult, error)
 	Key(ctx context.Context, project, item, host string) (GateKey, error)
 }
@@ -224,6 +240,8 @@ type CommandRequest struct {
 	Item    string
 	Run     []string
 	Host    string
+	// Base is the base branch of a gate call that judges a candidate head. It is empty for a sync head, a landing gate and a command call.
+	Base string
 	// BuildHost is the build host that the run recorded in host_up. The gate and a call with Host run there. Empty means the default of the project.
 	BuildHost string
 	Timeout   time.Duration

@@ -14,6 +14,18 @@ import (
 // A plain "#N" with no keyword closes nothing, so it does not match.
 var closingKeyword = regexp.MustCompile(`(?i)\b(?:close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved):?\s+((?:[a-z0-9_.-]+/[a-z0-9_.-]+)?#\d+|https?://github\.com/[a-z0-9_.-]+/[a-z0-9_.-]+/issues/\d+)`)
 
+// ClosingReferences lists the issues that a text closes with a closing keyword, each as "#N" or "owner/repo#N", in the order of the text.
+// The merge guard and the posting guard of the workflow builtins read the same keywords.
+func ClosingReferences(text string) []string {
+	var refs []string
+
+	for _, found := range closingKeyword.FindAllStringSubmatch(text, -1) {
+		refs = append(refs, issueRef(found[1]))
+	}
+
+	return refs
+}
+
 // shortSHA is the length of a commit id in a line of a refusal.
 const shortSHA = 9
 

@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `batch_merge`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -171,7 +171,7 @@ A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `h
 
 #### `pr_comment`
 
-`pr_comment(text, key, forbid_text)` adds a comment to the pull request of the item and returns `number`. The forge reads the comments first, and posts only when none holds the line `beehave-key: <run id>:<key>`. A replay after a crash therefore posts once.
+`pr_comment(text, key, forbid_text, integration)` adds a comment to the pull request of the item and returns `number`. The forge reads the comments first, and posts only when none holds the line `beehave-key: <run id>:<key>`. A replay after a crash therefore posts once.
 
 #### `pr_assign`
 
@@ -182,7 +182,7 @@ A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `h
 
 #### `pr_open`
 
-`pr_open(title, base, body, issue, parent, forbid_text, name)` opens the draft pull request of the item and returns `number`, `created` and `stack`.
+`pr_open(title, base, body, issue, parent, forbid_text, integration, name)` opens the draft pull request of the item and returns `number`, `created` and `stack`.
 
 - The branch of the item must be on the remote already.
 - The forge looks for an open pull request on that branch first, and opens one only when there is none. A resume after a lost step record therefore opens no second pull request, and `created` is then false.
@@ -206,6 +206,12 @@ The `parent` argument:
 | The pull request of `parent` is open. | The new pull request is based on the branch of the parent and linked into its native stack with `gh stack link` (the pull requests go by address, on github.com). The first link of a stack passes `--base` with the base of the call. The call reads the base of the parent pull request before and after every link. If the base moved on a new stack, the call unstacks, checks that the stack is gone, sets the base back and links again with that base. A second move, a stack that stays after the unstack, or a move on a stack that already held other pull requests fails the step. The call then reads the stack id of both pull requests, and fails unless they show one non-empty id. `stack` holds the id. |
 | The pull request of `parent` merged. | The base stays as given, and the call links nothing. |
 | `parent` has no pull request. | An error. |
+
+#### Closing keywords in posted text
+
+`pr_comment` and `pr_open` refuse text with a closing keyword (`Closes`, `Fixes`, `Resolves` and their forms, with an issue). The check reads the text of the comment, and the title and the body of the pull request. It uses the same keywords as the guard of `merge`. The refusal happens before the post and names the argument and the issue.
+
+Only the integration pull request may close an issue. A call for that pull request sets `integration = True`. The line that `pr_open` adds from `issue` is not part of the text and is not checked.
 
 ### `forbid_text` on public text
 
@@ -294,6 +300,24 @@ If no open pull request has the item as its head branch, the call searches the o
 #### Other orchestrators
 
 At the start of a run, the engine lists the other orchestrators that hold items in the claim store of the project. `beehave status` shows them for an open run. A store that cannot be read ends the run, because a failed read is not "nobody else runs".
+
+### `before_review`
+
+`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `base` and `keywords`.
+
+The call needs a `gate` call in the same run with `base`, at the same `head`. It reads the checks of that gate: the new tests and the secret scan. Without that gate call, the step fails with an error that says so. A gate without `base` holds no checks, so the call refuses it as a cut log.
+
+A finding is a result, not an error. `ok` is true when `findings` is empty. The call gives a finding when:
+
+- the log of the gate job has no end line (a cut log),
+- the head adds no new test,
+- a new test failed or was skipped on the head,
+- the secret scan did not exit with 0, or left no single exit code,
+- the head is not a descendant of `base`, by `git merge-base --is-ancestor`,
+- the head changed a path that `allow` does not allow (a list of globs, as `allow_paths` of `agent`),
+- a commit message between `base` and `head` has a closing keyword, unless `integration` is true.
+
+`new_tests` lists the new tests of the gate. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
 
 ### `queue`
 

@@ -247,3 +247,18 @@ func TestNew_Modes(t *testing.T) {
 	assert.True(t, sshtest.New(hosttest.Unreachable).Offline)
 	require.NotNil(t, sshtest.New(hosttest.Working).Units)
 }
+
+func TestMachine_TailAnswersTheLastBytesOfTheScriptedLogOfTheUnitAndTheDefaultForAnotherUnit(t *testing.T) {
+	t.Parallel()
+
+	m := sshtest.New(hosttest.Working)
+	m.Units["beehave-n1"] = &sshtest.Unit{Log: "0123456789\n"}
+	m.Units["beehave-n2"] = &sshtest.Unit{}
+
+	assert.Equal(t, "6789\n", call(m, "tail", "-c", "5", "/work/.beehave/beehave-n1.log").Stdout)
+	assert.Equal(t, "0123456789\n", call(m, "tail", "-c", "100", "/work/.beehave/beehave-n1.log").Stdout)
+	assert.Empty(t, call(m, "tail", "-c", "0", "/work/.beehave/beehave-n1.log").Stdout)
+	assert.Equal(t, "0123456789\n", call(m, "tail", "-c", "11", "/work/.beehave/beehave-n1.log").Stdout)
+	assert.Equal(t, "log text\n", call(m, "tail", "-c", "5", "/work/.beehave/beehave-n2.log").Stdout)
+	assert.Equal(t, "log text\n", call(m, "tail", "-c", "5", "/work/.beehave/beehave-n9.log").Stdout)
+}

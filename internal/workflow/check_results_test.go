@@ -16,7 +16,7 @@ func TestCheck_ReportsAFieldThatTheResultOfABuiltinDoesNotHave(t *testing.T) {
 		{"agent", `agent("p", "m")`, "3:11 haed is not a field of the result of agent. It has: text, session, transcript, head_sha, violations, stop, cost_usd, cost_estimated, cost_unknown, rewrote."},
 		{"batch_merge", `batch_merge(item.id, "b", "r", name = "n")`, "3:11 haed is not a field of the result of batch_merge. It has: merged, rejected, deferred, tip, tree, gates, findings, note, unproven."},
 		{"command", `command(["a"])`, "3:11 haed is not a field of the result of command. It has: stdout, stderr, rc."},
-		{"gate", `gate()`, "3:11 haed is not a field of the result of gate. It has: passed, head, tree, report, steps, required."},
+		{"gate", `gate()`, "3:11 haed is not a field of the result of gate. It has: passed, head, tree, report, steps, required, checks, new_tests."},
 		{"gather", `gather([])`, "3:11 haed is not a field of the result of gather. It has: results."},
 		{"item_comment", `item_comment("1", "t", "k")`, "3:11 haed is not a field of the result of item_comment. It has: id."},
 		{"item_create", `item_create("t", "k")`, "3:11 haed is not a field of the result of item_create. It has: id, created."},
@@ -158,7 +158,7 @@ func TestCheck_AFieldThatFactsDoesNotReturnIsRefused(t *testing.T) {
 func TestResults_ListsTheBuiltinsWithFixedFields(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, []string{"agent", "batch_merge", "board_sync", "command", "earlier_calls", "facts", "gate", "gather", "host_teardown", "host_up", "item_assign", "item_comment", "item_create", "item_read", "item_status", "merge", "pr_assign", "pr_comment", "pr_open", "preflight", "queue", "spawn", "wait", "write"}, workflow.Results())
+	assert.Equal(t, []string{"agent", "batch_merge", "before_review", "board_sync", "command", "earlier_calls", "facts", "gate", "gather", "host_teardown", "host_up", "item_assign", "item_comment", "item_create", "item_read", "item_status", "merge", "pr_assign", "pr_comment", "pr_open", "preflight", "queue", "spawn", "wait", "write"}, workflow.Results())
 }
 
 func TestResultFields_ReturnACopyAndNoFieldsForAnotherName(t *testing.T) {

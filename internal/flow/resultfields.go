@@ -19,9 +19,18 @@ func writeOutputs(stdout, stderr string, rc int, key string, skipped bool) map[s
 
 // gateOutputs records the fields of a GateResult. A gate with no step records an empty list, never a null.
 // required holds the names that the gate list of the project had when the gate ran. A merge reads them from this record, never from the config of the day.
-func gateOutputs(passed bool, head, tree, report string, steps []GateStep, required []string) map[string]any {
+// checks is what the log of a candidate job gave. new_tests is the list of its new test names, and a gate with no checks records an empty list and a zero record.
+func gateOutputs(passed bool, head, tree, report string, steps []GateStep, required []string, checks *GateChecks) map[string]any {
+	recorded := GateChecks{}
+	if checks != nil {
+		recorded = *checks
+	}
+
+	recorded.NewTests, recorded.Failed = append([]string{}, recorded.NewTests...), append([]string{}, recorded.Failed...)
+
 	return map[string]any{
 		"passed": passed, "head": head, treeName: tree, "report": report, "steps": append([]GateStep{}, steps...), "required": append([]string{}, required...),
+		"checks": recorded, "new_tests": recorded.NewTests,
 	}
 }
 

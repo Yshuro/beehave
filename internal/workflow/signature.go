@@ -346,7 +346,7 @@ func stepSignatures() map[string][]Param {
 		},
 		writeName: writeParams(),
 		gateName: {
-			words(runWord), opt("host", KindText), ruled("timeout", KindText, durationRule("timeout")), opt("head", KindText), label,
+			words(runWord), opt("host", KindText), ruled("timeout", KindText, durationRule("timeout")), opt("head", KindText), opt("base", KindText), label,
 		},
 		waitName:         waitParams(),
 		earlierCallsName: {req("call", KindText), label},
@@ -372,9 +372,12 @@ func swarmSignatures() map[string][]Param {
 	}
 }
 
-// readSignatures holds the builtins that read the tracker.
+// readSignatures holds the builtins that read the tracker or the item folder.
 func readSignatures() map[string][]Param {
-	return map[string][]Param{itemReadName: {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)}}
+	return map[string][]Param{
+		itemReadName:     {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
+		beforeReviewName: {filled("base"), filled("head"), ruled("allow", KindList, allowRule), opt("integration", KindBool), opt(nameKeyword, KindText)},
+	}
 }
 
 // itemSignatures holds the builtins that write the tracker or merge.
@@ -390,8 +393,8 @@ func itemSignatures() map[string][]Param {
 		itemStatusName: {filled("id"), {Name: statusField, Kind: KindText, Required: true, Values: StatusValues()}, label},
 		boardSyncName:  {req("board", KindInt), filled(statusField), opt("owner", KindText), opt("issue", KindInt), label},
 		prAssignName:   {filled("assignee"), opt("linked", KindBool), label},
-		prCommentName:  {filled("text"), filled("key"), forbidText(), label},
-		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), label},
+		prCommentName:  {filled("text"), filled("key"), forbidText(), opt("integration", KindBool), label},
+		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), opt("integration", KindBool), label},
 		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), one("foreign", ForeignModes()), label},
 		mergeName: {
 			req("head", KindText), opt("repo", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("approved", KindBool),

@@ -23,10 +23,13 @@ func TestLoadFolder_AGateListKeepsTheOrderOfTheDictAndGateSetsNone(t *testing.T)
 func TestLoadFolder_AGateListIsRefusedWithGateAndForABadStep(t *testing.T) {
 	t.Parallel()
 
-	cases := map[string]string{
+	cases := map[string]string{ //nolint:gosec // step names, not credentials
 		`, gate = "make", gate_steps = {"a": "make a"}`: "both set",
 		`, gate_steps = {"tests": "make a"}`:            "takes that name",
 		`, gate_steps = {"a b": "make a"}`:              "step name",
+		`, gate_steps = {"head-gate": "make a"}`:        `"head-gate". The gate job of a candidate head takes that name. Rename the step.`,
+		`, gate_steps = {"secret-scan": "make a"}`:      `"secret-scan". The gate job`,
+		`, gate_steps = {"base-suite": "make a"}`:       `"base-suite". The gate job`,
 		`, gate_steps = {"a": " "}`:                     "blank command",
 		`, gate_steps = ["a"]`:                          "want a dict",
 		`, gate_steps = {"a": 1}`:                       "want a step name and a command",

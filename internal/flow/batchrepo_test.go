@@ -280,7 +280,7 @@ type treeGate struct {
 	void bool
 }
 
-func (*treeGate) Submit(context.Context, string, string, string) (GateJob, error) {
+func (*treeGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 

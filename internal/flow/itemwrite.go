@@ -140,7 +140,7 @@ func (s *script) itemComment(b *starlark.Builtin, args starlark.Tuple, kwargs []
 		return nil, err
 	}
 
-	if err = s.check(workflow.NotEmpty("id", id), workflow.NotEmpty(textKeyword, text), workflow.NotEmpty(keyKeyword, key), rules.refuse(postedText{"text", text})); err != nil {
+	if err = s.check(workflow.NotEmpty("id", id), workflow.NotEmpty(textKeyword, text), workflow.NotEmpty(keyKeyword, key), rules.refuse(postedText{textKeyword, text})); err != nil {
 		return nil, err
 	}
 

@@ -34,6 +34,8 @@ type Plan struct {
 	TestReport string           `json:"test_report,omitempty"`
 	BuildHost  string           `json:"build_host,omitempty"`
 	Pins       *PinCheck        `json:"pins,omitempty"`
+	// Base is the base branch of a candidate head, or empty for a sync head and a landing gate.
+	Base string `json:"base,omitempty"`
 }
 
 // PlanOf is the plan of the project as it is now. It holds no pin check: Submit adds it.
