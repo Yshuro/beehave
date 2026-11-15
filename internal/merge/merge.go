@@ -158,7 +158,7 @@ type Request struct {
 
 // Result is the verdict. A Done result merged the pull request. Lines are the lines to show, a refusal last.
 // Refusal holds the lines of the guard that stopped the run, and it is empty for a Done result. Lines end with Refusal.
-// No line of Lines or Refusal matches a pattern of the ForbidText of the request.
+// In a Result that Run, Poll or Disarm builds, no line of Lines or Refusal matches a pattern of the ForbidText of the request, with each line split at its newlines.
 type Result struct {
 	Stop    Stop
 	Reason  Reason

@@ -23,19 +23,22 @@ func Compile(patterns []string) ([]*regexp.Regexp, error) {
 	return rules, nil
 }
 
-// matchingRule returns the position of the first rule that the line matches, and false when none matches. It is the one line test of the merge guard and of the posting steps.
-func matchingRule(rules []*regexp.Regexp, line string) (int, bool) {
-	i := slices.IndexFunc(rules, func(rule *regexp.Regexp) bool { return rule.MatchString(line) })
+// matchingRule returns the position of the first rule that a line of the text matches, and false when no line matches.
+// It splits the text on newlines and tests each line. It is the one test of the merge guard, of the merge result and, through ForbiddenBy, of the posting steps.
+func matchingRule(rules []*regexp.Regexp, text string) (int, bool) {
+	for line := range strings.SplitSeq(text, "\n") {
+		if i := slices.IndexFunc(rules, func(rule *regexp.Regexp) bool { return rule.MatchString(line) }); i >= 0 {
+			return i, true
+		}
+	}
 
-	return i, i >= 0
+	return -1, false
 }
 
 // ForbiddenBy returns the first rule that a line of the text matches, and false when no line matches.
 func ForbiddenBy(rules []*regexp.Regexp, text string) (*regexp.Regexp, bool) {
-	for _, line := range strings.Split(text, "\n") {
-		if i, found := matchingRule(rules, line); found {
-			return rules[i], true
-		}
+	if i, found := matchingRule(rules, text); found {
+		return rules[i], true
 	}
 
 	return nil, false
@@ -47,6 +50,7 @@ func patternWord(i int) string {
 }
 
 // withheld returns the lines with each line that a rule matches replaced by a line that names the rule and not the text.
+// A line that holds a newline is replaced whole when a rule matches one of its parts, as the posting steps test it.
 func withheld(rules []*regexp.Regexp, lines []string) []string {
 	out := make([]string, len(lines))
 

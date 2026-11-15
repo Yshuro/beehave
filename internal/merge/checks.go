@@ -158,7 +158,7 @@ func (a *attempt) reviews() *refusal {
 	return refuse(lines...)
 }
 
-// threadLine is the summary of an open thread. A first comment that a pattern of the request matches is left out, and the line names the pattern by its position.
+// threadLine is the summary of an open thread. A first comment is left out when a pattern of the request matches one of its lines, and the line names the pattern by its position.
 func threadLine(thread model.ReviewThread, forbidden []*regexp.Regexp) string {
 	if i, found := matchingRule(forbidden, thread.Comment()); found {
 		return thread.Where() + ": (the comment is left out: it matches " + patternWord(i) + ")"

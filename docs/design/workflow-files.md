@@ -417,7 +417,7 @@ A value of another type fails the step and names the value. An environment name 
 
 It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note` and `unproven`.
 
-- Each entry of `rejected` and `deferred` has `item` and `reason`. For a member that a merge guard refused, the reason is every line of that refusal, one per line. No line of it matches a pattern of `forbid_text`, so a step can post it with the same `forbid_text`.
+- Each entry of `rejected` and `deferred` has `item` and `reason`. For a member that a merge guard refused, the reason is every line of that refusal, one per line. No line of it matches a pattern of `forbid_text`, with each line tested as the posting steps test it, so a step can post it with the same `forbid_text`.
 - Each entry of `unproven` has `item` and `reason`. An item of `merged` that `unproven` names has not landed.
 - `findings` holds one line for each finding. `note` says why no read ran (see below).
 
