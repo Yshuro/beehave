@@ -248,7 +248,7 @@ func TestRunStar_AReplayIssuesTheSameStepNamesAndRunsNoRecordedStepAgain(t *test
 	assert.Equal(t, []string{"command:before#1", "wait:ask#1", "command:after#2"}, stepNames(t, next))
 }
 
-// goldenFlow calls every builtin that records a step. Its step names are the contract that stepsVersion guards.
+// goldenFlow calls every builtin that records a step. Its step names are the contract that the module versions of moduleTable guard.
 const goldenFlow = `def main(item):
     env("HOME")
     now()
@@ -261,8 +261,9 @@ const goldenFlow = `def main(item):
     merge(name = "m", head = checked.head)
 `
 
-// goldenSteps are the step names that goldenFlow records under stepsVersion star30.
-// A change to this list is a change to the sequence of a builtin: bump stepsVersion in the same commit.
+// goldenSteps are the step names that goldenFlow records at the module versions of this build (before the modules, under stepsVersion star30).
+// A change to this list is a change to the sequence of a builtin: bump the version of the module that owns it in moduleTable (stepmodules.go) in the same commit.
+// A later change re-keys this list for each module.
 var goldenSteps = []string{
 	"env:HOME#1", "now#1", "facts#1", "board_sync:b#1", "command:c#1", "scope:g#1", "gate:g#1",
 	"login#1", "agent:a#1/render", "agent:a#1/clear1", "agent:a#1/budget1.0", "agent:a#1/read1",
@@ -291,10 +292,10 @@ func TestRunStar_TheStepNamesOfEveryBuiltinMatchTheGoldenListOfTheStepsVersion(t
 
 	require.NoError(t, (<-done).err)
 	assert.Equal(t, "star30", stepsVersion)
-	assert.Equal(t, goldenSteps, stepNames(t, engine), "the step names changed: bump stepsVersion and update the list")
+	assert.Equal(t, goldenSteps, stepNames(t, engine), "the step names changed: bump the version of the module that owns the step in moduleTable (stepmodules.go) and update the list")
 
 	_, child := gateChildSteps(t, engine)
-	assert.Equal(t, goldenGateSteps, child, "the steps of the gate run changed: bump stepsVersion and update the list")
+	assert.Equal(t, goldenGateSteps, child, "the steps of the gate run changed: bump the version of the gate module in moduleTable (stepmodules.go) and update the list")
 }
 
 func TestStrandedError_ARunStoredUnderTheBareVersionNamesTheOlderStepFormat(t *testing.T) {

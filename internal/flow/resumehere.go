@@ -76,8 +76,12 @@ func (c *Client) requireMovable(item string, last run) error {
 func (c *Client) requireSameSteps(item string, last run) error {
 	stored, now := stepListOf(last.Status.ApplicationVersion), stepListOf(c.version)
 
-	was, readable := parseVersions(stored)
-	if !readable {
+	was, readErr := readVersions(stored)
+	if readErr != nil && looksLikeModuleList(stored) {
+		return fmt.Errorf("%w: %s was recorded under a step list that is not valid: %w. Start the item again: beehave run %s", errStranded, last.Status.ID, readErr, item)
+	}
+
+	if readErr != nil {
 		return fmt.Errorf("%w: %s was recorded under %s and this build has %s. A run cannot replay under another step list. Start the item again: beehave run %s",
 			errStranded, last.Status.ID, describeStepList(stored), describeStepList(now), item)
 	}

@@ -104,6 +104,26 @@ func TestParseVersions_ReadsAListAndRefusesAnOlderSingleVersionAndNoise(t *testi
 	}
 }
 
+func TestReadVersions_NamesTheBadEntryAndTheModuleThatRepeats(t *testing.T) {
+	t.Parallel()
+
+	_, err := readVersions("core1.gate")
+	require.ErrorContains(t, err, `entry "gate" of the step list "core1.gate"`)
+
+	_, err = readVersions("core1.gate2.core3")
+	require.ErrorContains(t, err, "names the module core twice")
+}
+
+func TestSplitVersion_KeepsAMalformedListOfModuleVersionsAsTheStepList(t *testing.T) {
+	t.Parallel()
+
+	for _, tail := range []string{"core1.gate", "core1.gatex", "core1.core2"} {
+		build, steps := splitVersion("v1+" + tail)
+		assert.Equal(t, "v1", build)
+		assert.Equal(t, tail, steps)
+	}
+}
+
 func TestSplitVersion_ReadsTheListOfModuleVersionsAndKeepsABuildTagThatLooksLikeOne(t *testing.T) {
 	t.Parallel()
 
@@ -114,6 +134,10 @@ func TestSplitVersion_ReadsTheListOfModuleVersionsAndKeepsABuildTagThatLooksLike
 	build, steps = splitVersion("v1+rc1")
 	assert.Equal(t, "v1+rc1", build, "rc1 has the shape of a module version, but no module is named rc")
 	assert.Empty(t, steps)
+
+	build, steps = splitVersion("+core1.gate2")
+	assert.Empty(t, build, "a plus sign at the start has an empty build version before it")
+	assert.Equal(t, "core1.gate2", steps)
 
 	build, steps = splitVersion("v1+star30")
 	assert.Equal(t, "v1", build)

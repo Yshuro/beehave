@@ -3,6 +3,7 @@ package flow
 import (
 	"testing"
 
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -95,6 +96,39 @@ func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionWhenAUsed
 	expireLease(harness)
 
 	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), "agent module at version 1 and this build has version 2")
+}
+
+func TestClient_ResumeOnThisBuildRefusesARunStoredUnderAMalformedOrRepeatingList(t *testing.T) {
+	t.Parallel()
+
+	for tail, want := range map[string]string{
+		"core1.gate":  `entry "gate" of the step list "core1.gate"`,
+		"core1.core2": `names the module core twice`,
+	} {
+		harness, _, other := strandedHarness(t)
+		_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+"+tail, testRun)
+		require.NoError(t, err)
+
+		expireLease(harness)
+
+		err = other.ResumeOnThisBuild(testItem)
+		require.ErrorIs(t, err, errStranded)
+		require.ErrorContains(t, err, want)
+	}
+}
+
+func TestClient_AStepListThatTheStoreCannotReadRefusesTheMoveWithTheWordsOfTheRead(t *testing.T) {
+	t.Parallel()
+
+	_, _, other := strandedHarness(t)
+	last, err := other.newest(testItem)
+	require.NoError(t, err)
+	require.NoError(t, dbos.Shutdown(other.flow, shutdownTimeout))
+
+	err = other.requireUsedModulesSame(testItem, last, map[string]int{moduleGate: 1}, map[string]int{moduleGate: 2})
+
+	require.ErrorContains(t, err, "read the steps of "+last.Status.ID)
+	require.NotErrorIs(t, err, errStranded, "a read that failed says nothing about the step list")
 }
 
 func TestClient_ResumeOnThisBuildMovesARunStoredUnderAListOfSomeModules(t *testing.T) {

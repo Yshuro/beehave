@@ -82,26 +82,60 @@ var moduleVersionPart = regexp.MustCompile(`^([a-z]+)([0-9]+)$`)
 // Any other single version (such as star13), a part that is not the version of a module of the table, and an empty text are not readable.
 // A build tag such as rc1 has the shape of a module version, so only the names of the table decide.
 func parseVersions(steps string) (map[string]int, bool) {
-	versions := map[string]int{}
+	versions, err := readVersions(steps)
 
+	return versions, err == nil
+}
+
+// readVersions is parseVersions with the reason: the error names the bad entry of a list, or the module that a list names twice.
+func readVersions(steps string) (map[string]int, error) {
 	if steps == stepsVersion {
-		for _, module := range moduleTable() {
-			versions[module.name] = 1
-		}
-
-		return versions, true
+		return allModulesAtOne(), nil
 	}
+
+	versions := map[string]int{}
 
 	for part := range strings.SplitSeq(steps, ".") {
 		name, number, ok := moduleVersionOf(part)
 		if !ok {
-			return nil, false
+			return nil, fmt.Errorf("the entry %q of the step list %q is not the name of a module and its version, such as gate2", part, steps)
+		}
+
+		if _, twice := versions[name]; twice {
+			return nil, fmt.Errorf("the step list %q names the module %s twice", steps, name)
 		}
 
 		versions[name] = number
 	}
 
-	return versions, true
+	return versions, nil
+}
+
+// allModulesAtOne is the list that the single version of the steps stands for.
+func allModulesAtOne() map[string]int {
+	versions := map[string]int{}
+
+	for _, module := range moduleTable() {
+		versions[module.name] = 1
+	}
+
+	return versions
+}
+
+// moduleListShape matches a text of entries that each have a name and an optional number, joined by dots.
+var moduleListShape = regexp.MustCompile(`^[a-z]+[0-9]*(\.[a-z]+[0-9]*)*$`)
+
+// looksLikeModuleList is true for a text that starts with the name of a module and has the shape of a list of module versions, even when an entry is
+// malformed or a module repeats. A build tag such as rc1 does not start with the name of a module, so it is not a list.
+func looksLikeModuleList(text string) bool {
+	if !moduleListShape.MatchString(text) {
+		return false
+	}
+
+	first, _, _ := strings.Cut(text, ".")
+	first = strings.TrimRight(first, "0123456789")
+
+	return slices.ContainsFunc(moduleTable(), func(module stepModule) bool { return module.name == first })
 }
 
 // moduleVersionOf reads one part of a stored list, such as gate2. The name must be a module of the table.
@@ -121,9 +155,7 @@ func moduleVersionOf(part string) (name string, number int, ok bool) {
 func kindOfStep(name string) (string, bool) {
 	kind, _, _ := strings.Cut(name, "/")
 
-	if at := strings.IndexAny(kind, ":#@"); at >= 0 {
-		kind = kind[:at]
-	}
+	kind = kind[:strings.IndexAny(kind+":", ":#@")]
 
 	_, known := moduleOfKind(kind)
 

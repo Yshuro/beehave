@@ -311,7 +311,7 @@ func splitVersion(stored string) (build, steps string) {
 	}
 
 	tail := stored[at+1:]
-	if _, listed := parseVersions(tail); listed || strings.HasPrefix(tail, "star") {
+	if _, listed := parseVersions(tail); listed || strings.HasPrefix(tail, "star") || looksLikeModuleList(tail) {
 		return stored[:at], tail
 	}
 
