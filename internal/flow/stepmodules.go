@@ -33,6 +33,9 @@ const (
 // gateModuleVersion is the version of the gate module. It rose to 2 when the module took the mutation step.
 const gateModuleVersion = 2
 
+// coreModuleVersion is the version of the core module. It rose to 2 when facts gained the mutation command.
+const coreModuleVersion = 2
+
 // stepModule is one module of the table: its version and the step kinds that it records.
 type stepModule struct {
 	name    string
@@ -43,7 +46,7 @@ type stepModule struct {
 // moduleTable assigns each recorded step kind to its module. The order is the order of the application version.
 func moduleTable() []stepModule {
 	return []stepModule{
-		{name: moduleCore, version: 1, kinds: []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"}},
+		{name: moduleCore, version: coreModuleVersion, kinds: []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"}},
 		{name: moduleAgent, version: 1, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
 		{name: moduleForge, version: 1, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open"}},

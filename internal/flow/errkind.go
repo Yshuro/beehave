@@ -43,7 +43,7 @@ func productionKnown() []error {
 	return []error{
 		context.Canceled, context.DeadlineExceeded, fs.ErrNotExist,
 		forgepkg.ErrNoForge, forgepkg.ErrNoPull, ErrMemberNotOpen, batch.ErrGateVoid,
-		gatepkg.ErrNoTests, gatepkg.ErrTreeChanged, gatepkg.ErrNoVerdict, gatepkg.ErrNoHead, gatepkg.ErrNoCloneURL, gatepkg.ErrCloneOutsideRoot,
+		gatepkg.ErrNoTests, gatepkg.ErrTreeChanged, gatepkg.ErrNoVerdict, gatepkg.ErrNoHead, gatepkg.ErrNoCloneURL, gatepkg.ErrCloneOutsideRoot, gatepkg.ErrNoMutationHost,
 		host.ErrUnbanked, host.ErrNoRepos, host.ErrDiskLow, host.ErrDiskRead, host.ErrInUse, host.ErrInUseRead, host.ErrJobState, host.ErrLost, host.ErrNotDeleted, host.ErrDiskText,
 	}
 }

@@ -90,6 +90,16 @@ func TestMutation_AToolErrorLineWithNoEndMarkerIsAToolErrorAndNotACutLog(t *test
 	assert.Contains(t, got.findings[0], "gremlins is not on the path")
 }
 
+func TestMutation_AToolErrorLineAfterTheCountsLineWithNoEndMarkerIsAToolErrorAndNotACutLog(t *testing.T) {
+	t.Parallel()
+
+	got := judgeMutation(MutationRun{Failed: true, Log: counts(4, 1) + "mutation-pr: the gremlins report is not readable\n"}, changedA)
+
+	assert.Equal(t, outcomeToolError, got.outcome)
+	require.Len(t, got.findings, 1)
+	assert.Contains(t, got.findings[0], "the gremlins report is not readable")
+}
+
 func TestMutation_AnExitWithNoResultLineIsAToolErrorWhateverTheExitCode(t *testing.T) {
 	t.Parallel()
 
@@ -147,8 +157,33 @@ func TestMutation_TheChangedLinesAreTheAddedLinesOfTheHunks(t *testing.T) {
 	assert.False(t, got.has("a.go", 21))
 }
 
-func TestMutation_TheMutationStepThroughTheFakeSSHHostReadsOneLivedMutantFromTheJobLog(t *testing.T) {
+func TestMutation_ASurvivorInAFileWithANonASCIIOrSpacedNameIsKept(t *testing.T) {
 	t.Parallel()
+
+	diff := "diff --git a/internal/é/a b.go b/internal/é/a b.go\n--- a/internal/é/a b.go\n+++ b/internal/é/a b.go\t\n@@ -0,0 +1 @@\n+x\n" +
+		"diff --git a/q.go b/q.go\n--- a/q.go\n+++ \"b/q\\\"x.go\"\n@@ -0,0 +3 @@\n+x\n"
+
+	got := changedLines(diff)
+
+	assert.True(t, got.has("internal/é/a b.go", 1))
+	assert.True(t, got.has("q\"x.go", 3))
+}
+
+func TestMutation_AnAddedLineThatStartsWithTwoPlusesIsNotAFileHeader(t *testing.T) {
+	t.Parallel()
+
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1,2 @@\n+x\n+++ b/other.go\n@@ -9 +11 @@\n-z\n+w\n"
+
+	got := changedLines(diff)
+
+	assert.True(t, got.has("a.go", 2))
+	assert.True(t, got.has("a.go", 11))
+	assert.False(t, got.has("other.go", 11))
+}
+
+// fakeSSHHost is an ssh host over the fake machine. A job that the host takes has the log that the test puts in m.Units.
+func fakeSSHHost(t *testing.T) (*ssh.Host, *sshtest.Machine) {
+	t.Helper()
 
 	m := sshtest.New(hosttest.Working)
 	n := 0
@@ -160,6 +195,14 @@ func TestMutation_TheMutationStepThroughTheFakeSSHHostReadsOneLivedMutantFromThe
 		}),
 	}, m.SSH(), ssh.WithNonce(func() string { n++; return "n" + strconv.Itoa(n) }))
 	require.NoError(t, err)
+
+	return h, m
+}
+
+func TestMutation_TheMutationStepThroughTheFakeSSHHostReadsOneLivedMutantFromTheJobLog(t *testing.T) {
+	t.Parallel()
+
+	h, m := fakeSSHHost(t)
 
 	id, err := h.Submit(t.Context(), model.JobSpec{Name: "mutation", Command: "make mutation-pr BASE=origin/main"})
 	require.NoError(t, err)

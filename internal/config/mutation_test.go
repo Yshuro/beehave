@@ -57,6 +57,16 @@ func TestMutationSlots_EachHostHasTheLargestCapOfTheProjectsThatNameIt(t *testin
 	require.Equal(t, map[string]int{"box": 3, "far": 3, "local": 1}, config.MutationSlots(projects))
 }
 
+func TestMutationSlots_TheLocalQueueHasOneSlotWhateverAProjectOnItAsks(t *testing.T) {
+	t.Parallel()
+
+	projects := map[string]config.Project{
+		"a": {Project: model.Project{BuildHost: "local", Host: &model.HostConfig{MutationSlots: 4}}},
+	}
+
+	require.Equal(t, map[string]int{"local": 1}, config.MutationSlots(projects))
+}
+
 func TestLoadFolder_APapersRoundNeedsNoMutationBlock(t *testing.T) {
 	t.Parallel()
 

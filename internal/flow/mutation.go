@@ -126,7 +126,7 @@ func (s *script) changedByHead(ctx context.Context, call mutationCall) (lineSet,
 		return nil, fmt.Errorf("find the folder of item %s: %w", s.in.Item, err)
 	}
 
-	diff, err := git(ctx, dir, "diff", "-U0", "--no-renames", call.base+"..."+call.head)
+	diff, err := git(ctx, dir, "-c", "core.quotepath=off", "diff", "-U0", "--no-renames", call.base+"..."+call.head)
 	if err != nil {
 		return nil, fmt.Errorf("read the lines that the head changed since the base: %w", err)
 	}
@@ -268,11 +268,11 @@ func judgeMutation(run MutationRun, changed lineSet) mutationVerdict {
 
 // decideMutation gives the verdict of a log that needs no diff to read: a refusal, "not applicable" or "no candidate". It reports false for a log of a run that tested.
 func decideMutation(run MutationRun, read gatepkg.MutationLog) (mutationVerdict, bool) {
+	if verdict, unfinished := unfinishedMutation(run, read); unfinished {
+		return verdict, true
+	}
+
 	switch {
-	case !read.HasResult():
-		return failedMutation(outcomeToolError, "the mutation command gave no result line, so it did not run to a result"+quoted(read.Other)+". Read the log of the job on the build host"), true
-	case !read.HasEnd || read.Printed != len(read.Survivors):
-		return failedMutation(outcomeCutLog, "the log of the mutation job is cut: its end marker is missing, or it counts "+strconv.Itoa(read.Printed)+" printed mutants where the log holds "+strconv.Itoa(len(read.Survivors))+". A cut log proves nothing"), true
 	case read.HasNotApplicable:
 		return mutationVerdict{outcome: outcomeNotApplicable, reason: read.NotApplicable}, true
 	case read.HasNoCandidate:
@@ -281,6 +281,21 @@ func decideMutation(run MutationRun, read gatepkg.MutationLog) (mutationVerdict,
 		return failedMutation(outcomeNoneApplied, "the mutation run applied no mutant; the command may not cover the diff"), true
 	case run.Failed && read.Lived == 0:
 		return failedMutation(outcomeToolError, "the mutation command failed and reported no lived mutant. Read the log of the job on the build host"), true
+	}
+
+	return mutationVerdict{}, false
+}
+
+// unfinishedMutation gives the verdict of a log of a run that did not finish: no result line, a tool error after the counts line, or a cut log.
+// A tool error wins over a cut log. It reports false for a log of a run that finished.
+func unfinishedMutation(run MutationRun, read gatepkg.MutationLog) (mutationVerdict, bool) {
+	switch {
+	case !read.HasResult():
+		return failedMutation(outcomeToolError, "the mutation command gave no result line, so it did not run to a result"+quoted(read.Other)+". Read the log of the job on the build host"), true
+	case run.Failed && read.Other != "" && !read.HasEnd:
+		return failedMutation(outcomeToolError, "the mutation command failed after its counts line and printed no end marker"+quoted(read.Other)+". Read the log of the job on the build host"), true
+	case !read.HasEnd || read.Printed != len(read.Survivors):
+		return failedMutation(outcomeCutLog, "the log of the mutation job is cut: its end marker is missing, or it counts "+strconv.Itoa(read.Printed)+" printed mutants where the log holds "+strconv.Itoa(len(read.Survivors))+". A cut log proves nothing"), true
 	}
 
 	return mutationVerdict{}, false
@@ -349,22 +364,58 @@ func (l lineSet) has(file string, line int) bool {
 func changedLines(diff string) lineSet {
 	changed := lineSet{}
 	file := ""
+	removing, adding := 0, 0
 
 	for line := range strings.SplitSeq(diff, "\n") {
 		switch {
+		case removing > 0 && strings.HasPrefix(line, "-"):
+			removing--
+		case adding > 0 && strings.HasPrefix(line, "+"):
+			adding--
 		case strings.HasPrefix(line, "+++ "):
-			file = strings.TrimPrefix(strings.TrimPrefix(line, "+++ "), "b/")
-			if line == "+++ /dev/null" {
-				file = ""
-			}
-		case strings.HasPrefix(line, "@@ ") && file != "":
-			if span, ok := addedSpan(line); ok {
-				changed[file] = append(changed[file], span)
-			}
+			file = headerPath(strings.TrimPrefix(line, "+++ "))
+		case strings.HasPrefix(line, "@@ "):
+			removing, adding = hunkCounts(line)
+			changed.add(file, line)
 		}
 	}
 
 	return changed
+}
+
+// add records the added side of a hunk header for the file. A hunk of no file, or one that adds no line, adds nothing.
+func (l lineSet) add(file, header string) {
+	if span, ok := addedSpan(header); ok && file != "" {
+		l[file] = append(l[file], span)
+	}
+}
+
+// headerPath reads the path of a "+++" header. A path with a space ends in a tab, a path with a special character is quoted, and "/dev/null" is no file.
+func headerPath(text string) string {
+	if text == "/dev/null" {
+		return ""
+	}
+
+	if unquoted, err := strconv.Unquote(text); err == nil {
+		text = unquoted
+	} else if path, _, found := strings.Cut(text, "\t"); found {
+		text = path
+	}
+
+	return strings.TrimPrefix(text, "b/")
+}
+
+// hunkCounts reads the count of removed lines and the count of added lines of a hunk header, "@@ -a,b +c,d @@": b and d. A missing count is 1.
+func hunkCounts(header string) (removed, added int) {
+	for field := range strings.FieldsSeq(header) {
+		if rest, found := strings.CutPrefix(field, "-"); found {
+			_, removed, _ = spanNumbers(rest)
+		} else if rest, found := strings.CutPrefix(field, "+"); found {
+			_, added, _ = spanNumbers(rest)
+		}
+	}
+
+	return removed, added
 }
 
 // addedSpan reads the added side of a hunk header, "@@ -a,b +c,d @@": the lines c to c+d-1. A count of 0 is a pure deletion and adds none.

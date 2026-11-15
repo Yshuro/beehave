@@ -44,6 +44,8 @@ GOTESTSUM = gotestsum --format standard-quiet --junitfile $(REPORT_DIR)
 AI_RULEZ_VERSION := v5.9.2
 # The secret scan of the candidate gate job runs gitleaks. The "git" subcommand exists from 8.19 on.
 GITLEAKS_VERSION := v8.30.1
+# The per-pull-request mutation run (scripts/mutation-pr.sh) needs gremlins at this version.
+GREMLINS_VERSION := v0.6.0
 BIN := bin/beehave
 REMEDY := bin/remedy
 
@@ -60,6 +62,7 @@ setup:  ## Install the Go tools and generate the agent files
 	command -v gotestsum >/dev/null 2>&1 || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
 	command -v deadcode >/dev/null 2>&1 || go install $(DEADCODE_VERSION)
 	[ "$$(gitleaks version 2>/dev/null)" = "$(GITLEAKS_VERSION:v%=%)" ] || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	command -v gremlins >/dev/null 2>&1 || go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 	$(MAKE) governance-generate
 
 build:  ## Build bin/beehave and bin/remedy
@@ -141,6 +144,7 @@ check-darwin:  ## On a Mac: run the Seatbelt enforcer tests and the contract sui
 # Run on one package: make mutation PKG=./internal/cli
 # PKG is a folder, never a "..." pattern: gremlins walks the folder, so "./internal/..." finds no file and reports nothing.
 mutation:
+	$(if $(findstring ...,$(PKG)),$(error PKG is a folder such as ./internal/cli, never a "..." pattern))
 	gremlins unleash $(or $(PKG),.)
 
 # Per-PR run: mutate only the Go lines that differ from BASE, the branch the pull request targets. BASE is required: make mutation-pr BASE=origin/integration/r1

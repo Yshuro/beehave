@@ -153,6 +153,7 @@ var rules = map[string]rule{
 	"internal/flow.gate.Submit":                   {NotHeld: inAdapter},
 	"internal/flow.gate.Run":                      {NotHeld: inAdapter},
 	"internal/flow.gate.Key":                      {NotHeld: inAdapter},
+	"internal/flow.mutator.Mutate":                {Proof: "TestMutation_AFailedMutateFailsTheStepWithItsError", Needle: "mutateErr"},
 	"internal/flow.items.Fields":                  {NotHeld: inAdapter},
 	"internal/flow.merger.Merge":                  {NotHeld: inAdapter},
 	"internal/flow.merger.Poll":                   {NotHeld: inAdapter},

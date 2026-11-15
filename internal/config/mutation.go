@@ -21,17 +21,25 @@ func MutationSlots(projects map[string]Project) map[string]int {
 			count = project.Host.MutationSlots
 		}
 
-		names := project.BuildHosts
-		if len(names) == 0 {
-			names = []string{project.BuildHost}
-		}
-
-		for _, name := range names {
+		for _, name := range buildHostNames(project) {
 			slots[name] = max(slots[name], count)
 		}
 	}
 
+	if _, found := slots[LocalHost]; found {
+		slots[LocalHost] = defaultMutationSlots
+	}
+
 	return slots
+}
+
+// buildHostNames lists the build hosts of a project: its `build_hosts`, else its one `build_host`.
+func buildHostNames(project Project) []string {
+	if len(project.BuildHosts) == 0 {
+		return []string{project.BuildHost}
+	}
+
+	return project.BuildHosts
 }
 
 // rawMutation is a mutation block as written. At is the position of its call.

@@ -122,6 +122,14 @@ func toolDirs(t *testing.T) string {
 func runScript(t *testing.T, base, head map[string]string, report string, status int) mutationRun {
 	t.Helper()
 
+	return runScriptWith(t, base, head, report, status, nil, nil)
+}
+
+// runScriptWith is runScript with a different tool path and more environment. A nil tools gives the path of runScript: the fake gremlins, then the real tools.
+// A non-nil tools gets the folder of the fake gremlins and returns the whole PATH.
+func runScriptWith(t *testing.T, base, head map[string]string, report string, status int, tools func(bin string) string, extraEnv []string) mutationRun {
+	t.Helper()
+
 	repo := t.TempDir()
 	root, err := os.OpenRoot(repo)
 	require.NoError(t, err)
@@ -155,10 +163,15 @@ func runScript(t *testing.T, base, head map[string]string, report string, status
 
 	command := exec.CommandContext(t.Context(), "sh", "scripts/mutation-pr.sh", "base")
 	command.Dir = repo
-	command.Env = []string{
-		"PATH=" + bin + string(os.PathListSeparator) + toolDirs(t), "HOME=" + repo,
-		"FAKE_REPORT=" + filepath.Join(repo, "report.json"), "FAKE_CALLED=" + called, fmt.Sprintf("FAKE_STATUS=%d", status),
+	path := bin + string(os.PathListSeparator) + toolDirs(t)
+	if tools != nil {
+		path = tools(bin)
 	}
+
+	command.Env = append([]string{
+		"PATH=" + path, "HOME=" + repo,
+		"FAKE_REPORT=" + filepath.Join(repo, "report.json"), "FAKE_CALLED=" + called, fmt.Sprintf("FAKE_STATUS=%d", status),
+	}, extraEnv...)
 	out, err := command.CombinedOutput()
 
 	run := mutationRun{output: string(out)}
@@ -266,6 +279,76 @@ func TestMutationPR_MoreThanFiftyLivedMutantsPrintFiftyLinesAndTheFullCount(t *t
 
 	require.Equal(t, 50, printed)
 	require.Equal(t, "mutation-pr: end count=60 printed=50", run.last(t))
+}
+
+func TestMutationPR_ADocsOnlyDiffIsNotApplicableWithNoToolOnThePath(t *testing.T) {
+	t.Parallel()
+
+	bare := func(string) string {
+		dir := t.TempDir()
+
+		for _, tool := range []string{"git", "dirname"} {
+			path, err := exec.LookPath(tool)
+			require.NoError(t, err)
+			require.NoError(t, os.Symlink(path, filepath.Join(dir, tool)))
+		}
+
+		return dir
+	}
+
+	run := runScriptWith(t, map[string]string{"a.go": baseSource, "README.md": "a\n"}, map[string]string{"README.md": "b\n"}, `{"files":[]}`, 1, bare, nil)
+
+	require.Equal(t, 0, run.exit, run.output)
+	require.Contains(t, run.output, "mutation-pr: not applicable: ")
+	require.Equal(t, "mutation-pr: end count=0 printed=0", run.last(t))
+}
+
+func TestMutationPR_ATimeoutThatIsNotAPositiveWholeNumberIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, limit := range []string{"0", "abc", "-5", "1.5"} {
+		run := runScriptWith(t, map[string]string{"a.go": baseSource}, map[string]string{"a.go": opSource}, reportOf(t, "a.go", [3]any{"KILLED", 4, "ARITHMETIC_BASE"}), 0, nil, []string{"MUTATION_TIMEOUT=" + limit})
+
+		require.NotEqual(t, 0, run.exit, limit+": "+run.output)
+		require.False(t, run.called, limit)
+		require.Contains(t, run.output, "mutation-pr: MUTATION_TIMEOUT is", limit)
+	}
+}
+
+// makeDryRun runs a `make -n` command, which the caller built from constants, in the repository folder. It returns what the command printed and whether it exited with 0.
+func makeDryRun(command *exec.Cmd) (string, bool) {
+	command.Dir = ".."
+	out, err := command.CombinedOutput()
+
+	return string(out), err == nil
+}
+
+func TestMakefile_MutationRefusesAPkgWithThreeDots(t *testing.T) {
+	t.Parallel()
+
+	out, ok := makeDryRun(exec.CommandContext(t.Context(), "make", "-n", "mutation", "PKG=./internal/..."))
+
+	require.False(t, ok, out)
+	require.Contains(t, out, "PKG is a folder")
+
+	out, ok = makeDryRun(exec.CommandContext(t.Context(), "make", "-n", "mutation", "PKG=./internal/cli"))
+
+	require.True(t, ok, out)
+	require.Contains(t, out, "gremlins unleash ./internal/cli")
+}
+
+func TestMakefile_SetupPinsGremlins(t *testing.T) {
+	t.Parallel()
+
+	out, ok := makeDryRun(exec.CommandContext(t.Context(), "make", "-n", "setup"))
+
+	require.True(t, ok, out)
+	require.Regexp(t, `go install github\.com/go-gremlins/gremlins/cmd/gremlins@v\d+\.\d+\.\d+`, out)
+
+	text, err := os.ReadFile("../Makefile")
+	require.NoError(t, err)
+	require.Regexp(t, `(?m)^GREMLINS_VERSION := v\d+\.\d+\.\d+$`, string(text))
+	require.Contains(t, string(text), "gremlins/cmd/gremlins@$(GREMLINS_VERSION)")
 }
 
 func TestMutationPR_ARunWithNoLivedMutantPrintsTheEndMarkerWithCountZero(t *testing.T) {

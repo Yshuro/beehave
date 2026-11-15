@@ -5,7 +5,8 @@
 #   BASE is the branch or commit that the pull request targets, for example origin/integration/r1.
 #   There is no default, because the base differs from one pull request to the next.
 #   MUTATION_TIMEOUT is the time limit for the gremlins run in seconds. The default is 1200.
-#   A run that exceeds the limit fails. The script needs gremlins, jq and timeout (or gtimeout) on the path.
+#   The limit must be a positive whole number. A run that exceeds the limit fails. A run that needs gremlins also needs jq and timeout
+#   (or gtimeout) on the path. A diff that is not applicable or has no candidate needs none of them.
 #
 # The script changes to the module root and runs gremlins on the path ".". Gremlins matches the lines of the
 # diff to mutants by file path. The diff has paths relative to the module root. Gremlins gives mutants paths
@@ -28,15 +29,12 @@ fi
 base=$1
 limit=${MUTATION_TIMEOUT:-1200}
 
-command -v gremlins >/dev/null 2>&1 || { echo "mutation-pr: gremlins is not on the path"; exit 1; }
-command -v jq >/dev/null 2>&1 || { echo "mutation-pr: jq is not on the path"; exit 1; }
-if command -v timeout >/dev/null 2>&1; then
-	limiter=timeout
-elif command -v gtimeout >/dev/null 2>&1; then
-	limiter=gtimeout
-else
-	echo "mutation-pr: neither timeout nor gtimeout is on the path"
-	exit 1
+case $limit in
+'' | *[!0-9]*) limit=0 ;;
+esac
+if [ "$limit" -le 0 ]; then
+	echo "mutation-pr: MUTATION_TIMEOUT is ${MUTATION_TIMEOUT:-empty}. Write a positive whole number of seconds"
+	exit 2
 fi
 
 root=$(cd "$(dirname "$0")/.." && pwd)
@@ -61,6 +59,18 @@ if ! printf '%s\n' "$patch" | grep '^+' | grep -v '^+++ ' | sed -e 's|^+||' -e '
 	echo "mutation-pr: no candidate: the changed non-test Go lines hold no operator that gremlins mutates"
 	echo "mutation-pr: end count=0 printed=0"
 	exit 0
+fi
+
+# The tools are needed only from here: a diff that is not applicable or has no candidate runs none of them.
+command -v gremlins >/dev/null 2>&1 || { echo "mutation-pr: gremlins is not on the path"; exit 1; }
+command -v jq >/dev/null 2>&1 || { echo "mutation-pr: jq is not on the path"; exit 1; }
+if command -v timeout >/dev/null 2>&1; then
+	limiter=timeout
+elif command -v gtimeout >/dev/null 2>&1; then
+	limiter=gtimeout
+else
+	echo "mutation-pr: neither timeout nor gtimeout is on the path"
+	exit 1
 fi
 
 report=$(mktemp "${TMPDIR:-/tmp}/mutation-pr.XXXXXX")
