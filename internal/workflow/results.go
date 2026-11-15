@@ -33,9 +33,11 @@ const (
 	itemReadName     = "item_read"
 	itemStatusName   = "item_status"
 	boardSyncName    = "board_sync"
+	beforeReviewName = "before_review"
 	prAssignName     = "pr_assign"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
+	baseField        = "base"
 	numberField      = "number"
 	statusField      = "status"
 )
@@ -51,7 +53,6 @@ func resultFields() map[string][]string {
 		batchMergeName:   {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", "findings", "note", "unproven"},
 		commandName:      {"stdout", "stderr", "rc"},
 		earlierCallsName: {"count"},
-		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests"},
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
@@ -62,10 +63,19 @@ func resultFields() map[string][]string {
 		waitName:         {"answer", "answers", "timed_out"},
 		writeName:        {"stdout", "stderr", "rc", "key", "skipped"},
 	}
+	maps.Copy(fields, gateResultFields())
 	maps.Copy(fields, trackerResultFields())
 	maps.Copy(fields, factsResultFields())
 
 	return fields
+}
+
+// gateResultFields holds the fields of the builtins that judge a head: gate and before_review.
+func gateResultFields() map[string][]string {
+	return map[string][]string{
+		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests"},
+		beforeReviewName: {"ok", "findings", "new_tests", baseField, "keywords"},
+	}
 }
 
 // factsResultFields holds the fields of the struct that facts returns.

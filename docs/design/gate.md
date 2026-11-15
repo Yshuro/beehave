@@ -143,6 +143,32 @@ Before the gate command starts, beehave records the modification time and the si
 
 beehave reads no clock. So a file with a future timestamp, a coarse timestamp or a clock that steps back does not change the result. If no file counts, the gate fails with a reason that says the gate wrote no new report.
 
+### The candidate gate
+
+A `gate` call with `base` submits the job of a candidate head. A `gate` call without `base` is a sync head or a landing gate: it runs the gate command only, with no secret scan and no new-tests check. A candidate gate never reuses an earlier pass, because a reused pass holds no checks.
+
+The job of a candidate runs its steps apart, each in its own subshell, and a failed step never stops a later one. Each step writes the line `beehave-gate-step <name> rc=<code>`. The step names `head-gate`, `secret-scan` and `base-suite` are reserved, and `gate_steps` refuses them. The job exits with the exit code of `head-gate`.
+
+| Step | What it does |
+|---|---|
+| `head-gate` | Runs the gate command and the report checks. Its exit code is the verdict of the gate. |
+| `secret-scan` | Runs `gitleaks git --log-opts=<merge base>..HEAD`, so it reads the diff of the candidate only. |
+| `base-suite` | Runs `test_command` on the merge base when the host has no cached report for that commit. |
+
+The merge base is the merge base of the head and `origin/<base>`. The host keeps one parsed base report for each merge base commit, in a folder outside the clone. The job writes each file under a temporary name and renames it, so no reader sees a partial file.
+
+After the steps, the job compares the head report with the base report per test, by `classname` and `name`. A subtest is its own test. The reader is `awk` only. The job prints:
+
+- one line `beehave-new-test <class> <name>` for each new test,
+- one line `beehave-new-test-failed <kind> <class> <name>` for each new test that failed or was skipped on the head,
+- the end line `beehave-new-tests-end new=<n> failed=<n>`.
+
+The name lines and the marker lines stop at 50 each. The end line carries the full counts.
+
+The engine reads the log of a passing candidate job and records `checks` and `new_tests` in the result of the gate call. A log with no end line is a cut log: `checks.complete` is false. The step line of `beehave status <run id> --json` shows `new_tests`.
+
+The secret scan needs gitleaks 8.30.1, which `make setup` and the CI `test` job install. A test with a planted key proves that the step fails. The test builds the key from parts at run time, and it fails when `CI` is set and gitleaks is missing.
+
 ### Non-zero exits and kills
 
 - A gate that exits non-zero fails, and the report is not read. The step `command` is `fail`, and every later step (`tests`) is `unknown`, in the step results and in the `steps=` field of `beehave status`.

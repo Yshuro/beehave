@@ -32,6 +32,7 @@ var goldenShapes = map[string][]string{
 	"star29": {
 		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,stop,text,transcript,violations",
 		"batch_merge: deferred,findings,gates,merged,note,rejected,tip,tree,unproven",
+		"before_review: base,findings,keywords,new_tests,ok",
 		"board_sync: number,status",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
@@ -70,7 +71,7 @@ func TestStepsVersion_TheShapeOfTheRecordedResultsIsTheGoldenShapeOfTheVersion(t
 // the table is the one the engine checks every step name against. A builtin with no result fields is in it too.
 var goldenKinds = map[string][]string{
 	"star29": {
-		"agent", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
+		"agent", "before_review", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
 		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "merge", "now",
 		"pr_assign", "pr_comment", "pr_open", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
 	},

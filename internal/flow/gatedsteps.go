@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 
 	"go.starlark.net/starlark"
@@ -22,6 +23,8 @@ type gatedCall struct {
 	head     starlark.Value
 	steps    starlark.Value
 	required starlark.Value
+	// checks is what the log of the gate job gave. A gate with no checks holds the zero value, which is not Complete.
+	checks GateChecks
 }
 
 // holdMerge runs before a merge. The steps must be the steps of a gate of this run at the head of the merge, they must hold every name
@@ -83,9 +86,21 @@ func (s *script) recordGate(label string, outputs map[string]any) (starlark.Valu
 	}
 
 	// gateOutputs writes the head, the steps and the required names of every gate record, so the fields hold all three.
-	s.gated = append(s.gated, gatedCall{head: fields["head"], steps: fields["steps"], required: fields["required"]})
+	s.gated = append(s.gated, gatedCall{head: fields["head"], steps: fields["steps"], required: fields["required"], checks: recordedChecks(outputs["checks"])})
 
 	return starlarkstruct.FromStringDict(starlarkstruct.Default, fields), nil
+}
+
+// recordedChecks reads the checks of a gate record. A record that holds none, or anything else, reads as the zero value: not Complete.
+func recordedChecks(raw any) GateChecks {
+	var checks GateChecks
+
+	data, err := json.Marshal(raw)
+	if err != nil || json.Unmarshal(data, &checks) != nil {
+		return GateChecks{}
+	}
+
+	return checks
 }
 
 // checkGateSteps refuses a `steps` argument that is not the steps of a gate call of this run at the head of the merge, and returns that call.

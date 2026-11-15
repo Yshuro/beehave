@@ -193,6 +193,11 @@ func (s scope) outside(ctx context.Context, dir string, mark startMark) ([]strin
 		return nil, err
 	}
 
+	return s.blocked(names), nil
+}
+
+// blocked lists the names that no glob allows, sorted and with no repeat.
+func (s scope) blocked(names []string) []string {
 	var bad []string
 
 	for _, name := range names {
@@ -203,7 +208,7 @@ func (s scope) outside(ctx context.Context, dir string, mark startMark) ([]strin
 
 	slices.Sort(bad)
 
-	return bad, nil
+	return bad
 }
 
 // check fails when the folder changed a path that no glob allows. The message names each path.

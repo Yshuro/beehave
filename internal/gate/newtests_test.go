@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -56,7 +57,13 @@ func runCandidate(t *testing.T, root, repo, head string, scan int) string {
 
 	bin := filepath.Join(root, "bin")
 	require.NoError(t, os.MkdirAll(bin, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "gitleaks"), []byte(fmt.Sprintf("#!/bin/sh\nexit %d\n", scan)), 0o700)) //nolint:gosec // a stub program
+
+	// A negative scan runs the real gitleaks, which the PATH finds in its own folder.
+	if scan < 0 {
+		bin = gitleaksFolder(t)
+	} else {
+		require.NoError(t, os.WriteFile(filepath.Join(bin, "gitleaks"), []byte(fmt.Sprintf("#!/bin/sh\nexit %d\n", scan)), 0o700)) //nolint:gosec // a stub program
+	}
 
 	project := model.Project{Name: "demo", Gate: "sh mkreport.sh", TestReport: "reports/*.xml", TestCommand: "sh mkreport.sh"}
 	command := hostCommand(project, nil, repo, head, root+"/beehave-gate-demo-"+head, "main")
@@ -179,6 +186,65 @@ func TestBeforeReview_TheEndMarkerCarriesTheFullCountPastTheNameLineCap(t *testi
 
 	require.Equal(t, 75, checks.New)
 	require.Len(t, checks.NewTests, markerCap)
+}
+
+// gitleaksFolder is the folder of the real gitleaks. A machine that has none fails the test when CI is set, and skips it anywhere else.
+func gitleaksFolder(t *testing.T) string {
+	t.Helper()
+
+	found, err := exec.LookPath("gitleaks")
+	if err != nil {
+		if config.ProcessEnv()["CI"] != "" {
+			t.Fatal("gitleaks is not installed and CI is set. The planted-key test never skips in CI. Run make setup")
+		}
+
+		t.Skip("gitleaks is not installed. Run make setup")
+	}
+
+	return filepath.Dir(found)
+}
+
+// plantedKey is a key shape that gitleaks reads as a cloud access key. The parts join at run time, so no file of the repository holds the whole key.
+func plantedKey() string {
+	return "AKI" + "A" + "XQJZ5MNP" + "W3LK7RTV"
+}
+
+// commitFile commits a file with the text on the branch that is checked out, and returns the new head.
+func commitFile(t *testing.T, repo, name, text string) string {
+	t.Helper()
+
+	require.NoError(t, os.WriteFile(filepath.Join(repo, name), []byte(text), 0o600))
+
+	for _, args := range [][]string{{"add", name}, {"commit", "-q", "-m", "add " + name}} {
+		out, err := exec.CommandContext(t.Context(), "git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...).CombinedOutput() //nolint:gosec // test helper
+		require.NoError(t, err, string(out))
+	}
+
+	out, err := exec.CommandContext(t.Context(), "git", "-C", repo, "rev-parse", "HEAD").Output() //nolint:gosec // test helper
+	require.NoError(t, err)
+
+	return strings.TrimSpace(string(out))
+}
+
+func TestBeforeReview_ASecretScanFailsAPlantedKeyInTheCandidateDiffAndPassesACleanOne(t *testing.T) {
+	t.Parallel()
+
+	gitleaksFolder(t)
+
+	cleanRepo, _ := shellRepo(t, "pass a TestOld\n", "pass a TestOld\npass a TestNew\n")
+	cleanHead := commitFile(t, cleanRepo, "notes.env", "greeting = hello\n")
+	clean := ReadChecks(runCandidate(t, t.TempDir(), cleanRepo, cleanHead, -1))
+
+	plantedRepo, _ := shellRepo(t, "pass a TestOld\n", "pass a TestOld\npass a TestNew\n")
+	plantedHead := commitFile(t, plantedRepo, "settings.env", "aws_access_key_id = "+plantedKey()+"\n")
+	planted := ReadChecks(runCandidate(t, t.TempDir(), plantedRepo, plantedHead, -1))
+
+	require.NotNil(t, clean.Secrets)
+	require.Zero(t, *clean.Secrets, "the control: a diff with no key passes the scan")
+	require.NotNil(t, planted.Secrets)
+	require.NotZero(t, *planted.Secrets, "the planted key in the diff fails the scan")
+	require.True(t, planted.Complete, "the failed scan leaves the later steps running")
+	require.Equal(t, 1, planted.New)
 }
 
 func manyTests(n int) string {

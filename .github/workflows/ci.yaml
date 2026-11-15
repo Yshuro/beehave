@@ -59,8 +59,23 @@ jobs:
       - name: Install gotestsum
         run: go install gotest.tools/gotestsum@v1.13.0
 
+      - name: Install gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
+
       - name: Race tests, coverage gate, smoke
         run: make test coverage smoke
+        env:
+          GOTELEMETRY: "off"
+
+      # make test runs without -v, so its log has no PASS line. This step prints the PASS line of each proof test by name.
+      # A name with no test prints no PASS line, so a missing test never reads as a pass.
+      - name: Proof tests
+        if: always()
+        run: |
+          status=0
+          go test -run '^TestBeforeReview_ASecretScanFailsAPlantedKeyInTheCandidateDiffAndPassesACleanOne$' -count=1 -v ./internal/gate/ || status=1
+          go test -run '^TestInstall_APartialThreadSyncStopsTheInstallation$' -count=1 -v ./internal/sandbox/landlock/ || status=1
+          exit $status
         env:
           GOTELEMETRY: "off"
 

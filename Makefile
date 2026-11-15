@@ -42,6 +42,8 @@ GOTESTSUM_VERSION := v1.13.0
 REPORT_DIR := reports
 GOTESTSUM = gotestsum --format standard-quiet --junitfile $(REPORT_DIR)
 AI_RULEZ_VERSION := v5.9.2
+# The secret scan of the candidate gate job runs gitleaks. The "git" subcommand exists from 8.19 on.
+GITLEAKS_VERSION := v8.30.1
 BIN := bin/beehave
 REMEDY := bin/remedy
 
@@ -57,6 +59,7 @@ setup:  ## Install the Go tools and generate the agent files
 	command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 	command -v gotestsum >/dev/null 2>&1 || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
 	command -v deadcode >/dev/null 2>&1 || go install $(DEADCODE_VERSION)
+	go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 	$(MAKE) governance-generate
 
 build:  ## Build bin/beehave and bin/remedy
