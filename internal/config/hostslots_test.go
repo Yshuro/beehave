@@ -23,6 +23,20 @@ func TestConfig_AHostBlockReadsItsSlotClasses(t *testing.T) {
 	require.Nil(t, project.Host.Slots, "a host block with no slots names no class")
 }
 
+func TestConfig_AHostBlockTakesTheLargestSlotCountAndRefusesOneMore(t *testing.T) {
+	t.Parallel()
+
+	project, problems := loadProjectText(t, call(clusterProject+", host = "+hostCall(`, slots = {"bench": 1048576}`)))
+
+	require.Empty(t, problems)
+	require.Equal(t, map[string]int{"bench": 1048576}, project.Host.Slots)
+
+	_, problems = loadProjectText(t, call(clusterProject+", host = "+hostCall(`, slots = {"bench": 1048577}`)))
+
+	require.Len(t, problems, 1)
+	require.ErrorContains(t, problems[0], "`host.slots` class \"bench\" must be above zero and at most 1048576; got 1048577")
+}
+
 func slotProject(name, host string, hosts []string, slots map[string]int) config.Project {
 	return config.Project{Project: model.Project{Name: name, BuildHost: host, BuildHosts: hosts, Host: &model.HostConfig{Slots: slots}}}
 }

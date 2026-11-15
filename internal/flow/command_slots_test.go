@@ -173,6 +173,10 @@ func TestCommand_ASlotClassTheBuildCannotGrantIsRefusedAtTheCall(t *testing.T) {
 			},
 			`command(run = ["x"], host = "box", slots = "mutation")`, `host "box" names no slot class "mutation"`,
 		},
+		"a grant of no slots": {
+			func(_, _, _ string) (SlotGrant, error) { return SlotGrant{Host: "box", Count: 0}, nil },
+			`command(run = ["x"], host = "box", slots = "mutation")`, `register the queue of the slot class "mutation"`,
+		},
 		"no host":    {nil, `command(run = ["x"], slots = "mutation")`, "slots cannot be used without host"},
 		"blank name": {nil, `command(run = ["x"], host = "box", slots = " ")`, "slots must be the name of a slot class"},
 	}
@@ -190,6 +194,28 @@ func TestCommand_ASlotClassTheBuildCannotGrantIsRefusedAtTheCall(t *testing.T) {
 			assert.Empty(t, h.commands.ran(), "a refused call runs nothing")
 		})
 	}
+}
+
+func TestSlotQueue_ASetPollIntervalReachesTheQueueAndAZeroPollLeavesTheLibraryDefault(t *testing.T) {
+	t.Parallel()
+
+	engine := newHarness(t).engine(t)
+
+	engine.deps.Clock.Poll = 0
+
+	byDefault, err := engine.slotQueue("poll-default", 2)
+	require.NoError(t, err)
+	require.NotNil(t, byDefault.GetPartitionConcurrency())
+	assert.Equal(t, 2, *byDefault.GetPartitionConcurrency())
+
+	engine.deps.Clock.Poll = 3 * time.Second
+
+	set, err := engine.slotQueue("poll-set", 2)
+	require.NoError(t, err)
+
+	assert.Equal(t, 3*time.Second, set.GetPollingInterval(), "a set poll is the interval of the queue")
+	assert.Positive(t, byDefault.GetPollingInterval(), "a zero poll leaves the library default")
+	assert.NotEqual(t, 3*time.Second, byDefault.GetPollingInterval())
 }
 
 func TestCommand_AHostJobWaitsForAFreeSlotOfItsClass(t *testing.T) {

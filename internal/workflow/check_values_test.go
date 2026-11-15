@@ -149,6 +149,15 @@ func TestCheck_AcceptsTheLiteralValuesThatTheRunAccepts(t *testing.T) {
 	assert.Empty(t, got)
 }
 
+func TestCheck_ASlotsValueOfTheWrongKindGetsTheKindErrorAndNoSecondOne(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    command(run = [\"x\"], host = \"h\", slots = 5)\n")
+
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "slots must be a text, not an int")
+}
+
 func TestCheck_ReportsOneErrorForOneArgument(t *testing.T) {
 	t.Parallel()
 
