@@ -741,6 +741,19 @@ func TestOptions_TheReviewPollMinutesBecomeTheIntervalOfTheEngine(t *testing.T) 
 	assert.Equal(t, 45*time.Minute, rig.options.ReviewPoll)
 }
 
+func TestOptions_TheCapsOfTheRunAndOfTheTreeReachTheEngine(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+	writeConfig(t, rig.dir, "runners.star", "agents(max_run_budget_usd = 20, max_tree_budget_usd = 60)\n"+validRunners)
+
+	code, _, stderr := rig.execute(t.Context(), "run", "12")
+
+	require.Equal(t, 0, code, stderr)
+	assert.InDelta(t, 20.0, rig.options.MaxRunBudget, 0)
+	assert.InDelta(t, 60.0, rig.options.MaxTreeBudget, 0)
+}
+
 func TestOptions_TheRetentionDaysBecomeTheAgeOfTheEngineAndZeroKeepsTheRuns(t *testing.T) {
 	t.Parallel()
 

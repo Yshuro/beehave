@@ -92,35 +92,33 @@ c = agent(model = "m", prompt = "prompts/a.md", name = "c")
 command(run = ["done"])
 `)
 
-func TestAgentStep_AStepThatWouldStartPastTheRunCapFailsBeforeItStartsAndNamesTheCapAndTheSpentSum(t *testing.T) {
+func TestAgentStep_AStepThatWouldStartPastTheRunCapWaitsBeforeItStartsAndNamesTheCapAndTheSpentSum(t *testing.T) {
 	t.Parallel()
 
 	rig := newAgentRig(t)
 	rig.h.opts.MaxRunBudget = 5
 	rig.reply("", costing(3))
 
-	_, err := rig.run(t, threeFlow, "x")
+	stop := holdOnCap(t, rig, capFile(t, threeFlow))
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "the cap for one item run is $5")
-	assert.Contains(t, err.Error(), "the agent steps of the item run spent $6")
-	assert.Contains(t, err.Error(), "the last step can pass it by its own cost")
+	assert.Contains(t, stop.Note, "the cap for one item run is $5")
+	assert.Contains(t, stop.Note, "the agent steps of the item run spent $6")
+	assert.Contains(t, stop.Note, "the last step can pass it by its own cost")
 	assert.Len(t, rig.h.agents.seen(), 2, "the third agent never started")
 	assert.Empty(t, rig.h.commands.ran())
 }
 
-func TestAgentStep_AStepStartsWhileTheSumIsUnderTheCapAndIsRefusedWhenTheSumEqualsTheCap(t *testing.T) {
+func TestAgentStep_AStepStartsWhileTheSumIsUnderTheCapAndWaitsWhenTheSumEqualsTheCap(t *testing.T) {
 	t.Parallel()
 
 	rig := newAgentRig(t)
 	rig.h.opts.MaxRunBudget = 5
 	rig.reply("", costing(2.5))
 
-	_, err := rig.run(t, threeFlow, "x")
+	stop := holdOnCap(t, rig, capFile(t, threeFlow))
 
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "the agent steps of the item run spent $5")
-	assert.Len(t, rig.h.agents.seen(), 2, "the second step started at $2.5 of $5, the third was refused at $5 of $5")
+	assert.InDelta(t, 5.0, stop.Spent, 0)
+	assert.Len(t, rig.h.agents.seen(), 2, "the second step started at $2.5 of $5, the third waited at $5 of $5")
 	assert.Empty(t, rig.h.commands.ran())
 }
 
@@ -194,18 +192,14 @@ command(run = ["done"])
 
 	next := rig.h.engine(t)
 	client := rig.h.client(t, testVersion)
-	done := make(chan runOutcome, 1)
-
-	go func() {
-		result, err := next.RunFile(testItem, testProject, file)
-		done <- runOutcome{result: result, err: err}
-	}()
+	done := runInBackground2(next, file)
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	eventually(t, func() bool { return stoppedRun(t, client, testRun) != nil })
 
-	outcome := <-done
-
-	require.Error(t, outcome.err)
-	assert.Contains(t, outcome.err.Error(), "the agent steps of the item run spent $13", "3 from the record of a, then 10 from b")
+	assert.Contains(t, stoppedRun(t, client, testRun).Note, "the agent steps of the item run spent $13", "3 from the record of a, then 10 from b")
 	assert.Len(t, rig.h.agents.seen(), 2, "a ran once, b ran once, c never started")
+
+	require.NoError(t, next.Shutdown())
+	<-done
 }

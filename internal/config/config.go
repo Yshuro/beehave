@@ -21,6 +21,7 @@ const (
 	envMaxTurns            = "BEEHAVE_AGENTS_MAX_TURNS"
 	envMaxBudget           = "BEEHAVE_AGENTS_MAX_BUDGET_USD"
 	envMaxRunBudget        = "BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD"
+	envMaxTreeBudget       = "BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD"
 	envRetentionDays       = "BEEHAVE_AGENTS_RETENTION_DAYS"
 	envReviewPoll          = "BEEHAVE_REVIEW_POLL_MINUTES"
 	envFiveHourMax         = "BEEHAVE_POOL_FIVE_HOUR_MAX"
@@ -181,6 +182,7 @@ func (c *Config) applyEnv(env map[string]string) error {
 		overlayWhole(env, envRetentionDays, "for example 30, or 0 to keep every finished run.", &c.Agents.RetentionDays),
 		overlayDollars(env, envMaxBudget, "5", &c.Agents.MaxBudgetUSD),
 		overlayDollars(env, envMaxRunBudget, "20", &c.Agents.MaxRunBudgetUSD),
+		overlayDollars(env, envMaxTreeBudget, "100", &c.Agents.MaxTreeBudgetUSD),
 	)
 	if err != nil {
 		return err
@@ -269,6 +271,7 @@ func (c Config) budgetProblems(runnersPath string) Problems {
 	}{
 		{"agents.max_budget_usd", envMaxBudget, c.Agents.MaxBudgetUSD},
 		{"agents.max_run_budget_usd", envMaxRunBudget, c.Agents.MaxRunBudgetUSD},
+		{"agents.max_tree_budget_usd", envMaxTreeBudget, c.Agents.MaxTreeBudgetUSD},
 	} {
 		if !(limit.dollars >= 0) || math.IsInf(limit.dollars, 0) {
 			problems = append(problems, refuse("%s must be 0 (no cap) or more, and a finite number. Set it in %s or in %s.", limit.name, runnersPath, limit.env))
