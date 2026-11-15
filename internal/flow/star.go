@@ -20,7 +20,9 @@ import (
 // jsonModule is the one name of workflow.Builtins that is a module of the Starlark library, not a step.
 const jsonModule = "json"
 
-// stepsVersion changes when a builtin changes its steps. It is part of the application version, so an old run is not replayed by a new build.
+// stepsVersion is the single version of the builtin steps that came before the step modules. A run stored under it recorded every module at version 1
+// (parseVersions), and the golden tables of this package are held under it. A change to a builtin changes the version of its module in moduleTable.
+// The application version holds those module versions, so an old run is not replayed by a build that changed a module that the run used.
 const stepsVersion = "star30"
 
 // runStar runs `main(item)` of the workflow file of the run on one thread. The files are the bytes that the run pinned.

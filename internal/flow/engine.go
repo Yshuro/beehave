@@ -298,21 +298,24 @@ func engineConfig(opts Options, state store, logger *slog.Logger) dbos.Config {
 	}
 }
 
-// applicationVersion is the version that DBOS stores with each run: the build version and the version of the builtin steps.
-func applicationVersion(build string) string { return build + "+" + stepsVersion }
+// applicationVersion is the version that DBOS stores with each run: the build version and one version for each step module (moduleVersions).
+func applicationVersion(build string) string { return build + "+" + moduleVersions() }
 
-// stepsMark starts the version of the builtin steps in a stored application version.
-const stepsMark = "+star"
-
-// splitVersion splits a stored application version into the build version that a user starts and the version of the builtin steps (such as star13).
-// A version with no step list part has an empty second value. This is the only place that reads the format of applicationVersion.
+// splitVersion splits a stored application version into the build version that a user starts and the steps part: the list of module versions
+// (such as core1.agent1) or the single version of the builtin steps that came before the modules (such as star13).
+// A version with no steps part has an empty second value. This is the only place that reads the format of applicationVersion.
 func splitVersion(stored string) (build, steps string) {
-	at := strings.LastIndex(stored, stepsMark)
+	at := strings.LastIndex(stored, "+")
 	if at < 0 {
 		return stored, ""
 	}
 
-	return stored[:at], stored[at+1:]
+	tail := stored[at+1:]
+	if _, listed := parseVersions(tail); listed || strings.HasPrefix(tail, "star") {
+		return stored[:at], tail
+	}
+
+	return stored, ""
 }
 
 // buildVersion is the version that a user starts: a stored version without the version of the builtin steps.

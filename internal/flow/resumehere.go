@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -54,10 +55,8 @@ func (c *Client) moveOpen(item string, last run) error {
 
 // requireMovable refuses a run that cannot move to this build: one recorded under another step list, a finished one, one whose holder is alive, and one whose files changed.
 func (c *Client) requireMovable(item string, last run) error {
-	// A run replays its recorded steps. Under another step list the replay does not match them, whatever the build.
-	if was, now := stepListOf(last.Status.ApplicationVersion), stepListOf(c.version); was != now {
-		return fmt.Errorf("%w: %s was recorded under %s and this build has %s. A run cannot replay under another step list. Start the item again: beehave run %s",
-			errStranded, last.Status.ID, describeStepList(was), describeStepList(now), item)
+	if err := c.requireSameSteps(item, last); err != nil {
+		return err
 	}
 
 	if state := stateOf(last.Status.Status); last.terminal() && state != runCancelled && state != runFailed {
@@ -69,6 +68,57 @@ func (c *Client) requireMovable(item string, last run) error {
 	}
 
 	return requirePinned(last)
+}
+
+// requireSameSteps refuses a run that this build cannot replay. A run replays its recorded steps, so it needs the step modules that it recorded
+// at the same version as this build. A module that the run recorded no step of may differ. A run stored under a single version of the steps
+// other than the one that stands for every module at version 1, or under none, cannot replay at all.
+func (c *Client) requireSameSteps(item string, last run) error {
+	stored, now := stepListOf(last.Status.ApplicationVersion), stepListOf(c.version)
+
+	was, readable := parseVersions(stored)
+	if !readable {
+		return fmt.Errorf("%w: %s was recorded under %s and this build has %s. A run cannot replay under another step list. Start the item again: beehave run %s",
+			errStranded, last.Status.ID, describeStepList(stored), describeStepList(now), item)
+	}
+
+	current, _ := parseVersions(now)
+
+	return c.requireUsedModulesSame(item, last, was, current)
+}
+
+// requireUsedModulesSame refuses a run that recorded a step of a module whose version differs between the stored list and this build.
+func (c *Client) requireUsedModulesSame(item string, last run, was, current map[string]int) error {
+	if maps.Equal(was, current) {
+		return nil
+	}
+
+	names, err := c.stepNames(last.Status.ID)
+	if err != nil {
+		return err
+	}
+
+	if module, changed := changedModule(modulesUsed(names), was, current); changed {
+		return fmt.Errorf("%w: %s recorded steps of the %s module at %s and this build has %s. A run cannot replay under another step list. Start the item again: beehave run %s",
+			errStranded, last.Status.ID, module, describeModule(module, was), describeModule(module, current), item)
+	}
+
+	return nil
+}
+
+// stepNames reads the names of the steps that a run recorded.
+func (c *Client) stepNames(id string) ([]string, error) {
+	records, err := dbos.GetWorkflowSteps(c.flow, id)
+	if err != nil {
+		return nil, fmt.Errorf("read the steps of %s: %w", id, err)
+	}
+
+	names := make([]string, len(records))
+	for i, record := range records {
+		names[i] = record.StepName
+	}
+
+	return names, nil
 }
 
 // requireNoLiveHolder refuses an open run whose claim lease has not ended: the build that holds it still runs, and a move would take the run from it.
