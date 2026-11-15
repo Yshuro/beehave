@@ -38,7 +38,7 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"env missing name", `env()`, "env needs the `name` keyword"},
 		{"gate unknown keyword", `gate(runs = ["a"])`, "gate takes no argument runs"},
 		{"gate text for a list", `gate(run = "make check")`, "run must be a list, not a text."},
-		{"queue unknown keyword", `queue(name = "n", limit = 2)`, "queue takes no argument limit. Use one of: name, hold."},
+		{"queue unknown keyword", `queue(name = "n", limit = 2)`, "queue takes no argument limit. Use one of: name, hold, label, items."},
 		{"queue number for hold", `queue(name = "n", hold = 3)`, "hold must be a text, not an int."},
 		{"gather unknown keyword", `gather([], wait = True)`, "gather takes no argument wait"},
 		{"gather missing runs", `gather(fail = "raise")`, "gather needs the `runs` keyword"},
@@ -100,6 +100,8 @@ func TestCheck_AcceptsACallThatKeepsItsSignature(t *testing.T) {
 		`item_status("1", "hold")`,
 		`merge("h", children = "retarget", approved = True, own = {"logins": []})`,
 		`preflight(head = "h", base = "b", hold = "hold", name = "intake")`,
+		`queue(name = "n", hold = "hold", label = "beehave-round")`,
+		`queue(name = "n", items = ["12", "bd-3"])`,
 		`spawn(["1"], name = "n")`,
 		`wait()`,
 	}

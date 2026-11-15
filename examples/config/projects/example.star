@@ -40,19 +40,20 @@ project(
     #     merged = "Done",             # the Status column that it sets after the merge; required
     #     owner = "your-org",          # the login that owns the board; the default is the owner of `repo`
     # ),                               # optional. With no board block the example makes no board call. The token needs the `project` scope
-    # rounds = rounds(
-    #     base = "integration/r2",         # the branch of the round; the round id is round/<base>; required
-    #     owner = "your-login",            # the login of the owner; required
-    #     lane_cap = 4,                    # the lanes that run at once, 1 or more; required
-    #     fix_rounds = 5,                  # the fix rounds for one item, 1 or more; required
-    #     label = "beehave-round",         # the tracker label that selects the items; set this or `items`, not both; required
-    #     # items = ["12", "15"],          # the explicit list of item ids, in place of `label`
-    #     next_base = "integration/r3",    # the branch of the next round; empty means the round does not cut
-    #     merge = False,                   # True lets the round land approved items; the default is False
-    #     integration_pr = 0,              # a number pins the integration pull request; 0 lets the round find it
-    #     wait_hours = 24,                 # the hours that the round waits for the owner, 1 or more
-    #     lane_kind = "impl",              # impl, papers or design; papers and design need `allow_paths`
-    # ),                                 # optional. Also: owner_email, source_checkout, acceptance, base_result, base_reds, base_reds_file, allow_paths
+    # The remediation example reads the settings of a round from the key `round` of `vars`. The engine reads none of them, and the example refuses a missing or wrong one. A project has one `vars`, so put the key `round` in the same dict as your other keys:
+    # vars = {"round": {
+    #     "base": "integration/r2",         # the branch of the round; the round id is round/<base>; required
+    #     "owner": "your-login",            # the login of the owner; required
+    #     "lane_cap": 4,                    # the lanes that run at once, 1 or more; required
+    #     "fix_rounds": 5,                  # the fix rounds for one item, 1 or more; required
+    #     "label": "beehave-round",         # the tracker label that selects the items; set this or "items", not both; required
+    #     # "items": ["12", "15"],          # the explicit list of item ids, in place of "label"
+    #     "next_base": "integration/r3",    # the branch of the next round; empty means the round does not cut
+    #     "merge": False,                   # True lets the round land approved items; the default is False
+    #     "integration_pr": 0,              # a number pins the integration pull request; 0 lets the round find it
+    #     "wait_hours": 24,                 # the hours that the round waits for the owner, 1 or more; the default is 24
+    #     "lane_kind": "impl",              # impl, papers or design; papers and design need "allow_paths"
+    # }},                                 # optional. Also: owner_email, source_checkout, acceptance, base_result, base_reds, base_reds_file, allow_paths
     # schedules = [
     #     schedule(
     #         name = "weekly-bump",          # lower case letters, digits and hyphens; unique in the project; required

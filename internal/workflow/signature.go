@@ -371,7 +371,7 @@ func swarmSignatures() map[string][]Param {
 		},
 		gatherName: {req("runs", KindAny), one(failKeyword, FailModes()), one(untilKeyword, UntilModes()), label},
 		spawnName:  {{Name: "items", Kind: KindList, Required: true, Rule: wordsRule("items")}, opt(entryKeyword, KindText), label},
-		queueName:  {label, opt("hold", KindText)},
+		queueName:  {label, opt("hold", KindText), opt("label", KindText), words("items")},
 	}
 }
 

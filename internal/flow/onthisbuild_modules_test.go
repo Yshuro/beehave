@@ -103,7 +103,7 @@ func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionOfTheStep
 
 	expireLease(harness)
 
-	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), "core module at version 1 and this build has version 2", "the facts result of the old build has no vars field")
+	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), "core module at version 1 and this build has version 3", "the facts result of the old build has the round_* fields and no vars field")
 }
 
 func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionWhenAUsedModuleChanged(t *testing.T) {

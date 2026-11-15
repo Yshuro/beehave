@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -76,7 +77,8 @@ type joinedPull struct {
 func (s *script) queue(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	var hold, label string
 
-	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{nameKeyword: &label, holdKeyword: &hold}); err != nil {
+	only, err := queueSelector(b, args, kwargs, &hold, &label)
+	if err != nil {
 		return nil, err
 	}
 
@@ -85,7 +87,7 @@ func (s *script) queue(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 	}
 
 	got, err := countedStep(s, "queue", label, func(c context.Context) (queued, error) {
-		return s.e.readQueue(c, s.in.Project, hold)
+		return s.e.readQueue(c, s.in.Project, hold, only)
 	})
 	if err != nil {
 		return nil, err
@@ -94,14 +96,37 @@ func (s *script) queue(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 	return queuedValue(got), nil
 }
 
+// queueSelector reads the arguments of a queue call into hold and the step name, and returns the item selector. A call that sets both label and items is refused.
+func queueSelector(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple, hold, name *string) (selector, error) {
+	var (
+		tracked string
+		items   starlark.Value
+	)
+
+	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{nameKeyword: name, holdKeyword: hold, "label": &tracked, "items": &items}); err != nil {
+		return selector{}, err
+	}
+
+	ids, err := workflow.Words("items", items)
+	if err != nil {
+		return selector{}, err
+	}
+
+	if tracked != "" && len(ids) > 0 {
+		return selector{}, errors.New("queue takes label or items, not both")
+	}
+
+	return selector{label: tracked, ids: ids}, nil
+}
+
 // readQueue reads the tracker and the forge, then the runs of each item, and sorts the rows by severity and item id.
-func (e *Engine) readQueue(ctx context.Context, project, holdLabel string) (queued, error) {
+func (e *Engine) readQueue(ctx context.Context, project, holdLabel string, only selector) (queued, error) {
 	items, err := e.deps.Queue.OpenItems(ctx, project)
 	if err != nil {
 		return queued{}, fmt.Errorf("read the open items of project %s: %w", project, err)
 	}
 
-	items = e.selected(project, items)
+	items = only.keep(items)
 
 	pulls, err := e.deps.Queue.OpenPulls(ctx, project)
 	if err != nil {
@@ -120,18 +145,22 @@ func (e *Engine) readQueue(ctx context.Context, project, holdLabel string) (queu
 	return queued{Rows: rows, Free: free}, err
 }
 
-// selected keeps the items that the round settings of the project select. A project with no rounds block keeps every item.
-func (e *Engine) selected(project string, items []model.Item) []model.Item {
-	if e.deps.Facts == nil {
-		return items
+// selector is the item selection of a queue call: the items that carry label, or the items whose id is in ids. A call that names neither selects every item.
+type selector struct {
+	label string
+	ids   []string
+}
+
+// keep returns the items that the selector takes.
+func (s selector) keep(items []model.Item) []model.Item {
+	switch {
+	case s.label != "":
+		return slices.DeleteFunc(slices.Clone(items), func(item model.Item) bool { return !slices.Contains(item.Labels, s.label) })
+	case len(s.ids) > 0:
+		return slices.DeleteFunc(slices.Clone(items), func(item model.Item) bool { return !slices.Contains(s.ids, item.ID) })
 	}
 
-	rounds := e.deps.Facts(project).Rounds
-	if !rounds.Configured() {
-		return items
-	}
-
-	return slices.DeleteFunc(slices.Clone(items), func(item model.Item) bool { return !rounds.Selects(item) })
+	return items
 }
 
 // queueRows gives one row for each item, sorted by severity and then by item id.
