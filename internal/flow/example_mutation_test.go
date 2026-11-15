@@ -106,7 +106,7 @@ func approveAfter(fixes int) func(int) string {
 }
 
 // gremlinsLog is the noise that a real mutation log holds before the finding lines: the line of a killed mutant as gremlins prints it, a time stamp, and lines of the shape of a location with no prefix.
-const gremlinsLog = "Starting the tool\n      KILLED CONDITIONALS_NEGATION at internal/a/a.go:30:4\n12:30:45 text\na:b: c\nx.go:9: not prefixed\n"
+const gremlinsLog = "Starting the tool\n      KILLED CONDITIONALS_NEGATION at internal/a/a.go:30:4\n12:30:45 text\na:b: c\nx.go:9: not prefixed\nthe tool quotes finding: zzz-midline\n"
 
 func TestReviewFix_ALivedMutantOnAChangedLineIsAFinding(t *testing.T) {
 	t.Parallel()
@@ -136,6 +136,7 @@ func TestReviewFix_ALivedMutantOnAChangedLineIsAFinding(t *testing.T) {
 	assert.NotContains(t, fixes[0], "12:30:45", "a line with a time stamp is no finding")
 	assert.NotContains(t, fixes[0], "a:b: c", "a line of the shape a:b: c with no prefix is no finding")
 	assert.NotContains(t, fixes[0], "x.go:9: not prefixed", "a line of the shape path:line: text with no prefix is no finding")
+	assert.NotContains(t, fixes[0], "zzz-midline", "a line that holds the prefix in the middle is no finding: the prefix must start the line")
 	assert.Equal(t, []string{"opus", "sonnet", "sonnet", "opus"}, rig.models(), "the plan, the implement step, a fix, then the one review of the fixed head: no review judges a head with a lived mutant")
 }
 
