@@ -257,6 +257,7 @@ func (c Config) Validate() Problems {
 	problems = append(problems, c.budgetProblems(runnersPath)...)
 	problems = append(problems, c.pollProblems(runnersPath)...)
 	problems = append(problems, c.retentionProblems(runnersPath)...)
+	problems = append(problems, c.slotProblems()...)
 
 	return append(problems, c.poolProblems(runnersPath)...)
 }

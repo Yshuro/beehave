@@ -158,7 +158,7 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 		SandboxDefault: func(project string) bool { return cfg.Projects[project].SandboxByDefault() },
 		RefuseGate:     gateRefusal(cfg.Projects, enforcers.Refusal),
 		Repository:     repositoryOf(cfg.Projects),
-		Facts:          factsOf(cfg.Projects),
+		Facts:          factsOf(cfg.Projects), Slots: slotsOf(cfg.Projects),
 	}
 }
 

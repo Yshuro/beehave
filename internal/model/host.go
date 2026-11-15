@@ -49,6 +49,8 @@ type HostConfig struct {
 	// BankBudget is the time that the bank scan gives to each repository on the host. Zero means the default of the host package.
 	BankBudget    time.Duration
 	PrivateRemote string
+	// Slots is the number of jobs of each slot class that the host runs at once. A class that is not a key has no slot on the host. It is nil when the block names none.
+	Slots map[string]int
 	// Block is the config block of the chosen provider, when the provider declares one and the project gave it. The provider reads its keys once, in its constructor.
 	Block *Block
 }

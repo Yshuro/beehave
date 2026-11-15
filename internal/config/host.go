@@ -32,12 +32,13 @@ type rawHost struct {
 	DiskFloorGB   int
 	DiskWaitMins  int
 	PrivateRemote string
+	Slots         slotTable
 	Blocks        map[string]*model.Block
 }
 
 // hostSpec is the schema of the host constructor: the keys every provider shares, and one optional argument for each provider block that the registry declares.
 func hostSpec(declared []Block) spec {
-	args := []string{"provider", "disk_floor_gb", "idle_minutes?", "stale_minutes?", "max_run?", "disk_wait_minutes?", "bank_budget?", "private_remote?"}
+	args := []string{"provider", "disk_floor_gb", "idle_minutes?", "stale_minutes?", "max_run?", "disk_wait_minutes?", "bank_budget?", "slots?", "private_remote?"}
 
 	return spec{hostSpecName, append(args, blockArgs(declared)...)}
 }
@@ -50,7 +51,7 @@ func newHost(declared []Block) func(at syntax.Position, kwargs []starlark.Tuple)
 	return func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
 		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget}
 		held := holders(declared)
-		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.PrivateRemote}
+		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.Slots, &raw.PrivateRemote}
 
 		err := hostSpec(declared).unpack(at, kwargs, append(dests, blockDests(held)...)...)
 		raw.Blocks = heldBlocks(declared, held)
@@ -205,6 +206,18 @@ func fillCounts(raw rawHost, host *model.HostConfig) error {
 	}
 
 	host.DiskWaitMinutes = raw.DiskWaitMins
+
+	return fillLimits(raw, host)
+}
+
+// fillLimits sets the slot classes and the disk floor of host.
+func fillLimits(raw rawHost, host *model.HostConfig) error {
+	var err error
+
+	if host.Slots, err = slotsOf(raw.At, raw.Slots); err != nil {
+		return err
+	}
+
 	host.DiskFloorGB, err = positive(raw.At, "host.disk_floor_gb", raw.DiskFloorGB)
 
 	return err

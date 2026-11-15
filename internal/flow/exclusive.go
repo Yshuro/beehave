@@ -32,10 +32,12 @@ const (
 	kindGate      = "gate"
 	kindMerge     = "merge"
 	kindBatchGate = "batch_gate"
+	// kindCommand is a command call that names a slot class. It runs as a host job on the queue of its class and never on the exclusive queue.
+	kindCommand = "command"
 )
 
-// ExclusiveInput is one gate or one merge of a repository. Kind is "gate", "merge" or "batch_gate".
-// Request and Head belong to a gate. Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
+// ExclusiveInput is one gate or one merge of a repository, or the host job of a command call with a slot class. Kind is "gate", "merge", "batch_gate" or "command".
+// Request belongs to a command call. Request and Head belong to a gate. Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
 type ExclusiveInput struct {
 	Kind    string `json:"kind"`
 	Project string `json:"project"`
@@ -64,7 +66,9 @@ type ExclusiveOutput struct {
 	Outputs map[string]any    `json:"outputs,omitempty"`
 	Merge   merge.Result      `json:"merge"`
 	Batch   batch.GateOutcome `json:"batch"`
-	Failure *Failure          `json:"failure,omitempty"`
+	// Command is the output of a command call with a slot class.
+	Command CommandOutput `json:"command"`
+	Failure *Failure      `json:"failure,omitempty"`
 	// Key names the gate of a gate run that passed on every step; a later gate with the same key reuses the pass. Empty for every other run.
 	Key string `json:"key,omitempty"`
 	// Project is the project of a run that holds a Key; the lookup reads a pass only from a run of the same project.
@@ -159,6 +163,8 @@ func (e *Engine) runCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutp
 		out.Batch, err = runStep(e, ctx, kindBatchGate, func(c context.Context) (batch.GateOutcome, error) {
 			return e.batchGateOutcome(c, in)
 		})
+	case kindCommand:
+		out.Command, err = runStep(e, ctx, kindCommand, func(c context.Context) (CommandOutput, error) { return e.deps.Commands.Run(c, in.Request) })
 	default:
 		err = fmt.Errorf("an exclusive run has no kind %q", in.Kind) //nolint:err113 // a fault of the engine, not a state that a caller tests
 	}
@@ -291,9 +297,14 @@ func (e *Engine) stopJob(ctx context.Context, in ExclusiveInput, job string) {
 // was canceled cancels the job, a queued one before it starts and a running one at the next tick. A stop of the engine leaves the job for the next start.
 // A cancel of the run while no engine runs cancels the job too: WithCancelChildren of DBOS reaches every descendant of the run, grandchildren included.
 func (e *Engine) onHost(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) error {
+	return e.runJob(ctx, in, e.hostQueue, out)
+}
+
+// runJob queues the host job of in on queue, under the HostKey of in, and waits for it. The error and the stop of the wait are those of onHost.
+func (e *Engine) runJob(ctx dbos.Context, in ExclusiveInput, queue dbos.Queue, out *ExclusiveOutput) error {
 	host := strings.TrimPrefix(in.HostKey, hostKeyPrefix)
 
-	handle, err := dbos.RunWorkflow(ctx, e.hostJob, in, dbos.WithQueue(e.hostQueue), dbos.WithQueuePartitionKey(in.HostKey), dbos.WithPriority(in.Priority))
+	handle, err := dbos.RunWorkflow(ctx, e.hostJob, in, dbos.WithQueue(queue), dbos.WithQueuePartitionKey(in.HostKey), dbos.WithPriority(in.Priority))
 	if err != nil {
 		return fmt.Errorf("queue the build job of item %s on host %s: %w", in.Item, host, err)
 	}

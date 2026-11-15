@@ -249,6 +249,8 @@ type CommandRequest struct {
 	Gate bool
 	// MaxNewProcesses is the number of tasks that the tree of the command may hold besides the command (on Linux), or the process count of the user at the start plus this number (elsewhere). It is zero for a call that sets no cap.
 	MaxNewProcesses int
+	// SlotClass names the slot class of a call with Host. The host runs at most the count of its host block for the class at once. It is empty for a call that names none.
+	SlotClass string
 	// Stdin is the text that the program reads. It is empty when the call sets none.
 	Stdin string
 	// Env is the whole environment of the program as NAME=value pairs. It is nil for a request that keeps the environment of the process.
@@ -325,6 +327,9 @@ type Deps struct {
 	Repository func(project string) bool
 	// Facts returns the project as the config holds it. The `facts` builtin reads it in a recorded step. A nil Facts means every project has no facts.
 	Facts func(project string) model.Project
+	// Slots resolves the slot class of a command call to the build host that runs it and the number of jobs of the class that the host runs at once.
+	// An empty cluster means the build host of the project. It refuses a class that the host does not name. A nil Slots means the build has no slot classes: a call with `slots` fails.
+	Slots func(project, cluster, class string) (SlotGrant, error)
 	// Kept lists errors, besides the errors of the gate and the host, that a gate or a merge keeps for errors.Is when it fails. A call that runs in
 	// a child run returns its error as text, and the parent finds each listed error again from that text.
 	Kept []error
