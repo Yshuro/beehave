@@ -180,11 +180,9 @@ func costOf(v any) (float64, bool) {
 // floatBits is the bit size of a dollar amount.
 const floatBits = 64
 
-// agentFields are the fields that every agent call returns, as the view of a run reads them. A test decodes agentOutputs into it.
-// The output verdict is declared by the call, so a reader takes it by its name.
+// agentFields are the fields that every agent call returns, as the view of a run reads them, except the cost, which only spendOf reads.
+// A test decodes agentOutputs into it. The output verdict is declared by the call, so a reader takes it by its name.
 type agentFields struct {
-	agent.Spend
-
 	Text       string `json:"text"`
 	Session    string `json:"session"`
 	Transcript string `json:"transcript"`

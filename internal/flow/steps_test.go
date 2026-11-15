@@ -438,13 +438,28 @@ func TestStepLine_ACostRecordThatIsNotAStepRecordMarksTheSpendUnreadable(t *test
 		"spent output not text":  {StepName: "agent:a#1/spent0", Output: 42},
 		"spent not json":         {StepName: "agent:a#1/spent0", Output: `not json`},
 		"read output not text":   {StepName: "agent:a#1/read0", Output: 42},
-		"read cost is a string":  {StepName: "agent:a#1/read0", Output: `{"outputs":{"cost_usd":"2"}}`},
 		"spent cost is a string": {StepName: "agent:a#1/spent0", Output: `{"outputs":{"cost_usd":"2"}}`},
 	} {
 		line := callLine([]dbos.StepInfo{record}, record.StepName)
 
 		assert.Equal(t, agent.Spend{Unknown: true, Unreadable: true}, line.Spend, name)
 		assert.True(t, line.OutputUnreadable, name)
+	}
+}
+
+func TestStepLine_AReadWhoseCostIsUnreadableStillShowsItsHeadStopAndVerdict(t *testing.T) {
+	t.Parallel()
+
+	for name, cost := range map[string]string{"a string": `"2"`, "a bool": `true`, "an object": `{}`} {
+		output := `{"outputs":{"cost_usd":` + cost + `,"head_sha":"h2","stop":"turns","rewrote":true,"verdict":"approve"}}`
+		line := callLine([]dbos.StepInfo{{StepName: "agent:a#1/read1", Output: output}}, "agent:a#1/read1")
+
+		assert.Equal(t, agent.Spend{Unknown: true, Unreadable: true}, line.Spend, name)
+		assert.False(t, line.OutputUnreadable, name)
+		assert.Equal(t, "h2", line.Head, name)
+		assert.Equal(t, "turns", line.Stop, name)
+		assert.Equal(t, "approve", line.Verdict, name)
+		assert.True(t, line.Rewrote, name)
 	}
 }
 
