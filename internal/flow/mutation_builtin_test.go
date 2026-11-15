@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -60,7 +63,7 @@ func (s *sshMutator) recorded() []mutationCommandCall {
 }
 
 // builtinRun walks a workflow whose body is the statements, over an engine whose mutation runner is the mutator, in the item folder of the tree.
-func builtinRun(t *testing.T, tree reviewTree, mutator mutator, chooseHost bool, body string) (ItemResult, *harness, error) {
+func builtinRun(t *testing.T, tree reviewTree, mutator mutator, chooseHost bool, body string, tweaks ...func(*Deps)) (*Engine, *harness, error) {
 	t.Helper()
 
 	h := newHarness(t)
@@ -77,14 +80,28 @@ func builtinRun(t *testing.T, tree reviewTree, mutator mutator, chooseHost bool,
 		deps.Facts = func(string) model.Project { return model.Project{Name: testProject, BuildHost: "box"} }
 	}
 
+	for _, tweak := range tweaks {
+		tweak(&deps)
+	}
+
 	engine, err := NewEngine(t.Context(), h.opts, deps)
 	require.NoError(t, err)
 	require.NoError(t, engine.Launch())
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
-	result, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(body)))
+	_, err = engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(body)))
 
-	return result, h, err
+	return engine, h, err
+}
+
+// jobsOnQueue counts the mutation jobs that the queue named queue ran or holds.
+func jobsOnQueue(t *testing.T, engine *Engine, queue string) int {
+	t.Helper()
+
+	rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterQueueName(queue), dbos.WithFilterName(mutationJobName))
+	require.NoError(t, err)
+
+	return len(rows)
 }
 
 func TestMutation_TheBuiltinRunsTheCommandOnTheHostAndGivesOneFindingFromTheJobLog(t *testing.T) {
@@ -126,14 +143,17 @@ func TestMutation_TheBuiltinRunsTheCommandOnTheHostAndGivesOneFindingFromTheJobL
 			call := "r = mutation(name = \"m\", base = \"" + base + "\", head = \"" + tree.head + "\", command = \"make mutation-pr BASE=origin/{base}\")\n" +
 				"command(run = [\"show\", str(r.ok), \"|\".join(r.findings), str(r.survived)])\n"
 
-			_, h, err := builtinRun(t, tree, mutator, tc.chooseHost, call)
+			engine, h, err := builtinRun(t, tree, mutator, tc.chooseHost, call)
 			require.NoError(t, err)
+
+			assert.Equal(t, 1, jobsOnQueue(t, engine, "mutation:box"), "the job ran on the mutation queue of the build host")
+			assert.Equal(t, 0, jobsOnQueue(t, engine, "mutation:local"), "no job ran on the queue of this machine")
 
 			assert.Equal(t, []string{tc.want}, h.commands.ran())
 
 			calls := mutator.recorded()
 			require.Len(t, calls, 1, "one job ran")
-			assert.Equal(t, map[bool]string{true: "box", false: ""}[tc.chooseHost], calls[0].host, "the host argument of Mutate is the chosen host, and empty when no host was chosen. This does not show which queue ran the job")
+			assert.Equal(t, map[bool]string{true: "box", false: ""}[tc.chooseHost], calls[0].host, "the host argument of Mutate is the chosen host, and empty when no host was chosen")
 			assert.Equal(t, "make mutation-pr BASE=origin/"+base, calls[0].job.Command, "the base of the call stands in for {base}")
 			assert.Equal(t, tree.head, calls[0].job.Head)
 		})
@@ -186,4 +206,129 @@ func TestMutation_AFailedMutateFailsTheStepWithItsError(t *testing.T) {
 	require.Error(t, err)
 	require.ErrorIs(t, err, gatepkg.ErrNoMutationHost, "the error keeps its identity across the child run")
 	assert.Empty(t, h.commands.ran(), "the steps after the failed mutation do not run")
+}
+
+func TestMutation_ACallThatCannotRunFailsTheStepWithItsReason(t *testing.T) {
+	t.Parallel()
+
+	tree := reviewTreeOf(t, "internal/a/a.go", "add a")
+	call := func(base, head string) string {
+		return "mutation(name = \"m\", base = \"" + base + "\", head = \"" + head + "\", command = \"make mutation-pr\")\n"
+	}
+
+	tests := []struct {
+		name    string
+		mutator mutator
+		tweak   func(*Deps)
+		byFacts bool
+		base    string
+		head    string
+		want    string
+	}{
+		{name: "a base that is no branch name", mutator: failingMutator{}, base: "a b", head: tree.head, want: "mutation: base is"},
+		{name: "no mutation runner", base: tree.base, head: tree.head, want: "this build cannot run the mutation command"},
+		{
+			name: "a build host with no queue", mutator: failingMutator{}, base: tree.base, head: tree.head, byFacts: true, want: `build host "stranger" has no mutation queue`,
+			tweak: func(d *Deps) { d.Facts = func(string) model.Project { return model.Project{BuildHost: "stranger"} } },
+		},
+		{
+			name: "an item with no folder", mutator: okMutator{}, base: tree.base, head: tree.head, want: "find the folder of item",
+			tweak: func(d *Deps) { d.Trees = &fakeTrees{err: errFake} },
+		},
+		{name: "a head that the folder does not hold", mutator: okMutator{}, base: tree.base, head: "0000000000000000000000000000000000000000", want: "read the lines that the head changed since the base"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tweak := tc.tweak
+			if tweak == nil {
+				tweak = func(*Deps) {}
+			}
+
+			_, h, err := builtinRun(t, tree, tc.mutator, !tc.byFacts, call(tc.base, tc.head)+"command(run = [\"after\"])\n", tweak)
+
+			require.ErrorContains(t, err, tc.want)
+			assert.Empty(t, h.commands.ran(), "the steps after the refused call do not run")
+		})
+	}
+}
+
+func TestMutation_AJobThatTheQueueRefusesFailsWithTheItem(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	deps := h.deps()
+	deps.Mutation = okMutator{}
+	deps.MutationSlots = map[string]int{"box": 1}
+
+	engine, err := NewEngine(t.Context(), h.opts, deps)
+	require.NoError(t, err)
+	require.NoError(t, engine.Launch())
+	require.NoError(t, engine.Shutdown())
+
+	_, err = engine.enqueueMutation(&script{e: engine, in: ItemInput{Project: testProject, Item: "7"}, hostChosen: "box", ctx: engine.ctx}, mutationCall{head: "A", command: "make mutation-pr"})
+
+	require.ErrorContains(t, err, "queue the mutation job of item 7")
+}
+
+// okMutator answers every job with a log that holds one lived mutant on the line that the head adds.
+type okMutator struct{}
+
+func (okMutator) Mutate(context.Context, string, string, string, MutationJob) (MutationRun, error) {
+	return MutationRun{Failed: true, Log: counts(4, 1) + "mutation-pr: lived internal/a/a.go:1 ARITHMETIC_BASE\nmutation-pr: end count=1 printed=1\n"}, nil
+}
+
+func TestMutation_ARunThatStopsWhileItWaitsCancelsItsMutationJob(t *testing.T) {
+	t.Parallel()
+
+	tree := reviewTreeOf(t, "internal/a/a.go", "add a")
+	started := &atomic.Int32{}
+
+	h := newHarness(t)
+	deps := h.deps()
+	release := make(chan struct{})
+	deps.Mutation = holdingMutator{started: started, release: release}
+	deps.MutationSlots = map[string]int{"box": 1}
+
+	engine, err := NewEngine(t.Context(), h.opts, deps)
+	require.NoError(t, err)
+	require.NoError(t, engine.Launch())
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+	t.Cleanup(func() { close(release) })
+
+	runCtx, stop := dbos.WithTimeout(engine.ctx, time.Hour)
+	defer stop()
+
+	failed := make(chan error, 1)
+
+	go func() {
+		_, queueErr := engine.queueMutation(&script{e: engine, in: ItemInput{Project: testProject, Item: "7"}, hostChosen: "box", ctx: runCtx}, mutationCall{head: tree.head, command: "make mutation-pr"})
+		failed <- queueErr
+	}()
+
+	eventually(t, func() bool { return started.Load() == 1 })
+	stop()
+
+	require.Error(t, <-failed)
+
+	require.Eventually(t, func() bool {
+		rows, listErr := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(mutationJobName), dbos.WithFilterStatus(dbos.WorkflowStatusCancelled))
+
+		return listErr == nil && len(rows) == 1
+	}, 10*time.Second, pollEvery, "the mutation job is canceled")
+}
+
+func TestMutation_AMutationQueueThatCannotBeRegisteredFailsWithTheHost(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	engine, err := NewEngine(t.Context(), h.opts, h.deps())
+	require.NoError(t, err)
+	require.NoError(t, engine.Launch())
+	require.NoError(t, engine.Shutdown())
+
+	require.ErrorContains(t, engine.registerMutationQueue("box", 1), "register the mutation queue of host box")
 }

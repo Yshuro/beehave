@@ -345,6 +345,41 @@ func TestProjectGate_SubmitRefusesAProjectItCannotFindAndAHostThatRefusesTheJob(
 	require.ErrorIs(t, err, errFake)
 }
 
+func mutationGate(hosted host.Host) projectGate {
+	return projectGate{
+		projects: clusterProject(),
+		programs: programs{
+			trees: treeAt("/tree"),
+			hosts: func(string, string) (host.Host, error) { return hosted, nil },
+		},
+		forge: forgeAt("https://example.test/repo.git"),
+	}
+}
+
+func TestProjectGate_MutateRunsTheCommandOnTheBuildHostAndGivesTheLogOfTheJob(t *testing.T) {
+	t.Parallel()
+
+	hosted := &loggedHost{fakeHost: fakeHost{state: model.JobFailed}, log: "mutation-pr: applied=1 killed=0 lived=1 timed_out=0\n"}
+
+	got, err := mutationGate(hosted).Mutate(t.Context(), "p", "1", "", flow.MutationJob{Head: "abc123", Command: "make mutation-pr"})
+
+	require.NoError(t, err)
+	assert.Equal(t, flow.MutationRun{Log: "mutation-pr: applied=1 killed=0 lived=1 timed_out=0\n", Failed: true}, got)
+	assert.Contains(t, hosted.spec.Command, "make mutation-pr")
+	assert.Contains(t, hosted.spec.Command, "abc123")
+}
+
+func TestProjectGate_MutateRefusesAProjectItCannotFindAndAHostThatRefusesTheJob(t *testing.T) {
+	t.Parallel()
+
+	_, err := mutationGate(&fakeHost{}).Mutate(t.Context(), "unknown", "1", "", flow.MutationJob{Head: "abc123", Command: "make mutation-pr"})
+	require.ErrorIs(t, err, errUnknownProject)
+
+	_, err = mutationGate(&fakeHost{submitErr: errFake}).Mutate(t.Context(), "p", "1", "", flow.MutationJob{Head: "abc123", Command: "make mutation-pr"})
+	require.ErrorIs(t, err, errFake)
+	require.ErrorContains(t, err, "run the mutation command of item 1")
+}
+
 func TestProjectGate_TheCloneURLIsTheSourceOfTheProjectAndTheForgeIsNotAsked(t *testing.T) {
 	t.Parallel()
 

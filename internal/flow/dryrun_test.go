@@ -90,6 +90,17 @@ func TestDryRun_TheWritesToAPullRequestAndAnItemAreShownAndChangeNothing(t *test
 	assert.Contains(t, out.String(), "item_assign:i#1")
 }
 
+func TestDryRun_TheMutationStepFindsNoMutantAndRecordsNotApplicable(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	body := "def main(item):\n    r = mutation(name = \"m\", base = \"HEAD\", head = \"HEAD\", command = \"make mutation-pr\")\n    if r.outcome != \"not applicable\":\n        fail(\"outcome is \" + r.outcome)\n"
+	require.NoError(t, DryRun(t.Context(), dryFile(t, body), "12", map[string]string{}, &out), out.String())
+
+	assert.Contains(t, out.String(), "mutation:m#1")
+}
+
 func TestDryRun_AStepThatTheDryRunDoesNotFakeIsNotRunAndIsNotAnError(t *testing.T) {
 	t.Parallel()
 

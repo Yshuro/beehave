@@ -246,3 +246,63 @@ func TestMutation_TheMutationStepThroughTheFakeSSHHostReadsOneLivedMutantFromThe
 
 	assert.Equal(t, []string{"internal/a/a.go:10 a mutant survived: ARITHMETIC_BASE. The tests do not fail when this change is made"}, got.findings)
 }
+
+func TestMutation_ARunWithANoteIsNoResultAndKeepsTheNote(t *testing.T) {
+	t.Parallel()
+
+	got := judgeMutation(MutationRun{Note: "the host gave up", Log: counts(4, 1) + lived + "mutation-pr: end count=1 printed=1\n"}, changedA)
+
+	assert.Equal(t, outcomeNoResult, got.outcome)
+	assert.Equal(t, []string{"the host gave up"}, got.findings)
+}
+
+func TestMutation_AFailedRunWithMutantsAppliedAndNoneLivedIsAToolError(t *testing.T) {
+	t.Parallel()
+
+	got := judgeMutation(MutationRun{Failed: true, Log: counts(4, 0) + "mutation-pr: end count=0 printed=0\n"}, changedA)
+
+	assert.Equal(t, outcomeToolError, got.outcome)
+	assert.Equal(t, []string{"the mutation command failed and reported no lived mutant. Read the log of the job on the build host"}, got.findings)
+	assert.Equal(t, false, got.outputs()["ok"])
+}
+
+func TestMutation_AHeaderForNoFileNamesNoFileAndAMalformedHunkHeaderAddsNoLine(t *testing.T) {
+	t.Parallel()
+
+	assert.Empty(t, headerPath("/dev/null"))
+
+	for _, header := range []string{"@@ -1 @@", "@@ -1 +x @@", "@@ -1 +2,y @@"} {
+		_, ok := addedSpan(header)
+
+		assert.False(t, ok, header)
+	}
+}
+
+func TestMutation_TheBuildHostOfAJobIsTheChosenHostThenTheProjectDefaultThenThisMachine(t *testing.T) {
+	t.Parallel()
+
+	projectHost := func(string) model.Project { return model.Project{BuildHost: "box"} }
+	noHost := func(string) model.Project { return model.Project{} }
+
+	tests := []struct {
+		name   string
+		facts  func(string) model.Project
+		chosen string
+		want   string
+	}{
+		{name: "the chosen host wins", facts: projectHost, chosen: "gpu", want: "gpu"},
+		{name: "the project default", facts: projectHost, want: "box"},
+		{name: "a project with no build host", facts: noHost, want: "local"},
+		{name: "no facts at all", want: "local"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			engine := &Engine{deps: Deps{Facts: tc.facts}}
+
+			assert.Equal(t, tc.want, engine.mutationHost(mutationInput{Project: "p", Host: tc.chosen}))
+		})
+	}
+}
