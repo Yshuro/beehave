@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/rogpeppe/go-internal/testscript"
 	"github.com/stretchr/testify/assert"
@@ -21,13 +23,41 @@ import (
 const (
 	fakeServerName  = "fakedolt"
 	clashServerName = "clashdolt"
+	squatServerName = "squatdolt"
+
+	squatLife = time.Second
 )
 
 // TestMain lets the test binary play the dolt server. StartDolt runs `<binary> sql-server --host H --port P`.
 // The tests pass a link to the test binary named fakedolt, and testscript runs the command of that name: it listens on P until it is killed.
 // The command clashdolt ends at its first start, like a server whose port another process took, and listens from its second start.
 func TestMain(m *testing.M) {
-	testscript.Main(m, map[string]func(){fakeServerName: serveFake, clashServerName: serveAfterClash})
+	testscript.Main(m, map[string]func(){fakeServerName: serveFake, clashServerName: serveAfterClash, squatServerName: serveAsSquatter})
+}
+
+// serveAsSquatter plays a process that holds the port at the first start and is not the server: it listens, answers one connection, and ends without the ready line.
+// Its second start is the real fake server.
+func serveAsSquatter() {
+	if os.Mkdir("clashed", 0o700) != nil {
+		serveFake()
+
+		return
+	}
+
+	args := os.Args[2:]
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", net.JoinHostPort(args[1], args[3]))
+	if err != nil {
+		return
+	}
+
+	defer func() { _ = listener.Close() }()
+
+	time.AfterFunc(squatLife, func() { _ = listener.Close() }) // a start that waits for the ready line never connects
+
+	if conn, err := listener.Accept(); err == nil {
+		_ = conn.Close()
+	}
 }
 
 func serveAfterClash() {
@@ -58,6 +88,10 @@ func serveFake() {
 	}
 
 	defer func() { _ = listener.Close() }()
+
+	if _, err := syscall.Write(syscall.Stderr, []byte(beadstest.ReadyLine+"\n")); err != nil { // the server prints its ready line like dolt does
+		return
+	}
 
 	for {
 		conn, err := listener.Accept()
@@ -212,6 +246,17 @@ func TestStartDolt_StartsAgainOnANewPortWhenTheServerEndsAtOnce(t *testing.T) {
 	t.Parallel()
 
 	port := beadstest.StartDolt(t, t.TempDir(), serverLink(t, clashServerName))
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+}
+
+// The squatter answers the first connection and ends. A start that counts a connection as ready returns its port, and the next dial is refused.
+func TestStartDolt_DoesNotTakeAnAnsweringPortForItsOwnServer(t *testing.T) {
+	t.Parallel()
+
+	port := beadstest.StartDolt(t, t.TempDir(), serverLink(t, squatServerName))
 
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	require.NoError(t, err)

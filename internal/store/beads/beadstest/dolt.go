@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -94,7 +95,7 @@ func FreePort(tb testing.TB) int {
 }
 
 // StartDolt runs the dolt server binary on a free port that is not a live port, with its home and data folders under root,
-// and stops the server group when the test ends. It returns when the server accepts connections.
+// and stops the server group when the test ends. It returns when the server has printed ReadyLine and accepts connections.
 //
 // Another process can take the free port before the server binds it. The server then ends, and StartDolt starts it again on a new port, up to startAttempts times.
 func StartDolt(tb testing.TB, root, binary string) int {
@@ -123,12 +124,15 @@ func startOnFreePort(tb testing.TB, home, data, binary string) (int, bool) {
 	port := FreePort(tb)
 	check(tb, port != livePortA && port != livePortB, "port %d belongs to the live server: a test may never use it", port)
 
-	cmd := launch(tb, home, data, binary, port)
+	announced := &announcement{ready: make(chan struct{})}
+	cmd := launch(tb, home, data, binary, port, announced)
 	ctx, done := watchServer(tb, cmd)
 
 	tb.Cleanup(func() { stopServer(tb, cmd, done) })
 
-	ok := reachable(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), serverWait)
+	// A connection to the port proves nothing alone: another process can hold the port while this server ends.
+	// Only this server prints the line, so the wait for the line proves that this server owns the port.
+	ok := announced.wait(ctx, serverWait) && reachable(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), serverWait)
 	if !ok {
 		stopServer(tb, cmd, done) // a server that never answered must not outlive its attempt
 	}
@@ -137,13 +141,15 @@ func startOnFreePort(tb testing.TB, home, data, binary string) (int, bool) {
 }
 
 // launch starts the server binary on the port in its own process group.
-func launch(tb testing.TB, home, data, binary string, port int) *exec.Cmd {
+func launch(tb testing.TB, home, data, binary string, port int, announced *announcement) *exec.Cmd {
 	tb.Helper()
 
 	args := []string{"DOLT_ROOT_PATH=" + home, binary, "sql-server", "--host", "127.0.0.1", "--port", strconv.Itoa(port)}
 
 	cmd := proc.GroupCommand(tb.Context(), "env", args, data)
 	check(tb, cmd.Err == nil, "prepare the private server: %v", cmd.Err)
+
+	cmd.Stdout, cmd.Stderr = announced, announced // the same writer for both streams: exec copies them in one goroutine
 
 	err := cmd.Start()
 	check(tb, err == nil, "start the private server: %v", err)
@@ -193,6 +199,50 @@ func stopServer(tb testing.TB, cmd *exec.Cmd, done <-chan struct{}) {
 	<-done
 
 	check(tb, killed == nil || errors.Is(killed, syscall.ESRCH) || errors.Is(killed, syscall.EPERM), "stop the private server: %v", killed)
+}
+
+// ReadyLine is the line that dolt sql-server prints when it accepts connections. A test server prints it too.
+const ReadyLine = "Server ready. Accepting connections."
+
+// announcement is the output writer of the server. It closes ready when the output holds ReadyLine.
+type announcement struct {
+	ready chan struct{}
+	tail  []byte
+	seen  bool
+}
+
+// Write looks for ReadyLine across the writes. exec calls it from one goroutine, because Stdout and Stderr are the same writer.
+func (a *announcement) Write(p []byte) (int, error) {
+	if a.seen {
+		return len(p), nil
+	}
+
+	a.tail = append(a.tail, p...)
+
+	if strings.Contains(string(a.tail), ReadyLine) {
+		a.seen = true
+		a.tail = nil
+
+		close(a.ready)
+
+		return len(p), nil
+	}
+
+	a.tail = a.tail[max(0, len(a.tail)-len(ReadyLine)):]
+
+	return len(p), nil
+}
+
+// wait reports whether the server printed ReadyLine before ctx ended or wait passed.
+func (a *announcement) wait(ctx context.Context, wait time.Duration) bool {
+	select {
+	case <-a.ready:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-time.After(wait):
+		return false
+	}
 }
 
 // reachable polls until a connection to the address works, and reports whether one did within wait or before ctx ends.
