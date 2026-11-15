@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -48,6 +49,106 @@ func TestFacts_TheVarsOfTheFactsAreFrozen(t *testing.T) {
 	outcome := <-runInBackground(h.engine(t), testItem)
 
 	require.ErrorContains(t, outcome.err, "frozen")
+}
+
+func numberVars() map[string]any {
+	return map[string]any{
+		"whole":  json.Number("2.0"),
+		"big":    json.Number("12345678901234567890123"),
+		"bigf":   json.Number("1e+20"),
+		"frac":   json.Number("0.1"),
+		"one":    json.Number("1"),
+		"nest":   []any{[]any{json.Number("1"), []any{}}, map[string]any{"k": []any{nil, true, false}}},
+		"empty":  []any{},
+		"emptyd": map[string]any{},
+		"none":   nil,
+		"yes":    true,
+		"no":     false,
+	}
+}
+
+var varsReplayFlow = bodyFlow(`f = facts()
+command(run = ["before"], stdin = "%r" % f.vars, name = "before")
+ask = wait("go?", name = "ask")
+command(run = ["after"], stdin = "%r" % f.vars, name = "after")
+`)
+
+func TestFacts_TheVarsKeepTheirNumberTypesOnAReplayFromTheRecordedFacts(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	calls := 0
+	h.facts = func(project string) model.Project {
+		calls++
+		if calls > 1 {
+			return model.Project{Name: project, Vars: map[string]any{"changed": json.Number("9")}}
+		}
+
+		return model.Project{Name: project, Vars: numberVars()}
+	}
+
+	file := writeFlow(t, varsReplayFlow)
+	interrupted(t, h, file)
+
+	next := h.engine(t)
+	client := h.client(t, testVersion)
+	done := make(chan runOutcome, 1)
+
+	go func() {
+		result, err := next.RunFile(testItem, testProject, file)
+		done <- runOutcome{result: result, err: err}
+	}()
+
+	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+
+	outcome := <-done
+
+	require.NoError(t, outcome.err)
+	require.Len(t, h.commands.requests, 2)
+	assert.Contains(t, h.commands.requests[0].Stdin, `"whole": 2.0`)
+	assert.Contains(t, h.commands.requests[0].Stdin, `"big": 12345678901234567890123`)
+	assert.Equal(t, h.commands.requests[0].Stdin, h.commands.requests[1].Stdin)
+}
+
+func TestStepResult_ANumberKeepsItsTypeThroughTheRecordedJSON(t *testing.T) {
+	t.Parallel()
+
+	recorded, err := json.Marshal(stepResult{Outputs: map[string]any{
+		"whole": json.Number("2.0"),
+		"big":   json.Number("12345678901234567890123"),
+		"bigf":  json.Number("1e+20"),
+		"frac":  json.Number("0.1"),
+		"one":   int64(1),
+		"nest":  []any{json.Number("3.0")},
+	}})
+	require.NoError(t, err)
+
+	var replayed stepResult
+
+	require.NoError(t, json.Unmarshal(recorded, &replayed))
+
+	got, err := fields(replayed.Outputs)
+
+	require.NoError(t, err)
+	assert.Equal(t, "2.0", got["whole"].String())
+	assert.Equal(t, "12345678901234567890123", got["big"].String())
+	assert.Equal(t, "1e+20", got["bigf"].String())
+	assert.Equal(t, "0.1", got["frac"].String())
+	assert.Equal(t, "1", got["one"].String())
+	assert.Equal(t, "[3.0]", got["nest"].String())
+}
+
+func TestStepResult_ARecordedCostReadsTheSameOnAReplay(t *testing.T) {
+	t.Parallel()
+
+	recorded, err := json.Marshal(stepResult{Outputs: spendOutputs(agent.Spend{Cost: 1.25, Estimated: true})})
+	require.NoError(t, err)
+
+	var replayed stepResult
+
+	require.NoError(t, json.Unmarshal(recorded, &replayed))
+
+	assert.Equal(t, agent.Spend{Cost: 1.25, Estimated: true}, spendOf(replayed.Outputs))
 }
 
 func TestDryRun_TheFactsHoldTheVarsOfTheProjectAndNothingElse(t *testing.T) {

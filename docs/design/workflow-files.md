@@ -83,7 +83,8 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earl
 - A fact that the project file leaves out is empty text, an empty dict or an empty list, never a missing field.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.
 - A workflow passes the struct in the `inputs` of an agent call, and the prompt reads it as `{{ .facts.<field> }}`. The agent reads no file for it.
-- In a dry run the facts are empty, except `vars`. `beehave check workflow --project <name> --dry-run` gives `vars` the value of that project. Without `--project`, `vars` is an empty dict.- `beehave check workflow` refuses a field that `facts()` does not return.
+- In a dry run the facts are empty, except `vars`. `beehave check workflow --project <name> --dry-run` gives `vars` the value of that project. Without `--project`, `vars` is an empty dict.
+- `beehave check workflow` refuses a field that `facts()` does not return.
 
 ### Loading files and pinning
 
