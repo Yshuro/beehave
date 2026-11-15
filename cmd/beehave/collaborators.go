@@ -285,7 +285,7 @@ type treeFinder interface {
 }
 
 // programs runs the programs of command steps. A step with no host runs in the worktree of the item, or in a new empty folder that beehave removes afterwards when the item has none.
-// A step with a host runs as one job on the host of the project. A host job has no output to read: its stdout is empty and its code is 0 or 1.
+// A step with a host runs as one job on the host of the project. A host job that succeeds has no output to read. A host job that fails has the end of its log as stdout, and its code is 1.
 type programs struct {
 	trees treeFinder
 	// local runs a program with the environment of the process. The gate uses it.
@@ -426,7 +426,22 @@ func (p programs) onHost(ctx context.Context, request flow.CommandRequest) (flow
 		return flow.CommandOutput{}, fmt.Errorf("wait for the command of item %s on the host: %w", request.Item, err)
 	}
 
-	return hostOutput(state)
+	return withLog(ctx, h, id, state)
+}
+
+// withLog maps the end state of a host job as hostOutput does. A failed job also gives the end of its log as stdout, so a workflow reads what the program printed.
+// A log that cannot be read leaves stdout empty: the exit code still says the job failed.
+func withLog(ctx context.Context, h host.Host, id model.JobID, state model.JobState) (flow.CommandOutput, error) {
+	out, err := hostOutput(state)
+	if err != nil || state != model.JobFailed {
+		return out, err
+	}
+
+	if log, logErr := h.Log(ctx, id); logErr == nil {
+		out.Stdout = log
+	}
+
+	return out, nil
 }
 
 // hostOutput maps the end state of a host job to an exit code. Any state other than succeeded or failed is an error.

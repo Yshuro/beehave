@@ -23,12 +23,22 @@ func runDry(t *testing.T, env map[string]string, args ...string) (int, string, s
 	return code, stdout.String(), stderr.String()
 }
 
+// exampleProject writes a config folder whose project `code` holds the mutation command that the remediation example needs, and returns the folder.
+func exampleProject(t *testing.T) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "projects/code.star", "project(source = \"/srv/repo\", base_branch = \"main\", gate = \"g\", test_report = \"r.xml\", vars = {\"mutation_command\": [\"sh\", \"scripts/mutation-pr.sh\"]})\n")
+
+	return dir
+}
+
 func TestCheckWorkflowDryRun_PrintsEachStepOfTheRemediationExampleInOrder(t *testing.T) {
 	t.Parallel()
 
 	env := map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
 
-	code, stdout, stderr := runDry(t, env, "--item", "12", filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	code, stdout, stderr := runDry(t, env, "--item", "12", "--config", exampleProject(t), "--project", "code", filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
 
 	require.Equal(t, 0, code, stderr)
 	assert.Empty(t, stderr)
@@ -158,11 +168,13 @@ func TestCheckWorkflowDryRun_TheSendBackFlagWalksAFixRoundAfterTheFirstReview(t 
 	env := map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
 	file := filepath.Join("..", "..", "examples", "remediation", "workflow.star")
 
-	code, stdout, _ := runDry(t, env, "--item", "12", file)
+	config := exampleProject(t)
+
+	code, stdout, _ := runDry(t, env, "--item", "12", "--config", config, "--project", "code", file)
 	require.Equal(t, 0, code, stdout)
 	assert.NotContains(t, stdout, "agent:fix")
 
-	code, stdout, _ = runDry(t, env, "--item", "12", "--send-back", file)
+	code, stdout, _ = runDry(t, env, "--item", "12", "--send-back", "--config", config, "--project", "code", file)
 	require.Equal(t, 0, code, stdout)
 	assert.Contains(t, stdout, "agent:fix")
 }

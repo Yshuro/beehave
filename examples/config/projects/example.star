@@ -33,7 +33,8 @@ project(
     # traps = ["The build cache hides a stale tree"],    # measured traps and ownership rules
     # token_rules = ["Read a log by its summary lines"],  # token discipline, the dashboard, cross-repository steps and release steps
     # changelog = "CHANGELOG.md",                  # the changelog file; the example workflow refuses a merge that leaves it untouched
-    # vars = {"mutation": {"files": 4}, "labels": ["bug"]},  # free settings of your workflow; any string keys, with None, bool, string, number, list and dict values. `facts().vars` returns them as written
+    # vars = {"mutation_command": ["sh", "scripts/mutation-pr.sh"], "labels": ["bug"]},  # free settings of your workflow; any string keys, with None, bool, string, number, list and dict values. `facts().vars` returns them as written
+    # The remediation example needs `mutation_command`: the command of your mutation tool, a list of words. It runs on the build host in the slot class "mutation" (see the host block below), with the base ref as its last word.
     # board = board(
     #     number = 3,                  # the number of the GitHub Project (v2) board; required
     #     started = "In Progress",     # the Status column that the remediation example sets when the draft pull request opens; required

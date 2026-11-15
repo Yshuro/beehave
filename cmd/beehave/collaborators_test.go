@@ -299,12 +299,20 @@ type fakeHost struct {
 	submitErr error
 	waitErr   error
 	spec      model.JobSpec
+	log       string
 }
 
 func (*fakeHost) WorkRoot(context.Context) (string, error) { return "/home/ob", nil }
 
 // Log gives no log: the gate reads the log of every failed job, and this host keeps none.
-func (*fakeHost) Log(context.Context, model.JobID) (string, error) { return "", errFake }
+// A test that sets log gets it.
+func (f *fakeHost) Log(context.Context, model.JobID) (string, error) {
+	if f.log == "" {
+		return "", errFake
+	}
+
+	return f.log, nil
+}
 
 func (f *fakeHost) Submit(_ context.Context, spec model.JobSpec) (model.JobID, error) {
 	f.spec = spec
@@ -331,6 +339,8 @@ func TestPrograms_AHostProgramRunsAsOneQuotedJob(t *testing.T) {
 	}{
 		{"succeeded", &fakeHost{state: model.JobSucceeded}, flow.CommandOutput{}, nil},
 		{"failed", &fakeHost{state: model.JobFailed}, flow.CommandOutput{RC: 1}, nil},
+		{"failed with a log", &fakeHost{state: model.JobFailed, log: "a.go:3: a mutant lived\n"}, flow.CommandOutput{Stdout: "a.go:3: a mutant lived\n", RC: 1}, nil},
+		{"succeeded with a log", &fakeHost{state: model.JobSucceeded, log: "noise\n"}, flow.CommandOutput{}, nil},
 		{"canceled", &fakeHost{state: model.JobCanceled}, flow.CommandOutput{}, errHostJob},
 		{"submit fails", &fakeHost{submitErr: errFake}, flow.CommandOutput{}, errFake},
 		{"wait fails", &fakeHost{waitErr: errFake}, flow.CommandOutput{}, errFake},

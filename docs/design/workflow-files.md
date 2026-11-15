@@ -652,10 +652,25 @@ One workflow written in this form, with five prompt files. The method lives in t
 
 1. A plan.
 2. An implement step.
-3. A review and fix loop of up to five fix rounds (six passes, so the sixth reviews the fifth fix).
+3. A review and fix loop of up to five fix rounds (six passes, so the sixth reviews the fifth fix). After each green gate, the loop runs the mutation step before the review.
 4. A wait for the owner.
 5. A settle step.
 6. A merge step.
+
+#### The mutation step of `examples/remediation/`
+
+The engine has no mutation builtin. The project owns the tool and the workflow runs it as a host command.
+
+- The project file sets `vars.mutation_command`: a list of words, such as `["sh", "scripts/mutation-pr.sh"]`. A run with no such key, or a value that is not a list of words, is refused before the first agent starts. The message names the key.
+- After each green gate, `check_mutation` runs the command with `host` and `slots = "mutation"`. It adds one word at the end: the base ref, `origin/<BASE>`. The command mutates only the lines that differ from that ref.
+- The `host` block of the project lists the class: `slots = {"mutation": 1}`.
+- The command exits with code 0 when the head is clean, and with another code when the run fails. A run that applied no mutant is a failed run, and the command says so.
+- A failed run prints one finding per line on its standard output, as `path:line: text`, for example `internal/cli/check.go:112: a mutant lived: CONDITIONALS_NEGATION`. The output of a failed host job is the end of its log, so it can hold other lines of the tool. Each line of the form `path:line: text` is one finding. A failed run with no such line gives each non-blank line, the last 20 at most.
+- A failed run that prints no line, or a job whose log cannot be read, gives one finding with its exit code.
+- The findings go to the fix lane in the place of the report of a red gate. The loop starts no review on that head. The loop gates the fixed head and runs the mutation step again.
+- With exit code 0 the output is ignored.
+
+A project with another mutation tool sets another command. This repository uses `scripts/mutation-pr.sh`, which `make mutation-pr BASE=<ref>` also runs.
 
 `examples/remediation/CONFORMANCE.md` has one row for each rule of the method, with its home (`core`, `file`, `skill` or `drop`) and its status (`gap`, `expressed`, `proven` or `n/a`). A row moves to `proven` when a behavior test runs it. A test in the `workflow` package fails when:
 

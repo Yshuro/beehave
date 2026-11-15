@@ -62,8 +62,11 @@ def settled_gate(item):
 
     return check
 
-def review_fix(item, impl, review_prompt, fix_prompt, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None):
+def review_fix(item, impl, review_prompt, fix_prompt, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None, gate_check = None):
     """Runs the loop and returns a struct with stopped, exhausted, rejected, design, held, gate and review.
+
+    gate_check is a function of one argument, the passed gate, that runs after each gate that passes and before the review. It returns an empty text when the head is clean,
+    or the findings as text. Findings start no review: they go to the fix lane as the report of a red gate does, and the loop gates the fixed head again. Without the function every passed gate goes to the review.
 
     review_check is a function of one argument, the review, that runs after each review whose verdict is not reject. It returns an empty text to go on,
     or a reason. A reason ends the loop at once: held holds it, no fix lane starts, and the caller holds the item. Without the function held is an empty text.
@@ -115,7 +118,10 @@ def review_fix(item, impl, review_prompt, fix_prompt, rounds = 6, follow_ups = "
         if is_void(check):
             fail("REFUSE: the gate gave no result for %s after %d reruns and %d questions (steps with no result: %s). %s" % (item.id, VOID_RERUNS, VOID_ASKS, void_names(check), check.report))
 
-        if check.passed:
+        # A head with findings from gate_check gets no review. Its findings take the place of the report of a red gate.
+        proven = gate_check(check) if gate_check != None and check.passed else ""
+
+        if check.passed and proven == "":
             if stopped_before(item, "before-review-%d" % round, check.head, guard) != None:
                 return struct(stopped = True, exhausted = False, rejected = False, design = None, held = "", gate = check, review = None)
 
@@ -144,7 +150,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, rounds = 6, follow_ups = "
         # A read-only step that changed the folder is a violation of this round: the approve of that review is not clean.
         review_violations = review.violations if review != None else ""
 
-        if check.passed and review.verdict == "approve" and violations == "" and review_violations == "":
+        if review != None and review.verdict == "approve" and violations == "" and review_violations == "":
             return struct(stopped = False, exhausted = False, rejected = False, design = None, held = "", gate = check, review = review)
 
         # A reject ends the loop with no fix round, whatever the gate says. The review runs only on a passing gate, so a missing review is no reject.
@@ -155,7 +161,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, rounds = 6, follow_ups = "
         if round == rounds:
             break
 
-        findings = review.text if check.passed else check.report
+        findings = proven if proven != "" else (review.text if check.passed else check.report)
         if review_violations != "":
             findings = review_violations + "\n\n" + findings
 

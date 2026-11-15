@@ -14,6 +14,7 @@
 #
 # "Applied" means killed + lived + timed out, counted from the JSON report of gremlins.
 # The run fails when gremlins exits with a non-zero status, when applied is 0, or when a mutant lived.
+# A run with lived mutants prints one line for each, as path:line: a mutant lived: TYPE, then a summary line.
 # A diff with no Go source change prints "not applicable" and exits 0. A git diff that fails is an error.
 set -eu
 
@@ -75,6 +76,8 @@ if [ "$applied" -eq 0 ]; then
 	exit 1
 fi
 if [ "$lived" -gt 0 ]; then
+	# One finding per line, as path:line: text. The remediation workflow turns each line into a finding.
+	jq -r '.files[]? | .file_name as $file | .mutations[]? | select(.status == "LIVED") | "\($file):\(.line): a mutant lived: \(.type)"' "$report" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
 	echo "mutation-pr: $lived mutant(s) lived. Kill each one with a test."
 	exit 1
 fi
