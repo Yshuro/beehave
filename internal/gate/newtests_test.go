@@ -202,6 +202,30 @@ func TestBeforeReview_ATestNameWithATabIsRefusedWithAClearError(t *testing.T) {
 	require.Empty(t, checks.NewTests)
 }
 
+func TestBeforeReview_ABaseReportWithATabNameIsNotCachedSoNoLaterRunReadsAPartialList(t *testing.T) {
+	t.Parallel()
+
+	repo, head := shellRepo(t, "pass a TestOne\npass a Test\tparam id\npass a TestTwo\n", "pass a TestOne\npass a TestTwo\npass a TestNew\n")
+	root := t.TempDir()
+
+	first := ReadChecks(runCandidate(t, root, repo, head, 0))
+
+	require.False(t, first.Complete)
+	require.Contains(t, first.Problem, "no base report")
+
+	entries, err := os.ReadDir(filepath.Join(root, baseCache))
+	require.NoError(t, err)
+
+	for _, entry := range entries {
+		require.True(t, strings.HasPrefix(entry.Name(), ".tmp."), "the cache holds no report for the base: %s", entry.Name())
+	}
+
+	second := ReadChecks(runCandidate(t, root, repo, head, 0))
+
+	require.False(t, second.Complete, "the second run did not read a partial cache")
+	require.Contains(t, second.Problem, "no base report")
+}
+
 func TestBeforeReview_AJUnitNameWithANewlineMakesTheReaderExitWithTheBadNameCode(t *testing.T) {
 	t.Parallel()
 
