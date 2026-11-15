@@ -21,12 +21,9 @@ import (
 
 // This file is the contract test of the claim store. The same scenarios run against the fake bd of beadstest, which keeps the
 // fake honest, and against a real bd 1.3.2 with a private dolt server, which keeps the code honest. The real run needs
-// BEEHAVE_BD_132, the path of a bd 1.3.2 binary, and `dolt` on PATH. Without the variable the real run is skipped.
+// BEEHAVE_BD_132, the path of a bd 1.3.2 binary, and `dolt` on PATH. Without the variable the real run is skipped, and in CI it fails.
 
-const (
-	binaryVariable = "BEEHAVE_BD_132"
-	realPrefix     = "ct"
-)
+const realPrefix = "ct"
 
 // leaseBackend is one bd the scenarios run against.
 type leaseBackend struct {
@@ -47,15 +44,12 @@ func fakeBackend(t *testing.T) leaseBackend {
 	return leaseBackend{run: bd, prefix: "p", beads: beadsOver(t, bd), expire: expire}
 }
 
-// realBackend starts a private dolt server and a beads database on it. It skips when BEEHAVE_BD_132 is not set.
+// realBackend starts a private dolt server and a beads database on it. It skips when BEEHAVE_BD_132 is not set, and fails in CI.
 // Every command runs through env(1), so the test never changes the environment of the test process and can run in parallel.
 func realBackend(t *testing.T) leaseBackend {
 	t.Helper()
 
-	binary := config.ProcessEnv()[binaryVariable]
-	if binary == "" {
-		t.Skip(binaryVariable + " is not set: the real bd contract test needs a bd 1.3.2 binary")
-	}
+	binary := beadstest.RealBd(t, config.ProcessEnv())
 
 	root := t.TempDir()
 	port := beadstest.StartDolt(t, root, "dolt")
