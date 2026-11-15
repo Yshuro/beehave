@@ -141,6 +141,45 @@ func TestCapStop_ARunOutsideAWorkflowCannotSumItsTree(t *testing.T) {
 	require.ErrorContains(t, err, "read the id of the run of item 1")
 }
 
+func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	opts := rig.h.opts
+	state, err := openStore(opts)
+	require.NoError(t, err)
+
+	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
+	require.NoError(t, err)
+
+	engine := newEngine(opts, rig.h.deps(), state, held)
+	require.NoError(t, engine.open(t.Context(), opts, state))
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	// The run is a real workflow, so its own id reads fine. The reads of the engine fail at the first read of the climb.
+	sum := func(ctx dbos.Context, in ItemInput) (string, error) {
+		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}}
+		s := &script{e: failing, ctx: ctx, in: in}
+
+		_, err := s.treeSpend()
+		if err == nil {
+			return "", errors.New("the sum did not fail")
+		}
+
+		return err.Error(), nil
+	}
+
+	dbos.RegisterWorkflow(engine.ctx, sum, dbos.WithWorkflowName(itemName))
+	require.NoError(t, dbos.Launch(engine.ctx))
+
+	handle, err := dbos.RunWorkflow(engine.ctx, sum, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(runID("1", 1)))
+	require.NoError(t, err)
+
+	words, err := handle.GetResult()
+	require.NoError(t, err)
+	assert.Contains(t, words, "the store failed")
+}
+
 func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing.T) {
 	t.Parallel()
 
