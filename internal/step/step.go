@@ -1,7 +1,6 @@
 // Package step is the contract between the engine and the modules that hold the builtin steps of a workflow file.
-// A module is a plain value that the composition root builds and passes to the engine. The engine builds its builtin map,
-// its table of step kinds and the tables of signatures and results from the list of modules, and refuses a list in which two
-// modules name the same builtin or the same step kind.
+// A module is a plain value that the composition root builds and passes to the engine. The engine builds its builtin map
+// and its table of step kinds from the list of modules, and refuses a list in which two modules name the same builtin or the same step kind.
 package step
 
 import (
@@ -123,30 +122,4 @@ func (r Registry) Names() []string {
 // Kinds lists the counted step kinds of all modules, sorted.
 func (r Registry) Kinds() []string {
 	return slices.Clone(r.kinds)
-}
-
-// Signatures returns the keywords of each builtin that takes keywords.
-func (r Registry) Signatures() map[string][]workflow.Param {
-	signatures := map[string][]workflow.Param{}
-
-	for name, builtin := range r.builtins {
-		if builtin.Params != nil {
-			signatures[name] = builtin.Params
-		}
-	}
-
-	return signatures
-}
-
-// Results returns the result fields of each builtin that has fixed result fields.
-func (r Registry) Results() map[string][]string {
-	results := map[string][]string{}
-
-	for name, builtin := range r.builtins {
-		if builtin.Results != nil {
-			results[name] = slices.Clone(builtin.Results)
-		}
-	}
-
-	return results
 }

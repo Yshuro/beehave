@@ -642,7 +642,7 @@ var migratedDatabase = sync.OnceValues(func() ([]byte, error) {
 
 	defer os.RemoveAll(dir)
 
-	opts := Options{StateDir: filepath.Join(dir, "state"), Version: testVersion, MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: map[string]string{}}
+	opts := Options{StateDir: filepath.Join(dir, "state"), Version: testVersion, MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: map[string]string{}, Modules: []step.Module{StepModule()}}
 
 	engine, err := NewEngine(context.Background(), opts, Deps{})
 	if err != nil {

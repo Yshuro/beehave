@@ -187,9 +187,9 @@ type Engine struct {
 // One engine owns a state folder at a time: a second NewEngine on the same folder fails until Shutdown.
 // A Ctrl-C of the caller must not end the runs, so the engine does not take the cancel of ctx: Shutdown stops it and leaves the runs open.
 func NewEngine(ctx context.Context, opts Options, deps Deps) (*Engine, error) {
-	registry, err := step.NewRegistry(opts.Modules)
+	registry, err := buildRegistry(opts.Modules)
 	if err != nil {
-		return nil, fmt.Errorf("the step modules clash: %w", err)
+		return nil, err
 	}
 
 	state, held, err := openFolder(opts)
@@ -204,6 +204,20 @@ func NewEngine(ctx context.Context, opts Options, deps Deps) (*Engine, error) {
 	}
 
 	return engine.registered(engine.register(opts))
+}
+
+// buildRegistry builds the registry of the step modules. It refuses an empty list, because an engine with no builtins fails every workflow.
+func buildRegistry(modules []step.Module) (step.Registry, error) {
+	if len(modules) == 0 {
+		return step.Registry{}, errors.New("the composition root passed no step modules, so the engine has no builtins. Pass at least one module in Options.Modules")
+	}
+
+	registry, err := step.NewRegistry(modules)
+	if err != nil {
+		return step.Registry{}, fmt.Errorf("the step modules clash: %w", err)
+	}
+
+	return registry, nil
 }
 
 // openFolder opens the state folder and takes the engine lock of it. It closes the log when it fails.

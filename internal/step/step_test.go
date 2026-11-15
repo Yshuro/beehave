@@ -70,8 +70,6 @@ func TestRegistry_JoinsTheModulesInSortedOrder(t *testing.T) {
 
 	assert.Equal(t, []string{"beta", "empty", "zeta"}, registry.Names())
 	assert.Equal(t, []string{"alpha", "mid", "zeta"}, registry.Kinds())
-	assert.Equal(t, map[string][]workflow.Param{"zeta": params, "empty": {}}, registry.Signatures())
-	assert.Equal(t, map[string][]string{"zeta": {"out"}}, registry.Results())
 
 	found, ok := registry.Builtin("zeta")
 	require.True(t, ok)

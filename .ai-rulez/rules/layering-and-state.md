@@ -21,7 +21,7 @@ The method tools are under `examples/remediation/tools/`, in the same Go module.
 | 0 | `model`, `config`, `lockfile` | Domain types and enums, the typed config, the file lock opener. No upward imports. |
 | 1 | `store`, `forge`, `proc`, `agent`, `host` | Adapters for `bd`, `gh`, agent CLIs and build hosts. Each wraps an external shape once. |
 | 2 | `check/shell`, `claim`, `gate`, `merge`, `review`, `pool`, `workflow` | Round policy and the workflow file schema. Declares the small interfaces it needs from layer 1. |
-| 3 | `flow` | DBOS workflows and steps that call layer 2. |
+| 3 | `step`, `flow` | `step` is the contract between the engine and the modules that hold builtin steps. `flow` holds the DBOS workflows and steps that call layer 2, and imports `step`. |
 | 4 | `cli`, `tui` | Surfaces. Then `cmd/beehave`. |
 
 - One contract, one parent package, one package per implementation: `store/beads`, `store/github`, `forge/github`, `agent/claude`. The parent holds the interface, its errors and its conformance suite (`storetest`, `forgetest`, `agenttest`) and imports no implementation. An implementation never imports another one. Only `cmd/beehave` imports implementations and holds the name-to-constructor table.

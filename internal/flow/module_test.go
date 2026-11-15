@@ -36,7 +36,13 @@ func TestStepModule_NamesTheBuiltinsOfTheWorkflowPackage(t *testing.T) {
 func TestStepModule_HoldsTheSignaturesOfTheWorkflowPackage(t *testing.T) {
 	t.Parallel()
 
-	signatures := moduleRegistry(t).Signatures()
+	signatures := map[string][]workflow.Param{}
+
+	for _, b := range StepModule().Builtins {
+		if b.Params != nil {
+			signatures[b.Name] = b.Params
+		}
+	}
 
 	assert.ElementsMatch(t, workflow.Signed(), mapKeys(signatures))
 
@@ -50,7 +56,13 @@ func TestStepModule_HoldsTheSignaturesOfTheWorkflowPackage(t *testing.T) {
 func TestStepModule_HoldsTheResultFieldsOfTheWorkflowPackage(t *testing.T) {
 	t.Parallel()
 
-	results := moduleRegistry(t).Results()
+	results := map[string][]string{}
+
+	for _, b := range StepModule().Builtins {
+		if b.Results != nil {
+			results[b.Name] = b.Results
+		}
+	}
 
 	assert.ElementsMatch(t, workflow.Results(), mapKeys(results))
 
@@ -110,6 +122,17 @@ func TestNewEngine_RefusesTwoModulesThatRecordTheSameStepKind(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `module "flow" and module "extra" both record the step kind "merge"`)
+}
+
+func TestNewEngine_RefusesAnEmptyModuleList(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.opts.Modules = nil
+
+	_, err := NewEngine(t.Context(), h.opts, h.deps())
+
+	require.ErrorContains(t, err, "the composition root passed no step modules")
 }
 
 func TestNewEngine_TheSameModuleTwiceIsAClash(t *testing.T) {
@@ -180,7 +203,7 @@ func TestRunStar_ABuiltinWithNoModuleIsUndefined(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	h.opts.Modules = nil
+	h.opts.Modules = []step.Module{{Name: "other", Builtins: []step.Builtin{{Name: "unrelated"}}}}
 
 	_, err := walkText(t, h, "def main(item):\n    now()\n")
 
