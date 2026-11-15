@@ -98,6 +98,22 @@ func TestMachine_Files(t *testing.T) {
 	assert.Equal(t, 0, call(m, "test", "-e", "/d").ExitCode)
 }
 
+func TestMachine_StrictFoldersRefusesATouchIntoAFolderThatWasNeverMade(t *testing.T) {
+	t.Parallel()
+
+	m := sshtest.New(hosttest.Working)
+	m.StrictFolders = true
+
+	refused := call(m, "touch", "/d/m")
+	assert.Equal(t, 1, refused.ExitCode, "the folder was never made")
+	assert.Contains(t, refused.Stderr, "No such file or directory")
+	assert.False(t, m.Files["/d/m"], "a refused touch makes no file")
+
+	call(m, "mkdir", "-p", "/d")
+	assert.Equal(t, 0, call(m, "touch", "/d/m").ExitCode, "the folder is made")
+	assert.True(t, m.Files["/d/m"])
+}
+
 func submit(m *sshtest.Machine, name, command string) {
 	encoded := base64.StdEncoding.EncodeToString([]byte(command))
 	call(m, "systemd-run", "--user", "--unit="+name, "--", "sh", "-c", `eval "$(printf %s `+encoded+` | base64 -d)"`)
