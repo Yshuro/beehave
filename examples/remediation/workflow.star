@@ -14,6 +14,9 @@ SEVERITIES = ["P0", "P1", "P2", "P3", "P4"]
 # The merge adds the pattern of the tracker id of each item (id_patterns); the posting steps use only this list, because their text names the item.
 ATTRIBUTION = ["(?i)noreply@anthropic", "(?i)laude-Session", "(?i)uthored-By: Claude", "(?i)Generated with \\[Claude"]
 
+# A line of the mutation output is a finding only when it starts with this text. The log of the tool prints other lines, such as the line of a killed mutant that gremlins writes as KILLED TYPE at file:line:col.
+FINDING_PREFIX = "finding: "
+
 def _severity(row):
     if row.severity in SEVERITIES:
         return SEVERITIES.index(row.severity)
@@ -270,17 +273,17 @@ def mutation_command(project):
 
 def check_mutation(words):
     """Runs the mutation command of the project on the build host, in the slot class mutation, and returns the findings as text. An empty text means the head is clean.
-    The command prints one finding per line, such as path/file.go:12: a mutant lived: ARITHMETIC_BASE, and exits with a code other than 0 when the run fails.
+    The command prints one finding per line, such as finding: path/file.go:12: a mutant lived: ARITHMETIC_BASE, and exits with a code other than 0 when the run fails.
     A run that applied no mutant is a failed run: the command says so itself. Exit code 0 is a pass, and its output is ignored.
-    The output of a failed host job is the end of its log, so it holds the noise of the tool too. A failed run gives each located line (path:line: text) as one finding.
-    A failed run with no located line gives each non-blank line, the last 20 at most, as one finding. A failed run that printed no line gives one finding with its exit code."""
+    The output of a failed host job is the end of its log, so it holds the noise of the tool too. A failed run gives each line that starts with "finding: " as one finding, without the prefix.
+    A failed run with no such line gives each non-blank line, the last 20 at most, as one finding. A failed run that printed no line gives one finding with its exit code."""
     run = command(name = "mutation", run = words + ["origin/" + env("BASE")], host = "build", slots = "mutation")
     if run.rc == 0:
         return ""
 
     lines = [line.strip() for line in run.stdout.split("\n") if line.strip() != ""]
-    located = [line for line in lines if len(line.split(":", 2)) == 3 and line.split(":", 2)[1].isdigit()]
-    lines = located if len(located) > 0 else lines[-20:]
+    found = [line[len(FINDING_PREFIX):] for line in lines if line.startswith(FINDING_PREFIX)]
+    lines = found if len(found) > 0 else lines[-20:]
     if len(lines) == 0:
         return "The mutation command exited with code %d and printed no finding. A run that fails is a finding. Read its log, then fix the cause." % run.rc
 

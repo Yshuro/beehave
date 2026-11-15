@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -104,12 +105,15 @@ func approveAfter(fixes int) func(int) string {
 	}
 }
 
+// gremlinsLog is the noise that a real mutation log holds before the finding lines: the line of a killed mutant as gremlins prints it, a time stamp, and lines of the shape of a location with no prefix.
+const gremlinsLog = "Starting the tool\n      KILLED CONDITIONALS_NEGATION at internal/a/a.go:30:4\n12:30:45 text\na:b: c\nx.go:9: not prefixed\n"
+
 func TestReviewFix_ALivedMutantOnAChangedLineIsAFinding(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	replyInOrder(rig,
-		CommandOutput{RC: 1, Stdout: "Starting the tool\ninternal/a/a.go:12: a mutant lived: ARITHMETIC_BASE\ninternal/b/b.go:7: a mutant lived: CONDITIONALS_NEGATION\nmutation-pr: 2 mutant(s) lived.\n"},
+		CommandOutput{RC: 1, Stdout: gremlinsLog + "finding: internal/a/a.go:12: a mutant lived: ARITHMETIC_BASE\nfinding: internal/b/b.go:7: a mutant lived: CONDITIONALS_NEGATION\nmutation-pr: 2 mutant(s) lived.\n"},
 		CommandOutput{RC: 0, Stdout: "mutation-pr: applied=2 killed=2 lived=0 timed_out=0\n"},
 	)
 
@@ -125,9 +129,13 @@ func TestReviewFix_ALivedMutantOnAChangedLineIsAFinding(t *testing.T) {
 
 	fixes := fixPrompts(rig)
 	require.Len(t, fixes, 1, "the lived mutants send the lane back once")
-	assert.Contains(t, fixes[0], "internal/a/a.go:12: a mutant lived: ARITHMETIC_BASE")
-	assert.Contains(t, fixes[0], "internal/b/b.go:7: a mutant lived: CONDITIONALS_NEGATION")
-	assert.NotContains(t, fixes[0], "Starting the tool", "the noise of the host log is no finding when located lines exist")
+	assert.Contains(t, fixes[0], "The mutation run failed. Each line is one finding:\n- internal/a/a.go:12: a mutant lived: ARITHMETIC_BASE\n- internal/b/b.go:7: a mutant lived: CONDITIONALS_NEGATION\n", "the two finding lines, in order, with the prefix cut and nothing else")
+	assert.NotContains(t, fixes[0], "mutant(s) lived", "the summary line has no prefix")
+	assert.NotContains(t, fixes[0], "Starting the tool", "the noise of the host log is no finding when finding lines exist")
+	assert.NotContains(t, fixes[0], "KILLED", "a killed mutant that gremlins prints as KILLED TYPE at file:line:col is no finding")
+	assert.NotContains(t, fixes[0], "12:30:45", "a line with a time stamp is no finding")
+	assert.NotContains(t, fixes[0], "a:b: c", "a line of the shape a:b: c with no prefix is no finding")
+	assert.NotContains(t, fixes[0], "x.go:9: not prefixed", "a line of the shape path:line: text with no prefix is no finding")
 	assert.Equal(t, []string{"opus", "sonnet", "sonnet", "opus"}, rig.models(), "the plan, the implement step, a fix, then the one review of the fixed head: no review judges a head with a lived mutant")
 }
 
@@ -138,7 +146,7 @@ func TestReviewFix_AMutationRunThatFailsSendsTheLaneBack(t *testing.T) {
 		"it prints no line":      {RC: 2},
 		"it prints a note":       {RC: 1, Stdout: "mutation-pr: no mutant was applied. Check that the diff touches covered Go code.\n"},
 		"it prints blank lines":  {RC: 3, Stdout: "\n  \n"},
-		"it prints one finding ": {RC: 1, Stdout: "x.go:1: a mutant lived: INCREMENT_DECREMENT\n"},
+		"it prints one finding ": {RC: 1, Stdout: "finding: x.go:1: a mutant lived: INCREMENT_DECREMENT\n"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -154,13 +162,37 @@ func TestReviewFix_AMutationRunThatFailsSendsTheLaneBack(t *testing.T) {
 			fixes := fixPrompts(rig)
 			require.Len(t, fixes, 1, "a failed run is not a pass")
 
-			if line := strings.TrimSpace(out.Stdout); line != "" {
-				assert.Contains(t, fixes[0], line)
+			if line := strings.TrimPrefix(strings.TrimSpace(out.Stdout), "finding: "); line != "" {
+				assert.Contains(t, fixes[0], "- "+line, "the finding is the text after the prefix")
 			} else {
 				assert.Contains(t, fixes[0], "The mutation command exited with code", "a failed run with no finding line still names the failure")
 			}
 		})
 	}
+}
+
+func TestReviewFix_AFailedRunWithNoFindingLineGivesTheLast20LinesOfItsOutput(t *testing.T) {
+	t.Parallel()
+
+	var log strings.Builder
+
+	for line := 1; line <= 25; line++ {
+		fmt.Fprintf(&log, "note %02d\n", line)
+	}
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	replyInOrder(rig, CommandOutput{RC: 1, Stdout: log.String()}, CommandOutput{RC: 0})
+
+	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+
+	require.NoError(t, err)
+
+	fixes := fixPrompts(rig)
+	require.Len(t, fixes, 1)
+	assert.Contains(t, fixes[0], "- note 06\n", "the 20th line from the end is kept")
+	assert.Contains(t, fixes[0], "- note 25\n", "the last line is kept")
+	assert.NotContains(t, fixes[0], "note 05", "the lines before the last 20 are cut")
+	assert.NotContains(t, fixes[0], "note 01", "the lines before the last 20 are cut")
 }
 
 func TestReviewFix_ARunWithNoMutationCommandInTheVarsIsRefusedBeforeAnyAgentStarts(t *testing.T) {

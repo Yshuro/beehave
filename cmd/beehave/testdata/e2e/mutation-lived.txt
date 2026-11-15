@@ -16,6 +16,7 @@ grep -count=1 '^fix 1 ' calls.log
 grep -count=1 '^review ' calls.log
 grep -count=1 '^The mutation run failed. Each line is one finding:$' findings.log
 grep -count=1 '^- internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION$' findings.log
+! grep 'KILLED' findings.log
 
 cmp events.log expected-events.log
 

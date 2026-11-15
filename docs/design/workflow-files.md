@@ -557,6 +557,7 @@ When the exit code of the program is in `stop_on_rc`, the item ends with the nam
 The returned struct also holds `stderr`, the second output stream of the program, apart from `stdout`.
 
 - A step with `host` has an empty `stderr`, and so has a dry run.
+- A host job that failed gives the end of its log as `stdout` (the last 16 KiB). A job that succeeded gives an empty `stdout`. A log that cannot be read leaves `stdout` empty, and `rc` still says the job failed. The tail can start in the middle of a line.
 - The engine records `stderr` in the run database like `stdout`, so a program must not print a secret to either stream.
 - A run recorded before the field existed has no `stderr`. A workflow that reads it fails on a replay of that run.
 
@@ -665,7 +666,7 @@ The engine has no mutation builtin. The project owns the tool and the workflow r
 - After each green gate, `check_mutation` runs the command with `host` and `slots = "mutation"`. It adds one word at the end: the base ref, `origin/<BASE>`. The command mutates only the lines that differ from that ref.
 - The `host` block of the project lists the class: `slots = {"mutation": 1}`.
 - The command exits with code 0 when the head is clean, and with another code when the run fails. A run that applied no mutant is a failed run, and the command says so.
-- A failed run prints one finding per line on its standard output, as `path:line: text`, for example `internal/cli/check.go:112: a mutant lived: CONDITIONALS_NEGATION`. The output of a failed host job is the end of its log, so it can hold other lines of the tool. Each line of the form `path:line: text` is one finding. A failed run with no such line gives each non-blank line, the last 20 at most.
+- A failed run prints one finding per line on its standard output, as `finding: path:line: text`, for example `finding: internal/cli/check.go:112: a mutant lived: CONDITIONALS_NEGATION`. The output of a failed host job is the end of its log, so it can hold other lines of the tool, such as the `KILLED <TYPE> at file:line:col` lines of gremlins. Only a line that starts with the literal prefix `finding: ` is a finding, and the finding is the text after the prefix. A failed run with no such line gives each non-blank line, the last 20 at most.
 - A failed run that prints no line, or a job whose log cannot be read, gives one finding with its exit code.
 - The findings go to the fix lane in the place of the report of a red gate. The loop starts no review on that head. The loop gates the fixed head and runs the mutation step again.
 - With exit code 0 the output is ignored.

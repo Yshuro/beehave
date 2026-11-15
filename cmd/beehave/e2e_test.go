@@ -242,7 +242,7 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 
 	switch lines[n-1] {
 	case "lived":
-		return flow.CommandOutput{Stdout: "internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION\n", RC: 1}, nil
+		return flow.CommandOutput{Stdout: "      KILLED CONDITIONALS_NEGATION at internal/a.go:30:4\nfinding: internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION\n", RC: 1}, nil
 	case "silent":
 		return flow.CommandOutput{RC: 1}, nil
 	}
@@ -560,7 +560,7 @@ func TestScripts(t *testing.T) {
 		Setup: e2eSetup,
 		Cmds: map[string]func(*testscript.TestScript, bool, []string){
 			"waitfile": cmdWaitFile, "waitstatus": cmdWaitStatus,
-			"example": cmdExample, "subst": cmdSubst, "isolate": isolateFunc(tools), "exitcode": cmdExitCode, "noclaims": cmdNoClaims, "mode": cmdMode,
+			"example": cmdExample, "script": cmdScript, "subst": cmdSubst, "isolate": isolateFunc(tools), "exitcode": cmdExitCode, "noclaims": cmdNoClaims, "mode": cmdMode,
 			"swarmfakes": cmdSwarmFakes, "batchsetup": cmdBatchSetup, "replace": cmdReplace, "serve": cmdServe, "fakeclaude": cmdFakeClaude, "deskfakes": cmdDeskFakes, "deskinit": cmdDeskInit,
 			"incidentfakes": cmdIncidentFakes, "incidentinit": cmdIncidentInit, "maintfakes": cmdMaintFakes, "maintinit": cmdMaintInit,
 			"rdinit": cmdResearchDeskInit, "rdfakes": cmdResearchDeskFakes,
