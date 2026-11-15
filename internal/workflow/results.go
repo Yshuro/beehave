@@ -23,6 +23,7 @@ const (
 	hostTeardownName = "host_teardown"
 	hostUpName       = "host_up"
 	reasonField      = "reason"
+	findingsField    = "findings"
 	waitName         = "wait"
 	mergeName        = "merge"
 	preflightName    = "preflight"
@@ -34,6 +35,7 @@ const (
 	itemStatusName   = "item_status"
 	boardSyncName    = "board_sync"
 	beforeReviewName = "before_review"
+	mutationName     = "mutation"
 	prAssignName     = "pr_assign"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
@@ -50,7 +52,7 @@ const (
 func resultFields() map[string][]string {
 	fields := map[string][]string{
 		agentName:        {"text", "session", "transcript", "head_sha", "violations", "stop", "cost_usd", "cost_estimated", "cost_unknown", "rewrote"},
-		batchMergeName:   {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", "findings", "note", "unproven"},
+		batchMergeName:   {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", findingsField, "note", "unproven"},
 		commandName:      {"stdout", "stderr", "rc"},
 		earlierCallsName: {"count"},
 		gatherName:       {"results"},
@@ -74,7 +76,8 @@ func resultFields() map[string][]string {
 func gateResultFields() map[string][]string {
 	return map[string][]string{
 		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests"},
-		beforeReviewName: {"ok", "findings", "new_tests", baseField, "keywords"},
+		beforeReviewName: {"ok", findingsField, "new_tests", baseField, "keywords"},
+		mutationName:     {"ok", "outcome", reasonField, "applied", "survived", "survivors", findingsField},
 	}
 }
 
@@ -85,7 +88,7 @@ func factsResultFields() map[string][]string {
 		"brief_rules", "stacked_rules", "limits", "traps", "token_rules", "changelog",
 		"board_number", "board_owner", "board_started", "board_merged",
 		"round_base", "round_next_base", "round_owner", "round_owner_email", "round_source_checkout", "round_lane_cap", "round_fix_rounds", "round_integration_pr", "round_merge",
-		"round_acceptance", "round_base_result", "round_base_reds", "round_base_reds_file", "round_lane_kind", "round_allow_paths", "round_wait_hours",
+		"round_acceptance", "round_base_result", "round_base_reds", "round_base_reds_file", "round_lane_kind", "round_allow_paths", "round_wait_hours", "mutation_command",
 	}}
 }
 

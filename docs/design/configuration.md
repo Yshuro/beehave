@@ -74,6 +74,20 @@ The optional `rounds = rounds(...)` value holds the settings of one round. With 
 | `base_reds_file` | Optional. The default is `base-reds.md`. |
 | `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
 
+#### `mutation`
+
+The optional `mutation = mutation(command)` value names the mutation command of the project. The workflow reads it as the fact `mutation_command`, which is empty text when the project has none.
+
+| Argument | Rule |
+| --- | --- |
+| `command` | Required text. The shell command that the mutation job runs in a fresh clone of the head. `{base}` stands for the base branch of the round, for example `make mutation-pr BASE=origin/{base}`. |
+
+The loader refuses a project whose `rounds` block has the lane kind `impl` and that has no `mutation` value. A `papers` or `design` round needs none.
+
+The command decides "not applicable" and "no candidate" itself. It prints the result lines of `scripts/mutation-pr.sh`, and the `mutation` builtin reads only those lines (see `workflow-files.md`).
+
+The `host` block takes `mutation_slots`, a whole number of 1 or more. It is the number of mutation jobs that run at once on each build host. The default is 1. Mutation jobs run on their own queue, so they never wait for a gate. The queue has one partition for each host slot: a job waits for the job on its own slot even when another slot is idle. The engine does not check that `mutation_slots` and `max_concurrent` fit the CPU of the host.
+
 #### `schedules`
 
 The optional project key `schedules` is a list of `schedule(name, cron, workflow, item, timezone, catch_up)`. This key declares and validates the schedules only: no engine fires them yet.

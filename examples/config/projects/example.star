@@ -52,6 +52,9 @@ project(
     #     wait_hours = 24,                 # the hours that the round waits for the owner, 1 or more
     #     lane_kind = "impl",              # impl, papers or design; papers and design need `allow_paths`
     # ),                                 # optional. Also: owner_email, source_checkout, acceptance, base_result, base_reds, base_reds_file, allow_paths
+    # mutation = mutation(
+    #     command = "make mutation-pr BASE=origin/{base}",   # the mutation command; {base} is the base branch of the round; required when lane_kind is impl
+    # ),                               # optional for a papers or design round. The fact `mutation_command` holds the command
     # schedules = [
     #     schedule(
     #         name = "weekly-bump",          # lower case letters, digits and hyphens; unique in the project; required
@@ -72,6 +75,7 @@ project(
     #     max_run = "24h",         # the host is deleted after this run time (default "24h"); SkyPilot documents this limit for GPU instances only
     #     disk_floor_gb = 50,      # a host with less free space gets no new job; required
     #     disk_wait_minutes = 10,  # a job under the floor waits this many minutes for space, then is refused (default 0: refused at once)
+    #     mutation_slots = 1,      # the mutation jobs that run at once on this host, apart from the gate jobs (default 1)
     #     bank_budget = "20s",     # the bank scan gives each repository this long for all its git calls; a repository that is slower counts as unbanked (default "20s")
     #     private_remote = "git@example.com:your-org/your-repo-private.git",  # where beehave pushes unbanked work before the host goes down
     #     skypilot = skypilot(

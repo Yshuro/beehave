@@ -61,7 +61,7 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAGateStepWhenTheGateModu
 	waitForTheOwner(t, harness)
 	expireLease(harness)
 
-	other := buildWithModule(harness.client(t, otherBuild), moduleGate, 2)
+	other := buildWithModule(harness.client(t, otherBuild), moduleGate, 3)
 
 	err := other.ResumeOnThisBuild(testItem)
 

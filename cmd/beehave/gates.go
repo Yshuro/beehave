@@ -84,6 +84,22 @@ func (g projectGate) Submit(ctx context.Context, project, item, cluster, base st
 	return flow.GateJob{ID: string(job.ID), Head: job.Head, Plan: job.Plan}, nil
 }
 
+// Mutate runs the mutation command of the project as a job on the build host of the run, in a clone of the repository at the head of the job.
+// The engine reads the lines that the command prints from the log that this returns.
+func (g projectGate) Mutate(ctx context.Context, project, item, cluster string, job flow.MutationJob) (flow.MutationRun, error) {
+	request, err := g.request(ctx, project, item, cluster)
+	if err != nil {
+		return flow.MutationRun{}, err
+	}
+
+	ran, err := g.gate(project).Mutate(ctx, gate.MutationRequest{Project: request.Project, CloneURL: request.CloneURL, Head: job.Head, Command: job.Command, Limit: job.Limit})
+	if err != nil {
+		return flow.MutationRun{}, fmt.Errorf("run the mutation command of item %s: %w", item, err)
+	}
+
+	return flow.MutationRun{Log: ran.Log, Failed: ran.Failed, Note: ran.Note}, nil
+}
+
 func (g projectGate) gate(project string) gate.Gate {
 	return gate.New(g.shellFor(project), g.tree, func(chosen model.Project) (gate.Remote, error) { return g.programs.hosts(project, chosen.BuildHost) })
 }

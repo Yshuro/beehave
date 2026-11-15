@@ -78,6 +78,8 @@ type Project struct {
 	Schedules []Schedule
 	// Rounds are the settings of a round of the project. The zero value means the project has no rounds block.
 	Rounds Rounds
+	// MutationCommand is the command that runs the mutation tests on the diff of a candidate. `{base}` stands for the base branch of the round. Empty means the project has none.
+	MutationCommand string
 }
 
 // The lane kinds of a round.

@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `mutation`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -78,6 +78,7 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earl
 | `round_lane_cap`, `round_fix_rounds`, `round_integration_pr`, `round_wait_hours` | The whole numbers of the `rounds(...)` block, 0 when the project has none. |
 | `round_merge` | Bool, false when the project has none. |
 | `round_base_reds`, `round_allow_paths` | Lists of the `rounds(...)` block. |
+| `mutation_command` | The text of the `mutation(...)` block. Empty when the project has none. |
 
 - A fact that the project file leaves out is empty text, an empty dict or an empty list, never a missing field.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.
@@ -300,6 +301,22 @@ If no open pull request has the item as its head branch, the call searches the o
 #### Other orchestrators
 
 At the start of a run, the engine lists the other orchestrators that hold items in the claim store of the project. `beehave status` shows them for an open run. A store that cannot be read ends the run, because a failed read is not "nobody else runs".
+
+### `mutation`
+
+`mutation(base, head, command, run_timeout, name)` runs the mutation command of the project as a job on the build host, in a fresh clone of `head`. `{base}` in `command` stands for `base`. The default for `run_timeout` is the host run limit. It returns `ok`, `outcome`, `applied`, `survived`, `survivors`, `findings` and `reason`.
+
+The engine reads only the `mutation-pr:` lines of the job log, and it finds each one by its prefix, not by its place:
+
+- `not applicable: <reason>` and `no candidate: <reason>` pass, and `outcome` names each one. The command decides both. The engine never does.
+- `applied=N killed=K lived=L timed_out=T` is the counts line. A line with `applied=0` fails, whatever the exit code, because the run tested nothing.
+- `lived <file>:<line> <mutator>` is one mutant that lives on a changed line. A line that the diff of `head` against `base` does not change gives no finding.
+- `end count=N printed=P` is the end marker. A log with no end marker, or with a `printed` value that differs from the `lived` lines read, is a cut log, and the call fails with its own reason. Lines after the marker are fine.
+- Any other `mutation-pr:` line with a nonzero exit is a tool error. An exit with no known result line is a tool error too.
+
+Each survivor is one finding: `<file>:<line> a mutant survived: <mutator>. The tests do not fail when this change is made`. When `count` is above `printed`, the findings hold the printed mutants and `survived` holds the total. A finding is a result, not an error: `ok` is false and the workflow decides what to do.
+
+The job runs on the `mutation` queue, apart from the gate queue, with `host.mutation_slots` jobs for each host.
 
 ### `before_review`
 

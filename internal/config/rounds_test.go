@@ -15,7 +15,7 @@ import (
 const roundBase = `base = "integration/s1", owner = "tobocop2", lane_cap = 4, fix_rounds = 5`
 
 func roundsBlock(extra string) string {
-	return "\n" + call(localProject+", rounds = rounds("+roundBase+extra+")")
+	return "\n" + call(localProject+", mutation = mutation(command = \"make mutation-pr BASE=origin/{base}\"), rounds = rounds("+roundBase+extra+")")
 }
 
 func TestLoadFolder_TheRoundsBlockGivesEveryKeyToTheProfile(t *testing.T) {
@@ -123,7 +123,7 @@ func TestLoadFolder_ARoundsCountAtItsLimitIsAcceptedAndOnePastItIsRefused(t *tes
 			counts := map[string]string{"lane_cap": "1", "fix_rounds": "1", "wait_hours": "1", "integration_pr": "0"}
 			counts[key] = strconv.Itoa(value)
 
-			return "\n" + call(localProject+`, rounds = rounds(base = "b", owner = "o", label = "x", lane_cap = `+counts["lane_cap"]+`, fix_rounds = `+counts["fix_rounds"]+
+			return "\n" + call(localProject+`, mutation = mutation(command = "m"), rounds = rounds(base = "b", owner = "o", label = "x", lane_cap = `+counts["lane_cap"]+`, fix_rounds = `+counts["fix_rounds"]+
 				`, wait_hours = `+counts["wait_hours"]+`, integration_pr = `+counts["integration_pr"]+`)`)
 		}
 

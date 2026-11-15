@@ -31,13 +31,14 @@ type rawHost struct {
 	BankBudget    string
 	DiskFloorGB   int
 	DiskWaitMins  int
+	MutationSlots int
 	PrivateRemote string
 	Blocks        map[string]*model.Block
 }
 
 // hostSpec is the schema of the host constructor: the keys every provider shares, and one optional argument for each provider block that the registry declares.
 func hostSpec(declared []Block) spec {
-	args := []string{"provider", "disk_floor_gb", "idle_minutes?", "stale_minutes?", "max_run?", "disk_wait_minutes?", "bank_budget?", "private_remote?"}
+	args := []string{"provider", "disk_floor_gb", "idle_minutes?", "stale_minutes?", "max_run?", "disk_wait_minutes?", "bank_budget?", "mutation_slots?", "private_remote?"}
 
 	return spec{hostSpecName, append(args, blockArgs(declared)...)}
 }
@@ -48,9 +49,9 @@ const idleUnset = -1 << 31
 // newHost returns the constructor of the host block. A key that the call leaves out keeps its default.
 func newHost(declared []Block) func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
 	return func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
-		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget}
+		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget, MutationSlots: defaultMutationSlots}
 		held := holders(declared)
-		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.PrivateRemote}
+		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.MutationSlots, &raw.PrivateRemote}
 
 		err := hostSpec(declared).unpack(at, kwargs, append(dests, blockDests(held)...)...)
 		raw.Blocks = heldBlocks(declared, held)
@@ -205,6 +206,18 @@ func fillCounts(raw rawHost, host *model.HostConfig) error {
 	}
 
 	host.DiskWaitMinutes = raw.DiskWaitMins
+
+	return fillSlots(raw, host)
+}
+
+// fillSlots sets the disk floor and the mutation slots of host.
+func fillSlots(raw rawHost, host *model.HostConfig) error {
+	var err error
+
+	if host.MutationSlots, err = positive(raw.At, "host.mutation_slots", raw.MutationSlots); err != nil {
+		return err
+	}
+
 	host.DiskFloorGB, err = positive(raw.At, "host.disk_floor_gb", raw.DiskFloorGB)
 
 	return err

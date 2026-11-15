@@ -47,7 +47,7 @@ var goldenShapes = map[string][]string{
 		"board_sync: number,status",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
-		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,round_acceptance,round_allow_paths,round_base,round_base_reds,round_base_reds_file,round_base_result,round_fix_rounds,round_integration_pr,round_lane_cap,round_lane_kind,round_merge,round_next_base,round_owner,round_owner_email,round_source_checkout,round_wait_hours,source,stacked_rules,token_rules,tracker,traps",
+		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,mutation_command,people,repo,round_acceptance,round_allow_paths,round_base,round_base_reds,round_base_reds_file,round_base_result,round_fix_rounds,round_integration_pr,round_lane_cap,round_lane_kind,round_merge,round_next_base,round_owner,round_owner_email,round_source_checkout,round_wait_hours,source,stacked_rules,token_rules,tracker,traps",
 		"gate: checks,head,new_tests,passed,report,required,steps,tree",
 		"gather: results",
 		"host_teardown: down,reason",
@@ -58,6 +58,7 @@ var goldenShapes = map[string][]string{
 		"item_read: comments,fields,found,id,parent",
 		"item_status: id,status",
 		"merge: reason,state",
+		"mutation: applied,findings,ok,outcome,reason,survived,survivors",
 		"pr_assign: issues,number",
 		"pr_comment: number",
 		"pr_open: created,number,stack",
@@ -83,7 +84,7 @@ func TestStepsVersion_TheShapeOfTheRecordedResultsIsTheGoldenShapeOfTheVersion(t
 var goldenKinds = map[string][]string{
 	"star30": {
 		"agent", "before_review", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
-		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "merge", "now",
+		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "merge", "mutation", "now",
 		"pr_assign", "pr_comment", "pr_open", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
 	},
 }

@@ -14,16 +14,15 @@ import (
 func withFacts(path string, profile model.Project, raw rawProject) (model.Project, error) {
 	board, boardErr := boardOf(raw)
 	rounds, roundsErr := roundsOf(raw)
+	mutation, mutationErr := mutationOf(raw)
 	schedules, schedulesErr := schedulesOf(path, raw)
 
-	if err := errors.Join(checkLists(raw), checkDicts(raw), checkChangelog(raw), boardErr, roundsErr, schedulesErr); err != nil {
+	if err := errors.Join(checkLists(raw), checkDicts(raw), checkChangelog(raw), boardErr, roundsErr, mutationErr, schedulesErr); err != nil {
 		return model.Project{}, err
 	}
 
-	profile.Schedules = schedules
-	profile.Changelog = raw.Changelog.Value
-	profile.Board = board
-	profile.Rounds = rounds
+	profile.Schedules, profile.Changelog, profile.Board = schedules, raw.Changelog.Value, board
+	profile.Rounds, profile.MutationCommand = rounds, mutation
 
 	profile.People, profile.Epics = maps.Clone(raw.People), maps.Clone(raw.Epics)
 	profile.GateFiles, profile.Conventions = slices.Clone(raw.GateFiles), slices.Clone(raw.Conventions)

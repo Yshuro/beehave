@@ -377,6 +377,7 @@ func readSignatures() map[string][]Param {
 	return map[string][]Param{
 		itemReadName:     {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
 		beforeReviewName: {filled("base"), filled("head"), ruled("allow", KindList, allowRule), opt("integration", KindBool), opt(nameKeyword, KindText)},
+		mutationName:     {filled("base"), filled("head"), filled("command"), ruled("run_timeout", KindText, durationRule("run_timeout")), opt(nameKeyword, KindText)},
 	}
 }
 

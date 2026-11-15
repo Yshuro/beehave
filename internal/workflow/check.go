@@ -264,7 +264,7 @@ func sentence(text string) string { return strings.TrimRight(text, ".") + "." }
 
 // repositoryBuiltins are the builtins that read git or a forge. A project with no repository cannot call them.
 func repositoryBuiltins() []string {
-	return []string{gateName, mergeName, batchMergeName, preflightName, beforeReviewName}
+	return []string{gateName, mergeName, batchMergeName, preflightName, beforeReviewName, mutationName}
 }
 
 // repositoryCalls lists the calls of repositoryBuiltins in a parsed file. A name that the file defines is not the builtin.

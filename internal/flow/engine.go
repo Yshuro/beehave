@@ -146,7 +146,9 @@ type Engine struct {
 	exclusiveQueue dbos.Queue
 	// hostQueue is the queue of the build jobs of the gates: one job for each build host, whatever the project.
 	hostQueue dbos.Queue
-	deps      Deps
+	// mutationQueues holds the queue of the mutation jobs of each build host, capped at host.mutation_slots. They are apart from hostQueue, so a mutation job never blocks a gate.
+	mutationQueues map[string]dbos.Queue
+	deps           Deps
 	// maxConcurrent is agents.max_concurrent, the cap of the items queue. The queue builtin subtracts the open runs from it.
 	maxConcurrent int
 	// maxRunBudget is Options.MaxRunBudget.
@@ -351,10 +353,11 @@ func (e *Engine) register(opts Options) error {
 	dbos.RegisterWorkflow(e.ctx, e.exclusive, dbos.WithWorkflowName(exclusiveName))
 	dbos.RegisterWorkflow(e.ctx, e.hostJob, dbos.WithWorkflowName(hostJobName))
 	dbos.RegisterWorkflow(e.ctx, e.poll, dbos.WithWorkflowName(pollName))
+	dbos.RegisterWorkflow(e.ctx, e.mutationRun, dbos.WithWorkflowName(mutationJobName))
 
 	return errors.Join(
 		e.registerQueue(queueName, maxConcurrent, &e.queue), e.registerQueue(reviewsQueueName, opts.MaxReviewConcurrent, &e.reviewQueue),
-		e.registerItemQueue(maxConcurrent), e.registerExclusiveQueue(), e.registerHostQueue(),
+		e.registerItemQueue(maxConcurrent), e.registerExclusiveQueue(), e.registerHostQueue(), e.registerMutationQueues(),
 	)
 }
 

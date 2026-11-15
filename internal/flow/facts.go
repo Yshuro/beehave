@@ -36,6 +36,7 @@ func factsOutputs(p model.Project) map[string]any {
 	}
 
 	maps.Copy(facts, roundOutputs(p.Rounds))
+	facts["mutation_command"] = p.MutationCommand
 
 	return facts
 }

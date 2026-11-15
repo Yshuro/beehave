@@ -145,20 +145,20 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 	commands := newPrograms(cfg, trees, table)
 
 	return flow.Deps{
-		Agents: newAgents(cfg, opts, trees, table), Gate: projectGate{projects: cfg.Projects, programs: commands, forge: table.forge}, Logins: picks, Lifecycle: life, Forge: life, Watch: life, Merge: life, Preflight: life, Trees: trees, Beats: life, Others: life,
+		Agents: newAgents(cfg, opts, trees, table), Gate: projectGate{projects: cfg.Projects, programs: commands, forge: table.forge}, Mutation: projectGate{projects: cfg.Projects, programs: commands, forge: table.forge}, Logins: picks, Lifecycle: life, Forge: life, Watch: life, Merge: life, Preflight: life, Trees: trees, Beats: life, Others: life,
 		Commands: commands, Items: trackerItems{projects: cfg.Projects, tracker: table.tracker},
-		Writer: trackerWriter{projects: cfg.Projects, tracker: table.tracker},
-		Reader: trackerReader{projects: cfg.Projects, tracker: table.tracker},
-		Batch:  batchHost{pulls: life.pulls, programs: commands},
-		Hosts:  hostStop{programs: commands},
-		Queue:  queueReads{items: trackerItems{projects: cfg.Projects, tracker: table.tracker}, pulls: life.pulls},
-		Poll:   pollReads{projects: cfg.Projects, pulls: life.pulls},
-		Kept:   table.hostErrors(),
-
+		Writer:         trackerWriter{projects: cfg.Projects, tracker: table.tracker},
+		Reader:         trackerReader{projects: cfg.Projects, tracker: table.tracker},
+		Batch:          batchHost{pulls: life.pulls, programs: commands},
+		Hosts:          hostStop{programs: commands},
+		Queue:          queueReads{items: trackerItems{projects: cfg.Projects, tracker: table.tracker}, pulls: life.pulls},
+		Poll:           pollReads{projects: cfg.Projects, pulls: life.pulls},
+		Kept:           table.hostErrors(),
 		SandboxDefault: func(project string) bool { return cfg.Projects[project].SandboxByDefault() },
 		RefuseGate:     gateRefusal(cfg.Projects, enforcers.Refusal),
 		Repository:     repositoryOf(cfg.Projects),
 		Facts:          factsOf(cfg.Projects),
+		MutationSlots:  config.MutationSlots(cfg.Projects),
 	}
 }
 

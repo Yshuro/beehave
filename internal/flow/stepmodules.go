@@ -30,6 +30,9 @@ const (
 	kindBatch = "batch"
 )
 
+// gateModuleVersion is the version of the gate module. It rose to 2 when the module took the mutation step.
+const gateModuleVersion = 2
+
 // stepModule is one module of the table: its version and the step kinds that it records.
 type stepModule struct {
 	name    string
@@ -45,7 +48,7 @@ func moduleTable() []stepModule {
 		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
 		{name: moduleForge, version: 1, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open"}},
 		{name: moduleLand, version: 1, kinds: []string{kindBatch, mergeKey, kindPreflight}},
-		{name: moduleGate, version: 1, kinds: []string{"before_review", kindGate}},
+		{name: moduleGate, version: gateModuleVersion, kinds: []string{"before_review", kindGate, mutationName}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
 		{name: moduleRound, version: 1, kinds: []string{kindQueue, scopeStep, scopeCheckStep}},
 	}

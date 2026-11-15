@@ -194,7 +194,7 @@ func dryDeps(tree, head, item string, skills []string, chosen dryChoice) Deps {
 	}
 
 	return Deps{
-		Agents: agents, Gate: newDryGate(head, chosen.redGate), Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
+		Agents: agents, Gate: newDryGate(head, chosen.redGate), Mutation: dryMutation{}, Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
 		Forge: dryForge{head: head}, Watch: dryWatch{}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
 		Writer: dryWriter{}, Reader: dryReader{}, Preflight: dryPreflight{},
 		Clock: clock{Poll: dryPoll, Watch: dryWait, Settle: dryWait, Reading: dryReading()},
@@ -394,6 +394,13 @@ func (g dryGate) Run(context.Context, string, string, string, GateJob) (GateResu
 	}
 
 	return GateResult{Passed: true, Head: g.head, Tree: dryTree, Steps: []GateStep{{Name: gatepkg.StepCommand, Status: passStatus}}}, nil
+}
+
+// dryMutation answers every mutation run with the result of a diff that holds no Go source, so a dry run walks the mutation step and finds no mutant.
+type dryMutation struct{}
+
+func (dryMutation) Mutate(context.Context, string, string, string, MutationJob) (MutationRun, error) {
+	return MutationRun{Log: "mutation-pr: not applicable: the dry run changes no Go source\nmutation-pr: end count=0 printed=0\n"}, nil
 }
 
 type dryLogins struct{}

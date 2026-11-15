@@ -27,7 +27,7 @@ func TestLoadFolder_SSHAndSlurmHostsKeepTheirBlockUnread(t *testing.T) {
 
 	project, problems := loadProjectText(t, call(clusterProject+", host = "+sshCall("")))
 	require.Empty(t, problems)
-	require.Equal(t, &model.HostConfig{Provider: "ssh", StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, DiskFloorGB: 50}, project.Host, "a host with no block holds none")
+	require.Equal(t, &model.HostConfig{Provider: "ssh", StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, DiskFloorGB: 50, MutationSlots: 1}, project.Host, "a host with no block holds none")
 
 	project, problems = loadProjectText(t, call(clusterProject+", host = "+sshCall(`, ssh = ssh(user = "ci")`)))
 	require.Empty(t, problems)
@@ -49,15 +49,15 @@ func TestLoadFolder_HostTableDefaultsAndKeys(t *testing.T) {
 	project, problems := loadProjectText(t, call(clusterProject+", host = "+hostCall("")))
 
 	require.Empty(t, problems)
-	require.Equal(t, &model.HostConfig{Provider: "skypilot", IdleMinutes: 60, StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, DiskFloorGB: 50}, project.Host)
+	require.Equal(t, &model.HostConfig{Provider: "skypilot", IdleMinutes: 60, StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, DiskFloorGB: 50, MutationSlots: 1}, project.Host)
 
-	project, problems = loadProjectText(t, call(clusterProject+`, host = host(provider = "skypilot", idle_minutes = 30, stale_minutes = 5, max_run = "12h", bank_budget = "45s", disk_floor_gb = 20, disk_wait_minutes = 15,
+	project, problems = loadProjectText(t, call(clusterProject+`, host = host(provider = "skypilot", idle_minutes = 30, stale_minutes = 5, max_run = "12h", bank_budget = "45s", disk_floor_gb = 20, disk_wait_minutes = 15, mutation_slots = 3,
   private_remote = "git@example.com:org/repo.git",
   skypilot = skypilot(cloud = "gcp", region = "us-central1", instance_type = "n2-standard-8"))`))
 
 	require.Empty(t, problems)
 	require.Equal(t, &model.HostConfig{
-		Provider: "skypilot", IdleMinutes: 30, StaleMinutes: 5, MaxRun: 12 * time.Hour, BankBudget: 45 * time.Second, DiskFloorGB: 20, DiskWaitMinutes: 15, PrivateRemote: "git@example.com:org/repo.git",
+		Provider: "skypilot", IdleMinutes: 30, StaleMinutes: 5, MaxRun: 12 * time.Hour, BankBudget: 45 * time.Second, DiskFloorGB: 20, DiskWaitMinutes: 15, MutationSlots: 3, PrivateRemote: "git@example.com:org/repo.git",
 		Block: project.Host.Block,
 	}, project.Host)
 	require.Equal(t, `{cloud="gcp" instance_type="n2-standard-8" region="us-central1"}`, project.Host.Block.String())
@@ -92,6 +92,7 @@ func TestLoadFolder_HostTableRefusals(t *testing.T) {
 		{"skypilot_block_on_slurm", call(clusterProject + `, host = host(provider = "slurm", disk_floor_gb = 50, skypilot = skypilot())`), "the `host` block holds the `skypilot` block, and `host.provider` \"slurm\" does not take it"},
 		{"ssh_block_on_slurm", call(clusterProject + `, host = host(provider = "slurm", disk_floor_gb = 50, ssh = ssh())`), "the `host` block holds the `ssh` block, and `host.provider` \"slurm\" does not take it"},
 		{"slurm_block_on_ssh", call(clusterProject + ", host = " + sshCall(`, slurm = slurm()`)), "the `host` block holds the `slurm` block, and `host.provider` \"ssh\" does not take it"},
+		{"zero_mutation_slots", call(clusterProject + ", host = " + sshCall(", mutation_slots = 0")), "`host.mutation_slots` must be above zero"},
 		{"idle_on_ssh", call(clusterProject + ", host = " + sshCall(", idle_minutes = 30")), "`host.idle_minutes` is not allowed for provider \"ssh\""},
 		{"idle_on_slurm", call(clusterProject + `, host = host(provider = "slurm", disk_floor_gb = 50, idle_minutes = 30)`), "`host.idle_minutes` is not allowed for provider \"slurm\""},
 		{"ssh_port_of_the_wrong_type", call(clusterProject + ", host = " + sshCall(`, ssh = ssh(port = "22")`)), `ssh: for parameter "port": got string, want a whole number`},

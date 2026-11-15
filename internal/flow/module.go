@@ -65,6 +65,7 @@ func repositoryDefs() []builtinDef {
 		{name: "board_sync", call: (*script).boardSync, repository: true},
 		{name: "gate", call: (*script).gate, repository: true, exempt: "run"},
 		{name: "merge", call: (*script).merge, repository: true},
+		{name: mutationName, call: (*script).mutation, repository: true},
 		{name: "pr_assign", call: (*script).prAssign, repository: true},
 		{name: "pr_comment", call: (*script).prComment, repository: true},
 		{name: "pr_open", call: (*script).prOpen, repository: true},

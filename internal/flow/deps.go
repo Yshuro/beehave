@@ -287,16 +287,21 @@ func (e *absentError) Error() string { return e.message }
 
 // Deps holds the collaborators of the workflows. A nil Merge means the build cannot merge: a merge step with `merge = true` fails.
 type Deps struct {
-	Clock     clock
-	Agents    agents
-	Gate      gate
-	Logins    logins
-	Lifecycle lifecycle
-	Forge     forge
-	Watch     watcher
-	Trees     treeMaker
-	Beats     beats
-	Merge     merger
+	Clock  clock
+	Agents agents
+	Gate   gate
+	// Mutation serves mutation. A nil Mutation means the build cannot run it: a mutation call fails.
+	Mutation mutator
+	// MutationSlots is the number of mutation jobs that each build host runs at once, by host name. The engine registers one queue for each host before Launch,
+	// and one for this machine. A job on a host that is not listed fails.
+	MutationSlots map[string]int
+	Logins        logins
+	Lifecycle     lifecycle
+	Forge         forge
+	Watch         watcher
+	Trees         treeMaker
+	Beats         beats
+	Merge         merger
 	// Preflight serves preflight. A nil Preflight means the build cannot run it: a preflight call fails.
 	Preflight preflighter
 	Commands  commands

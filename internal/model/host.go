@@ -47,7 +47,9 @@ type HostConfig struct {
 	// DiskWaitMinutes is how long a job waits for free space when the disk is under the floor. Zero means the job is refused at once.
 	DiskWaitMinutes int
 	// BankBudget is the time that the bank scan gives to each repository on the host. Zero means the default of the host package.
-	BankBudget    time.Duration
+	BankBudget time.Duration
+	// MutationSlots is the number of mutation jobs that one host runs at once, apart from the gate job.
+	MutationSlots int
 	PrivateRemote string
 	// Block is the config block of the chosen provider, when the provider declares one and the project gave it. The provider reads its keys once, in its constructor.
 	Block *Block
