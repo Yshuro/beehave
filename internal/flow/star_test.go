@@ -525,7 +525,7 @@ func TestPredeclared_NamesTheSameBuiltinsAsTheWorkflowPackage(t *testing.T) {
 	t.Parallel()
 
 	var names []string
-	for name := range (&script{}).predeclared() {
+	for name := range (&script{e: &Engine{registry: moduleRegistry(t)}}).predeclared() {
 		names = append(names, name)
 	}
 
@@ -535,7 +535,7 @@ func TestPredeclared_NamesTheSameBuiltinsAsTheWorkflowPackage(t *testing.T) {
 func TestPredeclared_EveryBuiltinReadsItsKeywordsFromTheSignature(t *testing.T) {
 	t.Parallel()
 
-	table := (&script{e: &Engine{}}).predeclared()
+	table := (&script{e: &Engine{registry: moduleRegistry(t)}}).predeclared()
 
 	for _, name := range workflow.Signed() {
 		fn, ok := table[name].(*starlark.Builtin)
@@ -635,7 +635,7 @@ func TestToGo_ConvertsADictOfListsAndStructsAndRefusesAFunction(t *testing.T) {
 	t.Parallel()
 
 	thread := &starlark.Thread{}
-	value, err := starlark.EvalOptions(&syntax.FileOptions{}, thread, "t", "{'a': [1, 'b', True, None, 1.5], 'c': struct(d = 'e')}", (&script{}).predeclared())
+	value, err := starlark.EvalOptions(&syntax.FileOptions{}, thread, "t", "{'a': [1, 'b', True, None, 1.5], 'c': struct(d = 'e')}", (&script{e: &Engine{registry: moduleRegistry(t)}}).predeclared())
 	require.NoError(t, err)
 
 	got, err := workflow.ToGo[any](value)

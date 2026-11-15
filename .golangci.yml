@@ -377,6 +377,36 @@ linters:
             - github.com/tobocop2/beehave/internal/pool
             - github.com/tobocop2/beehave/internal/preflight
             - github.com/tobocop2/beehave/internal/workflow
+        layer-step:
+          list-mode: lax
+          files:
+            - "**/internal/step/**"
+          deny:
+            - pkg: github.com/tobocop2/beehave/internal
+              desc: the step contract imports layers 0 to 2 and its own package only, never the engine (docs/design/packages.md)
+          allow:
+            - github.com/tobocop2/beehave/internal/model
+            - github.com/tobocop2/beehave/internal/config
+            - github.com/tobocop2/beehave/internal/lockfile
+            - github.com/tobocop2/beehave/internal/atomicfile
+            - github.com/tobocop2/beehave/internal/exectest
+            - github.com/tobocop2/beehave/internal/store
+            - github.com/tobocop2/beehave/internal/forge
+            - github.com/tobocop2/beehave/internal/proc
+            - github.com/tobocop2/beehave/internal/agent
+            - github.com/tobocop2/beehave/internal/host
+            - github.com/tobocop2/beehave/internal/sandbox
+            - github.com/tobocop2/beehave/internal/check/shell
+            - github.com/tobocop2/beehave/internal/batch
+            - github.com/tobocop2/beehave/internal/claim
+            - github.com/tobocop2/beehave/internal/gate
+            - github.com/tobocop2/beehave/internal/lease
+            - github.com/tobocop2/beehave/internal/merge
+            - github.com/tobocop2/beehave/internal/review
+            - github.com/tobocop2/beehave/internal/pool
+            - github.com/tobocop2/beehave/internal/preflight
+            - github.com/tobocop2/beehave/internal/workflow
+            - github.com/tobocop2/beehave/internal/step
         layer-3:
           list-mode: lax
           files:
@@ -403,6 +433,7 @@ linters:
             - github.com/tobocop2/beehave/internal/pool
             - github.com/tobocop2/beehave/internal/preflight
             - github.com/tobocop2/beehave/internal/workflow
+            - github.com/tobocop2/beehave/internal/step
             - github.com/tobocop2/beehave/internal/flow
         unlisted-package:
           list-mode: lax
@@ -430,6 +461,7 @@ linters:
             - "!**/internal/pool/**"
             - "!**/internal/preflight/**"
             - "!**/internal/workflow/**"
+            - "!**/internal/step/**"
             - "!**/internal/flow/**"
             - "!**/internal/cli/**"
             - "!**/internal/tui/**"

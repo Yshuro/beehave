@@ -8,8 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/step"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
+
+// moduleRegistry is the registry that an engine builds from the module of this package.
+func moduleRegistry(t *testing.T) step.Registry {
+	t.Helper()
+
+	registry, err := step.NewRegistry([]step.Module{StepModule()})
+	require.NoError(t, err)
+
+	return registry
+}
 
 // resultShape lists every builtin that has result fields with its sorted fields, one line each. It reads the table of the workflow package,
 // so a builtin added to the table is in the shape at once and cannot be left out of the golden data.
@@ -82,7 +93,7 @@ func TestStepsVersion_TheTableOfStepKindsIsTheGoldenTableOfTheVersion(t *testing
 
 	golden, ok := goldenKinds[stepsVersion]
 	require.True(t, ok, "stepsVersion %s has no golden step kinds: add the table under the new version and remove the old one", stepsVersion)
-	assert.Equal(t, golden, stepKinds(), "a step kind changed: bump stepsVersion and update the golden table")
+	assert.Equal(t, golden, moduleRegistry(t).Kinds(), "a step kind changed: bump stepsVersion and update the golden table")
 	assert.Len(t, goldenKinds, 1, "only the table of the current version stays")
 }
 
@@ -94,15 +105,17 @@ func TestStepsVersion_EveryBuiltinWithResultFieldsRecordsUnderAKindOfTheTable(t 
 			continue // its steps are named batch:<name>.<kind> and the golden list of its steps holds them
 		}
 
-		assert.Contains(t, stepKinds(), name, "the builtin %s has result fields and no step kind", name)
+		assert.Contains(t, moduleRegistry(t).Kinds(), name, "the builtin %s has result fields and no step kind", name)
 	}
 }
 
 func TestStepsVersion_AStepOfAKindOutsideTheTableIsAFaultOfTheBuild(t *testing.T) {
 	t.Parallel()
 
-	require.ErrorIs(t, checkStepKind(stepKinds(), "pr_comment2"), errUnknownStepKind)
-	require.NoError(t, checkStepKind(stepKinds(), "pr_comment"))
+	kinds := moduleRegistry(t).Kinds()
+
+	require.ErrorIs(t, checkStepKind(kinds, "pr_comment2"), errUnknownStepKind)
+	require.NoError(t, checkStepKind(kinds, "pr_comment"))
 }
 
 func TestStepsVersion_EveryPathThatRecordsAStepRefusesAKindOutsideTheTable(t *testing.T) {

@@ -23,6 +23,7 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/review"
+	"github.com/tobocop2/beehave/internal/step"
 )
 
 const (
@@ -578,7 +579,8 @@ func newHarness(t *testing.T) *harness {
 			StateDir:      filepath.Join(folder, "state"),
 			Version:       testVersion,
 			MaxConcurrent: 2, MaxReviewConcurrent: 2,
-			Env: map[string]string{},
+			Env:     map[string]string{},
+			Modules: []step.Module{StepModule()},
 		},
 	}
 	h.migrate(t)
@@ -640,7 +642,7 @@ var migratedDatabase = sync.OnceValues(func() ([]byte, error) {
 
 	defer os.RemoveAll(dir)
 
-	opts := Options{StateDir: filepath.Join(dir, "state"), Version: testVersion, MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: map[string]string{}}
+	opts := Options{StateDir: filepath.Join(dir, "state"), Version: testVersion, MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: map[string]string{}, Modules: []step.Module{StepModule()}}
 
 	engine, err := NewEngine(context.Background(), opts, Deps{})
 	if err != nil {

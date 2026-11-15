@@ -21,13 +21,7 @@ func (s *script) facts(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 	}
 
 	return s.durable("facts", "", func(context.Context, string) (stepResult, error) {
-		var project model.Project
-
-		if s.e.deps.Facts != nil {
-			project = s.e.deps.Facts(s.in.Project)
-		}
-
-		return stepResult{Outputs: factsOutputs(project)}, nil
+		return stepResult{Outputs: factsOutputs(s.Project())}, nil
 	})
 }
 
