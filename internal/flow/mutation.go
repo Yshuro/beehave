@@ -110,13 +110,22 @@ func (s *script) mutation(b *starlark.Builtin, args starlark.Tuple, kwargs []sta
 	}
 
 	return s.durable(mutationName, call.label, func(ctx context.Context, _ string) (stepResult, error) {
-		changed, err := s.changedByHead(ctx, call)
-		if err != nil {
-			return stepResult{}, err
-		}
-
-		return stepResult{Outputs: judgeMutation(ran, changed).outputs()}, nil
+		return s.judgeRun(ctx, call, ran)
 	})
+}
+
+// judgeRun records the verdict of a run. It reads the diff only when the run tested, because a run that tested nothing needs no changed line.
+func (s *script) judgeRun(ctx context.Context, call mutationCall, ran MutationRun) (stepResult, error) {
+	if verdict, decided := judgeWithoutDiff(ran); decided {
+		return stepResult{Outputs: verdict.outputs()}, nil
+	}
+
+	changed, err := s.changedByHead(ctx, call)
+	if err != nil {
+		return stepResult{}, err
+	}
+
+	return stepResult{Outputs: judgeMutation(ran, changed).outputs()}, nil
 }
 
 // changedByHead reads the lines that the head of the call changed since its base.
@@ -254,16 +263,22 @@ type mutationVerdict struct {
 // refuses a run that applied no mutant. A log with no result line is a tool error, whatever the exit code. A log whose end marker is missing, or whose
 // `printed` value differs from the lived lines that it holds, is cut. A tool error wins over a cut log, because an early exit prints no end marker.
 func judgeMutation(run MutationRun, changed lineSet) mutationVerdict {
-	if run.Note != "" {
-		return mutationVerdict{outcome: outcomeNoResult, findings: []string{run.Note}}
-	}
-
-	read := gatepkg.ReadMutation(run.Log)
-	if verdict, decided := decideMutation(run, read); decided {
+	if verdict, decided := judgeWithoutDiff(run); decided {
 		return verdict
 	}
 
-	return survivorsOn(read, changed)
+	return survivorsOn(gatepkg.ReadMutation(run.Log), changed)
+}
+
+// judgeWithoutDiff gives the verdict of a run that needs no diff: a note, a refusal, "not applicable" or "no candidate". It reports false for a run that tested,
+// whose lived mutants the caller keeps by the lines that the diff changes. The engine reads the diff only for such a run, so a base that the repository lacks
+// cannot fail a run that tested nothing.
+func judgeWithoutDiff(run MutationRun) (mutationVerdict, bool) {
+	if run.Note != "" {
+		return mutationVerdict{outcome: outcomeNoResult, findings: []string{run.Note}}, true
+	}
+
+	return decideMutation(run, gatepkg.ReadMutation(run.Log))
 }
 
 // decideMutation gives the verdict of a log that needs no diff to read: a refusal, "not applicable" or "no candidate". It reports false for a log of a run that tested.

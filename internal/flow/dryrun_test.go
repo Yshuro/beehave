@@ -95,7 +95,7 @@ func TestDryRun_TheMutationStepFindsNoMutantAndRecordsNotApplicable(t *testing.T
 
 	var out bytes.Buffer
 
-	body := "def main(item):\n    r = mutation(name = \"m\", base = \"HEAD\", head = \"HEAD\", command = \"make mutation-pr\")\n    if r.outcome != \"not applicable\":\n        fail(\"outcome is \" + r.outcome)\n"
+	body := "def main(item):\n    r = mutation(name = \"m\", base = \"main\", head = \"HEAD\", command = \"make mutation-pr\")\n    if r.outcome != \"not applicable\":\n        fail(\"outcome is \" + r.outcome)\n"
 	require.NoError(t, DryRun(t.Context(), dryFile(t, body), "12", map[string]string{}, &out), out.String())
 
 	assert.Contains(t, out.String(), "mutation:m#1")
