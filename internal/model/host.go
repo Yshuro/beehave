@@ -74,12 +74,11 @@ const (
 )
 
 // LostProof is what a host adapter read about a job whose wait ended as lost. A Kind that is not empty is the proof that the job can no longer run.
-// An empty Kind is no proof, for example while the link to the host is down; Cause then holds the error that stopped the read, and Note says what to do.
-// No proof is a value, not a failed call, so the caller reads Cause and decides.
+// An empty Kind is no proof, for example while the link to the host is down; Note then holds the text of the error that stopped the read.
+// No proof is a value, not a failed call. Both fields are text, so the value survives a recorded step.
 type LostProof struct {
-	Kind  string
-	Note  string
-	Cause error
+	Kind string
+	Note string
 }
 
 // HostState is whether a build host exists and takes jobs.

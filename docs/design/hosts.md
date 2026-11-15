@@ -8,7 +8,9 @@ This part describes the build host contract, the three providers, the guards tha
 
 ### The Host contract
 
-`host` holds the `Host` contract: `Up`, `Status`, `Down`, `Submit`, `Wait`, `Cancel`, `LostProof`, `Drain` and `Resume`. An adapter is a child package.
+`host` holds the `Host` contract: `Up`, `Status`, `Down`, `Submit`, `Wait`, `Cancel`, `WorkRoot`, `LostProof` and `Log`. An adapter is a child package.
+
+Every provider also has `Drain` and `Resume`. They are not part of the contract, because no run calls them. The conformance suite asserts them on each adapter, and a host without them fails the suite. The disk-floor wrapper does not keep them.
 
 The config names three providers, and each one runs:
 
@@ -32,7 +34,7 @@ The job id, job state, disk reading and host status types live in `model`, so la
 
 ### The Slurm adapter
 
-`host/slurm` is the Slurm adapter. It holds the job half of the contract: `Submit`, `Wait`, `Cancel`, `Log`, `Drain`, `Resume`, the job states and the parsers. It runs over a `proc.Runner` that reaches the head node, which is ssh. It works for any Slurm cluster that beehave can reach, and it creates and deletes no machine.
+`host/slurm` is the Slurm adapter. It holds the job half of the contract (`Submit`, `Wait`, `Cancel`, `LostProof`, `Log`), the `Drain` and `Resume` of a provider, the job states and the parsers. It runs over a `proc.Runner` that reaches the head node, which is ssh. It works for any Slurm cluster that beehave can reach, and it creates and deletes no machine.
 
 | Method | Runs over ssh |
 |---|---|
@@ -50,7 +52,7 @@ The job id, job state, disk reading and host status types live in `model`, so la
 | `Up` | Checks that the head node answers and that `sinfo` lists its nodes. It changes nothing. |
 | `Status` | Absent when ssh cannot connect. Draining when Slurm drains a node. Otherwise up, with the free disk. |
 | `Down` | Sends nothing: beehave did not create the cluster. |
-| `Drain`, `Resume` | Run `scontrol update` on every node, which changes node state on a cluster that beehave does not own. They belong to the `Host` contract. Only the conformance suite calls them; the run never does. |
+| `Drain`, `Resume` | Run `scontrol update` on every node, which changes node state on a cluster that beehave does not own. They are not part of the `Host` contract. Only the conformance suite calls them; the run never does. |
 | `Teardown` | Banks the work and leaves the cluster up. |
 
 - No slot job holds the cluster, because nothing deletes an idle cluster.

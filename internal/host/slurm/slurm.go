@@ -231,7 +231,7 @@ func (q *Queue) LostProof(ctx context.Context, id model.JobID) (model.LostProof,
 
 	switch {
 	case err != nil:
-		return model.LostProof{Note: fmt.Sprintf("job %s: the state cannot be read, so it may still run", job), Cause: err}, nil
+		return model.LostProof{Note: fmt.Sprintf("job %s: the state cannot be read, so it may still run (%v)", job, err)}, nil
 	case ended(state):
 		return model.LostProof{Kind: model.LostEnded, Note: fmt.Sprintf("job %s: Slurm reads the state %s", job, state)}, nil
 	case state == model.JobDied:

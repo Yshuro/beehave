@@ -57,8 +57,7 @@ func TestSSH_ALostJobHasNoProofWhileTheLinkIsDownAndAProofOnceTheStopAnswers(t *
 
 	require.NoError(t, err, "a dropped link is no proof and no error")
 	assert.Empty(t, proof.Kind)
-	require.ErrorIs(t, proof.Cause, link.ErrDropped, "the cause is the dropped link")
-	assert.NotEmpty(t, proof.Note, "the note says what it means")
+	assert.Contains(t, proof.Note, link.ErrDropped.Error(), "the note holds the dropped link")
 	assert.False(t, m.Units[string(id)].Stopped, "no stop reached the machine")
 
 	m.Drops = 0
@@ -98,8 +97,7 @@ func TestSSH_ALostJobWhoseStopFailsHasNoProofAndAnIdThatIsNotAUnitIsAnError(t *t
 
 		require.NoError(t, err, name)
 		assert.Empty(t, proof.Kind, "%s: a step that fails is no proof", name)
-		assert.NotEmpty(t, proof.Note, name)
-		require.Error(t, proof.Cause, "%s: the failed step is the cause", name)
+		assert.Contains(t, proof.Note, "no stop answered", "%s: the note says the stop failed", name)
 	}
 
 	h, _, _ := newHost(t, machineWith(nil, nil), config())
@@ -125,5 +123,5 @@ func TestSSH_AUnitThatCannotBeReleasedAfterTheStopIsStillProvedStopped(t *testin
 	require.NoError(t, err)
 	assert.Equal(t, model.LostStopped, proof.Kind, "the stop answered, so the unit does not run")
 	assert.Contains(t, proof.Note, "not released")
-	require.ErrorIs(t, proof.Cause, link.ErrDropped)
+	assert.Contains(t, proof.Note, link.ErrDropped.Error())
 }

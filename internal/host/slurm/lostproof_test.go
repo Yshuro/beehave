@@ -30,6 +30,16 @@ func TestSlurm_ALostJobIsProvedByAFinalStateAfterTheCancel(t *testing.T) {
 
 	require.NoError(t, err, "the proof is safe to read again")
 	assert.Equal(t, model.LostEnded, again.Kind)
+
+	// An empty record (died) is no proof: the accounting record can come late.
+	h, f, _ = newClockedHost(t)
+	id, job = submitted(t, h, f)
+	job.Vanished = true
+
+	died, err := h.LostProof(context.Background(), id)
+
+	require.NoError(t, err)
+	assert.Empty(t, died.Kind, "an empty record is no proof")
 }
 
 func TestSlurm_ALostJobThatTheCancelDoesNotStopYetHasNoProof(t *testing.T) {
@@ -104,9 +114,9 @@ func TestSlurm_ALostJobHasNoProofWhileTheLinkIsDownOrTheReadFails(t *testing.T) 
 		assert.NotEmpty(t, proof.Note, name)
 
 		if name == "the scancel drops" {
-			require.NoError(t, proof.Cause, "the state read answered running, so nothing failed")
+			assert.NotContains(t, proof.Note, "cannot be read", "the state read answered running, so nothing failed")
 		} else {
-			require.Error(t, proof.Cause, "%s: the failed read is the cause", name)
+			assert.Contains(t, proof.Note, "cannot be read", "%s: the note holds the failed read", name)
 		}
 	}
 

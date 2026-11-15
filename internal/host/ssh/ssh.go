@@ -470,14 +470,13 @@ func (h *Host) LostProof(ctx context.Context, id model.JobID) (model.LostProof, 
 	}
 
 	if err = (scheduler{h}).Stop(ctx, job); err != nil {
-		return model.LostProof{Note: fmt.Sprintf("job %s: no stop answered, so it may still run", job.ID), Cause: err}, nil
+		return model.LostProof{Note: fmt.Sprintf("job %s: no stop answered, so it may still run (%v)", job.ID, err)}, nil
 	}
 
 	proof := model.LostProof{Kind: model.LostStopped, Note: fmt.Sprintf("job %s: the stop answered", job.ID)}
 
 	if err = h.release(ctx, job); err != nil {
-		proof.Note += ", but the unit is not released"
-		proof.Cause = err
+		proof.Note += fmt.Sprintf(", but the unit is not released (%v)", err)
 	}
 
 	return proof, nil
