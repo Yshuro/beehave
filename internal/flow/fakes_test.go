@@ -523,8 +523,10 @@ type harness struct {
 	facts func(project string) model.Project
 	// refuseGate is the refusal of a gate on this machine. It is nil, and so no gate is refused, unless a test sets it.
 	refuseGate func(project string, program bool) error
-	ticks      chan time.Time
-	sleep      time.Duration
+	// slots resolves the slot class of a command call. It is nil, and so the build has no slot classes, unless a test sets it.
+	slots func(project, cluster, class string) (SlotGrant, error)
+	ticks chan time.Time
+	sleep time.Duration
 	// wall replaces the wall clock of the engine when a test sets it.
 	wall    func() time.Time
 	capWait time.Duration
@@ -615,6 +617,7 @@ func (h *harness) deps() Deps {
 	deps.Repository = h.repository
 	deps.Facts = h.facts
 	deps.RefuseGate = h.refuseGate
+	deps.Slots = h.slots
 
 	if h.picker != nil {
 		deps.Logins = h.picker

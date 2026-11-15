@@ -185,6 +185,19 @@ A project selects a host with `build_host` and the `host` block.
 - A block of another provider is refused, and the refusal names the block and the provider.
 - `idle_minutes` is refused for `ssh` and `slurm`, because beehave does not delete a machine it does not own.
 - An unknown key or block is refused.
+- `slots` is an optional dict from a slot class name to a count, such as `{"mutation": 1, "bench": 2}`. See the next section.
+
+#### Slot classes
+
+A slot class limits the host jobs of one kind. The engine runs at most the stated count of jobs of one class on one host at once. It knows a class by its name only.
+
+- A class name holds letters, digits, dot, underscore and hyphen, and starts with a letter or a digit.
+- A count is a whole number from 1 to 1048576. A count below 1, or a value that is not a whole number, is refused, and the refusal names the class.
+- A `command` call joins a class with `slots = "<class>"`. See `command` in the workflow file reference.
+- The jobs of a class share one durable queue with one partition for each host, so a job of another class, and a job of no class, never waits for it.
+- A call names a class that the `host` block of its project lists. Any other class is refused when the workflow calls it, and the refusal names the class and the host.
+- Projects share a host by name. A host that two projects declare runs as many jobs of a class as the larger count allows.
+- A call with no `slots` has no limit from the engine. A gate keeps its own rule: one build job for each host.
 
 `cmd/beehave/adapters.go` picks the provider from its host block by `provider`, like the tracker and the forge. `beehave check config` builds the host of each project.
 

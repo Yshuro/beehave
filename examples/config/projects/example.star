@@ -73,6 +73,7 @@ project(
     #     max_run = "24h",         # the host is deleted after this run time (default "24h"); SkyPilot documents this limit for GPU instances only
     #     disk_floor_gb = 50,      # a host with less free space gets no new job; required
     #     disk_wait_minutes = 10,  # a job under the floor waits this many minutes for space, then is refused (default 0: refused at once)
+    #     slots = {"mutation": 1}, # at most this many host jobs of a class at once, for a command call with slots = "<class>" (default: no class)
     #     bank_budget = "20s",     # the bank scan gives each repository this long for all its git calls; a repository that is slower counts as unbanked (default "20s")
     #     private_remote = "git@example.com:your-org/your-repo-private.git",  # where beehave pushes unbanked work before the host goes down
     #     skypilot = skypilot(

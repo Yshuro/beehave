@@ -500,7 +500,17 @@ The resume also reopens each sibling that the raise canceled while it was open, 
 
 ### `command`
 
-A `command` step has four settings besides `run`, `timeout`, `host` and `name`: `max_new_processes`, `stdin`, `env` and `stop_on_rc`.
+A `command` step has five settings besides `run`, `timeout`, `host` and `name`: `max_new_processes`, `slots`, `stdin`, `env` and `stop_on_rc`.
+
+#### `slots`
+
+`slots` is the name of a slot class, such as `slots = "mutation"`. It limits the host jobs of one kind.
+
+- A step with `slots` needs `host`. A step with no `host` is refused.
+- The `host` block of the project lists the class and its count in `slots`. The engine runs at most that many jobs of the class on one host at once. A job that finds no free slot waits in a durable queue and starts when a job of its class ends.
+- A class that the `host` block does not list is refused when the step runs. The refusal names the class and the host.
+- A job of another class, and a job with no `slots`, never waits for the class.
+- `beehave check workflow` refuses a literal `slots` that is blank, and a literal `slots` with no `host`.
 
 #### `max_new_processes`
 

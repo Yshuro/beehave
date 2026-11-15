@@ -202,7 +202,7 @@ func dryDeps(tree, head, item string, skills []string, chosen dryChoice) Deps {
 	return Deps{
 		Agents: agents, Gate: newDryGate(head, chosen.redGate), Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
 		Forge: dryForge{head: head}, Watch: dryWatch{}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
-		Writer: dryWriter{}, Reader: dryReader{}, Preflight: dryPreflight{},
+		Writer: dryWriter{}, Reader: dryReader{}, Preflight: dryPreflight{}, Slots: drySlots,
 		Facts: func(string) model.Project { return model.Project{Vars: chosen.vars} },
 		Clock: clock{Poll: dryPoll, Watch: dryWait, Settle: dryWait, Reading: dryReading()},
 	}
@@ -485,6 +485,11 @@ type dryCommands struct{}
 
 func (dryCommands) Run(context.Context, CommandRequest) (CommandOutput, error) {
 	return CommandOutput{}, nil
+}
+
+// drySlots gives every slot class one slot on a fake host, so a command call with `slots` runs its fake program like any other call of a dry run.
+func drySlots(_, cluster, _ string) (SlotGrant, error) {
+	return SlotGrant{Host: cluster, Count: 1}, nil
 }
 
 type dryItems struct{ item string }

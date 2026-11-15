@@ -60,6 +60,18 @@ command(run = ["show", str(a.cost_usd)], name = "show")
 	assert.NotContains(t, out.String(), "FAILED")
 }
 
+func TestDryRun_ACommandWithASlotClassRunsItsFakeProgram(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	file := dryFile(t, bodyFlow(`command(run = ["mutate"], host = "box", slots = "mutation", name = "mutate")`))
+
+	require.NoError(t, DryRun(t.Context(), file, "12", map[string]string{}, &out), out.String())
+	assert.Contains(t, out.String(), "command:mutate")
+	assert.NotContains(t, out.String(), "FAILED")
+}
+
 func TestDryRun_AFailedRunNamesTheErrorWithItsLineAndTheLastStepOnItsOwnLine(t *testing.T) {
 	t.Parallel()
 

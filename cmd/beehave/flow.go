@@ -152,13 +152,13 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 		Batch:  batchHost{pulls: life.pulls, programs: commands},
 		Hosts:  hostStop{programs: commands},
 		Queue:  queueReads{items: trackerItems{projects: cfg.Projects, tracker: table.tracker}, pulls: life.pulls},
-		Poll:   pollReads{projects: cfg.Projects, pulls: life.pulls},
-		Kept:   table.hostErrors(),
+		Poll:   pollReads{projects: cfg.Projects, pulls: life.pulls}, Kept: table.hostErrors(),
 
 		SandboxDefault: func(project string) bool { return cfg.Projects[project].SandboxByDefault() },
 		RefuseGate:     gateRefusal(cfg.Projects, enforcers.Refusal),
 		Repository:     repositoryOf(cfg.Projects),
 		Facts:          factsOf(cfg.Projects),
+		Slots:          slotsOf(cfg.Projects),
 	}
 }
 

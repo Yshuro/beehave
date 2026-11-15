@@ -323,6 +323,9 @@ const treeKeyword = "tree"
 // processCap is the keyword max_new_processes of command. The run reads it as a value, so a None reaches the check of the hostWithCap pair.
 func processCap() Param { return Param{Name: "max_new_processes", Kind: KindInt, AsValue: true} }
 
+// slotClass is the keyword slots of command. The run reads it as a value, so an absent keyword differs from an empty text.
+func slotClass() Param { return Param{Name: "slots", Kind: KindText, AsValue: true} }
+
 // valueSignatures holds the builtins that return text or a struct of facts and start nothing.
 func valueSignatures() map[string][]Param {
 	return map[string][]Param{
@@ -342,7 +345,7 @@ func stepSignatures() map[string][]Param {
 		commandName: {
 			runParam(),
 			opt("host", KindText), opt("stdin", KindText), ruled("env", KindDict, envRule),
-			ruled("timeout", KindText, durationRule("timeout")), ruled("stop_on_rc", KindList, stopRule), processCap(), label,
+			ruled("timeout", KindText, durationRule("timeout")), ruled("stop_on_rc", KindList, stopRule), processCap(), slotClass(), label,
 		},
 		writeName: writeParams(),
 		gateName: {
@@ -550,6 +553,7 @@ func (g *graph) pairs(call *syntax.CallExpr, builtin string, params []Param) {
 		g.protection(call, params)
 	case commandName:
 		g.hostWithCap(call, params)
+		g.hostWithSlots(call, params)
 	case mergeName:
 		g.proof(call, params)
 	case waitName:
@@ -614,6 +618,30 @@ func (g *graph) hostWithCap(call *syntax.CallExpr, params []Param) {
 
 	if _, err := ProcessCap(value, host); err != nil {
 		g.report(placeOf(syntax.Start(limit)), commandName+": "+err.Error()+".")
+	}
+}
+
+// hostWithSlots checks the slots of a command call with the rule of the run. A value that is not a text literal, or a host that is neither absent nor a
+// text literal, is left to the run, and so is a value of the wrong kind, which the kind check reports.
+func (g *graph) hostWithSlots(call *syntax.CallExpr, params []Param) {
+	class := paramArg(call, params, "slots")
+	if class == nil {
+		return
+	}
+
+	if kind := kindOf(class); kind != KindText && kind != KindAny {
+		return
+	}
+
+	value, isLiteral := literalValue(class)
+	host, known := hostText(paramArg(call, params, "host"))
+
+	if !isLiteral || !known {
+		return
+	}
+
+	if _, err := SlotClass(value, host); err != nil {
+		g.report(placeOf(syntax.Start(class)), commandName+": "+err.Error()+".")
 	}
 }
 

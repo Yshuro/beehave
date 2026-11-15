@@ -62,6 +62,10 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 		{"max_new_processes with host", `command(run = ["x"], host = "h", max_new_processes = 5)`, "command: max_new_processes cannot be used together with host"},
 		{"max_new_processes none", `command(run = ["x"], max_new_processes = None)`, "command: max_new_processes must be a whole number from 1 to 100000"},
 		{"max_new_processes fraction", `command(run = ["x"], max_new_processes = 2.5)`, "command: max_new_processes must be a whole number from 1 to 100000"},
+		{"slots without host", `command(run = ["x"], slots = "mutation")`, "command: slots cannot be used without host"},
+		{"slots with an empty host", `command(run = ["x"], slots = "mutation", host = "")`, "command: slots cannot be used without host"},
+		{"slots blank", `command(run = ["x"], slots = " ", host = "h")`, "command: slots must be the name of a slot class"},
+		{"slots none", `command(run = ["x"], slots = None, host = "h")`, "command: slots must be the name of a slot class"},
 		{"timeout none", `command(run = ["x"], timeout = None)`, `command: for parameter "timeout": got NoneType, want string`},
 		{"output_tries none", `agent("p", "m", output_tries = None)`, `agent: for parameter "output_tries": got NoneType, want int`},
 		{"max_new_processes range", `command(run = ["x"], max_new_processes = 0)`, "command: max_new_processes must be a whole number from 1 to 100000"},
@@ -134,6 +138,8 @@ func TestCheck_AcceptsTheLiteralValuesThatTheRunAccepts(t *testing.T) {
 		"    wait(question = \"q\", to = who, quorum = 3)\n"+
 		"    command(run = [\"x\"], host = \"h\")\n"+
 		"    command(run = [\"x\"], max_new_processes = 5, host = \"\")\n"+
+		"    command(run = [\"x\"], host = \"h\", slots = \"mutation\")\n"+
+		"    command(run = [\"x\"], host = who[0], slots = D)\n"+
 		"    merge(head = \"h\", merge = True, steps = [{\"name\": \"a\", \"status\": \"pass\"}], tree = \"abc\", own = {\"logins\": [\"me\"], \"emails\": [\"a@b\"]})\n"+
 		"    merge(head = \"h\", merge = False, steps = [1], tree = \"\", own = None)\n"+
 		"    merge(head = \"h\", hold = \"h\")\n"+

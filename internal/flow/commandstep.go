@@ -19,7 +19,7 @@ func (s *script) commandCall(b *starlark.Builtin, args starlark.Tuple, kwargs []
 	var c commandRaw
 
 	err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{
-		runKeyword: &c.run, hostKeyword: &c.host, "stdin": &c.stdin, "env": &c.own, timeoutKeyword: &c.timeout, maxNewProcessesKeyword: &c.processes, "stop_on_rc": &c.codes, nameKeyword: &c.label,
+		runKeyword: &c.run, hostKeyword: &c.host, "stdin": &c.stdin, "env": &c.own, timeoutKeyword: &c.timeout, maxNewProcessesKeyword: &c.processes, slotsKeyword: &c.slots, "stop_on_rc": &c.codes, nameKeyword: &c.label,
 	})
 	if err != nil {
 		return CommandRequest{}, nil, "", err
@@ -36,6 +36,8 @@ type commandRaw struct {
 	run, own, codes             starlark.Value
 	// processes is max_new_processes as the file wrote it. It stays a value so that a text or a fraction is refused with its own message.
 	processes starlark.Value
+	// slots is the slot class as the file wrote it. It stays a value so that an empty text and None are refused with their own message.
+	slots starlark.Value
 }
 
 // commandRequest checks the arguments of a command call and makes its request and its stop codes.
@@ -47,7 +49,7 @@ func (s *script) commandRequest(c commandRaw) (CommandRequest, []int, error) {
 
 	request.Stdin = c.stdin
 
-	if request.MaxNewProcesses, err = workflow.ProcessCap(c.processes, c.host); err != nil {
+	if request.MaxNewProcesses, request.SlotClass, err = limitsOf(c); err != nil {
 		return request, nil, err
 	}
 
@@ -58,6 +60,17 @@ func (s *script) commandRequest(c commandRaw) (CommandRequest, []int, error) {
 	stops, err := workflow.StopCodes(c.codes)
 
 	return request, stops, err
+}
+
+// limitsOf reads the two settings that limit a call: the cap of its processes and the slot class of its host job. Each one refuses the other host rule on its own.
+func limitsOf(c commandRaw) (processes int, class string, err error) {
+	if processes, err = workflow.ProcessCap(c.processes, c.host); err != nil {
+		return 0, "", err
+	}
+
+	class, err = workflow.SlotClass(c.slots, c.host)
+
+	return processes, class, err
 }
 
 // request makes the request of a call from its program, host and timeout. The caller adds stdin and the environment.
@@ -100,8 +113,26 @@ func (s *script) command(b *starlark.Builtin, args starlark.Tuple, kwargs []star
 		return nil, err
 	}
 
+	if request.SlotClass != "" {
+		return s.slotCommand(request, stops, label)
+	}
+
 	return s.durable("command", label, func(ctx context.Context, name string) (stepResult, error) {
 		return s.runCommand(ctx, name, request, stops)
+	})
+}
+
+// slotCommand runs a command call that names a slot class as a job on the queue of the class, then records its output as the step of the call.
+// DBOS records a child run from the run, never from inside a step, so the queue wait comes first and the step records what it returned.
+// A replay reads the recorded result of the child run and queues nothing again.
+func (s *script) slotCommand(request CommandRequest, stops []int, label string) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
+	out, err := s.e.queueSlotCommand(s.ctx, request)
+	if err != nil {
+		return nil, fmt.Errorf("command %q could not run: %w", label, err)
+	}
+
+	return s.durable("command", label, func(_ context.Context, name string) (stepResult, error) {
+		return commandRecord(name, out, stops), nil
 	})
 }
 
@@ -112,12 +143,17 @@ func (s *script) runCommand(ctx context.Context, name string, request CommandReq
 		return stepResult{}, err
 	}
 
+	return commandRecord(name, out, stops), nil
+}
+
+// commandRecord is the record of a command step: the output, and the stop when the exit code is one of stops.
+func commandRecord(name string, out CommandOutput, stops []int) stepResult {
 	recorded := stepResult{Outputs: commandOutputs(out.Stdout, out.Stderr, out.RC)}
 	if slices.Contains(stops, out.RC) {
 		recorded.Stopped = &Stopped{Step: name, RC: out.RC, Output: out.Stdout}
 	}
 
-	return recorded, nil
+	return recorded
 }
 
 // errStopped unwinds the run when a command stops the item. It is not a failure: runStar turns it into a result.

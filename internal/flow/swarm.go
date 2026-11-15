@@ -45,6 +45,8 @@ const (
 	statusKeyword  = "status"
 	// maxNewProcessesKeyword is the keyword of a command call that caps the new processes of the program.
 	maxNewProcessesKeyword = "max_new_processes"
+	// slotsKeyword is the keyword of a command call that names the slot class of its host job.
+	slotsKeyword = "slots"
 )
 
 // spawnedRun is what the spawn step records for one item: the run that gather waits for, and whether spawn starts it. A run that finished before is reused, and Start is false.
