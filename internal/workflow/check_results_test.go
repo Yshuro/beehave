@@ -24,7 +24,7 @@ func TestCheck_ReportsAFieldThatTheResultOfABuiltinDoesNotHave(t *testing.T) {
 		{"merge", `merge("h")`, "3:11 haed is not a field of the result of merge. It has: state, reason."},
 		{"board_sync", `board_sync(board = 3, status = "Done")`, "3:11 haed is not a field of the result of board_sync. It has: number, status."},
 		{"pr_open", `pr_open(title = "t", base = "b")`, "3:11 haed is not a field of the result of pr_open. It has: number, created, stack."},
-		{"preflight", `preflight()`, "3:11 haed is not a field of the result of preflight. It has: ok, stop, code, reason."},
+		{"preflight", `preflight()`, "3:11 haed is not a field of the result of preflight. It has: ok, stop, code, reason, foreign, pr, head, author."},
 		{"queue", `queue()`, "3:11 haed is not a field of the result of queue. It has: rows, free."},
 		{"spawn", `spawn(["1"])`, "3:11 haed is not a field of the result of spawn. It has: runs."},
 		{"wait", `wait()`, "3:11 haed is not a field of the result of wait. It has: answer, answers, timed_out."},

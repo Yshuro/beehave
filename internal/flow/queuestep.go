@@ -3,6 +3,7 @@ package flow
 import (
 	"cmp"
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -25,6 +26,12 @@ const (
 	queueHold    = "hold"
 )
 
+// foreignReason is the reason that the run of a foreign review ends with, and pullMerged is the state of a merged pull request.
+const (
+	foreignReason = "foreign"
+	pullMerged    = "MERGED"
+)
+
 // holdStep is the name of the step that reads the hold of an item at the start of a run that spawn started.
 const holdStep = "hold:start"
 
@@ -34,6 +41,8 @@ var errNoQueue = &absentError{message: "this build cannot read the open work. Us
 type queueReader interface {
 	OpenItems(ctx context.Context, project string) ([]model.Item, error)
 	OpenPulls(ctx context.Context, project string) ([]model.PullRequest, error)
+	// PullState reads the state of one pull request, open or not: OPEN, CLOSED or MERGED.
+	PullState(ctx context.Context, project string, pr int) (string, error)
 }
 
 // queueRow is one open item of the queue, as the queue step records it. PR is 0 when the item has no open pull request.
@@ -106,7 +115,7 @@ func (e *Engine) readQueue(ctx context.Context, project, holdLabel string) (queu
 		return queued{}, err
 	}
 
-	rows, err := e.queueRows(items, joinPulls(pulls, holdLabel))
+	rows, err := e.queueRows(ctx, items, joinPulls(pulls, holdLabel))
 
 	return queued{Rows: rows, Free: free}, err
 }
@@ -126,11 +135,11 @@ func (e *Engine) selected(project string, items []model.Item) []model.Item {
 }
 
 // queueRows gives one row for each item, sorted by severity and then by item id.
-func (e *Engine) queueRows(items []model.Item, joined map[string]joinedPull) ([]queueRow, error) {
+func (e *Engine) queueRows(ctx context.Context, items []model.Item, joined map[string]joinedPull) ([]queueRow, error) {
 	rows := make([]queueRow, 0, len(items))
 
 	for _, item := range items {
-		row, err := e.rowOf(item, joined[item.ID])
+		row, err := e.rowOf(ctx, item, joined[item.ID])
 		if err != nil {
 			return nil, err
 		}
@@ -182,26 +191,94 @@ func hasLabel(pull model.PullRequest, name string) bool {
 
 // rowOf gives the state of one item. It reads the last run with latestRun, as spawn does, so the queue and spawn agree on what is open, failed and done.
 // A hold decides only for an item that spawn could start: the run of an item has its own state.
-func (e *Engine) rowOf(item model.Item, pull joinedPull) (queueRow, error) {
+func (e *Engine) rowOf(ctx context.Context, item model.Item, pull joinedPull) (queueRow, error) {
 	last, found, err := latestRun(e.ctx, item.ID)
 	if err != nil {
 		return queueRow{}, err
 	}
 
-	state := queueReady
-
-	switch {
-	case found && !last.terminal():
-		state = queueRunning
-	case found && last.failed():
-		state = queueFailed
-	case found && last.Status.Status == dbos.WorkflowStatusSuccess:
-		state = queueDone
-	case item.Hold || pull.held:
-		state = queueHold
+	state, err := e.stateOf(ctx, last, found, item.Hold || pull.held)
+	if err != nil {
+		return queueRow{}, err
 	}
 
 	return rowWith(item, pull, state), nil
+}
+
+// stateOf is the state of an item from its last run, if it has one. A run that succeeded is done, unless it is owed another visit. held is the hold of the item.
+func (e *Engine) stateOf(ctx context.Context, last run, found, held bool) (string, error) {
+	switch {
+	case found && !last.terminal():
+		return queueRunning, nil
+	case found && last.failed():
+		return queueFailed, nil
+	case found && last.Status.Status == dbos.WorkflowStatusSuccess:
+		revisit, err := e.owesVisit(ctx, last)
+		if err != nil {
+			return "", err
+		}
+
+		if !revisit {
+			return queueDone, nil
+		}
+	}
+
+	return idleState(held), nil
+}
+
+// idleState is the state of an item with no run to settle: hold, or ready.
+func idleState(held bool) string {
+	if held {
+		return queueHold
+	}
+
+	return queueReady
+}
+
+// foreignRecord is what the run of a foreign review records in its value: the reason, the number of the reviewed pull request and the findings it left open.
+type foreignRecord struct {
+	Reason   string            `json:"reason"`
+	PR       int               `json:"pr"`
+	Findings []json.RawMessage `json:"findings"`
+}
+
+// owesVisit reports whether a run that ended with success is owed another visit: its last run ended with the reason foreign, it recorded open findings,
+// and its recorded pull request merged. The state is read for the recorded number: the pull request is not looked up again.
+// A value that is not a foreign record, or a run that recorded no value, owes none.
+func (e *Engine) owesVisit(ctx context.Context, last run) (bool, error) {
+	recorded, ok := foreignRecordOf(last)
+	if !ok {
+		return false, nil
+	}
+
+	project, err := last.project()
+	if err != nil {
+		return false, err
+	}
+
+	state, err := e.deps.Queue.PullState(ctx, project, recorded.PR)
+	if err != nil {
+		return false, fmt.Errorf("read the state of pull request %d for run %s: %w", recorded.PR, last.Status.ID, err)
+	}
+
+	return state == pullMerged, nil
+}
+
+// foreignRecordOf reads the foreign record in the value of a run. It is false when the run recorded no value, or a value that is not a foreign record with a pull request and open findings.
+func foreignRecordOf(last run) (foreignRecord, bool) {
+	var result ItemResult
+
+	if json.Unmarshal([]byte(fmt.Sprint(last.Status.Output)), &result) != nil { // WithFilterLoadOutput returns the stored JSON as a string
+		return foreignRecord{}, false
+	}
+
+	var recorded foreignRecord
+
+	if json.Unmarshal(result.Value, &recorded) != nil {
+		return foreignRecord{}, false
+	}
+
+	return recorded, recorded.Reason == foreignReason && recorded.PR != 0 && len(recorded.Findings) > 0
 }
 
 // rowWith joins the item, its pull request and its state into a row.
