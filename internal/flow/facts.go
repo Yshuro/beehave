@@ -2,7 +2,6 @@ package flow
 
 import (
 	"context"
-	"maps"
 	"strings"
 
 	"go.starlark.net/starlark"
@@ -47,19 +46,7 @@ func factsOutputs(p model.Project) map[string]any {
 		"board_number": p.Board.Number, "board_owner": p.Board.Owner, "board_started": p.Board.Started, "board_merged": p.Board.Merged,
 	}
 
-	maps.Copy(facts, roundOutputs(p.Rounds))
-
 	return facts
-}
-
-// roundOutputs holds the round_* fields of the facts struct. A key that the file leaves out is empty text, an empty list, 0 or false.
-func roundOutputs(r model.Rounds) map[string]any {
-	return map[string]any{
-		"round_base": r.Base, "round_next_base": r.NextBase, "round_owner": r.Owner, "round_owner_email": r.OwnerEmail, "round_source_checkout": r.SourceCheckout,
-		"round_lane_cap": r.LaneCap, "round_fix_rounds": r.FixRounds, "round_integration_pr": r.IntegrationPR, "round_merge": r.Merge,
-		"round_acceptance": r.Acceptance, "round_base_result": r.BaseResult, "round_base_reds": orEmptyList(r.BaseReds), "round_base_reds_file": r.BaseRedsFile,
-		"round_lane_kind": r.LaneKind, "round_allow_paths": orEmptyList(r.AllowPaths), "round_wait_hours": r.WaitHours,
-	}
 }
 
 // gateText is what a prompt shows as the gate of the project: the gate string, or the gate list as "name: command" joined by "; ", in order.

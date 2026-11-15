@@ -74,9 +74,9 @@ type joinedPull struct {
 // queue reads the open items and the open pull requests and returns one row for each item, with its state, and the number of free slots.
 // The read is one recorded step, so a replay returns the first answer. A read that fails ends the step: the call returns no guess.
 func (s *script) queue(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
-	var hold, label string
+	var hold, name, tracked string
 
-	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{nameKeyword: &label, holdKeyword: &hold}); err != nil {
+	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{nameKeyword: &name, holdKeyword: &hold, "label": &tracked}); err != nil {
 		return nil, err
 	}
 
@@ -84,8 +84,8 @@ func (s *script) queue(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 		return nil, errNoQueue
 	}
 
-	got, err := countedStep(s, "queue", label, func(c context.Context) (queued, error) {
-		return s.e.readQueue(c, s.in.Project, hold)
+	got, err := countedStep(s, "queue", name, func(c context.Context) (queued, error) {
+		return s.e.readQueue(c, s.in.Project, hold, tracked)
 	})
 	if err != nil {
 		return nil, err
@@ -95,13 +95,14 @@ func (s *script) queue(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 }
 
 // readQueue reads the tracker and the forge, then the runs of each item, and sorts the rows by severity and item id.
-func (e *Engine) readQueue(ctx context.Context, project, holdLabel string) (queued, error) {
+// A tracked label other than "" keeps only the items that carry that tracker label. The rows hold no labels, so a workflow cannot make this choice itself.
+func (e *Engine) readQueue(ctx context.Context, project, holdLabel, tracked string) (queued, error) {
 	items, err := e.deps.Queue.OpenItems(ctx, project)
 	if err != nil {
 		return queued{}, fmt.Errorf("read the open items of project %s: %w", project, err)
 	}
 
-	items = e.selected(project, items)
+	items = withLabel(items, tracked)
 
 	pulls, err := e.deps.Queue.OpenPulls(ctx, project)
 	if err != nil {
@@ -120,18 +121,13 @@ func (e *Engine) readQueue(ctx context.Context, project, holdLabel string) (queu
 	return queued{Rows: rows, Free: free}, err
 }
 
-// selected keeps the items that the round settings of the project select. A project with no rounds block keeps every item.
-func (e *Engine) selected(project string, items []model.Item) []model.Item {
-	if e.deps.Facts == nil {
+// withLabel returns the items that carry the tracker label. An empty label keeps every item.
+func withLabel(items []model.Item, tracked string) []model.Item {
+	if tracked == "" {
 		return items
 	}
 
-	rounds := e.deps.Facts(project).Rounds
-	if !rounds.Configured() {
-		return items
-	}
-
-	return slices.DeleteFunc(slices.Clone(items), func(item model.Item) bool { return !rounds.Selects(item) })
+	return slices.DeleteFunc(slices.Clone(items), func(item model.Item) bool { return !slices.Contains(item.Labels, tracked) })
 }
 
 // queueRows gives one row for each item, sorted by severity and then by item id.

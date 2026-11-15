@@ -457,7 +457,7 @@ func TestQueue_AStoreThatIsClosedFailsTheReadsOfTheRunsAndTheSlots(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, engine.Shutdown())
 
-	_, err = engine.readQueue(t.Context(), testProject, "")
+	_, err = engine.readQueue(t.Context(), testProject, "", "")
 	require.ErrorContains(t, err, "count the open runs", "the slots are read before the rows, so the slots fail first")
 
 	_, err = engine.freeSlots()

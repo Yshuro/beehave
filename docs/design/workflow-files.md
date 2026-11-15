@@ -75,10 +75,6 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earl
 | `vars` | Dict. The `vars` of the project file, as written, and frozen. |
 | `board_number` | The board number, 0 when the project has none. |
 | `board_owner`, `board_started`, `board_merged` | The other values of the board. |
-| `round_base`, `round_next_base`, `round_owner`, `round_owner_email`, `round_source_checkout`, `round_acceptance`, `round_base_result`, `round_base_reds_file`, `round_lane_kind` | The text values of the `rounds(...)` block. Empty when the project has none. |
-| `round_lane_cap`, `round_fix_rounds`, `round_integration_pr`, `round_wait_hours` | The whole numbers of the `rounds(...)` block, 0 when the project has none. |
-| `round_merge` | Bool, false when the project has none. |
-| `round_base_reds`, `round_allow_paths` | Lists of the `rounds(...)` block. |
 
 - A fact that the project file leaves out is empty text, an empty dict or an empty list, never a missing field.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.
@@ -322,7 +318,9 @@ A finding is a result, not an error. `ok` is true when `findings` is empty. The 
 
 ### `queue`
 
-`queue(name, hold)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows` and `free`.
+`queue(name, hold, label)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows` and `free`.
+
+`label` keeps the items that carry that tracker label. A call with no `label` keeps every open item. The engine reads no project setting for the choice: the workflow passes it. The rows hold no labels, so only the engine can choose by label. A workflow that needs a list of item ids keeps the rows whose `item` is in the list.
 
 Each row has `item`, `state`, `severity` and `pr`. The state:
 

@@ -59,23 +59,25 @@ The optional `board = board(number, started, merged, owner)` value is the GitHub
 | `started`, `merged` | The Status columns that a workflow sets. |
 | `owner` | The login that owns the board. It defaults to the owner of the repository. |
 
-#### `rounds`
+#### The round settings
 
-The optional `rounds = rounds(...)` value holds the settings of one round. With no `rounds` value, the project has no round settings and the queue lists every open item. The workflow reads each key as the fact `round_<key>`.
+The engine has no round settings. The remediation example keeps its own under the key `round` of `vars`: `vars = {"round": {...}}`. With no `round` key, the example queues every open item. The function `settings` in `examples/remediation/workflow.star` reads `facts().vars` and refuses a missing or wrong setting with a message that names the key and the fix. The loader checks none of them.
 
-| Argument | Rule |
+| Key | Rule |
 | --- | --- |
 | `base` | Required. The branch of the round, such as `integration/r2`. The round id is `round/<base>`. |
 | `owner` | Required. The login of the owner. |
 | `lane_cap`, `fix_rounds` | Required. A whole number of 1 or more. |
-| `label`, `items` | Required: set exactly one. `label` is the tracker label that marks the items of the round. `items` is a list of item ids. The loader refuses a block with neither, with both, or with a blank label or an id that is not an item. |
+| `label`, `items` | Required: set exactly one. `label` is the tracker label that marks the items of the round. `items` is a list of item ids. The example refuses neither, both, a blank label and an id that is not an item. |
 | `next_base`, `owner_email`, `source_checkout`, `acceptance`, `base_result` | Optional text. Empty when left out. |
 | `integration_pr` | Optional. A whole number of 0 or more. 0 means the round finds the pull request. |
-| `wait_hours` | Optional. A whole number of 1 or more when set. |
+| `wait_hours` | Optional. A whole number of 1 or more. The default is 24. |
 | `merge` | Optional bool. The default is false. |
 | `base_reds`, `allow_paths` | Optional lists. |
 | `base_reds_file` | Optional. The default is `base-reds.md`. |
 | `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
+
+The example refuses any other key under `round`.
 
 #### `schedules`
 

@@ -56,6 +56,23 @@ func TestExampleQueue_ThePassStartsWorkInFlightBeforeNewWorkAndThenBySeverity(t 
 	assert.Equal(t, []string{"22", "23"}, itemsOf(rig), "the item with an open pull request starts first, then the most severe new item, and a held item never starts")
 }
 
+func TestExampleQueue_ARoundWithAnItemListStartsOnlyTheListedItems(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	rig.h.opts.Env["QUEUE_SWEEP"] = "true"
+	rig.h.queue = &fakeQueue{items: []model.Item{queueItem("21", model.SeverityP1), queueItem("22", model.SeverityP1), queueItem("23", model.SeverityP1)}}
+	rig.h.facts = func(project string) model.Project {
+		return model.Project{Name: project, Vars: roundVars(with(roundSettings(), map[string]any{"label": nil, "items": []any{"23"}}))}
+	}
+	rig.h.agents.err = errFake
+
+	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"23"}, itemsOf(rig), "the workflow filters the rows by the list, and the free slots would take two")
+}
+
 func TestExampleQueue_AnItemThatAlreadyFailedIsNotStartedAgain(t *testing.T) {
 	t.Parallel()
 

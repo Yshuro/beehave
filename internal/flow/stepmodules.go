@@ -30,8 +30,8 @@ const (
 	kindBatch = "batch"
 )
 
-// coreVersion is the version of the core module. Version 2 added the vars field to the result of facts.
-const coreVersion = 2
+// coreVersion is the version of the core module. Version 2 added the vars field to the result of facts. Version 3 removed the round_* fields from it.
+const coreVersion = 3
 
 // stepModule is one module of the table: its version and the step kinds that it records.
 type stepModule struct {
@@ -65,7 +65,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core2.agent1.tracker1.forge1.land1.gate1.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core3.agent1.tracker1.forge1.land1.gate1.host1.round1.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

@@ -83,7 +83,7 @@ func TestFacts_TheRunRefusesAnArgument(t *testing.T) {
 	require.ErrorContains(t, outcome.err, "facts")
 }
 
-// The vars of a project are any-typed JSON values. A value that JSON cannot hold (here NaN) fails the step that records the facts, so the call fails and the file gets no facts.
+// A step that cannot record the facts fails the call, and the file gets no facts. The config loader refuses NaN, so a real project never holds it; here a NaN that JSON cannot encode stands in for a failed write of the record.
 func TestFacts_AVarThatTheRecordCannotHoldFailsTheCall(t *testing.T) {
 	t.Parallel()
 

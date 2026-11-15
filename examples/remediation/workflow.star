@@ -81,6 +81,161 @@ def patch_rounds():
 
     return int(text)
 
+# The settings of a round are the dict `round` of the project file vars: vars = {"round": {...}}. Each key has its type and the fix that a refusal names.
+ROUND_KEYS = {
+    "base": ("string", "the branch of the round, such as integration/r2"),
+    "owner": ("string", "the login of the owner"),
+    "lane_cap": ("int", "the number of lanes that run at once, 1 or more"),
+    "fix_rounds": ("int", "the number of fix rounds for one item, 1 or more"),
+    "label": ("string", "the tracker label that selects the items of the round"),
+    "items": ("list", "the item ids of the round, in place of the label"),
+    "next_base": ("string", "the branch of the next round, or an empty text for a round that does not cut"),
+    "owner_email": ("string", "the email of the owner"),
+    "source_checkout": ("string", "the checkout of the owner"),
+    "integration_pr": ("int", "the number of the integration pull request, or 0 to let the round find it"),
+    "merge": ("bool", "true to land approved items, false to land none"),
+    "acceptance": ("string", "the acceptance script, or an empty text for none"),
+    "base_result": ("string", "the file of the base result, or an empty text for none"),
+    "base_reds": ("list", "the known base reds"),
+    "base_reds_file": ("string", "the file of the known base reds"),
+    "lane_kind": ("string", "impl, papers or design"),
+    "allow_paths": ("list", "the paths that a papers or design lane may change"),
+    "wait_hours": ("int", "the hours that the round waits for the owner, 1 or more"),
+}
+
+# The keys that a round cannot go without, and the value of each other key that the file leaves out.
+ROUND_REQUIRED = ["base", "owner", "lane_cap", "fix_rounds"]
+ROUND_DEFAULTS = {
+    "label": "",
+    "items": [],
+    "next_base": "",
+    "owner_email": "",
+    "source_checkout": "",
+    "integration_pr": 0,
+    "merge": False,
+    "acceptance": "",
+    "base_result": "",
+    "base_reds": [],
+    "base_reds_file": "base-reds.md",
+    "lane_kind": "impl",
+    "allow_paths": [],
+    "wait_hours": 24,
+}
+
+ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+def _made_of(text, allowed):
+    for c in text.elems():
+        if c not in allowed:
+            return False
+
+    return True
+
+def _valid_base(text):
+    # A branch name that can be part of a round id: segments of letters, digits, "_", "." and "-" joined by "/". Each segment starts with a letter or a digit.
+    if ".." in text:
+        return False
+
+    for segment in text.split("/"):
+        if segment == "" or segment[0] not in ALNUM or not _made_of(segment[1:], ALNUM + "_.-"):
+            return False
+
+    return True
+
+def _valid_item(text):
+    # An item id is a number, or a beads id such as bd-12.
+    if text != "" and _made_of(text, "0123456789"):
+        return True
+
+    prefix, found, rest = text.partition("-")
+    return found != "" and prefix != "" and prefix[0] in ALNUM and _made_of(prefix, ALNUM + "_") and rest != "" and _made_of(rest, ALNUM + "_.-")
+
+def _round_refuse(key, why):
+    fail("REFUSE: vars.round.%s %s" % (key, why))
+
+def _round_value(block, key):
+    kind, fix = ROUND_KEYS[key]
+    if key not in block:
+        return ROUND_DEFAULTS[key]
+
+    value = block[key]
+    if type(value) != kind:
+        _round_refuse(key, "is %r, of type %s. Write %s, of type %s." % (value, type(value), fix, kind))
+
+    return value
+
+def _round_lists(got):
+    for key in ["base_reds", "allow_paths"]:
+        for entry in got[key]:
+            if type(entry) != "string" or entry.strip() == "":
+                _round_refuse(key, "lists a blank string. Write the entry or remove it.")
+
+def _round_numbers(got):
+    for key, least in [("lane_cap", 1), ("fix_rounds", 1), ("wait_hours", 1), ("integration_pr", 0)]:
+        if got[key] < least:
+            _round_refuse(key, "is %d. Write %s." % (got[key], ROUND_KEYS[key][1]))
+
+def _round_lane(got):
+    if got["lane_kind"] not in ["impl", "papers", "design"]:
+        _round_refuse("lane_kind", "is %r. Write impl, papers or design." % got["lane_kind"])
+
+    if got["lane_kind"] != "impl" and len(got["allow_paths"]) == 0:
+        _round_refuse("lane_kind", "is %r and vars.round.allow_paths is empty. List the paths that the lane may change." % got["lane_kind"])
+
+def _round_selector(block, got):
+    has_label = "label" in block
+    has_items = len(got["items"]) > 0
+    if has_label and has_items:
+        fail("REFUSE: a round takes one item selector: set vars.round.label or vars.round.items, not both.")
+
+    if not has_label and not has_items:
+        fail("REFUSE: a round needs an item selector: set vars.round.label or vars.round.items.")
+
+    if has_label and got["label"].strip() == "":
+        _round_refuse("label", "is blank. Write the tracker label that selects the items.")
+
+    for item in got["items"]:
+        if type(item) != "string" or not _valid_item(item):
+            _round_refuse("items", "lists %r. Write an item id: a number, or a beads id such as bd-12." % item)
+
+def settings(project):
+    """Returns the settings of the round as a dict, with the default of each key that the project vars leave out, or None when the project vars hold no `round`.
+    The engine reads no setting. This function is the one check of them: it refuses a missing key, a key of the wrong type, a value out of range and a key that is no setting,
+    each with a message that names the key and the fix. `project` is the value of facts()."""
+    if "round" not in project.vars:
+        return None
+
+    block = project.vars["round"]
+    if type(block) != "dict":
+        fail("REFUSE: vars.round is %r, of type %s. Write a dict of the round settings, for example {\"base\": \"integration/r2\"}." % (block, type(block)))
+
+    for key in block:
+        if key not in ROUND_KEYS:
+            _round_refuse(key, "is not a round setting. The settings are: %s." % ", ".join(sorted(ROUND_KEYS)))
+
+    for key in ROUND_REQUIRED:
+        if key not in block:
+            _round_refuse(key, "is missing. Add it: %s." % ROUND_KEYS[key][1])
+
+    got = {key: _round_value(block, key) for key in ROUND_KEYS}
+
+    for key in ["base", "owner"]:
+        if got[key].strip() == "":
+            _round_refuse(key, "is blank. Write %s." % ROUND_KEYS[key][1])
+
+    if not _valid_base(got["base"]):
+        _round_refuse("base", "is %r. Write a branch name such as integration/r2: letters, digits, `.`, `_` and `-`, with `/` between parts." % got["base"])
+
+    if got["base_reds_file"].strip() == "":
+        _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for base-reds.md.")
+
+    _round_numbers(got)
+    _round_lists(got)
+    _round_lane(got)
+    _round_selector(block, got)
+
+    return got
+
 def regressions(value):
     """Returns the regression count that the output `regressions` of a report holds, or None when the count is unknown.
     The output is a text. Spaces around the number are allowed. A text that is not a whole number gives None: an unknown count is never a pass."""
@@ -272,10 +427,20 @@ def land(item, pins):
 def sweep(item):
     """Starts the ready items in the order of the queue, up to the free slots, and waits for the runs.
     QUEUE_SWEEP="true" selects this pass. The queue is read again here, so a pull request that arrived since the last pass shows in the order.
-    The runs are the pipeline of one item each. The rank rule is above."""
+    The runs are the pipeline of one item each. The rank rule is above.
+    A project whose vars hold a `round` reads the settings of the round first and queues only the items that its label or its item list selects. Another project queues every item."""
     # The run of the sweep claims the item id it is given, as every run does. That is wanted: the claim lets only one pass run for that id, so two passes cannot start the same items twice. Give the sweep an id that is no real item.
-    q = queue(name = "sweep-queue", hold = "hold")
-    take = [r.item for r in rank(q.rows, env("OWNER_LOGIN"))][:q.free]
+    # The label is the one selector the engine applies, because the rows hold no labels. The item list is applied here, to the rows.
+    label = ""
+    listed = []
+    round = settings(facts())
+    if round != None:
+        label = round["label"]
+        listed = round["items"]
+
+    q = queue(name = "sweep-queue", hold = "hold", label = label)
+    rows = [r for r in q.rows if len(listed) == 0 or r.item in listed]
+    take = [r.item for r in rank(rows, env("OWNER_LOGIN"))][:q.free]
     if len(take) == 0:
         return
 
