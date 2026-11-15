@@ -42,6 +42,27 @@ func check(tb testing.TB, ok bool, format string, args ...any) {
 	}
 }
 
+// BinaryVariable names the variable that holds the path of the bd 1.3.2 binary for the contract tests against a real bd.
+const BinaryVariable = "BEEHAVE_BD_132"
+
+// RealBd returns the path of the bd 1.3.2 binary that a contract test against a real bd runs, and checks that dolt is on PATH.
+// Without the binary the test skips on a developer machine. In CI (the CI variable is set) it stops instead,
+// so a missing tool never turns the real run into a silent skip.
+func RealBd(tb testing.TB, env map[string]string) string {
+	tb.Helper()
+
+	binary := env[BinaryVariable]
+	if binary == "" {
+		check(tb, env["CI"] == "", "%s is not set in CI: the real bd contract test must run there", BinaryVariable)
+		tb.Skip(BinaryVariable + " is not set: the real bd contract test needs a bd 1.3.2 binary")
+	}
+
+	_, err := exec.LookPath("dolt")
+	check(tb, err == nil, "dolt is not on PATH: the real bd contract test needs it: %v", err)
+
+	return binary
+}
+
 // EnvRunner runs a binary under env(1) with the given variables set, so a test never changes the environment of the test process.
 type EnvRunner struct {
 	Inner  proc.ExecRunner
@@ -112,7 +133,7 @@ func StartDolt(tb testing.TB, root, binary string) int {
 		port, ok = startOnFreePort(tb, home, data, binary)
 	}
 
-	check(tb, ok, "the private dolt server did not start")
+	check(tb, ok, "the private dolt server did not start: it did not print %q and accept a connection", ReadyLine)
 
 	return port
 }
@@ -130,9 +151,13 @@ func startOnFreePort(tb testing.TB, home, data, binary string) (int, bool) {
 
 	tb.Cleanup(func() { stopServer(tb, cmd, done) })
 
+	// The context ends when the server ends or when serverWait passes, so one bound covers the wait for the line and the wait for the dial.
+	ctx, bound := context.WithTimeout(ctx, serverWait)
+	defer bound()
+
 	// A connection to the port proves nothing alone: another process can hold the port while this server ends.
 	// Only this server prints the line, so the wait for the line proves that this server owns the port.
-	ok := announced.wait(ctx, serverWait) && reachable(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), serverWait)
+	ok := announced.wait(ctx) && reachable(ctx, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if !ok {
 		stopServer(tb, cmd, done) // a server that never answered must not outlive its attempt
 	}
@@ -233,21 +258,19 @@ func (a *announcement) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// wait reports whether the server printed ReadyLine before ctx ended or wait passed.
-func (a *announcement) wait(ctx context.Context, wait time.Duration) bool {
+// wait reports whether the server printed ReadyLine before ctx ended.
+func (a *announcement) wait(ctx context.Context) bool {
 	select {
 	case <-a.ready:
 		return true
 	case <-ctx.Done():
 		return false
-	case <-time.After(wait):
-		return false
 	}
 }
 
-// reachable polls until a connection to the address works, and reports whether one did within wait or before ctx ends.
-func reachable(ctx context.Context, address string, wait time.Duration) bool {
-	for deadline := time.Now().Add(wait); time.Now().Before(deadline) && ctx.Err() == nil; time.Sleep(serverPoll) {
+// reachable polls until a connection to the address works, and reports whether one did before ctx ends.
+func reachable(ctx context.Context, address string) bool {
+	for ; ctx.Err() == nil; time.Sleep(serverPoll) {
 		conn, err := (&net.Dialer{Timeout: dialTimeout}).DialContext(ctx, "tcp", address)
 		if err == nil {
 			_ = conn.Close()

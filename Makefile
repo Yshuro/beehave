@@ -49,7 +49,7 @@ REMEDY := bin/remedy
 
 DEADCODE_VERSION := golang.org/x/tools/cmd/deadcode@v0.51.0
 
-.PHONY: setup lint-version ai-rulez-version ai-rulez-install deps deadcode build release-snapshot format format-check lint vet vuln test coverage smoke smoke-agent smoke-hook smoke-sandbox mutation mutation-pr \
+.PHONY: setup lint-version ai-rulez-version ai-rulez-install contract-tools-install deps deadcode build release-snapshot format format-check lint vet vuln test coverage smoke smoke-agent smoke-hook smoke-sandbox mutation mutation-pr \
 	governance-generate governance-validate governance-verify clean check check-darwin
 
 setup:  ## Install the Go tools and generate the agent files
@@ -74,6 +74,11 @@ lint-version:  ## Fail unless golangci-lint is the version CI runs
 
 ai-rulez-install:  ## Install ai-rulez $(AI_RULEZ_VERSION) into the Go bin folder
 	sh scripts/install-ai-rulez.sh $(AI_RULEZ_VERSION) "$$(go env GOPATH)/bin"
+
+CONTRACT_TOOLS_DIR ?= $(shell go env GOPATH)/bin
+
+contract-tools-install:  ## Install dolt and bd 1.3.2 (linux amd64) into CONTRACT_TOOLS_DIR for the contract tests against a real bd
+	sh scripts/install-contract-tools.sh "$(CONTRACT_TOOLS_DIR)"
 
 ai-rulez-version:  ## Fail unless ai-rulez is the version the gate expects
 	@ai-rulez --version | grep -qx "ai-rulez version $(patsubst v%,%,$(AI_RULEZ_VERSION))" || { echo "ai-rulez $(AI_RULEZ_VERSION) is required, found: $$(ai-rulez --version). Run make ai-rulez-install. A new version can add rules: change AI_RULEZ_VERSION in its own pull request."; exit 1; }
