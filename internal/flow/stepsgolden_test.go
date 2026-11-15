@@ -36,9 +36,9 @@ func resultShape(t *testing.T) []string {
 	return lines
 }
 
-// goldenShapes holds the shape of the recorded results for each steps version. The key is the steps version.
-// A change to a builtin or to a result field is a change to what a run records: bump stepsVersion and add the new shape under the new version.
-// The old entry goes away with the bump, because a build refuses the runs of an older version.
+// goldenShapes holds the shape of the recorded results. The key is stepsVersion, the single version that came before the modules.
+// A change to a builtin or to a result field is a change to what a run records: bump the version of the module that owns the kind in moduleTable
+// (stepmodules.go) and update the shape. A later change re-keys these goldens for each module; until then the key stays star30.
 var goldenShapes = map[string][]string{
 	"star30": {
 		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,stop,text,transcript,violations",
@@ -73,8 +73,8 @@ func TestStepsVersion_TheShapeOfTheRecordedResultsIsTheGoldenShapeOfTheVersion(t
 	t.Parallel()
 
 	golden, ok := goldenShapes[stepsVersion]
-	require.True(t, ok, "stepsVersion %s has no golden shape: add the shape of the results under the new version and remove the old one", stepsVersion)
-	assert.Equal(t, golden, resultShape(t), "a builtin or a result field changed: bump stepsVersion and update the golden shape")
+	require.True(t, ok, "the golden shapes have no entry for the key %s", stepsVersion)
+	assert.Equal(t, golden, resultShape(t), "a builtin or a result field changed: bump the version of the module that owns it in moduleTable (stepmodules.go) and update the golden shape")
 	assert.Len(t, goldenShapes, 1, "only the shape of the current version stays")
 }
 
@@ -92,8 +92,8 @@ func TestStepsVersion_TheTableOfStepKindsIsTheGoldenTableOfTheVersion(t *testing
 	t.Parallel()
 
 	golden, ok := goldenKinds[stepsVersion]
-	require.True(t, ok, "stepsVersion %s has no golden step kinds: add the table under the new version and remove the old one", stepsVersion)
-	assert.Equal(t, golden, moduleRegistry(t).Kinds(), "a step kind changed: bump stepsVersion and update the golden table")
+	require.True(t, ok, "the golden step kinds have no entry for the key %s", stepsVersion)
+	assert.Equal(t, golden, moduleRegistry(t).Kinds(), "a step kind changed: bump the version of the module that owns it in moduleTable (stepmodules.go) and update the golden table")
 	assert.Len(t, goldenKinds, 1, "only the table of the current version stays")
 }
 
@@ -166,5 +166,5 @@ func TestStepsVersion_TheStepNamesOfABatchMergeMatchTheGoldenListOfTheStepsVersi
 		}
 	}
 
-	assert.Equal(t, goldenBatchSteps, batch, "the steps of batch_merge changed: bump stepsVersion and update the list")
+	assert.Equal(t, goldenBatchSteps, batch, "the steps of batch_merge changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
 }

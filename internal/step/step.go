@@ -17,7 +17,10 @@ import (
 
 // Module is a named set of builtins and the step kinds that it records.
 type Module struct {
-	Name     string
+	Name string
+	// Version is the version of the recorded steps of the module. A change to a builtin of the module that changes its recorded steps bumps it.
+	// It is 0 for a module that stands for several modules whose versions the host package keeps in a table of its own: the module of package flow.
+	Version  int
 	Builtins []Builtin
 	// Kinds are the counted step kinds that the module records: the start of the name `<kind>:<label>#<n>` of each step.
 	// A builtin that records no counted step, or records steps of another name, is not listed.
