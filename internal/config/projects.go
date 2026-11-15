@@ -57,6 +57,8 @@ type rawProject struct {
 	Epics                                                                       table
 	GateFiles, Conventions, BriefRules, StackedRules, Limits, Traps, TokenRules paths
 
+	// Vars are the free settings of the workflow. The engine reads no key and no value.
+	Vars   vars
 	Board  *rawBoard
 	Rounds *rawRounds
 
@@ -84,7 +86,7 @@ func loadProject(path string, registry Adapters) (Project, error) {
 
 // projectSpec is the schema of the project call. The arguments after the fixed ones are the adapter blocks that the registry declares, each optional and named as its block.
 func projectSpec(declared []Block) spec {
-	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "board?", "rounds?", "schedules?"}
+	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "vars?", "board?", "rounds?", "schedules?"}
 
 	for _, block := range declared {
 		args = append(args, block.Name+"?")
@@ -150,7 +152,7 @@ func newProject(at syntax.Position, kwargs []starlark.Tuple, declared []Block) (
 	host, board, rounds, held := nested[rawHost]{want: hostSpecName}, nested[rawBoard]{want: boardSpec().name}, nested[rawRounds]{want: roundsSpec().name}, holders(declared)
 	dests := []any{
 		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.TestCommand, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer,
-		&raw.People, &raw.Epics, &raw.GateFiles, &raw.Conventions, &raw.BriefRules, &raw.StackedRules, &raw.Limits, &raw.Traps, &raw.TokenRules, &raw.Changelog, &board, &rounds, &raw.Schedules,
+		&raw.People, &raw.Epics, &raw.GateFiles, &raw.Conventions, &raw.BriefRules, &raw.StackedRules, &raw.Limits, &raw.Traps, &raw.TokenRules, &raw.Changelog, &raw.Vars, &board, &rounds, &raw.Schedules,
 	}
 
 	err := projectSpec(declared).unpack(at, kwargs, append(dests, blockDests(held)...)...)

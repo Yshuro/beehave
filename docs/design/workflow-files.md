@@ -72,6 +72,7 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earl
 | `people`, `epics` | Dict. |
 | `gate_files`, `conventions`, `brief_rules`, `stacked_rules`, `limits`, `traps`, `token_rules` | List. |
 | `changelog` | Text. |
+| `vars` | Dict. The `vars` of the project file, as written, and frozen. |
 | `board_number` | The board number, 0 when the project has none. |
 | `board_owner`, `board_started`, `board_merged` | The other values of the board. |
 | `round_base`, `round_next_base`, `round_owner`, `round_owner_email`, `round_source_checkout`, `round_acceptance`, `round_base_result`, `round_base_reds_file`, `round_lane_kind` | The text values of the `rounds(...)` block. Empty when the project has none. |
@@ -82,7 +83,7 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earl
 - A fact that the project file leaves out is empty text, an empty dict or an empty list, never a missing field.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.
 - A workflow passes the struct in the `inputs` of an agent call, and the prompt reads it as `{{ .facts.<field> }}`. The agent reads no file for it.
-- In a dry run the facts are empty.
+- In a dry run the facts are empty, except `vars`. `beehave check workflow --project <name> --dry-run` gives `vars` the value of that project. Without `--project`, `vars` is an empty dict.
 - `beehave check workflow` refuses a field that `facts()` does not return.
 
 ### Loading files and pinning

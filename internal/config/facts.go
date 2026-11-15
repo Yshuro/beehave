@@ -24,6 +24,7 @@ func withFacts(path string, profile model.Project, raw rawProject) (model.Projec
 	profile.Changelog = raw.Changelog.Value
 	profile.Board = board
 	profile.Rounds = rounds
+	profile.Vars = raw.Vars
 
 	profile.People, profile.Epics = maps.Clone(raw.People), maps.Clone(raw.Epics)
 	profile.GateFiles, profile.Conventions = slices.Clone(raw.GateFiles), slices.Clone(raw.Conventions)

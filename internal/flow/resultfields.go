@@ -1,6 +1,10 @@
 package flow
 
-import "github.com/tobocop2/beehave/internal/agent"
+import (
+	"encoding/json"
+
+	"github.com/tobocop2/beehave/internal/agent"
+)
 
 // The outputs of each builtin that records a step, one function each. The fields of a function are the fields in workflow.ResultFields,
 // and a test compares them, so the check of a workflow file and the run read the same names.
@@ -116,13 +120,41 @@ func spendOutputs(spend agent.Spend) map[string]any {
 	return map[string]any{costField: spend.Cost, estimatedField: spend.Estimated, unknownField: spend.Unknown}
 }
 
-// spendOf reads the cost that the outputs of an agent call hold. An output that is missing or has another type reads as no cost and no mark.
+// spendOf reads the cost that the outputs of an agent call hold. A cost that is missing reads as no cost and no mark, as a run that cost nothing does.
+// A cost that is there but is no number that costOf can read marks the spend unknown: a silent 0 would hide the spend from the cap.
 func spendOf(outputs map[string]any) agent.Spend {
-	cost, _ := outputs[costField].(float64)        //nolint:errcheck // a missing or ill-typed cost reads as 0
+	var cost float64
+
+	unknown, _ := outputs[unknownField].(bool) //nolint:errcheck // a missing mark reads as false
+
+	if raw, present := outputs[costField]; present {
+		var readable bool
+
+		cost, readable = costOf(raw)
+		unknown = unknown || !readable
+	}
+
 	estimated, _ := outputs[estimatedField].(bool) //nolint:errcheck // a missing mark reads as false
-	unknown, _ := outputs[unknownField].(bool)     //nolint:errcheck // a missing mark reads as false
 
 	return agent.Spend{Cost: cost, Estimated: estimated, Unknown: unknown}
+}
+
+// costOf reads a dollar amount that is a float64 on a first run and a json.Number on a replay. It reports false, with 0 dollars, for a value that is
+// no number, and for a number that does not fit a float64.
+func costOf(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case json.Number:
+		cost, err := x.Float64()
+		if err != nil {
+			return 0, false
+		}
+
+		return cost, true
+	default:
+		return 0, false
+	}
 }
 
 // floatBits is the bit size of a dollar amount.

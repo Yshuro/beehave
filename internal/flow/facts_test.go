@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"math"
 	"testing"
 	"time"
 
@@ -80,6 +81,23 @@ func TestFacts_TheRunRefusesAnArgument(t *testing.T) {
 	outcome := <-runInBackground(h.engine(t), testItem)
 
 	require.ErrorContains(t, outcome.err, "facts")
+}
+
+// The vars of a project are any-typed JSON values. A value that JSON cannot hold (here NaN) fails the step that records the facts, so the call fails and the file gets no facts.
+func TestFacts_AVarThatTheRecordCannotHoldFailsTheCall(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"GOT FACTS\")\n")
+	h.facts = func(project string) model.Project {
+		return model.Project{Name: project, Vars: map[string]any{"ratio": math.NaN()}}
+	}
+
+	outcome := <-runInBackground(h.engine(t), testItem)
+
+	require.Error(t, outcome.err)
+	assert.NotContains(t, outcome.err.Error(), "GOT FACTS", "the call failed before the file used the facts")
+	assert.Contains(t, outcome.err.Error(), "NaN", "the error names the value that the record cannot hold")
 }
 
 // A crash after facts() and before the answer, then a resume under a config that changed: the replay returns the facts the run started with.

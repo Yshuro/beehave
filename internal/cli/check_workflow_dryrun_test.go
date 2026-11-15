@@ -36,6 +36,19 @@ func TestCheckWorkflowDryRun_PrintsEachStepOfTheRemediationExampleInOrder(t *tes
 	assert.Contains(t, stdout, "gate:check#1")
 }
 
+func TestCheckWorkflowDryRun_TheFactsOfANamedProjectHoldItsVars(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeConfig(t, dir, "workflow.star", "def main(item):\n    fail(\"V=%r\" % facts().vars)\n")
+	writeConfig(t, dir, "projects/code.star", "project(source = \"/srv/repo\", base_branch = \"main\", gate = \"g\", test_report = \"r.xml\", vars = {\"a\": [1]})\n")
+
+	code, stdout, _ := runDry(t, map[string]string{}, "--config", dir, "--project", "code", filepath.Join(dir, "workflow.star"))
+
+	require.Equal(t, 1, code)
+	assert.Contains(t, stdout, `V={"a": [1]}`)
+}
+
 func TestCheckWorkflowDryRun_APlainRunWithoutTheFlagPrintsNoSteps(t *testing.T) {
 	t.Parallel()
 

@@ -43,8 +43,11 @@ The project also takes facts. All facts are optional and are empty when left out
 | `people`, `epics` | A dict of strings. |
 | `gate_files`, `conventions`, `brief_rules`, `stacked_rules`, `limits`, `traps`, `token_rules` | A list of strings. |
 | `changelog` | One relative path inside the work tree. The example workflow checks it before a merge. |
+| `vars` | A dict of the settings of one workflow. The engine reads no key and no value. |
 
 The loader refuses a blank item, and a blank dict key or value.
+
+The `vars` keys must be strings. The values must be `None`, a bool, a string, a number, a list, a tuple or a dict, nested to any depth. The loader refuses a function, a non-finite number and a key that is not a string, because a run records the facts as JSON. A workflow reads `vars` with `facts().vars`.
 
 #### `board`
 

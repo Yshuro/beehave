@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -22,6 +23,25 @@ type stepResult struct {
 	Outputs map[string]any `json:"outputs,omitempty"`
 	Note    string         `json:"note,omitempty"`
 	Stopped *Stopped       `json:"stopped,omitempty"`
+}
+
+// UnmarshalJSON reads a recorded step with each number kept as a json.Number, so that a replay holds the digits and the int or float kind
+// that the first run recorded. A plain decode would turn every number into a float64.
+func (r *stepResult) UnmarshalJSON(data []byte) error {
+	type plain stepResult
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+
+	var decoded plain
+
+	if err := decoder.Decode(&decoded); err != nil {
+		return fmt.Errorf("decode a recorded step: %w", err)
+	}
+
+	*r = stepResult(decoded)
+
+	return nil
 }
 
 // script is the state of one run of a workflow file. The thread of the run calls its builtins one at a time on the workflow goroutine.
@@ -178,7 +198,7 @@ func fields(outputs map[string]any) (starlark.StringDict, error) {
 }
 
 // toStarlark converts a recorded value through its JSON text with the decoder of the Starlark JSON library. A first run holds a Go int and
-// a replay holds a float64 from JSON. Both give the same Starlark int, and a dict keeps the key order of the text, which is sorted.
+// a replay holds a json.Number from the record. Both give the same Starlark int, and a dict keeps the key order of the text, which is sorted.
 func toStarlark(v any) (starlark.Value, error) { //nolint:ireturn // the value is any of the Starlark types
 	data, err := json.Marshal(v)
 	if err != nil {

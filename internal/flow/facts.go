@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
@@ -20,10 +21,21 @@ func (s *script) facts(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 		return nil, err
 	}
 
-	return s.durable("facts", "", func(context.Context, string) (stepResult, error) {
+	fields, err := s.durableFields("facts", "", map[string]any{varsField: map[string]any{}}, func(context.Context, string) (stepResult, error) {
 		return stepResult{Outputs: factsOutputs(s.Project())}, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+
+	// The settings that the project file wrote stay as written. Every call builds a fresh value, so the freeze is local to the caller.
+	fields[varsField].Freeze()
+
+	return starlarkstruct.FromStringDict(starlarkstruct.Default, fields), nil
 }
+
+// varsField is the field `vars` of the facts: the free settings of the project file.
+const varsField = "vars"
 
 // factsOutputs holds the fields of the facts struct. An empty fact is an empty list, an empty dict or empty text, never a missing field, so a prompt can range over it.
 func factsOutputs(p model.Project) map[string]any {
@@ -31,7 +43,7 @@ func factsOutputs(p model.Project) map[string]any {
 		repoKeyword: p.Repo, "source": p.Source, "forge": string(p.Forge), "tracker": string(p.Tracker), "base_branch": p.BaseBranch, "gate": gateText(p), "gate_steps": gateStepNames(p), "build_host": p.BuildHost,
 		"people": orEmptyDict(p.People), "epics": orEmptyDict(p.Epics),
 		"gate_files": orEmptyList(p.GateFiles), "conventions": orEmptyList(p.Conventions), "brief_rules": orEmptyList(p.BriefRules), "stacked_rules": orEmptyList(p.StackedRules),
-		"limits": orEmptyList(p.Limits), "traps": orEmptyList(p.Traps), "token_rules": orEmptyList(p.TokenRules), "changelog": p.Changelog,
+		"limits": orEmptyList(p.Limits), "traps": orEmptyList(p.Traps), "token_rules": orEmptyList(p.TokenRules), "changelog": p.Changelog, varsField: orEmptyVars(p.Vars),
 		"board_number": p.Board.Number, "board_owner": p.Board.Owner, "board_started": p.Board.Started, "board_merged": p.Board.Merged,
 	}
 
@@ -80,6 +92,14 @@ func gateStepNames(p model.Project) []string {
 func orEmptyList(items []string) []string {
 	if items == nil {
 		return []string{}
+	}
+
+	return items
+}
+
+func orEmptyVars(items map[string]any) map[string]any {
+	if items == nil {
+		return map[string]any{}
 	}
 
 	return items

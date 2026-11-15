@@ -65,7 +65,10 @@ func dryReading() func() time.Time {
 }
 
 // dryChoice holds what the caller chose for a dry run.
-type dryChoice struct{ redGate, sendBack bool }
+type dryChoice struct {
+	redGate, sendBack bool
+	vars              map[string]any
+}
 
 // DryOption is a choice for a dry run.
 type DryOption func(*dryChoice)
@@ -75,6 +78,9 @@ func WithRedGate() DryOption { return func(c *dryChoice) { c.redGate = true } }
 
 // WithSendBack makes the first review of the dry run end with the verdict changes, so that the run walks a send-back and a fix round. Each later review approves.
 func WithSendBack() DryOption { return func(c *dryChoice) { c.sendBack = true } }
+
+// WithVars gives the facts of the dry run the vars of a project. The vars are static config, so the dry run reads them as a real run does. Every other fact stays empty.
+func WithVars(vars map[string]any) DryOption { return func(c *dryChoice) { c.vars = vars } }
 
 // chooseDry applies the options of a dry run in order.
 func chooseDry(options []DryOption) dryChoice {
@@ -197,6 +203,7 @@ func dryDeps(tree, head, item string, skills []string, chosen dryChoice) Deps {
 		Agents: agents, Gate: newDryGate(head, chosen.redGate), Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
 		Forge: dryForge{head: head}, Watch: dryWatch{}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
 		Writer: dryWriter{}, Reader: dryReader{}, Preflight: dryPreflight{},
+		Facts: func(string) model.Project { return model.Project{Vars: chosen.vars} },
 		Clock: clock{Poll: dryPoll, Watch: dryWait, Settle: dryWait, Reading: dryReading()},
 	}
 }
