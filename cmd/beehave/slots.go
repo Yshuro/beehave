@@ -12,7 +12,7 @@ import (
 var errNoSlotClass = errors.New("the host block names no such slot class")
 
 // slotsOf gives the host that a command call with a slot class runs on, and the number of jobs of the class that the host runs at once.
-// The host block of the project must list the class. A host that other projects declare too runs as many jobs as the largest count of those projects allows.
+// The host block of the project must list the class. The config load makes every project that declares the host give the same count.
 func slotsOf(projects map[string]config.Project) func(project, cluster, class string) (flow.SlotGrant, error) {
 	return func(project, cluster, class string) (flow.SlotGrant, error) {
 		host, err := slotHost(projects, project, cluster, class)

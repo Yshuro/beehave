@@ -23,12 +23,46 @@ func TestConfig_AHostBlockReadsItsSlotClasses(t *testing.T) {
 	require.Nil(t, project.Host.Slots, "a host block with no slots names no class")
 }
 
-func TestSlotCount_AHostThatProjectsShareRunsAsManyJobsAsTheLargestCountAllows(t *testing.T) {
+func slotProject(name, host string, hosts []string, slots map[string]int) config.Project {
+	return config.Project{Project: model.Project{Name: name, BuildHost: host, BuildHosts: hosts, Host: &model.HostConfig{Slots: slots}}}
+}
+
+func TestConfigValidate_TwoProjectsOnOneHostWithDifferentCountsForAClassAreRefused(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Projects = map[string]config.Project{
+		"one": slotProject("one", "gpu", nil, map[string]int{"mutation": 1}),
+		"two": slotProject("two", "cpu", []string{"cpu", "gpu"}, map[string]int{"mutation": 4}),
+	}
+
+	problems := cfg.Validate()
+
+	require.Len(t, problems, 1)
+	require.ErrorIs(t, problems[0], config.ErrRefused)
+	require.ErrorContains(t, problems[0], `projects one and two both use host gpu and give a different count for the slot class "mutation": 1 and 4`)
+}
+
+func TestConfigValidate_ProjectsOnOneHostMayGiveEqualCountsOrDifferentClasses(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.DefaultConfig()
+	cfg.Projects = map[string]config.Project{
+		"one":   slotProject("one", "gpu", nil, map[string]int{"mutation": 2, "bench": 1}),
+		"two":   slotProject("two", "gpu", nil, map[string]int{"mutation": 2, "fuzz": 5}),
+		"three": slotProject("three", "cpu", nil, map[string]int{"mutation": 9}),
+		"local": {Project: model.Project{Name: "local", BuildHost: config.LocalHost}},
+	}
+
+	require.Empty(t, cfg.Validate(), "equal counts agree, a class that one project names has no rival, and another host has its own count")
+}
+
+func TestSlotCount_AHostThatProjectsShareRunsTheCountTheyAgreeOn(t *testing.T) {
 	t.Parallel()
 
 	projects := map[string]config.Project{
-		"one":   {Project: model.Project{Name: "one", BuildHost: "gpu", Host: &model.HostConfig{Slots: map[string]int{"mutation": 1}}}},
-		"two":   {Project: model.Project{Name: "two", BuildHost: "cpu", BuildHosts: []string{"cpu", "gpu"}, Host: &model.HostConfig{Slots: map[string]int{"mutation": 3, "bench": 2}}}},
+		"one":   slotProject("one", "gpu", nil, map[string]int{"mutation": 3}),
+		"two":   slotProject("two", "cpu", []string{"cpu", "gpu"}, map[string]int{"mutation": 3, "bench": 2}),
 		"local": {Project: model.Project{Name: "local", BuildHost: config.LocalHost}},
 	}
 
@@ -36,9 +70,9 @@ func TestSlotCount_AHostThatProjectsShareRunsAsManyJobsAsTheLargestCountAllows(t
 	require.True(t, named)
 	require.Equal(t, 3, count)
 
-	count, named = config.SlotCount(projects, "cpu", "mutation")
+	count, named = config.SlotCount(projects, "cpu", "bench")
 	require.True(t, named)
-	require.Equal(t, 3, count)
+	require.Equal(t, 2, count)
 
 	_, named = config.SlotCount(projects, "gpu", "fuzz")
 	require.False(t, named, "no project names the class")

@@ -24,7 +24,7 @@ func TestSlotsOf_AClassTheHostBlockListsGetsItsCountAndAClassItLeavesOutIsRefuse
 
 	grant := slotsOf(map[string]config.Project{
 		"p":     slotProject("p", []string{"gpu", "cpu"}, map[string]int{"mutation": 1, "bench": 2}),
-		"other": slotProject("other", []string{"gpu"}, map[string]int{"mutation": 3}),
+		"other": slotProject("other", []string{"gpu"}, map[string]int{"mutation": 1}),
 		"local": {Project: model.Project{Name: "local", BuildHost: config.LocalHost}},
 	})
 
@@ -34,7 +34,7 @@ func TestSlotsOf_AClassTheHostBlockListsGetsItsCountAndAClassItLeavesOutIsRefuse
 
 	got, err = grant("p", "gpu", "mutation")
 	require.NoError(t, err)
-	require.Equal(t, flow.SlotGrant{Host: "gpu", Count: 3}, got, "projects that share a host run as many jobs as the largest count allows")
+	require.Equal(t, flow.SlotGrant{Host: "gpu", Count: 1}, got, "projects that share a host agree on the count")
 
 	got, err = grant("p", "cpu", "mutation")
 	require.NoError(t, err)

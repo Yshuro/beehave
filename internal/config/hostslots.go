@@ -77,19 +77,80 @@ func slotsOf(at syntax.Position, table slotTable) (map[string]int, error) {
 }
 
 // SlotCount returns the number of jobs of one slot class that a build host runs at once, and whether any project names the class on the host.
-// Projects share a host by name, so a host that two projects declare runs as many jobs as the project with the larger count allows.
+// Projects share a host by name. The config load refuses two projects that give different counts for one class on one host, so every project that names the class gives the same count.
 func SlotCount(projects map[string]Project, cluster, class string) (int, bool) {
-	count := 0
-
-	for _, project := range projects {
+	for _, name := range slices.Sorted(maps.Keys(projects)) {
+		project := projects[name]
 		if project.Host == nil {
 			continue
 		}
 
-		if _, err := project.HostFor(cluster); err == nil {
-			count = max(count, project.Host.Slots[class])
+		if _, err := project.HostFor(cluster); err == nil && project.Host.Slots[class] > 0 {
+			return project.Host.Slots[class], true
 		}
 	}
 
-	return count, count > 0
+	return 0, false
+}
+
+// slotProblems refuses two projects that name one host and give different counts for one slot class. A host has one capacity, so the projects cannot
+// each set it. Equal counts are fine.
+func (c Config) slotProblems() Problems {
+	var problems Problems
+
+	seen := map[hostClass]slotClaim{}
+
+	for _, name := range slices.Sorted(maps.Keys(c.Projects)) {
+		project := c.Projects[name]
+		if project.Host == nil {
+			continue
+		}
+
+		for _, host := range declaredOrDefault(project) {
+			problems = append(problems, claimSlots(seen, name, host, project.Host.Slots)...)
+		}
+	}
+
+	return problems
+}
+
+// declaredOrDefault is every build host that a project declares: its list, or its one host.
+func declaredOrDefault(project Project) []string {
+	if len(project.BuildHosts) == 0 {
+		return []string{project.BuildHost}
+	}
+
+	return project.BuildHosts
+}
+
+// hostClass is one slot class on one build host.
+type hostClass struct{ host, class string }
+
+// slotClaim is the count that a project gives to a hostClass.
+type slotClaim struct {
+	project string
+	count   int
+}
+
+// claimSlots records the counts that a project gives on a host in seen, and refuses a count that differs from the count of an earlier project.
+func claimSlots(seen map[hostClass]slotClaim, project, host string, slots map[string]int) Problems {
+	var problems Problems
+
+	for _, class := range slices.Sorted(maps.Keys(slots)) {
+		key := hostClass{host, class}
+
+		first, known := seen[key]
+		if !known {
+			seen[key] = slotClaim{project, slots[class]}
+
+			continue
+		}
+
+		if first.count != slots[class] {
+			problems = append(problems, refuse("projects %s and %s both use host %s and give a different count for the slot class %q: %d and %d. A host has one count for each class. Give both projects the same count in `slots` of the `host` block.",
+				first.project, project, host, class, first.count, slots[class]))
+		}
+	}
+
+	return problems
 }

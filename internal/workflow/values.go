@@ -190,7 +190,7 @@ func SlotClass(v starlark.Value, host string) (string, error) {
 
 	class, isText := starlark.AsString(v)
 	if !isText || strings.TrimSpace(class) == "" {
-		return "", errors.New("slots must be the name of a slot class. Write slots = \"mutation\"")
+		return "", errors.New("slots must be the name of a slot class. Write slots = \"heavy\"")
 	}
 
 	if host == "" {
