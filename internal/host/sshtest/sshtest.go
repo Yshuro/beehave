@@ -209,8 +209,8 @@ func (m *Machine) tail(words []string) model.CommandResult {
 	log := found.Log
 
 	if len(words) >= 4 && words[1] == "-c" {
-		if bytes, err := strconv.Atoi(words[2]); err == nil && bytes >= 0 && bytes < len(log) {
-			log = log[len(log)-bytes:]
+		if bytes, err := strconv.Atoi(words[2]); err == nil && bytes >= 0 {
+			log = log[len(log)-min(bytes, len(log)):]
 		}
 	}
 
