@@ -68,6 +68,8 @@ type StepLine struct {
 	Rewrote bool       `json:"rewrote,omitempty"`
 	Passed  *bool      `json:"passed,omitempty"`
 	Gate    []GateStep `json:"gate,omitempty"`
+	// NewTests holds the names of the new tests that the gate of a candidate head found. It is empty for any other step.
+	NewTests []string `json:"new_tests,omitempty"`
 	// OutputUnreadable is set when a recorded output of the step did not decode into the type the engine wrote. The other fields are then incomplete.
 	OutputUnreadable bool `json:"output_unreadable,omitempty"`
 }
@@ -345,9 +347,13 @@ func (l *StepLine) fromAgentRead(read agentRead) {
 	l.Spend = l.Plus(read.Spend)
 }
 
-// fromGate takes the result of a gate: pass or fail, the head and the status of each gate step.
+// fromGate takes the result of a gate: pass or fail, the head, the status of each gate step and the names of the new tests.
 func (l *StepLine) fromGate(result GateResult) {
 	l.Passed, l.Head, l.Gate = &result.Passed, cmp.Or(result.Head, l.Head), result.Steps
+
+	if result.Checks != nil {
+		l.NewTests = result.Checks.NewTests
+	}
 }
 
 // fromCommand takes the exit code of a command, and the stop of the item when the command ended it.

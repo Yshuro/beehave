@@ -195,7 +195,7 @@ func e2eHeadOf(ctx context.Context, dir string) (string, error) {
 // e2eGate passes every item.
 type e2eGate struct{ dir string }
 
-func (e2eGate) Submit(context.Context, string, string, string) (flow.GateJob, error) {
+func (e2eGate) Submit(context.Context, string, string, string, string) (flow.GateJob, error) {
 	return flow.GateJob{}, nil
 }
 

@@ -32,13 +32,13 @@ type rawProject struct {
 	Claims  string
 	Forge   text
 	// Blocks are the adapter blocks that the call holds, by block name.
-	Blocks      map[string]*model.Block
-	BaseBranch  string
-	Gate        string
-	GateSteps   gateList
-	BuildHost   hostNames
-	Host        *rawHost
-	TestReport  text
+	Blocks     map[string]*model.Block
+	BaseBranch string
+	Gate       string
+	GateSteps  gateList
+	BuildHost  hostNames
+	Host       *rawHost
+	TestReport text
 	// TestCommand is the command that runs the test suite alone, without the lint of the gate. The new-tests check runs it on the base.
 	TestCommand text
 	PinFile     text

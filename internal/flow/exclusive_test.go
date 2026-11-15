@@ -19,7 +19,7 @@ type slowGate struct {
 	release chan struct{}
 }
 
-func (slowGate) Submit(context.Context, string, string, string) (GateJob, error) {
+func (slowGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 
@@ -134,7 +134,7 @@ type cancelGate struct {
 	runs    *atomic.Int32
 }
 
-func (cancelGate) Submit(context.Context, string, string, string) (GateJob, error) {
+func (cancelGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 

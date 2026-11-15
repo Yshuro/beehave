@@ -445,32 +445,37 @@ func (g Gate) remote(ctx context.Context, request Request, head string) (Result,
 
 // wait waits for the host job and maps its state to a result for head. A candidate job that passed also gets its checks from its log.
 func wait(ctx context.Context, host Remote, project model.Project, id model.JobID, head string, candidate bool) (Result, error) {
-	cluster := project.BuildHost
-
 	state, err := host.Wait(ctx, id)
 	if err != nil {
 		// A wait that ends because the context ended leaves the job running on the host: stop it, so a stopped gate frees the host.
 		if ctx.Err() != nil {
-			err = errors.Join(err, stopJob(ctx, host, cluster, id))
+			err = errors.Join(err, stopJob(ctx, host, project.BuildHost, id))
 		}
 
-		return Result{}, fmt.Errorf("wait for the gate on %s: %w", cluster, err)
+		return Result{}, fmt.Errorf("wait for the gate on %s: %w", project.BuildHost, err)
 	}
 
 	result, err := verdict(ctx, project, head, state)
-
-	// The log of every failed job is evidence: it holds the void line of a pin mismatch, which no setting of the project predicts.
-	if err == nil && state == model.JobFailed {
-		result = explainFailure(ctx, host, project, id, result)
-	}
-
-	if err == nil && candidate && state == model.JobSucceeded {
-		result.Checks = readChecks(ctx, host, id)
+	if err == nil {
+		result = withLog(ctx, host, project, id, state, candidate, result)
 	}
 
 	result.Head = head
 
 	return result, err
+}
+
+// withLog adds what the log of the job says. The log of every failed job is evidence: it holds the void line of a pin mismatch, which no setting
+// of the project predicts. The log of a passing candidate job holds the lines of the new-tests check.
+func withLog(ctx context.Context, host Remote, project model.Project, id model.JobID, state model.JobState, candidate bool, result Result) Result {
+	switch {
+	case state == model.JobFailed:
+		return explainFailure(ctx, host, project, id, result)
+	case candidate && state == model.JobSucceeded:
+		result.Checks = readChecks(ctx, host, id)
+	}
+
+	return result
 }
 
 // readChecks reads the new-tests lines from the log of a passing candidate job. A log that cannot be read is a cut log: Complete is false, and the reason is the problem.
@@ -637,18 +642,7 @@ func plainWord(word string) bool {
 // with exit status 124 and the trap still writes the marker and deletes the clone.
 // A clone or checkout that fails, as it does for a commit that is not pushed, ends the command with a failure before the gate runs.
 func hostCommand(project model.Project, pins []Pin, cloneURL, head, clone, base string) string {
-	path := model.ShellQuote(clone)
-	words := []string{
-		"trap " + model.ShellQuote("echo "+cloneMarker+"; rm -rf "+path) + " EXIT",
-		"trap 'exit 143' HUP INT TERM",
-		"rm -rf " + path,
-		"mkdir " + path,
-		"cd " + path,
-		"git clone -- " + model.ShellQuote(cloneURL) + " tree",
-		"cd tree",
-		"git checkout --detach " + model.ShellQuote(head),
-		`[ "$(git rev-parse HEAD)" = ` + model.ShellQuote(head) + ` ]`,
-	}
+	words := cloneWords(cloneURL, head, clone)
 
 	// A candidate head runs its steps apart (see candidateWord). A sync head and a landing gate keep the gate command only.
 	if base != "" {
@@ -661,6 +655,23 @@ func hostCommand(project model.Project, pins []Pin, cloneURL, head, clone, base 
 	words = append(words, gateWords(project, pins)...)
 
 	return strings.Join(append(words, after...), " && ")
+}
+
+// cloneWords are the words that make the clone folder and check out head in it.
+func cloneWords(cloneURL, head, clone string) []string {
+	path := model.ShellQuote(clone)
+
+	return []string{
+		"trap " + model.ShellQuote("echo "+cloneMarker+"; rm -rf "+path) + " EXIT",
+		"trap 'exit 143' HUP INT TERM",
+		"rm -rf " + path,
+		"mkdir " + path,
+		"cd " + path,
+		"git clone -- " + model.ShellQuote(cloneURL) + " tree",
+		"cd tree",
+		"git checkout --detach " + model.ShellQuote(head),
+		`[ "$(git rev-parse HEAD)" = ` + model.ShellQuote(head) + ` ]`,
+	}
 }
 
 // gateWords are the words that run the gate command. A project with a gate string has one word. A gate list has one word for each step:

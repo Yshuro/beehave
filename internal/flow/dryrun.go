@@ -383,7 +383,7 @@ func newDryGate(head string, red bool) dryGate {
 
 func (dryGate) Key(context.Context, string, string, string) (GateKey, error) { return GateKey{}, nil }
 
-func (dryGate) Submit(context.Context, string, string, string) (GateJob, error) {
+func (dryGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 

@@ -32,7 +32,7 @@ func shellRepo(t *testing.T, baseTests, headTests string) (repo, head string) {
 
 	repo = t.TempDir()
 	git := func(args ...string) string {
-		out, err := exec.Command("git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...).CombinedOutput() //nolint:gosec // test helper
+		out, err := exec.CommandContext(t.Context(), "git", append([]string{"-C", repo, "-c", "user.name=t", "-c", "user.email=t@t"}, args...)...).CombinedOutput() //nolint:gosec // test helper
 		require.NoError(t, err, string(out))
 
 		return strings.TrimSpace(string(out))
@@ -60,15 +60,25 @@ func runCandidate(t *testing.T, root, repo, head string, scan int) string {
 
 	project := model.Project{Name: "demo", Gate: "sh mkreport.sh", TestReport: "reports/*.xml", TestCommand: "sh mkreport.sh"}
 	command := hostCommand(project, nil, repo, head, root+"/beehave-gate-demo-"+head, "main")
-	out, _ := exec.Command("sh", "-c", command).CombinedOutput() //nolint:gosec // the job text under test
+	job := exec.CommandContext(t.Context(), "sh", "-c", command) //nolint:gosec // the job text under test
+	job.Env = []string{"PATH=" + bin + string(os.PathListSeparator) + "/usr/bin:/bin", "HOME=" + t.TempDir()}
+
+	// The job exits with the exit of the head gate, and the tests read the log, so the exit status is not the result here.
+	out, err := job.CombinedOutput()
+	if err != nil {
+		var exit *exec.ExitError
+
+		require.ErrorAs(t, err, &exit, string(out))
+	}
 
 	return string(out)
 }
 
 func TestBeforeReview_TheJobComparesTheHeadReportWithTheBaseReportPerTestAndCachesTheBase(t *testing.T) {
+	t.Parallel()
+
 	repo, head := shellRepo(t, "pass a TestOld\n", "pass a TestOld\npass a TestNew\npass a TestNew/case\nskip a TestSkipped\n")
 	root := t.TempDir()
-	t.Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	out := runCandidate(t, root, repo, head, 0)
 	checks := ReadChecks(out)
@@ -88,9 +98,10 @@ func TestBeforeReview_TheJobComparesTheHeadReportWithTheBaseReportPerTestAndCach
 }
 
 func TestBeforeReview_AFailedSecretScanLeavesTheLaterStepsRunning(t *testing.T) {
+	t.Parallel()
+
 	repo, head := shellRepo(t, "pass a TestOld\n", "pass a TestOld\npass a TestNew\n")
 	root := t.TempDir()
-	t.Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	checks := ReadChecks(runCandidate(t, root, repo, head, 1))
 
@@ -101,9 +112,10 @@ func TestBeforeReview_AFailedSecretScanLeavesTheLaterStepsRunning(t *testing.T) 
 }
 
 func TestBeforeReview_AHeadWithNoNewTestGivesAZeroCount(t *testing.T) {
+	t.Parallel()
+
 	repo, head := shellRepo(t, "pass a TestOld\n", "pass a TestOld\n# no change\n")
 	root := t.TempDir()
-	t.Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	checks := ReadChecks(runCandidate(t, root, repo, head, 0))
 
@@ -112,6 +124,8 @@ func TestBeforeReview_AHeadWithNoNewTestGivesAZeroCount(t *testing.T) {
 }
 
 func TestBeforeReview_TheJobExitsWithTheExitOfTheHeadGate(t *testing.T) {
+	t.Parallel()
+
 	project := model.Project{Name: "demo", Gate: "false", TestReport: "r/*.xml"}
 	command := hostCommand(project, nil, "/nowhere", "abc", "/tmp/beehave-gate-demo-abc", "main")
 
@@ -121,6 +135,8 @@ func TestBeforeReview_TheJobExitsWithTheExitOfTheHeadGate(t *testing.T) {
 }
 
 func TestBeforeReview_ALogOverSixteenKiBBeforeTheEndMarkerStillReadsItsNameLines(t *testing.T) {
+	t.Parallel()
+
 	var log strings.Builder
 
 	log.WriteString(strings.Repeat("noise noise noise noise\n", 1000))
@@ -134,6 +150,8 @@ func TestBeforeReview_ALogOverSixteenKiBBeforeTheEndMarkerStillReadsItsNameLines
 }
 
 func TestBeforeReview_ALogWithNoEndMarkerIsACutLog(t *testing.T) {
+	t.Parallel()
+
 	checks := ReadChecks(newTestMarker + "pkg TestA\nnoise\n")
 
 	require.False(t, checks.Complete)
@@ -141,6 +159,8 @@ func TestBeforeReview_ALogWithNoEndMarkerIsACutLog(t *testing.T) {
 }
 
 func TestBeforeReview_ATestThatPrintsTheEndMarkerEarlierChangesNothing(t *testing.T) {
+	t.Parallel()
+
 	log := newTestsEnd + "new=99 failed=0\n" + "noise\n" + newTestMarker + "pkg TestA\n" + newTestsEnd + "new=1 failed=0\n"
 
 	checks := ReadChecks(log)
@@ -150,9 +170,10 @@ func TestBeforeReview_ATestThatPrintsTheEndMarkerEarlierChangesNothing(t *testin
 }
 
 func TestBeforeReview_TheEndMarkerCarriesTheFullCountPastTheNameLineCap(t *testing.T) {
-	repo, head := shellRepo(t, "pass a TestOld\n", "pass a TestOld\n"+strings.Repeat("pass a TestN\n", 0)+manyTests(75))
+	t.Parallel()
+
+	repo, head := shellRepo(t, "pass a TestOld\n", "pass a TestOld\n"+manyTests(75))
 	root := t.TempDir()
-	t.Setenv("PATH", filepath.Join(root, "bin")+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	checks := ReadChecks(runCandidate(t, root, repo, head, 0))
 

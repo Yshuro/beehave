@@ -29,7 +29,7 @@ func (g supersedeGate) Key(context.Context, string, string, string) (GateKey, er
 	return GateKey{Head: g.tip}, nil
 }
 
-func (supersedeGate) Submit(context.Context, string, string, string) (GateJob, error) {
+func (supersedeGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 

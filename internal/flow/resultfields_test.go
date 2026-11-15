@@ -45,7 +45,7 @@ func TestResultFields_TheOutputsOfEachBuiltinAreTheFieldsOfTheTable(t *testing.T
 		"board_sync":    keysOf(boardOutputs(0, "")),
 		"command":       keysOf(commandOutputs("", "", 0)),
 		"earlier_calls": keysOf(earlierOutputs(0)),
-		"gate":          keysOf(gateOutputs(true, "", "", "", nil, nil)),
+		"gate":          keysOf(gateOutputs(true, "", "", "", nil, nil, nil)),
 		"facts":         keysOf(factsOutputs(model.Project{})),
 		"item_comment":  keysOf(commentOutputs("")),
 		"item_create":   keysOf(createOutputs("", true)),

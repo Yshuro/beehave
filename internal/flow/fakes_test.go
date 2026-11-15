@@ -145,6 +145,8 @@ type fakeGate struct {
 	keyErr   error
 	// hosts are the build hosts that the calls of Key, Submit and Run were given, in order.
 	hosts []string
+	// bases are the base branches that Submit was given, in order.
+	bases []string
 }
 
 // gatedOn lists the build hosts that the calls of the gate were given, in order.
@@ -199,9 +201,10 @@ func (cancelGate) Key(context.Context, string, string, string) (GateKey, error) 
 }
 
 // Submit counts the host jobs that it started and gives each one an id.
-func (g *fakeGate) Submit(_ context.Context, _, _, host string) (GateJob, error) {
+func (g *fakeGate) Submit(_ context.Context, _, _, host, base string) (GateJob, error) {
 	g.mu.Lock()
 	g.hosts = append(g.hosts, host)
+	g.bases = append(g.bases, base)
 	g.mu.Unlock()
 
 	return GateJob{ID: fmt.Sprintf("job-%d", g.submits.Add(1)), Head: gatedHead}, nil

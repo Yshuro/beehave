@@ -51,7 +51,7 @@ func resultFields() map[string][]string {
 		batchMergeName:   {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", "findings", "note", "unproven"},
 		commandName:      {"stdout", "stderr", "rc"},
 		earlierCallsName: {"count"},
-		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required"},
+		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests"},
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},

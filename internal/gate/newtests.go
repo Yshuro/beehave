@@ -27,9 +27,9 @@ const (
 	newTestsError = "beehave-new-tests-error "
 
 	// The names of the steps that the job of a candidate runs apart. Each writes a stepMarker line.
-	stepHeadGate  = "head-gate"
-	stepSecrets   = "secret-scan"
-	stepBaseSuite = "base-suite"
+	stepHeadGate  = model.StepHeadGate
+	stepSecrets   = model.StepSecrets
+	stepBaseSuite = model.StepBaseSuite
 )
 
 // junitAwk reads the JUnit files that its arguments name and prints one line for each test case: the class, the name and the result, split by tabs.
@@ -137,6 +137,33 @@ func ReadChecks(log string) Checks {
 		checks.Secrets = &code
 	}
 
+	end := endMarker(lines, &checks)
+	if end < 0 {
+		return checks
+	}
+
+	checks.Complete = true
+	checks.New, checks.FailedCount = readCounts(strings.TrimPrefix(lines[end], newTestsEnd))
+	readRun(lines[:end], &checks)
+
+	return checks
+}
+
+// readRun reads the name lines and marker lines in the run of such lines that ends the lines.
+func readRun(lines []string, checks *Checks) {
+	for i := len(lines) - 1; i >= 0; i-- {
+		if name, found := strings.CutPrefix(lines[i], newTestMarker); found {
+			checks.NewTests = append([]string{name}, checks.NewTests...)
+		} else if reason, found := strings.CutPrefix(lines[i], failedTestMarker); found {
+			checks.Failed = append([]string{reason}, checks.Failed...)
+		} else {
+			return
+		}
+	}
+}
+
+// endMarker is the index of the last end marker line, or -1. It also records the last error line of the job in checks.
+func endMarker(lines []string, checks *Checks) int {
 	end := -1
 
 	for i, line := range lines {
@@ -149,24 +176,7 @@ func ReadChecks(log string) Checks {
 		}
 	}
 
-	if end < 0 {
-		return checks
-	}
-
-	checks.Complete = true
-	checks.New, checks.FailedCount = readCounts(strings.TrimPrefix(lines[end], newTestsEnd))
-
-	for i := end - 1; i >= 0; i-- {
-		if name, found := strings.CutPrefix(lines[i], newTestMarker); found {
-			checks.NewTests = append([]string{name}, checks.NewTests...)
-		} else if reason, found := strings.CutPrefix(lines[i], failedTestMarker); found {
-			checks.Failed = append([]string{reason}, checks.Failed...)
-		} else {
-			break
-		}
-	}
-
-	return checks
+	return end
 }
 
 // readCounts reads "new=<n> failed=<n>". A part that does not read gives 0.
