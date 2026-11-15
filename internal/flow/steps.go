@@ -283,11 +283,17 @@ func (l *StepLine) decode(record dbos.StepInfo) bool {
 func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {
 	case strings.HasPrefix(sub, "read"):
+		// The cost comes through the reader of the run cap, so a cost that cannot be read marks the line, and the sum of a tree, unknown.
+		l.Spend = l.Plus(recordedSpend(output))
+
 		return decodeThen(output, func(read recorded[agentRead]) { l.fromAgentRead(read.Outputs) })
 	case strings.HasPrefix(sub, "budget"):
 		return decodeThen(output, func(check capCheck) { l.CapStop = check.Stop })
 	case strings.HasPrefix(sub, "spent"):
-		return decodeThen(output, func(spent recorded[agentFields]) { l.Spend = l.Plus(spent.Outputs.Spend) })
+		spend := recordedSpend(output)
+		l.Spend = l.Plus(spend)
+
+		return !spend.Unreadable
 	}
 
 	return true
@@ -344,7 +350,6 @@ func (l *StepLine) fromPhase(phase PhaseOutput) {
 // fromAgentRead takes the head, the cap that stopped the agent and the verdict from the read of its outputs.
 func (l *StepLine) fromAgentRead(read agentRead) {
 	l.Head, l.Stop, l.Verdict, l.Rewrote = read.Head, read.Stop, read.Verdict, read.Rewrote
-	l.Spend = l.Plus(read.Spend)
 }
 
 // fromGate takes the result of a gate: pass or fail, the head, the status of each gate step and the names of the new tests.

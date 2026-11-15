@@ -107,8 +107,14 @@ func TestBudget_AChildInheritsTheRootCap(t *testing.T) {
 
 // deepTree runs a tree of three item runs: item 1 is the root, item 2 its child and item 3 the grandchild. Each run records the cost of 2 dollars the way an
 // agent call does, and starts the run below it. The engine starts a child by spawn, and a run that spawn started cannot spawn, so only a workflow of the
-// test builds the third level. It returns the engine, whose store holds the finished tree.
+// test builds the third level. The outputs that a run records come from outputsOf, by the item. It returns the engine, whose store holds the finished tree.
 func deepTree(t *testing.T, rig *agentRig) *Engine {
+	t.Helper()
+
+	return deepTreeOf(t, rig, func(string) map[string]any { return spendOutputs(agent.Spend{Cost: 2}) })
+}
+
+func deepTreeOf(t *testing.T, rig *agentRig, outputsOf func(item string) map[string]any) *Engine {
 	t.Helper()
 
 	opts := rig.h.opts
@@ -127,8 +133,8 @@ func deepTree(t *testing.T, rig *agentRig) *Engine {
 	var tier func(ctx dbos.Context, in ItemInput) (string, error)
 
 	tier = func(ctx dbos.Context, in ItemInput) (string, error) {
-		_, err := runStep(engine, ctx, "agent#1/spent0", func(context.Context) (recorded[agentFields], error) {
-			return recorded[agentFields]{Outputs: agentFields{Spend: agent.Spend{Cost: 2}}}, nil
+		_, err := runStep(engine, ctx, "agent#1/spent0", func(context.Context) (stepResult, error) {
+			return stepResult{Outputs: outputsOf(in.Item)}, nil
 		})
 
 		next, more := below[in.Item]
@@ -182,6 +188,58 @@ func TestBudget_TheTreeSumReachesAGrandchildAndTheCapStopsTheTree(t *testing.T) 
 	child, err := runAndBelowSpend(engine.ctx, runID("2", 1))
 	require.NoError(t, err)
 	assert.InDelta(t, 4.0, child.Cost, 0, "a run sums itself and every run below it")
+}
+
+// unreadableChild is a tree in which the child records a cost that is a string, as a damaged record does.
+func unreadableChild(t *testing.T) (*Engine, agent.Spend) {
+	t.Helper()
+
+	rig := newAgentRig(t)
+	rig.h.opts.MaxTreeBudget = 5
+	engine := deepTreeOf(t, rig, func(item string) map[string]any {
+		if item == "2" {
+			return map[string]any{costField: "2"}
+		}
+
+		return spendOutputs(agent.Spend{Cost: 2})
+	})
+
+	spent, err := runAndBelowSpend(engine.ctx, runID("1", 1))
+	require.NoError(t, err)
+
+	return engine, spent
+}
+
+func TestBudget_ATreeWhoseChildRecordedAnUnreadableCostStopsTheNextStep(t *testing.T) {
+	t.Parallel()
+
+	engine, spent := unreadableChild(t)
+
+	assert.True(t, spent.Unknown, "the cost of the child is not known")
+
+	stop, err := overCap("q", engine.treeCap(), spent)
+
+	assert.Nil(t, stop)
+	require.Error(t, err, "the next step does not start under a cap that cannot be checked")
+	assert.Contains(t, err.Error(), "agents.max_tree_budget_usd")
+}
+
+func TestBudget_TheStopForAnUnreadableRecordNamesTheRecordNotThePriceOfTheModel(t *testing.T) {
+	t.Parallel()
+
+	engine, spent := unreadableChild(t)
+
+	_, err := overCap("q", engine.treeCap(), spent)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "recorded cost")
+	assert.Contains(t, err.Error(), "cannot be read")
+	assert.NotContains(t, err.Error(), "no price")
+
+	_, err = overCap("q", engine.treeCap(), agent.Spend{Unknown: true})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no price", "an unpriced model keeps its own cause")
 }
 
 // capRestart runs three steps of 3 dollars under a cap that stops the third, reads the stop on the run and on the line of the step, raises the cap and

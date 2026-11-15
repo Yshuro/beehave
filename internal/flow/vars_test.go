@@ -161,7 +161,7 @@ func TestSpendOf_ACostThatIsThereButUnreadableMarksTheSpendUnknown(t *testing.T)
 	} {
 		got := spendOf(map[string]any{costField: raw, estimatedField: true})
 
-		assert.Equal(t, agent.Spend{Estimated: true, Unknown: true}, got, name)
+		assert.Equal(t, agent.Spend{Estimated: true, Unknown: true, Unreadable: true}, got, name)
 	}
 }
 

@@ -431,6 +431,23 @@ func withChild(record dbos.StepInfo) dbos.StepInfo {
 	return record
 }
 
+func TestStepLine_ACostRecordThatIsNotAStepRecordMarksTheSpendUnreadable(t *testing.T) {
+	t.Parallel()
+
+	for name, record := range map[string]dbos.StepInfo{
+		"spent output not text":  {StepName: "agent:a#1/spent0", Output: 42},
+		"spent not json":         {StepName: "agent:a#1/spent0", Output: `not json`},
+		"read output not text":   {StepName: "agent:a#1/read0", Output: 42},
+		"read cost is a string":  {StepName: "agent:a#1/read0", Output: `{"outputs":{"cost_usd":"2"}}`},
+		"spent cost is a string": {StepName: "agent:a#1/spent0", Output: `{"outputs":{"cost_usd":"2"}}`},
+	} {
+		line := callLine([]dbos.StepInfo{record}, record.StepName)
+
+		assert.Equal(t, agent.Spend{Unknown: true, Unreadable: true}, line.Spend, name)
+		assert.True(t, line.OutputUnreadable, name)
+	}
+}
+
 func TestStepLine_AnOutputThatDoesNotDecodeKeepsTheStepAndSaysTheOutputCannotBeRead(t *testing.T) {
 	t.Parallel()
 
