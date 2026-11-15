@@ -151,6 +151,47 @@ func TestStepResult_ARecordedCostReadsTheSameOnAReplay(t *testing.T) {
 	assert.Equal(t, agent.Spend{Cost: 1.25, Estimated: true}, spendOf(replayed.Outputs))
 }
 
+func TestSpendOf_ACostThatIsThereButUnreadableMarksTheSpendUnknown(t *testing.T) {
+	t.Parallel()
+
+	for name, raw := range map[string]any{
+		"a number beyond the float range": json.Number("1e400"),
+		"a string":                        "1.25",
+		"a null":                          nil,
+	} {
+		got := spendOf(map[string]any{costField: raw, estimatedField: true})
+
+		assert.Equal(t, agent.Spend{Estimated: true, Unknown: true}, got, name)
+	}
+}
+
+func TestSpendOf_ACostThatIsMissingReadsAsNoCostAndNoMark(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, agent.Spend{}, spendOf(map[string]any{}))
+	assert.Equal(t, agent.Spend{}, spendOf(nil))
+	assert.Equal(t, agent.Spend{}, spendOf(spendOutputs(agent.Spend{})))
+}
+
+func TestSpendOf_AReadableCostKeepsItsMarksWhateverItsType(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, agent.Spend{Cost: 2.5}, spendOf(map[string]any{costField: 2.5}))
+	assert.Equal(t, agent.Spend{Cost: 2.5, Unknown: true}, spendOf(map[string]any{costField: json.Number("2.5"), unknownField: true}))
+}
+
+func TestStepResult_ARecordedStepThatIsNotValidJSONReturnsTheDecodeError(t *testing.T) {
+	t.Parallel()
+
+	var replayed stepResult
+
+	err := replayed.UnmarshalJSON([]byte(`{"outputs": {"cost_usd": `))
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "decode a recorded step:")
+	assert.Contains(t, err.Error(), "unexpected EOF")
+}
+
 func TestDryRun_TheFactsHoldTheVarsOfTheProjectAndNothingElse(t *testing.T) {
 	t.Parallel()
 
