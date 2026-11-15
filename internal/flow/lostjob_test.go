@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -369,6 +370,60 @@ func TestLostJob_AProofReadThatFailsFailsTheGate(t *testing.T) {
 
 	require.ErrorContains(t, err, "read the proof that the lost job job-1 on host gpu-b can no longer run: the job id is not a unit of this host")
 	assert.Equal(t, 1, hosts.proofReads(), "a read that fails ends the wait")
+}
+
+// lastProofWarning is the start of the warning that the last read of a canceled wait logs when it gives no proof.
+const lastProofWarning = "the gate stopped while its lost job may still run on the host"
+
+// lostStoppedLog runs the end of a canceled wait whose last read of the proof is answered by hosts, and returns what the engine logged and the error it gave back.
+func lostStoppedLog(t *testing.T, hosts *upHosts) (string, error) {
+	t.Helper()
+
+	engine, err := NewEngine(t.Context(), newHarness(t).opts, Deps{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	var logged bytes.Buffer
+
+	engine.logger = newLogger(&logged)
+	engine.deps.Hosts = hosts
+
+	canceled, cancel := dbos.WithCancel(engine.ctx)
+	cancel()
+
+	stopped := errors.New("the run was canceled")
+
+	err = engine.lostStopped(canceled, ExclusiveInput{Project: testProject, Item: testItem}, LostJob{Job: "job-1", Host: "gpu-b"}, stopped)
+
+	return logged.String(), err
+}
+
+func TestLostJob_ACanceledWaitLogsTheWarningOnlyWhenItsLastReadGivesNoProof(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		hosts    *upHosts
+		warnings int
+		contains string
+	}{
+		{"logs_nothing_when_the_read_has_a_proof", &upHosts{proofs: []model.LostProof{{Kind: model.LostStopped}}}, 0, ""},
+		{"logs_once_when_the_read_has_no_proof_and_no_error", &upHosts{proofs: []model.LostProof{{Note: "the link is down"}}}, 1, "the link is down"},
+		{"logs_once_with_the_error_when_the_read_fails", &upHosts{proofs: []model.LostProof{{Kind: model.LostStopped}}, proofErr: errors.New("the job id is not a unit of this host")}, 1, "the job id is not a unit of this host"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			logged, err := lostStoppedLog(t, tc.hosts)
+
+			require.EqualError(t, err, "the run was canceled", "the end of the wait gives back the error that stopped it")
+			assert.Equal(t, 1, tc.hosts.proofReads(), "the canceled wait reads the proof once")
+			assert.Equal(t, tc.warnings, strings.Count(logged, lastProofWarning))
+			assert.Contains(t, logged, tc.contains)
+		})
+	}
 }
 
 func TestLostJob_ABuildWithNoHostReaderWaitsToTheLimitWithNoProof(t *testing.T) {
