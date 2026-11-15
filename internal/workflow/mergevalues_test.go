@@ -133,16 +133,32 @@ func TestPullRequests_ApprovedIsABoolThatDefaultsToFalse(t *testing.T) {
 		return starlark.NewList([]starlark.Value{pr(fields)})
 	}
 
-	got, err := workflow.PullRequests(member(nil))
-	require.NoError(t, err)
-	assert.Equal(t, []workflow.PullRequest{{Item: "i", Head: "h", Approved: false}}, got, "a member that leaves out approved is not approved")
+	cases := []struct {
+		name         string
+		extra        starlark.StringDict
+		wantApproved bool
+		wantErr      string
+	}{
+		{"absent is not approved", nil, false, ""},
+		{"a bool true is approved", starlark.StringDict{"approved": starlark.True}, true, ""},
+		{"a non-bool is refused", starlark.StringDict{"approved": starlark.String("yes")}, false, "`approved` of a member of `prs` must be a bool, not string. Use approved = True or approved = False"},
+	}
 
-	got, err = workflow.PullRequests(member(starlark.StringDict{"approved": starlark.True}))
-	require.NoError(t, err)
-	assert.Equal(t, []workflow.PullRequest{{Item: "i", Head: "h", Approved: true}}, got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, err = workflow.PullRequests(member(starlark.StringDict{"approved": starlark.String("yes")}))
-	require.ErrorContains(t, err, "`approved` of a member of `prs` must be a bool, not string. Use approved = True or approved = False")
+			got, err := workflow.PullRequests(member(tc.extra))
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, []workflow.PullRequest{{Item: "i", Head: "h", Approved: tc.wantApproved}}, got)
+		})
+	}
 }
 
 func TestOwnerIdentity_RefusesWhatTheRunRefuses(t *testing.T) {
