@@ -61,6 +61,8 @@ Case does not count. A third party's pull request with one commit of ours is ref
 
 Only `Approved` lifts this rule, and it lifts only this rule. `AllowOrphans`, `AllowNoChecks` and `AllowReady` do not reach it. `auto_merge` covers only the pull request of a contributor.
 
+The `merge` builtin sets `Approved` from its `approved` keyword. `batch_merge` sets it for each member from the `approved` field of that member, and a member that leaves it out is not approved. The call has no `approved`, so one approved member never approves another.
+
 A missing or empty owner login or address is a refusal, because the rule cannot tell whose work it is.
 
 The scopes of the token and every later read run after guard 0, so a refused pull request has had no write.

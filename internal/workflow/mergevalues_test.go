@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -120,6 +121,28 @@ func TestPullRequests_RefusesWhatTheRunRefuses(t *testing.T) {
 	got, err := workflow.PullRequests(starlark.NewList([]starlark.Value{pr(starlark.StringDict{"item": text("i"), "head": text("h")})}))
 	require.NoError(t, err)
 	assert.Equal(t, []workflow.PullRequest{{Item: "i", Head: "h"}}, got)
+}
+
+func TestPullRequests_ApprovedIsABoolThatDefaultsToFalse(t *testing.T) {
+	t.Parallel()
+
+	member := func(extra starlark.StringDict) starlark.Value {
+		fields := starlark.StringDict{"item": starlark.String("i"), "head": starlark.String("h")}
+		maps.Copy(fields, extra)
+
+		return starlark.NewList([]starlark.Value{pr(fields)})
+	}
+
+	got, err := workflow.PullRequests(member(nil))
+	require.NoError(t, err)
+	assert.Equal(t, []workflow.PullRequest{{Item: "i", Head: "h", Approved: false}}, got, "a member that leaves out approved is not approved")
+
+	got, err = workflow.PullRequests(member(starlark.StringDict{"approved": starlark.True}))
+	require.NoError(t, err)
+	assert.Equal(t, []workflow.PullRequest{{Item: "i", Head: "h", Approved: true}}, got)
+
+	_, err = workflow.PullRequests(member(starlark.StringDict{"approved": starlark.String("yes")}))
+	require.ErrorContains(t, err, "`approved` of a member of `prs` must be a bool, not string. Use approved = True or approved = False")
 }
 
 func TestOwnerIdentity_RefusesWhatTheRunRefuses(t *testing.T) {

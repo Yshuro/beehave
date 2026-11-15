@@ -236,7 +236,7 @@ func (s *script) batchScope(name string) error {
 	return nil
 }
 
-// members reads the `prs` argument: a list of structs with the text fields `item` and `head`.
+// members reads the `prs` argument: a list of structs with the text fields `item` and `head`, and the optional bool field `approved`.
 func members(v starlark.Value) ([]batch.Member, error) {
 	prs, err := workflow.PullRequests(v)
 	if err != nil {
@@ -245,7 +245,7 @@ func members(v starlark.Value) ([]batch.Member, error) {
 
 	list := make([]batch.Member, len(prs))
 	for i, pr := range prs {
-		list[i] = batch.Member{Item: pr.Item, Head: pr.Head}
+		list[i] = batch.Member{Item: pr.Item, Head: pr.Head, Approved: pr.Approved}
 	}
 
 	return list, nil
@@ -411,8 +411,9 @@ func (b *batchBase) Merge(ctx context.Context, m batch.Member, prefixTree string
 		return batch.MergeOutcome{Status: batch.StatusRefused, Reason: read.Refused}, nil
 	}
 
+	// The approval is a fact about this member only, so the call settings never carry one.
 	settings := b.call.settings
-	settings.GatedTree, settings.Intent = prefixTree, &read.Intent
+	settings.GatedTree, settings.Intent, settings.Approved = prefixTree, &read.Intent, m.Approved
 
 	return b.mergeReads(ctx, m, settings)
 }

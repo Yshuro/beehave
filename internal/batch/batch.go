@@ -24,9 +24,11 @@ const (
 )
 
 // Member is one pull request of a batch. Head is the full commit id that a reviewer gated.
+// Approved is true when another step accepted that head: only then does work of an own identity merge.
 type Member struct {
-	Item string `json:"item"`
-	Head string `json:"head"`
+	Item     string `json:"item"`
+	Head     string `json:"head"`
+	Approved bool   `json:"approved"`
 }
 
 // Tip is the base tip: a commit and its tree.
