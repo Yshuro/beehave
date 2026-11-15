@@ -180,6 +180,49 @@ func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 	assert.Contains(t, words, "the store failed")
 }
 
+func TestCapStop_ACapCheckWhoseTreeReadFailsReturnsTheErrorAndNoStop(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	opts := rig.h.opts
+	state, err := openStore(opts)
+	require.NoError(t, err)
+
+	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
+	require.NoError(t, err)
+
+	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
+	require.NoError(t, engine.open(t.Context(), opts, state))
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	// The run is a real workflow, so its own id reads fine. The tree cap is set and the first read of the climb fails.
+	check := func(ctx dbos.Context, in ItemInput) (string, error) {
+		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}, maxTreeBudget: 5}
+		s := &script{e: failing, ctx: ctx, in: in}
+
+		got, err := s.checkCaps("q")
+		if err == nil {
+			return "", errors.New("the check did not fail")
+		}
+
+		if got.Stop != nil {
+			return "", errors.New("the check returned a stop with its error")
+		}
+
+		return err.Error(), nil
+	}
+
+	dbos.RegisterWorkflow(engine.ctx, check, dbos.WithWorkflowName(itemName))
+	require.NoError(t, dbos.Launch(engine.ctx))
+
+	handle, err := dbos.RunWorkflow(engine.ctx, check, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(runID("1", 1)))
+	require.NoError(t, err)
+
+	words, err := handle.GetResult()
+	require.NoError(t, err)
+	assert.Contains(t, words, "the store failed")
+}
+
 func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing.T) {
 	t.Parallel()
 
