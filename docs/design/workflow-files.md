@@ -316,7 +316,7 @@ The engine reads only the `mutation-pr:` lines of the job log, and it finds each
 
 Each survivor is one finding: `<file>:<line> a mutant survived: <mutator>. The tests do not fail when this change is made`. When `count` is above `printed`, the findings hold the printed mutants and `survived` holds the total. A finding is a result, not an error: `ok` is false and the workflow decides what to do.
 
-The job runs on the `mutation` queue, apart from the gate queue, with `host.mutation_slots` jobs for each host.
+The job runs on the `mutation` queue, apart from the gate queue, with one queue for each host. `host.mutation_slots` caps the queue. If two projects share a host, the host takes the larger cap.
 
 ### `before_review`
 

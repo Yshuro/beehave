@@ -86,7 +86,7 @@ The loader refuses a project whose `rounds` block has the lane kind `impl` and t
 
 The command decides "not applicable" and "no candidate" itself. It prints the result lines of `scripts/mutation-pr.sh`, and the `mutation` builtin reads only those lines (see `workflow-files.md`).
 
-The `host` block takes `mutation_slots`, a whole number of 1 or more. It is the number of mutation jobs that run at once on each build host. The default is 1. Mutation jobs run on their own queue, so they never wait for a gate. The queue has one partition for each host slot: a job waits for the job on its own slot even when another slot is idle. The engine does not check that `mutation_slots` and `max_concurrent` fit the CPU of the host.
+The `host` block takes `mutation_slots`, a whole number of 1 or more. It is the number of mutation jobs that run at once on each build host. The default is 1. Mutation jobs run on their own queue, so they never wait for a gate. Each build host has one mutation queue, and `mutation_slots` caps it. If two projects share a host, the host takes the larger cap. A project that names a host that the config does not declare fails. The engine does not check that `mutation_slots` and `max_concurrent` fit the CPU of the host.
 
 #### `schedules`
 

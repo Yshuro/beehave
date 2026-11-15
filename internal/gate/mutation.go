@@ -37,8 +37,8 @@ type MutationLog struct {
 	NotApplicable, NoCandidate       string
 	HasNotApplicable, HasNoCandidate bool
 	// HasCounts is true when the log holds the counts line.
-	HasCounts                      bool
-	Applied, Killed, Lived, TimedO int
+	HasCounts      bool
+	Applied, Lived int
 	// Survivors are the lived lines in log order.
 	Survivors []Survivor
 	// HasEnd is true when the log holds the end marker. Count and Printed are its numbers.
@@ -83,7 +83,7 @@ func (l *MutationLog) take(line string) {
 	}
 }
 
-// takeCounts reads "applied=N killed=K lived=L timed_out=T". A part that does not read gives 0.
+// takeCounts reads the applied and lived parts of "applied=N killed=K lived=L timed_out=T". A part that does not read gives 0.
 func (l *MutationLog) takeCounts(line string) {
 	l.HasCounts = true
 
@@ -94,12 +94,8 @@ func (l *MutationLog) takeCounts(line string) {
 		switch key {
 		case "applied":
 			l.Applied = number
-		case "killed":
-			l.Killed = number
 		case "lived":
 			l.Lived = number
-		case "timed_out":
-			l.TimedO = number
 		}
 	}
 }

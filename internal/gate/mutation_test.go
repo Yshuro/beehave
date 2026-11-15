@@ -28,9 +28,7 @@ func TestReadMutation_ACompleteLogGivesTheCountsTheSurvivorsAndTheEnd(t *testing
 	assert.True(t, read.HasResult())
 	assert.True(t, read.HasCounts)
 	assert.Equal(t, 5, read.Applied)
-	assert.Equal(t, 3, read.Killed)
 	assert.Equal(t, 2, read.Lived)
-	assert.Zero(t, read.TimedO)
 	assert.Equal(t, []gate.Survivor{{File: "internal/a/b.go", Line: 12, Mutator: "ARITHMETIC_BASE"}, {File: "c.go", Line: 7, Mutator: "CONDITIONALS_NEGATION"}}, read.Survivors)
 	assert.True(t, read.HasEnd)
 	assert.Equal(t, 2, read.Count)
@@ -103,9 +101,7 @@ func TestReadMutation_ACountsLinePartThatDoesNotReadGivesZero(t *testing.T) {
 
 	assert.True(t, read.HasCounts)
 	assert.Zero(t, read.Applied)
-	assert.Equal(t, 2, read.Killed)
 	assert.Equal(t, 1, read.Lived)
-	assert.Equal(t, 1, read.TimedO)
 }
 
 func mutationProject(buildHost string) model.Project {
