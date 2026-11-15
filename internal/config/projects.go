@@ -39,6 +39,8 @@ type rawProject struct {
 	BuildHost   hostNames
 	Host        *rawHost
 	TestReport  text
+	// TestCommand is the command that runs the test suite alone, without the lint of the gate. The new-tests check runs it on the base.
+	TestCommand text
 	PinFile     text
 	Changelog   text
 	Visibility  text
@@ -82,7 +84,7 @@ func loadProject(path string, registry Adapters) (Project, error) {
 
 // projectSpec is the schema of the project call. The arguments after the fixed ones are the adapter blocks that the registry declares, each optional and named as its block.
 func projectSpec(declared []Block) spec {
-	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "board?", "rounds?", "schedules?"}
+	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "board?", "rounds?", "schedules?"}
 
 	for _, block := range declared {
 		args = append(args, block.Name+"?")
@@ -147,7 +149,7 @@ func newProject(at syntax.Position, kwargs []starlark.Tuple, declared []Block) (
 
 	host, board, rounds, held := nested[rawHost]{want: hostSpecName}, nested[rawBoard]{want: boardSpec().name}, nested[rawRounds]{want: roundsSpec().name}, holders(declared)
 	dests := []any{
-		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer,
+		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.TestCommand, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer,
 		&raw.People, &raw.Epics, &raw.GateFiles, &raw.Conventions, &raw.BriefRules, &raw.StackedRules, &raw.Limits, &raw.Traps, &raw.TokenRules, &raw.Changelog, &board, &rounds, &raw.Schedules,
 	}
 
@@ -177,7 +179,7 @@ func profileOf(path string, raw rawProject, registry Adapters) (model.Project, e
 
 	return withFacts(path, model.Project{
 		Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Repo: raw.Repo.Value, Source: source, Tracker: names.tracker, Claims: names.claims,
-		Forge: names.forge, Blocks: blocksOf(raw, names), Tools: toolsOf(names), BaseBranch: raw.BaseBranch, Gate: raw.Gate, GateSteps: slices.Clone(raw.GateSteps), BuildHost: host, BuildHosts: declaredHosts(raw.BuildHost), Host: hostTable, TestReport: raw.TestReport.Value,
+		Forge: names.forge, Blocks: blocksOf(raw, names), Tools: toolsOf(names), BaseBranch: raw.BaseBranch, Gate: raw.Gate, GateSteps: slices.Clone(raw.GateSteps), BuildHost: host, BuildHosts: declaredHosts(raw.BuildHost), Host: hostTable, TestReport: raw.TestReport.Value, TestCommand: raw.TestCommand.Value,
 		PinFile: raw.PinFile.Value, Visibility: visibility, Sandbox: sandbox, SandboxRead: slices.Clone(raw.SandboxRead), SandboxDeny: slices.Clone(raw.SandboxDeny), GateNetwork: slices.Clone(raw.GateNetwork), GateAllowWrite: slices.Clone(raw.GateAllowWrite), SandboxEnforcer: raw.SandboxEnforcer.Value,
 	}, raw)
 }
@@ -202,7 +204,7 @@ func checkKeys(raw rawProject, names adapters) (string, string, error) {
 		return host, source, noRepositoryKeys(raw)
 	}
 
-	return host, source, errors.Join(requireText(raw.At, "base_branch", raw.BaseBranch), gateKeys(raw), testReport(raw), pinFile(raw))
+	return host, source, errors.Join(requireText(raw.At, "base_branch", raw.BaseBranch), gateKeys(raw), testReport(raw), testCommand(raw), pinFile(raw))
 }
 
 // noRepositoryKeys checks a project with no source and no forge. Its items run in plain folders, so base_branch, gate and test_report are optional unless a gate is set.
@@ -319,6 +321,15 @@ func testReport(raw rawProject) error {
 	}
 
 	return requireText(raw.At, "test_report", raw.TestReport.Value)
+}
+
+// testCommand refuses a test_command that is set and empty. An unset test_command is allowed: the project then has no base suite run.
+func testCommand(raw rawProject) error {
+	if !raw.TestCommand.Set {
+		return nil
+	}
+
+	return requireText(raw.At, "test_command", raw.TestCommand.Value)
 }
 
 // hostNames is the build_host argument: one name, or a list of names that a run may choose. The first name is the default of a run.

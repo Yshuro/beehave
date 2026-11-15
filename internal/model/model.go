@@ -36,7 +36,9 @@ type Project struct {
 	// GateSteps is the ordered gate list: one named command for each step. A project sets Gate or GateSteps, never both.
 	GateSteps  []GateSpec
 	TestReport string
-	PinFile    string
+	// TestCommand is the command that runs the test suite alone. The new-tests check runs it on the base commit. Empty means the project sets none.
+	TestCommand string
+	PinFile     string
 	// Changelog is the path of the changelog file of the repository, or empty when the project declares none. It is a fact for the workflow, which refuses a merge that leaves it unchanged.
 	Changelog string
 	BuildHost string
