@@ -318,9 +318,9 @@ A finding is a result, not an error. `ok` is true when `findings` is empty. The 
 
 ### `queue`
 
-`queue(name, hold, label, items)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows` and `free`.
+`queue(name, hold, label)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows` and `free`.
 
-`label` keeps the items that carry that tracker label. `items` is a list of item ids and keeps only those items. A call that sets both fails. A call that sets neither keeps every open item. The engine reads no project setting for the choice: the workflow passes it.
+`label` keeps the items that carry that tracker label. A call with no `label` keeps every open item. The engine reads no project setting for the choice: the workflow passes it. The rows hold no labels, so only the engine can choose by label. A workflow that needs a list of item ids keeps the rows whose `item` is in the list.
 
 Each row has `item`, `state`, `severity` and `pr`. The state:
 

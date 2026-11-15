@@ -30,15 +30,14 @@ func TestQueue_ALabelArgumentTakesOnlyTheReadyRowsWithTheLabel(t *testing.T) {
 	assert.Equal(t, []string{"21:ready:P1:0", "free=2"}, seenBy(t, h), "a ready row without the label stays out of the queue")
 }
 
-func TestQueue_AnItemsArgumentTakesOnlyTheListedRowsAndLeavesAReadyRowOutsideTheListUntaken(t *testing.T) {
+func TestQueue_AnItemsArgumentIsNoArgumentOfTheCall(t *testing.T) {
 	t.Parallel()
 
 	h, _ := queueHarness(t, selectorItems())
 
-	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, queueFlow(`name = "q", items = ["23"]`)))
+	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, queueFlow(`**{"name": "q", "items": ["23"]}`)))
 
-	require.NoError(t, err)
-	assert.Equal(t, []string{"23:ready:P1:0", "free=2"}, seenBy(t, h))
+	require.ErrorContains(t, err, "items", "a workflow picks its items from the rows, so the call takes no list of items")
 }
 
 func TestQueue_ACallWithNoSelectorQueuesEveryRow(t *testing.T) {
@@ -50,16 +49,6 @@ func TestQueue_ACallWithNoSelectorQueuesEveryRow(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"21:ready:P1:0", "22:ready:P1:0", "23:ready:P1:0", "free=2"}, seenBy(t, h))
-}
-
-func TestQueue_ALabelAndAnItemListTogetherAreRefused(t *testing.T) {
-	t.Parallel()
-
-	h, _ := queueHarness(t, selectorItems())
-
-	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, queueFlow(`name = "q", label = "beehave-round", items = ["23"]`)))
-
-	require.ErrorContains(t, err, "label or items, not both")
 }
 
 func TestFacts_NoFactIsNamedForARound(t *testing.T) {

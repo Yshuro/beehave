@@ -430,13 +430,17 @@ def sweep(item):
     The runs are the pipeline of one item each. The rank rule is above.
     A project whose vars hold a `round` reads the settings of the round first and queues only the items that its label or its item list selects. Another project queues every item."""
     # The run of the sweep claims the item id it is given, as every run does. That is wanted: the claim lets only one pass run for that id, so two passes cannot start the same items twice. Give the sweep an id that is no real item.
-    selected = {}
+    # The label is the one selector the engine applies, because the rows hold no labels. The item list is applied here, to the rows.
+    label = ""
+    listed = []
     round = settings(facts())
     if round != None:
-        selected = {"label": round["label"]} if round["label"] != "" else {"items": round["items"]}
+        label = round["label"]
+        listed = round["items"]
 
-    q = queue(name = "sweep-queue", hold = "hold", **selected)
-    take = [r.item for r in rank(q.rows, env("OWNER_LOGIN"))][:q.free]
+    q = queue(name = "sweep-queue", hold = "hold", label = label)
+    rows = [r for r in q.rows if len(listed) == 0 or r.item in listed]
+    take = [r.item for r in rank(rows, env("OWNER_LOGIN"))][:q.free]
     if len(take) == 0:
         return
 
