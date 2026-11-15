@@ -152,7 +152,7 @@ func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
 	require.NoError(t, err)
 
-	engine := newEngine(opts, rig.h.deps(), state, held)
+	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
 	require.NoError(t, engine.open(t.Context(), opts, state))
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 

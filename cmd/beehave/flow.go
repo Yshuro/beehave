@@ -17,6 +17,7 @@ import (
 	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/sandbox/enforcers"
+	"github.com/tobocop2/beehave/internal/step"
 )
 
 var errUnknownProject = errors.New("the config has no project of this name")
@@ -107,7 +108,19 @@ func stateFolder(dir string) func() (string, error) {
 
 // newEngine builds the engine of the run command.
 func newEngine(ctx context.Context, cfg config.Config, opts flow.Options) (*flow.Engine, error) {
-	return flow.NewEngine(ctx, opts, newDeps(cfg, opts))
+	return flow.NewEngine(ctx, withModules(opts), newDeps(cfg, opts))
+}
+
+// stepModules lists the step modules that the engine runs.
+func stepModules() []step.Module {
+	return []step.Module{flow.StepModule()}
+}
+
+// withModules gives the options the step modules of the binary.
+func withModules(opts flow.Options) flow.Options {
+	opts.Modules = stepModules()
+
+	return opts
 }
 
 // newDeps builds what the engine of the run command needs. The pool pick reads the usage through the agent entries.
@@ -122,7 +135,7 @@ func newEngineReading(ctx context.Context, cfg config.Config, opts flow.Options,
 
 // newEngineOn builds the engine over a table of adapters. A test passes a table with one adapter replaced.
 func newEngineOn(ctx context.Context, cfg config.Config, opts flow.Options, read pool.Reader, table adapters) (*flow.Engine, error) {
-	return flow.NewEngine(ctx, opts, depsOn(cfg, opts, loginsReading(cfg, read), table))
+	return flow.NewEngine(ctx, withModules(opts), depsOn(cfg, opts, loginsReading(cfg, read), table))
 }
 
 // depsOn builds the deps of the engine over a pool pick and a table of adapters.

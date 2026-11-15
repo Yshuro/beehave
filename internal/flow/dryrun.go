@@ -22,6 +22,7 @@ import (
 	"github.com/tobocop2/beehave/internal/preflight"
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/review"
+	"github.com/tobocop2/beehave/internal/step"
 	trackerstore "github.com/tobocop2/beehave/internal/store"
 	"github.com/tobocop2/beehave/internal/workflow/workflowtest"
 )
@@ -101,7 +102,7 @@ func DryRun(ctx context.Context, file, item string, env map[string]string, out i
 
 	defer func() { err = errors.Join(err, os.RemoveAll(root)) }()
 
-	opts := Options{StateDir: filepath.Join(root, "state"), Version: "dry-run", MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: env}
+	opts := Options{StateDir: filepath.Join(root, "state"), Version: "dry-run", MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: env, Modules: []step.Module{StepModule()}}
 
 	deps, err := dryPrepare(ctx, root, file, item, chosen)
 	if err != nil {

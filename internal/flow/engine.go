@@ -23,6 +23,7 @@ import (
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/step"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -79,6 +80,9 @@ type Options struct {
 	Progress io.Writer
 	// Mode is ModeRun or ModeServe: what beehave status says about the engine that holds the state folder. The empty value means ModeRun.
 	Mode string
+	// Modules are the step modules that the engine runs. The engine builds its builtins, its step kinds and its tables of signatures and results from them.
+	// A run that calls a builtin needs the module of that builtin in the list. Two modules that name the same builtin or the same step kind fail NewEngine.
+	Modules []step.Module
 }
 
 func (o Options) validate() error {
@@ -130,6 +134,8 @@ func openStore(opts Options) (store, error) {
 // Engine runs the item workflows. Call NewEngine, then Launch, then Run for each item, then Shutdown.
 type Engine struct {
 	ctx dbos.Context
+	// registry holds the builtins, the step kinds and the tables of signatures and results of the modules that this engine runs.
+	registry step.Registry
 	// queue is the agents queue: the steps of the kind implement.
 	queue dbos.Queue
 	// reviewQueue is the queue of the steps of the kind review.
@@ -181,23 +187,38 @@ type Engine struct {
 // One engine owns a state folder at a time: a second NewEngine on the same folder fails until Shutdown.
 // A Ctrl-C of the caller must not end the runs, so the engine does not take the cancel of ctx: Shutdown stops it and leaves the runs open.
 func NewEngine(ctx context.Context, opts Options, deps Deps) (*Engine, error) {
-	state, err := openStore(opts)
+	registry, err := step.NewRegistry(opts.Modules)
+	if err != nil {
+		return nil, fmt.Errorf("the step modules clash: %w", err)
+	}
+
+	state, held, err := openFolder(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	held, err := claimFolder(state.dir, applicationVersion(opts.Version), cmp.Or(opts.Mode, ModeRun))
-	if err != nil {
-		return nil, errors.Join(err, state.log.Close())
-	}
-
-	engine := newEngine(opts, deps, state, held)
+	engine := newEngine(opts, deps, state, held, registry)
 
 	if err := engine.open(ctx, opts, state); err != nil {
 		return nil, errors.Join(fmt.Errorf("open the workflow store: %w", err), removeEngineFiles(state.dir), held.Unlock(), state.log.Close())
 	}
 
 	return engine.registered(engine.register(opts))
+}
+
+// openFolder opens the state folder and takes the engine lock of it. It closes the log when it fails.
+func openFolder(opts Options) (store, *flock.Flock, error) {
+	state, err := openStore(opts)
+	if err != nil {
+		return store{}, nil, err
+	}
+
+	held, err := claimFolder(state.dir, applicationVersion(opts.Version), cmp.Or(opts.Mode, ModeRun))
+	if err != nil {
+		return store{}, nil, errors.Join(err, state.log.Close())
+	}
+
+	return state, held, nil
 }
 
 // claimFolder takes the engine lock of the state folder and writes the version and the description of this engine, all under probe.lock, so no check reads the files of an engine that stopped. It leaves the engine lock free when it fails.
@@ -225,9 +246,9 @@ func claimFolder(dir, version, mode string) (*flock.Flock, error) {
 }
 
 // newEngine makes the engine value for an opened store and a held folder lock.
-func newEngine(opts Options, deps Deps, state store, held *flock.Flock) *Engine {
+func newEngine(opts Options, deps Deps, state store, held *flock.Flock, registry step.Registry) *Engine {
 	engine := &Engine{
-		deps: deps, maxConcurrent: opts.MaxConcurrent, maxRunBudget: opts.MaxRunBudget, maxTreeBudget: opts.MaxTreeBudget, reviewPoll: opts.ReviewPoll, retention: opts.Retention, keepRuns: opts.KeepRuns, overCap: opts.OverCap, setSchedule: (*Engine).schedulePoll, env: opts.Env, version: applicationVersion(opts.Version), dir: state.dir, log: state.log, lock: held, logger: newLogger(state.log), redact: agent.Redactor(),
+		registry: registry, deps: deps, maxConcurrent: opts.MaxConcurrent, maxRunBudget: opts.MaxRunBudget, maxTreeBudget: opts.MaxTreeBudget, reviewPoll: opts.ReviewPoll, retention: opts.Retention, keepRuns: opts.KeepRuns, overCap: opts.OverCap, setSchedule: (*Engine).schedulePoll, env: opts.Env, version: applicationVersion(opts.Version), dir: state.dir, log: state.log, lock: held, logger: newLogger(state.log), redact: agent.Redactor(),
 		procs: &groups{path: groupsFile(opts.StateDir)}, tickEnd: make(chan struct{}), progress: &progress{out: opts.Progress},
 	}
 	engine.progress.redact = engine.redact
