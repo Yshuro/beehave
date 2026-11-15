@@ -30,6 +30,9 @@ const (
 	kindBatch = "batch"
 )
 
+// coreVersion is the version of the core module. Version 2 added the vars field to the result of facts.
+const coreVersion = 2
+
 // stepModule is one module of the table: its version and the step kinds that it records.
 type stepModule struct {
 	name    string
@@ -40,7 +43,7 @@ type stepModule struct {
 // moduleTable assigns each recorded step kind to its module. The order is the order of the application version.
 func moduleTable() []stepModule {
 	return []stepModule{
-		{name: moduleCore, version: 1, kinds: []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"}},
+		{name: moduleCore, version: coreVersion, kinds: []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"}},
 		{name: moduleAgent, version: 1, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
 		{name: moduleForge, version: 1, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open"}},
@@ -62,7 +65,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core1.agent1.tracker1.forge1.land1.gate1.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core2.agent1.tracker1.forge1.land1.gate1.host1.round1.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

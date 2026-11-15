@@ -11,6 +11,9 @@ import (
 // gateWaitFlow records a gate step, then waits for the owner.
 const gateWaitFlow = "def main(item):\n    gate(name = \"g\")\n    wait(name = \"ask\", question = \"What now?\")\n"
 
+// factsWaitFlow records a facts step, then waits for the owner.
+const factsWaitFlow = "def main(item):\n    facts()\n    wait(name = \"ask\", question = \"What now?\")\n"
+
 // buildWithModule is a client of another build whose module is at another version.
 func buildWithModule(c *Client, module string, version int) *Client {
 	c.version = versionWithModule(otherBuild, module, version)
@@ -83,6 +86,24 @@ func TestClient_ResumeOnThisBuildMovesARunStoredUnderTheSingleVersionOfTheSteps(
 	row, rowErr := other.row(testRun)
 	require.NoError(t, rowErr)
 	assert.Equal(t, other.version, row.ApplicationVersion)
+}
+
+func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionOfTheStepsWhenTheCoreModuleChanged(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.flowIs(t, factsWaitFlow)
+
+	runInBackground(harness.engine(t), testItem)
+	waitForTheOwner(t, harness)
+
+	other := harness.client(t, otherBuild)
+	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+"+stepsVersion, testRun)
+	require.NoError(t, err)
+
+	expireLease(harness)
+
+	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), "core module at version 1 and this build has version 2", "the facts result of the old build has no vars field")
 }
 
 func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionWhenAUsedModuleChanged(t *testing.T) {
