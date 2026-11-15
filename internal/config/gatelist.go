@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"slices"
 
 	"go.starlark.net/starlark"
 
@@ -67,6 +68,8 @@ func checkSpec(raw rawProject, spec model.GateSpec) error {
 		return refuseAt(raw.At, "`gate_steps` has the step name %q. Use letters, digits, dot, underscore and hyphen, and start with a letter or a digit.", spec.Name)
 	case spec.Name == reservedStep:
 		return refuseAt(raw.At, "`gate_steps` names a step %q. The test report of `test_report` takes that name. Use another name.", reservedStep)
+	case slices.Contains(model.ReservedGateSteps(), spec.Name):
+		return refuseAt(raw.At, "`gate_steps` names a step %q. The gate job of a candidate head takes that name. Rename the step.", spec.Name)
 	case blank(spec.Command):
 		return refuseAt(raw.At, "`gate_steps` step %q has a blank command. Write the command or remove the step.", spec.Name)
 	}

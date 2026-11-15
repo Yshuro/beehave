@@ -20,6 +20,7 @@ flowchart TD
     end
 
     subgraph L3["Layer 3: durable orchestration"]
+        step["step<br/>step module contract"]
         flow["flow<br/>DBOS workflow per item"]
     end
 
@@ -106,6 +107,9 @@ flowchart TD
     flow --> proc
     flow --> model
     flow --> lockfile
+    flow --> step
+    main --> step
+    step --> model
 
     tui -.-> flow
     flow -.-> claim
@@ -132,6 +136,14 @@ Only `proc` starts a process. `forge` and `agent` call it. `store` reaches it th
 File locks come from `github.com/gofrs/flock`. `flow` and `merge` open every lock through `lockfile.Open`, a layer 0 package. It opens the file for reading and writing, so a folder or a read-only file of that name is refused and not locked.
 
 `flow` and `merge` write the cancel marker and the saved check logs through `atomicfile.Write`, a layer 0 package. It writes a temporary file in the same folder, syncs it and renames it over the target. It sets the mode every time.
+
+### The step contract
+
+`step` sits between policy and the engine. It imports layers 0 to 2 (`model` and `workflow`) and never imports `flow` or DBOS. A module is a plain value: a name, its builtins and the step kinds that it records. A builtin has a name, a signature, its result fields, the keyword that exempts it from the repository check, and a call.
+
+The composition root builds the list of modules and passes it to `flow.NewEngine` in `flow.Options`. The engine builds its builtin map, its table of step kinds and its tables of signatures and results from that list. Two modules that name the same builtin or the same step kind are a start error.
+
+Today one module, built inside `flow`, holds every builtin. A table in `flow` assigns each recorded step kind to its future module (core, agent, tracker, forge, land, gate, host or round), and each of the eight modules has a version of its recorded steps. The application version holds those eight versions after the build version, such as `+core1.agent1.tracker1.forge1.land1.gate1.host1.round1`. `resume --on-this-build` compares only the modules whose kinds the run recorded. A stored version that ends in the old single version `+star30` stands for every module at version 1.
 
 ### Layer 2 interfaces
 

@@ -248,7 +248,7 @@ A path that no glob matches fails the step, and the message names each such path
 
 The globs use the `github.com/bmatcuk/doublestar/v4` dialect: `*` and `?` stop at a slash, `**` crosses it and also matches zero folders, and a leading `./` is dropped. A glob that does not parse is refused. An empty list is refused: leave the keyword out to turn the check off.
 
-A step with no `allow_paths` records no extra step, so `stepsVersion` does not move.
+A step with no `allow_paths` records no extra step, so no module version moves.
 
 Not seen:
 

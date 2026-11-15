@@ -23,6 +23,7 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/review"
+	"github.com/tobocop2/beehave/internal/step"
 )
 
 const (
@@ -145,6 +146,8 @@ type fakeGate struct {
 	keyErr   error
 	// hosts are the build hosts that the calls of Key, Submit and Run were given, in order.
 	hosts []string
+	// bases are the base branches that Submit was given, in order.
+	bases []string
 }
 
 // gatedOn lists the build hosts that the calls of the gate were given, in order.
@@ -199,9 +202,10 @@ func (cancelGate) Key(context.Context, string, string, string) (GateKey, error) 
 }
 
 // Submit counts the host jobs that it started and gives each one an id.
-func (g *fakeGate) Submit(_ context.Context, _, _, host string) (GateJob, error) {
+func (g *fakeGate) Submit(_ context.Context, _, _, host, base string) (GateJob, error) {
 	g.mu.Lock()
 	g.hosts = append(g.hosts, host)
+	g.bases = append(g.bases, base)
 	g.mu.Unlock()
 
 	return GateJob{ID: fmt.Sprintf("job-%d", g.submits.Add(1)), Head: gatedHead}, nil
@@ -575,7 +579,8 @@ func newHarness(t *testing.T) *harness {
 			StateDir:      filepath.Join(folder, "state"),
 			Version:       testVersion,
 			MaxConcurrent: 2, MaxReviewConcurrent: 2,
-			Env: map[string]string{},
+			Env:     map[string]string{},
+			Modules: []step.Module{StepModule()},
 		},
 	}
 	h.migrate(t)
@@ -637,7 +642,7 @@ var migratedDatabase = sync.OnceValues(func() ([]byte, error) {
 
 	defer os.RemoveAll(dir)
 
-	opts := Options{StateDir: filepath.Join(dir, "state"), Version: testVersion, MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: map[string]string{}}
+	opts := Options{StateDir: filepath.Join(dir, "state"), Version: testVersion, MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: map[string]string{}, Modules: []step.Module{StepModule()}}
 
 	engine, err := NewEngine(context.Background(), opts, Deps{})
 	if err != nil {

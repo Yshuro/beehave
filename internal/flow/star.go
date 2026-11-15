@@ -20,8 +20,10 @@ import (
 // jsonModule is the one name of workflow.Builtins that is a module of the Starlark library, not a step.
 const jsonModule = "json"
 
-// stepsVersion changes when a builtin changes its steps. It is part of the application version, so an old run is not replayed by a new build.
-const stepsVersion = "star26"
+// stepsVersion is the single version of the builtin steps that came before the step modules. A run stored under it recorded every module at version 1
+// (parseVersions), and the golden tables of this package are held under it. A change to a builtin changes the version of its module in moduleTable.
+// The application version holds those module versions, so an old run is not replayed by a build that changed a module that the run used.
+const stepsVersion = "star30"
 
 // runStar runs `main(item)` of the workflow file of the run on one thread. The files are the bytes that the run pinned.
 // Each builtin does its work in DBOS steps, so a replay of this function makes the same calls and gets the recorded results.
@@ -141,24 +143,19 @@ func itemArg(fields map[string]string) *starlarkstruct.Struct {
 	return arg
 }
 
-// builtinFunc is the Go function of a workflow builtin.
-type builtinFunc = func(*starlark.Builtin, starlark.Tuple, []starlark.Tuple) (starlark.Value, error)
-
 // hasRepository reports whether the project of the run has a git repository.
 func (s *script) hasRepository() bool {
 	return s.e.deps.Repository == nil || s.e.deps.Repository(s.in.Project)
 }
 
-// withRepository refuses a call of a builtin that reads git or a forge when the project has no repository, before the call reads its arguments.
+// refuseWithoutRepository refuses a call of a builtin that reads git or a forge when the project has no repository, before the call reads its arguments.
 // A call whose exempt keyword holds a non-empty program is not refused: a gate that names its own program with run reads no git. The message names the builtin and the fix.
-func (s *script) withRepository(call builtinFunc, exempt string) builtinFunc {
-	return func(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		if !s.hasRepository() && !namesKeyword(kwargs, exempt) {
-			return nil, fmt.Errorf("%s needs a repository, and project %s has no repository. Set `source` or `forge` in the project file, or remove the %s call", b.Name(), s.in.Project, b.Name())
-		}
-
-		return call(b, args, kwargs)
+func (s *script) refuseWithoutRepository(b *starlark.Builtin, kwargs []starlark.Tuple, exempt string) error {
+	if s.hasRepository() || namesKeyword(kwargs, exempt) {
+		return nil
 	}
+
+	return fmt.Errorf("%s needs a repository, and project %s has no repository. Set `source` or `forge` in the project file, or remove the %s call", b.Name(), s.in.Project, b.Name())
 }
 
 // namesKeyword reports whether a call passes the keyword with a non-empty list or tuple. None and an empty list name no program.
@@ -171,30 +168,23 @@ func namesKeyword(kwargs []starlark.Tuple, keyword string) bool {
 	})
 }
 
-// steps maps the name of each builtin that is a Go function to that function.
-func (s *script) steps() map[string]builtinFunc {
-	return map[string]builtinFunc{
-		"agent": s.agent, "batch_merge": s.withRepository(s.batchMerge, ""), "board_sync": s.withRepository(s.boardSync, ""), "command": s.command, "earlier_calls": s.earlierCalls, "env": s.env, "facts": s.facts, "gate": s.withRepository(s.gate, "run"), "gather": s.gather, "host_teardown": s.hostTeardown, "host_up": s.hostUp, "item_assign": s.itemAssign, "item_comment": s.itemComment, "item_create": s.itemCreate, "item_read": s.itemRead, "item_status": s.itemStatus, "merge": s.withRepository(s.merge, ""), "now": s.now, "pr_assign": s.withRepository(s.prAssign, ""), "pr_comment": s.withRepository(s.prComment, ""), "pr_open": s.withRepository(s.prOpen, ""), "preflight": s.withRepository(s.preflight, ""), "queue": s.queue, "sandbox": s.sandbox, "spawn": s.spawn, "wait": s.wait, "write": s.writeOutside,
-		"struct": func(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-			return starlarkstruct.Make(nil, b, args, kwargs)
-		},
-	}
-}
-
-// predeclared returns the builtins of a workflow file, one for each name of workflow.Builtins.
+// predeclared returns the builtins of a workflow file: json, and one builtin for each builtin of the registry of the engine.
 func (s *script) predeclared() starlark.StringDict {
-	table := s.steps()
 	out := starlark.StringDict{jsonModule: starjson.Module}
 
-	for _, name := range workflow.Builtins() {
-		if name == jsonModule {
-			continue
-		}
-
-		fn := table[name]
+	for _, name := range s.e.registry.Names() {
+		def, _ := s.e.registry.Builtin(name)
 
 		out[name] = starlark.NewBuiltin(name, func(_ *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-			return s.traced(b, kwargs, func() (starlark.Value, error) { return fn(b, args, kwargs) })
+			return s.traced(b, kwargs, func() (starlark.Value, error) {
+				if def.NeedsRepository {
+					if err := s.refuseWithoutRepository(b, kwargs, def.ExemptKeyword); err != nil {
+						return nil, err
+					}
+				}
+
+				return def.Call(s, b, args, kwargs)
+			})
 		})
 	}
 

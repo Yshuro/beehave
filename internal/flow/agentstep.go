@@ -451,7 +451,7 @@ func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (step
 		return stepResult{}, err
 	}
 
-	if err := s.checkRunBudget(name, try); err != nil {
+	if err := s.holdForCaps(name, try); err != nil {
 		return stepResult{}, err
 	}
 
@@ -510,41 +510,6 @@ func (s *script) clearOutput(name, file string, try int) error {
 	})
 
 	return err
-}
-
-// checkRunBudget fails an agent step that would start when the agent steps of the item run have already spent the cap. It does nothing for a run with no cap.
-// The cap is for one item run. A child workflow that the run spawns starts its own sum at 0 and has its own cap.
-// The check runs when a step starts, so one step can pass the cap by its own cost, which the cap of the step or the global cap limits.
-// The sum is spent: the cost of each earlier read step as the run recorded it, added again in the same order when the run replays.
-// The check is a step, so a replay of a step that started under the cap never fails it again if the cap has changed since.
-func (s *script) checkRunBudget(name string, try int) error {
-	limit := s.e.maxRunBudget
-	if limit <= 0 {
-		return nil
-	}
-
-	_, err := runStep(s.e, s.ctx, name+"/budget"+strconv.Itoa(try), func(context.Context) (stepResult, error) {
-		return stepResult{}, overCap(name, limit, s.spent)
-	})
-
-	return err
-}
-
-// overCap is the error of an agent step that may not start under the cap of the run, or nil when it may. A sum that holds an unknown cost fails too:
-// the cap cannot be checked against a cost that is not known.
-func overCap(name string, limit float64, spent agent.Spend) error {
-	switch {
-	case spent.Unknown:
-		return fmt.Errorf("the agent step %s does not start: the cap for one item run is $%s, but the cost is unknown for an earlier agent step "+
-			"(its model has no price), so the cap cannot be checked. "+
-			"Add a price for the model, or set agents.max_run_budget_usd (or BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD) to 0 for no cap", name, dollars(limit))
-	case spent.Cost < limit:
-		return nil
-	}
-
-	return fmt.Errorf("the agent step %s does not start: the cap for one item run is $%s and the agent steps of the item run spent $%s. "+
-		"The cap is checked when a step starts, so the last step can pass it by its own cost. "+
-		"Raise agents.max_run_budget_usd (or BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD), or set it to 0 for no cap", name, dollars(limit), dollars(spent.Cost))
 }
 
 // dollars writes an amount of dollars with at most four decimals and no trailing zero.

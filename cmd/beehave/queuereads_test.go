@@ -55,6 +55,42 @@ func TestQueueReads_OpenPullsListsTheOpenPullRequestsWithTheirBranchAndLabels(t 
 	assert.Equal(t, [][]string{{"--state", "open", "--json", "number,headRefName,labels,reviewDecision,author"}}, f.asked)
 }
 
+func TestQueueReads_PullStateReadsTheStateOfAPullRequestOfAnyState(t *testing.T) {
+	t.Parallel()
+
+	state, err := queueReadsOver(&pullForge{state: "MERGED"}, nil).PullState(t.Context(), "p", 7)
+
+	require.NoError(t, err)
+	assert.Equal(t, "MERGED", state)
+}
+
+func TestQueueReads_APullStateThatCannotBeReadIsAnError(t *testing.T) {
+	t.Parallel()
+
+	reads := queueReadsOver(nil, nil)
+	reads.pulls.forge = func(model.Project) (forge.Forge, error) { return nil, forge.ErrNoForge }
+
+	_, err := reads.PullState(t.Context(), "p", 7)
+	require.ErrorIs(t, err, forge.ErrNoForge)
+
+	_, err = queueReadsOver(stateForge{}, nil).PullState(t.Context(), "p", 7)
+	require.ErrorIs(t, err, errNoPullState)
+
+	_, err = queueReadsOver(stateForge{err: errFake}, nil).PullState(t.Context(), "p", 7)
+	require.ErrorIs(t, err, errFake)
+}
+
+// stateForge shows a pull request with no state, or fails the read.
+type stateForge struct {
+	forge.Forge
+
+	err error
+}
+
+func (f stateForge) PRView(context.Context, int, ...string) (model.PullRequest, error) {
+	return model.PullRequest{}, f.err
+}
+
 func TestQueueReads_AFailedListOfPullRequestsIsAnError(t *testing.T) {
 	t.Parallel()
 

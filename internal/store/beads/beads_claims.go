@@ -104,7 +104,13 @@ func leaseEnd(r bdRow) (time.Time, error) {
 
 // claimedItem returns the item a claim row title names, or false when the title is not a claim row of a known kind.
 func claimedItem(title string) (string, bool) {
-	if !strings.HasPrefix(title, lockPrefix+model.KindForge+"-") && !strings.HasPrefix(title, lockPrefix+model.KindBeads+"-") {
+	known := false
+
+	for _, kind := range []string{model.KindForge, model.KindBeads, model.KindRound} {
+		known = known || strings.HasPrefix(title, lockPrefix+kind+"-")
+	}
+
+	if !known {
 		return "", false
 	}
 
@@ -158,8 +164,14 @@ func (s *Store) heartbeat(ctx context.Context, rowID, holder string) error {
 	return nil
 }
 
+// rowID names the lock row of an item. The id of a round holds "/", which a beads id does not, so the row id carries the safe form of it.
 func (s *Store) rowID(item string) string {
-	return fmt.Sprintf("%s-lock-%s-%s", s.prefix, model.ItemKind(item), item)
+	kind := model.ItemKind(item)
+	if kind == model.KindRound {
+		item = model.SafeName(item)
+	}
+
+	return fmt.Sprintf("%s-lock-%s-%s", s.prefix, kind, item)
 }
 
 // showRow returns the row with exactly this id, or nil when it does not exist.

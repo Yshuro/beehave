@@ -35,6 +35,28 @@ func (q queueReads) OpenItems(ctx context.Context, project string) ([]model.Item
 	return items, closeAfter(err, tracker)
 }
 
+// errNoPullState is returned when the forge shows no state for a pull request.
+var errNoPullState = errors.New("the forge shows no state for the pull request")
+
+// PullState reads the state of the pull request with the number: OPEN, CLOSED or MERGED. A project with no forge cannot show one, which is an error.
+func (q queueReads) PullState(ctx context.Context, project string, pr int) (string, error) {
+	built, err := q.pulls.forgeOf(project)
+	if err != nil {
+		return "", err
+	}
+
+	pull, err := built.PRView(ctx, pr, "state")
+	if err != nil {
+		return "", fmt.Errorf("read the state of pull request %d of project %s: %w", pr, project, err)
+	}
+
+	if pull.State == nil {
+		return "", fmt.Errorf("%w: #%d of project %s", errNoPullState, pr, project)
+	}
+
+	return *pull.State, nil
+}
+
 // OpenPulls lists the open pull requests of the forge of the project, with their head branch, labels, review decision and author. A project with no forge has none.
 func (q queueReads) OpenPulls(ctx context.Context, project string) ([]model.PullRequest, error) {
 	built, err := q.pulls.forgeOf(project)

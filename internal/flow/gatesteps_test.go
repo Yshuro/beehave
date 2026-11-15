@@ -254,6 +254,33 @@ func TestGateStep_AGateProgramThatExitsWithAFailureGivesAStepThatFails(t *testin
 	assert.Equal(t, []string{"false", "show fail"}, h.commands.ran())
 }
 
+func TestGateStep_AGateProgramRecordsPassedFromItsExitCode(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct {
+		rc   int
+		want string
+	}{"a zero code": {0, "show True"}, "a code that is not zero": {1, "show False"}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h := mergeHarness(t, merge.Result{Stop: merge.Done})
+			h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
+				if request.Run[0] == "check" {
+					return CommandOutput{RC: test.rc}, nil
+				}
+
+				return CommandOutput{}, nil
+			}
+
+			_, err := walkText(t, h, bodyFlow("c = gate(run = [\"check\"], name = \"check\")\ncommand(run = [\"show\", str(c.passed)])\n"))
+
+			require.NoError(t, err)
+			assert.Equal(t, []string{"check", test.want}, h.commands.ran())
+		})
+	}
+}
+
 func TestMergeStep_AStepsListThatHoldsAValueThatCannotBeReadIsRefused(t *testing.T) {
 	t.Parallel()
 

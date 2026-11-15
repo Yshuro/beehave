@@ -254,6 +254,22 @@ func (f *Forge) IssueState(ctx context.Context, number int) (string, error) {
 	return state, nil
 }
 
+// IssueAssignees returns the logins that hold an issue. An empty repo reads the repository of the forge, and any other repo is read on that repository.
+func (f *Forge) IssueAssignees(ctx context.Context, repo string, number int) ([]string, error) {
+	if repo == "" {
+		repo = f.repo
+	}
+
+	base := fmt.Sprintf("cannot read the assignees of %s#%d", repo, number)
+
+	done := f.run.Run(ctx, []string{"issue", argView, strconv.Itoa(number), "-R", repo, argJSON, "assignees", argJQ, ".assignees[].login"})
+	if done.ExitCode != 0 {
+		return nil, forge.Refuse("%s", base)
+	}
+
+	return strings.Fields(done.Stdout), nil
+}
+
 type annotation struct {
 	Message *string `json:"message"`
 }

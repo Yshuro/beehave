@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -24,6 +25,9 @@ type fakeQueue struct {
 	pullsErr       error
 	afterFirstRead func(q *fakeQueue)
 	reads          int
+	states         map[int]string
+	stateErr       error
+	stateAsked     []int
 }
 
 func (q *fakeQueue) OpenItems(context.Context, string) ([]model.Item, error) {
@@ -45,6 +49,16 @@ func (q *fakeQueue) OpenPulls(context.Context, string) ([]model.PullRequest, err
 	defer q.mu.Unlock()
 
 	return slices.Clone(q.pulls), q.pullsErr
+}
+
+// PullState answers with the state that the test set for the pull request number, and records each number it was asked about.
+func (q *fakeQueue) PullState(_ context.Context, _ string, pr int) (string, error) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	q.stateAsked = append(q.stateAsked, pr)
+
+	return q.states[pr], q.stateErr
 }
 
 // hold sets the hold of one item in the tracker.
@@ -255,6 +269,83 @@ func TestQueue_ASucceededItemIsDone(t *testing.T) {
 	assert.Equal(t, []string{"21:done:P1:0", "free=2"}, seenBy(t, h))
 }
 
+// foreignChild runs a child that ends as a foreign review does: with the reason, the recorded pull request and the recorded findings. Then it reads the queue.
+func foreignChild(reason string, pr int, findings string) string {
+	return `def work(item):
+    command(name = "w", run = ["w"])
+    return {"reason": "` + reason + `", "pr": ` + strconv.Itoa(pr) + `, "findings": ` + findings + `}
+
+def main(item):
+    gather(spawn(items = ["21"], entry = "work", name = "s"), name = "g")
+    q = queue(name = "q")
+` + seenLine
+}
+
+const openFinding = `[{"class": "blocking", "text": "x"}]`
+
+func TestQueue_AForeignRowWhosePullRequestMergedWithFindingsOpenIsOfferedAgain(t *testing.T) {
+	t.Parallel()
+
+	h, q := queueHarness(t, []model.Item{queueItem("21", model.SeverityP1)})
+	q.states = map[int]string{7: "MERGED"}
+
+	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, foreignChild("foreign", 7, openFinding)))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"21:ready:P1:0", "free=2"}, seenBy(t, h), "a merged pull request with findings open brings the row back")
+	assert.Equal(t, []int{7}, q.stateAsked, "the state is read for the recorded pull request number")
+}
+
+func TestQueue_AForeignRowThatIsNotOwedAnotherVisitStaysDone(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct {
+		reason, findings, state string
+	}{
+		"the pull request is still open":        {"foreign", openFinding, "OPEN"},
+		"the pull request closed unmerged":      {"foreign", openFinding, "CLOSED"},
+		"the findings are closed":               {"foreign", "[]", "MERGED"},
+		"the last run ended for another reason": {"other", openFinding, "MERGED"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h, q := queueHarness(t, []model.Item{queueItem("21", model.SeverityP1)})
+			q.states = map[int]string{7: test.state}
+
+			_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, foreignChild(test.reason, 7, test.findings)))
+
+			require.NoError(t, err)
+			assert.Equal(t, []string{"21:done:P1:0", "free=2"}, seenBy(t, h))
+		})
+	}
+}
+
+func TestQueue_AForeignRowThatRecordedNoPullRequestStaysDoneAndReadsNoState(t *testing.T) {
+	t.Parallel()
+
+	h, q := queueHarness(t, []model.Item{queueItem("21", model.SeverityP1)})
+	q.states = map[int]string{0: "MERGED"}
+
+	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, foreignChild("foreign", 0, openFinding)))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"21:done:P1:0", "free=2"}, seenBy(t, h))
+	assert.Empty(t, q.stateAsked, "a record with no pull request number reads no pull request state")
+}
+
+func TestQueue_AFailedReadOfTheRecordedPullRequestFailsTheStepAndReturnsNoGuess(t *testing.T) {
+	t.Parallel()
+
+	h, q := queueHarness(t, []model.Item{queueItem("21", model.SeverityP1)})
+	q.stateErr = errFake
+
+	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, foreignChild("foreign", 7, openFinding)))
+
+	require.ErrorIs(t, err, errFake)
+	assert.Empty(t, h.commands.ranBy(testItem), "no row reached the file")
+}
+
 func TestQueue_RowsSortBySeverityThenByItemID(t *testing.T) {
 	t.Parallel()
 
@@ -372,10 +463,10 @@ func TestQueue_AStoreThatIsClosedFailsTheReadsOfTheRunsAndTheSlots(t *testing.T)
 	_, err = engine.freeSlots()
 	require.ErrorContains(t, err, "count the open runs")
 
-	_, err = engine.queueRows([]model.Item{queueItem("21", model.SeverityP1)}, nil)
+	_, err = engine.queueRows(t.Context(), []model.Item{queueItem("21", model.SeverityP1)}, nil)
 	require.ErrorContains(t, err, "list the runs of item 21", "the run of an item cannot be read")
 
-	_, err = engine.queueRows(nil, nil)
+	_, err = engine.queueRows(t.Context(), nil, nil)
 	require.NoError(t, err, "no item has no run to read")
 }
 

@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `batch_merge`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -74,6 +74,10 @@ The engine predeclares `agent`, `batch_merge`, `command`, `earlier_calls`, `env`
 | `changelog` | Text. |
 | `board_number` | The board number, 0 when the project has none. |
 | `board_owner`, `board_started`, `board_merged` | The other values of the board. |
+| `round_base`, `round_next_base`, `round_owner`, `round_owner_email`, `round_source_checkout`, `round_acceptance`, `round_base_result`, `round_base_reds_file`, `round_lane_kind` | The text values of the `rounds(...)` block. Empty when the project has none. |
+| `round_lane_cap`, `round_fix_rounds`, `round_integration_pr`, `round_wait_hours` | The whole numbers of the `rounds(...)` block, 0 when the project has none. |
+| `round_merge` | Bool, false when the project has none. |
+| `round_base_reds`, `round_allow_paths` | Lists of the `rounds(...)` block. |
 
 - A fact that the project file leaves out is empty text, an empty dict or an empty list, never a missing field.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.
@@ -167,7 +171,7 @@ A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `h
 
 #### `pr_comment`
 
-`pr_comment(text, key, forbid_text)` adds a comment to the pull request of the item and returns `number`. The forge reads the comments first, and posts only when none holds the line `beehave-key: <run id>:<key>`. A replay after a crash therefore posts once.
+`pr_comment(text, key, forbid_text, integration)` adds a comment to the pull request of the item and returns `number`. The forge reads the comments first, and posts only when none holds the line `beehave-key: <run id>:<key>`. A replay after a crash therefore posts once.
 
 #### `pr_assign`
 
@@ -178,7 +182,7 @@ A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `h
 
 #### `pr_open`
 
-`pr_open(title, base, body, issue, parent, forbid_text, name)` opens the draft pull request of the item and returns `number`, `created` and `stack`.
+`pr_open(title, base, body, issue, parent, forbid_text, integration, name)` opens the draft pull request of the item and returns `number`, `created` and `stack`.
 
 - The branch of the item must be on the remote already.
 - The forge looks for an open pull request on that branch first, and opens one only when there is none. A resume after a lost step record therefore opens no second pull request, and `created` is then false.
@@ -202,6 +206,12 @@ The `parent` argument:
 | The pull request of `parent` is open. | The new pull request is based on the branch of the parent and linked into its native stack with `gh stack link` (the pull requests go by address, on github.com). The first link of a stack passes `--base` with the base of the call. The call reads the base of the parent pull request before and after every link. If the base moved on a new stack, the call unstacks, checks that the stack is gone, sets the base back and links again with that base. A second move, a stack that stays after the unstack, or a move on a stack that already held other pull requests fails the step. The call then reads the stack id of both pull requests, and fails unless they show one non-empty id. `stack` holds the id. |
 | The pull request of `parent` merged. | The base stays as given, and the call links nothing. |
 | `parent` has no pull request. | An error. |
+
+#### Closing keywords in posted text
+
+`pr_comment` and `pr_open` refuse text with a closing keyword (`Closes`, `Fixes`, `Resolves` and their forms, with an issue). The check reads the text of the comment, and the title and the body of the pull request. It uses the same keywords as the guard of `merge`. The refusal happens before the post and names the argument and the issue.
+
+Only the integration pull request may close an issue. A call for that pull request sets `integration = True`. The line that `pr_open` adds from `issue` is not part of the text and is not checked.
 
 ### `forbid_text` on public text
 
@@ -250,19 +260,29 @@ The four steps that post public text (`item_create`, `item_comment`, `pr_comment
 
 ### `preflight`
 
-`preflight(head, base, hold, own, id, name)` reads the pull request of the item `id`, or of the item of the run when `id` is left out. It returns `ok`, `stop`, `code` and `reason`.
+`preflight(head, base, hold, own, id, foreign, name)` reads the pull request of the item `id`, or of the item of the run when `id` is left out. It returns `ok`, `stop`, `code`, `reason`, `foreign`, `pr`, `head` and `author`. The last four are `False`, `0` and two empty texts unless the pull request is foreign.
 
 It checks, in this order:
 
 1. Merged or closed.
 2. The head branch.
-3. The author. An open pull request by a login that is not in `own["logins"]` gives CLAIMED, exit code 10. An empty `own` checks no author.
-4. The `hold` label.
-5. A draft.
-6. The expected head.
-7. The expected base.
+3. The assignees. A login that is not in `own["logins"]` and holds the pull request, or an issue that the pull request body links, gives ASSIGNED, exit code 11. An empty `own` checks no assignee.
+4. The author. An open pull request by a login that is not in `own["logins"]` gives CLAIMED, exit code 10. An empty `own` checks no author.
+5. The `hold` label.
+6. A draft.
+7. The expected head.
+8. The expected base.
+
+The assignee check reads the pull request and each linked issue once. A link is a `Closes`, `Fixes`, `Resolves`, `Part of`, `Refs` or `Related` keyword with `#N`, `owner/repo#N` or the URL of an issue. The call reads a link to another repository on that repository.
+
+- A read that fails ends the step with an error. A failed read is not a clean item.
+- The read of the assignees of an issue is optional for a forge. A forge without it is refused when the body has a link.
+- The reason of ASSIGNED names the holder and ends with `knows=yes` or `knows=no`. The value is `yes` only when the holder opened the pull request or reviews it.
+- The reason also gives the recovery: leave the item to the holder, or ask the holder first.
 
 - A keyword that the call leaves out checks nothing of its kind. An item with no pull request passes.
+- `foreign = "review"` is the only value of `foreign`. With it, an open pull request by a login that is not in `own["logins"]` is not a stop. The call returns after the author check, before the `hold`, draft, head and base checks, with `foreign` set to `True` and `pr`, `head` and `author` set to the pull request, its head commit and its login. A merged or closed pull request still stops.
+- The foreign path is off. A build that gets a foreign result from the call turns it into the stop REFUSED, exit code 2, on every project, so a workflow never sees `foreign` as `True`. No setting changes this.
 - A stop is a result and not an error, so the workflow decides what to do with it. `code` is the exit code of the stop.
 - A stop also goes into the `stopped` field of the result of the run (step, exit code and reason).
 - A read that fails ends the step with an error. A build with no preflight reader fails the call.
@@ -281,6 +301,24 @@ If no open pull request has the item as its head branch, the call searches the o
 
 At the start of a run, the engine lists the other orchestrators that hold items in the claim store of the project. `beehave status` shows them for an open run. A store that cannot be read ends the run, because a failed read is not "nobody else runs".
 
+### `before_review`
+
+`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `base` and `keywords`.
+
+The call needs a `gate` call in the same run with `base`, at the same `head`. It reads the checks of that gate: the new tests and the secret scan. Without that gate call, the step fails with an error that says so. A gate without `base` holds no checks, so the call refuses it as a cut log.
+
+A finding is a result, not an error. `ok` is true when `findings` is empty. The call gives a finding when:
+
+- the log of the gate job has no end line (a cut log),
+- the head adds no new test,
+- a new test failed or was skipped on the head,
+- the secret scan did not exit with 0, or left no single exit code,
+- the head is not a descendant of `base`, by `git merge-base --is-ancestor`,
+- the head changed a path that `allow` does not allow (a list of globs, as `allow_paths` of `agent`),
+- a commit message between `base` and `head` has a closing keyword, unless `integration` is true.
+
+`new_tests` lists the new tests of the gate. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
+
 ### `queue`
 
 `queue(name, hold)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows` and `free`.
@@ -291,10 +329,11 @@ Each row has `item`, `state`, `severity` and `pr`. The state:
 | --- | --- |
 | `running` | The item has an open run. |
 | `failed` | Its last attempt ended without success. |
-| `done` | Its last run succeeded. |
+| `done` | Its last run succeeded, and no other row applies. |
 | `hold` | The tracker holds the item, or its pull request has the label that `hold` names. |
 | `ready` | Otherwise. A held item is never `ready`. |
 
+- A run that succeeded is offered again, with the state `ready` or `hold`, when its value holds `reason = "foreign"`, a `pr` number and a non-empty `findings` list, and the forge shows that pull request as merged. The call reads the state of that number and does not look the pull request up again. A read that fails ends the step with an error.
 - The rows sort by severity, then by item id as byte strings.
 - `pr` is the number of the lowest open pull request whose head branch is the item id, or 0.
 - `free` is the cap of the `items` queue less the runs that the library lists on it as pending or enqueued, so the engine keeps no count.

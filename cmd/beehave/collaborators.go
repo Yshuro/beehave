@@ -525,6 +525,26 @@ type opened struct{ forge.Forge }
 
 var errNoOptionalRead = errors.New("this forge cannot read it")
 
+// IssueAssignees reads who holds an issue, when the forge can. A forge that cannot is an error, so preflight never reads it as an issue nobody holds.
+func (o opened) IssueAssignees(ctx context.Context, repo string, number int) ([]string, error) {
+	reads, ok := o.Forge.(forge.AssigneeReads)
+	if !ok {
+		return nil, fmt.Errorf("%w: the assignees of an issue", errNoOptionalRead)
+	}
+
+	return reads.IssueAssignees(ctx, repo, number)
+}
+
+// ReadyMarks reads who marked a pull request ready for review, when the forge can. A forge that cannot is an error, so the poll never reads it as a pull request that nobody marked.
+func (o opened) ReadyMarks(ctx context.Context, pr int) ([]string, error) {
+	reads, ok := o.Forge.(forge.ReadyReads)
+	if !ok {
+		return nil, fmt.Errorf("%w: the ready marks of a pull request", errNoOptionalRead)
+	}
+
+	return reads.ReadyMarks(ctx, pr)
+}
+
 // AutoMergePR queues the merge of a pull request on the forge, when the forge can. A forge that cannot is an error.
 func (o opened) AutoMergePR(ctx context.Context, pr int, sha string) error {
 	queue, ok := o.Forge.(merge.Queuer)

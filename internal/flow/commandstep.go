@@ -126,17 +126,18 @@ var errStopped = errors.New("a command stopped the item")
 // gateCall unpacks the arguments of the gate builtin: the request, the head and the label.
 func (s *script) gateCall(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (request CommandRequest, head, label string, err error) {
 	var (
-		host, timeout string
-		run           starlark.Value
+		host, timeout, base string
+		run                 starlark.Value
 	)
 
 	if err = workflow.Unpack(b.Name(), args, kwargs, map[string]any{
-		runKeyword: &run, hostKeyword: &host, timeoutKeyword: &timeout, headKeyword: &head, nameKeyword: &label,
+		runKeyword: &run, hostKeyword: &host, timeoutKeyword: &timeout, headKeyword: &head, baseKeyword: &base, nameKeyword: &label,
 	}); err != nil {
 		return request, head, label, err
 	}
 
 	request, err = s.request(run, host, timeout)
+	request.Base = base
 
 	return request, head, label, err
 }
@@ -176,7 +177,7 @@ func (e *Engine) programGateOutputs(ctx context.Context, request CommandRequest,
 		status = failStatus
 	}
 
-	return gateOutputs(out.RC == 0, head, "", out.Stdout, []GateStep{{Name: gatepkg.StepCommand, Status: status}}, e.requiredSteps(request.Project)), nil
+	return gateOutputs(out.RC == 0, head, "", out.Stdout, []GateStep{{Name: gatepkg.StepCommand, Status: status}}, e.requiredSteps(request.Project), nil), nil
 }
 
 // gateStart is what the first step of a project gate records: the pass of an earlier gate that the key reuses, or the host job that the gate submitted.
@@ -198,11 +199,12 @@ func (e *Engine) reuseProjectGate(ctx context.Context, request CommandRequest) (
 
 	key := e.gateKey(ctx, request)
 
-	if earlier, ok := e.earlierPass(key, request.Project); ok {
+	// An earlier pass has no checks of a candidate, so a candidate gate reuses none.
+	if earlier, ok := e.earlierPass(key, request.Project); ok && request.Base == "" {
 		line := fmt.Sprintf("reused the gate pass of run %s: the tree %s, the gate command and the pins are the same. The gate did not run.", earlier.run, key.Tree)
 		e.logger.InfoContext(ctx, line, "item", request.Item)
 
-		return gateStart{Reused: gateOutputs(true, key.Head, key.Tree, line, earlier.steps, e.requiredSteps(request.Project)), Key: key}, nil
+		return gateStart{Reused: gateOutputs(true, key.Head, key.Tree, line, earlier.steps, e.requiredSteps(request.Project), nil), Key: key}, nil
 	}
 
 	return gateStart{Key: key}, nil
@@ -215,7 +217,7 @@ func (e *Engine) startProjectGate(ctx context.Context, request CommandRequest) (
 		return start, err
 	}
 
-	start.Job, err = e.deps.Gate.Submit(ctx, request.Project, request.Item, request.BuildHost)
+	start.Job, err = e.deps.Gate.Submit(ctx, request.Project, request.Item, request.BuildHost, request.Base)
 	start.Required = e.requiredOf(start.Job, request.Project)
 
 	return start, err
@@ -239,7 +241,7 @@ func (e *Engine) finishProjectGate(ctx context.Context, request CommandRequest, 
 		return nil, "", err
 	}
 
-	return gateOutputs(gated.Passed, gated.Head, gated.Tree, gated.Report, gated.Steps, start.Required), recordedKey(gated, start.Key), nil
+	return gateOutputs(gated.Passed, gated.Head, gated.Tree, gated.Report, gated.Steps, start.Required, gated.Checks), recordedKey(gated, start.Key), nil
 }
 
 // gateKey reads the key of the project gate. A key that cannot be read is an empty key: the gate then runs and reports the same problem.

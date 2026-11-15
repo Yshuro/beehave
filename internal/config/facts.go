@@ -13,15 +13,17 @@ import (
 // withFacts checks the facts of a project file and copies them into the profile. A fact that the file leaves out stays empty.
 func withFacts(path string, profile model.Project, raw rawProject) (model.Project, error) {
 	board, boardErr := boardOf(raw)
+	rounds, roundsErr := roundsOf(raw)
 	schedules, schedulesErr := schedulesOf(path, raw)
 
-	if err := errors.Join(checkLists(raw), checkDicts(raw), checkChangelog(raw), boardErr, schedulesErr); err != nil {
+	if err := errors.Join(checkLists(raw), checkDicts(raw), checkChangelog(raw), boardErr, roundsErr, schedulesErr); err != nil {
 		return model.Project{}, err
 	}
 
 	profile.Schedules = schedules
 	profile.Changelog = raw.Changelog.Value
 	profile.Board = board
+	profile.Rounds = rounds
 
 	profile.People, profile.Epics = maps.Clone(raw.People), maps.Clone(raw.Epics)
 	profile.GateFiles, profile.Conventions = slices.Clone(raw.GateFiles), slices.Clone(raw.Conventions)

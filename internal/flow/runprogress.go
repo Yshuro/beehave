@@ -32,6 +32,8 @@ type RunProgress struct {
 	Spent agent.Spend `json:"spent"`
 	// Cap is agents.max_run_budget_usd. It is 0 for no cap.
 	Cap float64 `json:"cap_usd"`
+	// CapStop is the cap that holds an agent step of an open run back. It is nil for a run that no cap holds.
+	CapStop *CapStop `json:"cap_stop,omitempty"`
 	// Now is the step that an open run is in. It is empty for a finished run.
 	Now string `json:"now,omitempty"`
 	// Deadline is the time that the wait of an open run ends. It is the zero time for a run that waits with no timeout, or does not wait.
@@ -51,7 +53,7 @@ func (p RunProgress) Notes() []string {
 
 // NotesAt is Notes with the time left to the deadline of a wait, counted from now. A zero now leaves the time left out.
 func (p RunProgress) NotesAt(now time.Time) []string {
-	notes := p.spentNotes()
+	notes := append(p.spentNotes(), p.stopNotes()...)
 
 	if p.Now != "" {
 		notes = append(notes, "now "+p.Now)
@@ -68,6 +70,15 @@ func (p RunProgress) NotesAt(now time.Time) []string {
 	notes = append(notes, p.Fix.notes("fix")...)
 
 	return append(notes, p.Review.notes("review")...)
+}
+
+// stopNotes is the note of the cap that holds a step back. A run that no cap holds has none.
+func (p RunProgress) stopNotes() []string {
+	if p.CapStop == nil {
+		return nil
+	}
+
+	return []string{p.CapStop.text()}
 }
 
 // deadlineNote is the note of the deadline of a wait, with the time left when now is set.
@@ -177,6 +188,10 @@ func progressOf(lines []StepLine, limit float64, open bool) RunProgress {
 // take adds one step line to the progress.
 func (p *RunProgress) take(line StepLine, open bool) {
 	p.Spent = p.Spent.Plus(line.Spend)
+
+	if open && line.CapStop != nil {
+		p.CapStop = line.CapStop
+	}
 
 	if line.Passed != nil {
 		p.Gate = &GateSeen{Passed: *line.Passed, Head: line.Head}

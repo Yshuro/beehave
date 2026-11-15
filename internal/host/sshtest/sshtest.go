@@ -5,6 +5,7 @@ package sshtest
 import (
 	"context"
 	"encoding/base64"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,6 +37,7 @@ type Unit struct {
 	LogSizes []int    // the size of the log at each read; the last size repeats
 	Raw      []string // the properties each read prints in place of the planned ones; the last text repeats
 	Reset    bool
+	Log      string // the log of the unit, whole; a tail answers its last bytes. Empty means the default text
 }
 
 // Machine is the state of a fake machine. A test sets the fields to plan a failure. Mu guards them while a runner answers.
@@ -181,10 +183,38 @@ func (m *Machine) command(words []string) model.CommandResult {
 	case "df":
 		return m.df()
 	case "tail":
-		return ok("log text\n")
+		return m.tail(words)
 	}
 
 	return m.files(words)
+}
+
+// defaultLog is the log of a unit that a test gave no log.
+const defaultLog = "log text\n"
+
+// tail answers `tail -c <bytes> <folder>/<unit>.log` with the last bytes of the log of the unit, as the real command does. A unit with no scripted log,
+// and a path of no unit, answer the default text.
+func (m *Machine) tail(words []string) model.CommandResult {
+	unit := strings.TrimSuffix(path.Base(words[len(words)-1]), ".log")
+
+	found := m.Units[unit]
+	if found == nil {
+		found = m.Units[strings.TrimPrefix(unit, "beehave-")]
+	}
+
+	if found == nil || found.Log == "" {
+		return ok(defaultLog)
+	}
+
+	log := found.Log
+
+	if len(words) >= 4 && words[1] == "-c" {
+		if bytes, err := strconv.Atoi(words[2]); err == nil && bytes >= 0 {
+			log = log[len(log)-min(bytes, len(log)):]
+		}
+	}
+
+	return ok(log)
 }
 
 // files runs the commands that change or test a file.

@@ -36,9 +36,15 @@ type Row struct {
 	OursAt string `json:"ours_at,omitempty"`
 	// OursWhen and StillHead complete the verdict ledger of the row: when our last review was submitted, and whether the commit it read (OursAt) is the head.
 	// A row with no review of ours has neither.
-	OursWhen         string `json:"ours_when,omitempty"`
-	StillHead        *bool  `json:"still_head,omitempty"`
-	ReplyAt          string `json:"reply_at,omitempty"`
+	OursWhen  string `json:"ours_when,omitempty"`
+	StillHead *bool  `json:"still_head,omitempty"`
+	ReplyAt   string `json:"reply_at,omitempty"`
+	// Deadline and Due are set on a FOLLOW-UP row: our review time plus FollowUpWindow, and whether now has reached it.
+	Deadline string `json:"deadline,omitempty"`
+	Due      *bool  `json:"due,omitempty"`
+	// ReadyMarks counts the ready marks of reviewers on a draft. LetGo is set from the second mark.
+	ReadyMarks       int    `json:"ready_marks,omitempty"`
+	LetGo            bool   `json:"let_go,omitempty"`
 	IsDraft          *bool  `json:"isDraft,omitempty"`
 	UpdatedAt        string `json:"updatedAt,omitempty"`
 	Title            string `json:"title,omitempty"`
@@ -78,6 +84,14 @@ func (r Row) reviewLine() string {
 	suffix := ""
 	if r.ReplyAt != "" {
 		suffix = " reply=" + r.ReplyAt
+	}
+
+	if r.Due != nil {
+		suffix += fmt.Sprintf(" deadline=%s due=%t", r.Deadline, *r.Due)
+	}
+
+	if r.ReadyMarks > 0 {
+		suffix += fmt.Sprintf(" ready_marks=%d let_go=%t", r.ReadyMarks, r.LetGo)
 	}
 
 	return fmt.Sprintf("%-10s #%d %s head=%s ours=%s@%s draft=%s upd=%s %s%s", r.Kind, r.Number, r.Author, model.FirstRunes(r.Head, headWidth),

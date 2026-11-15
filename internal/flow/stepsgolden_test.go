@@ -8,8 +8,19 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/step"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
+
+// moduleRegistry is the registry that an engine builds from the module of this package.
+func moduleRegistry(t *testing.T) step.Registry {
+	t.Helper()
+
+	registry, err := step.NewRegistry([]step.Module{StepModule()})
+	require.NoError(t, err)
+
+	return registry
+}
 
 // resultShape lists every builtin that has result fields with its sorted fields, one line each. It reads the table of the workflow package,
 // so a builtin added to the table is in the shape at once and cannot be left out of the golden data.
@@ -25,18 +36,19 @@ func resultShape(t *testing.T) []string {
 	return lines
 }
 
-// goldenShapes holds the shape of the recorded results for each steps version. The key is the steps version.
-// A change to a builtin or to a result field is a change to what a run records: bump stepsVersion and add the new shape under the new version.
-// The old entry goes away with the bump, because a build refuses the runs of an older version.
+// goldenShapes holds the shape of the recorded results. The key is stepsVersion, the single version that came before the modules.
+// A change to a builtin or to a result field is a change to what a run records: bump the version of the module that owns the kind in moduleTable
+// (stepmodules.go) and update the shape. A later change re-keys these goldens for each module; until then the key stays star30.
 var goldenShapes = map[string][]string{
-	"star26": {
+	"star30": {
 		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,stop,text,transcript,violations",
 		"batch_merge: deferred,findings,gates,merged,note,rejected,tip,tree,unproven",
+		"before_review: base,findings,keywords,new_tests,ok",
 		"board_sync: number,status",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
-		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,source,stacked_rules,token_rules,tracker,traps",
-		"gate: head,passed,report,required,steps,tree",
+		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,round_acceptance,round_allow_paths,round_base,round_base_reds,round_base_reds_file,round_base_result,round_fix_rounds,round_integration_pr,round_lane_cap,round_lane_kind,round_merge,round_next_base,round_owner,round_owner_email,round_source_checkout,round_wait_hours,source,stacked_rules,token_rules,tracker,traps",
+		"gate: checks,head,new_tests,passed,report,required,steps,tree",
 		"gather: results",
 		"host_teardown: down,reason",
 		"host_up: host,started",
@@ -49,7 +61,7 @@ var goldenShapes = map[string][]string{
 		"pr_assign: issues,number",
 		"pr_comment: number",
 		"pr_open: created,number,stack",
-		"preflight: code,ok,reason,stop",
+		"preflight: author,code,foreign,head,ok,pr,reason,stop",
 		"queue: free,rows",
 		"spawn: runs",
 		"wait: answer,answers,timed_out",
@@ -61,16 +73,16 @@ func TestStepsVersion_TheShapeOfTheRecordedResultsIsTheGoldenShapeOfTheVersion(t
 	t.Parallel()
 
 	golden, ok := goldenShapes[stepsVersion]
-	require.True(t, ok, "stepsVersion %s has no golden shape: add the shape of the results under the new version and remove the old one", stepsVersion)
-	assert.Equal(t, golden, resultShape(t), "a builtin or a result field changed: bump stepsVersion and update the golden shape")
+	require.True(t, ok, "the golden shapes have no entry for the key %s", stepsVersion)
+	assert.Equal(t, golden, resultShape(t), "a builtin or a result field changed: bump the version of the module that owns it in moduleTable (stepmodules.go) and update the golden shape")
 	assert.Len(t, goldenShapes, 1, "only the shape of the current version stays")
 }
 
 // goldenKinds holds the table of step kinds for each steps version, as the engine records them. The test needs no workflow to call a builtin:
 // the table is the one the engine checks every step name against. A builtin with no result fields is in it too.
 var goldenKinds = map[string][]string{
-	"star26": {
-		"agent", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
+	"star30": {
+		"agent", "before_review", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
 		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "merge", "now",
 		"pr_assign", "pr_comment", "pr_open", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
 	},
@@ -80,8 +92,8 @@ func TestStepsVersion_TheTableOfStepKindsIsTheGoldenTableOfTheVersion(t *testing
 	t.Parallel()
 
 	golden, ok := goldenKinds[stepsVersion]
-	require.True(t, ok, "stepsVersion %s has no golden step kinds: add the table under the new version and remove the old one", stepsVersion)
-	assert.Equal(t, golden, stepKinds(), "a step kind changed: bump stepsVersion and update the golden table")
+	require.True(t, ok, "the golden step kinds have no entry for the key %s", stepsVersion)
+	assert.Equal(t, golden, moduleRegistry(t).Kinds(), "a step kind changed: bump the version of the module that owns it in moduleTable (stepmodules.go) and update the golden table")
 	assert.Len(t, goldenKinds, 1, "only the table of the current version stays")
 }
 
@@ -93,15 +105,17 @@ func TestStepsVersion_EveryBuiltinWithResultFieldsRecordsUnderAKindOfTheTable(t 
 			continue // its steps are named batch:<name>.<kind> and the golden list of its steps holds them
 		}
 
-		assert.Contains(t, stepKinds(), name, "the builtin %s has result fields and no step kind", name)
+		assert.Contains(t, moduleRegistry(t).Kinds(), name, "the builtin %s has result fields and no step kind", name)
 	}
 }
 
 func TestStepsVersion_AStepOfAKindOutsideTheTableIsAFaultOfTheBuild(t *testing.T) {
 	t.Parallel()
 
-	require.ErrorIs(t, checkStepKind(stepKinds(), "pr_comment2"), errUnknownStepKind)
-	require.NoError(t, checkStepKind(stepKinds(), "pr_comment"))
+	kinds := moduleRegistry(t).Kinds()
+
+	require.ErrorIs(t, checkStepKind(kinds, "pr_comment2"), errUnknownStepKind)
+	require.NoError(t, checkStepKind(kinds, "pr_comment"))
 }
 
 func TestStepsVersion_EveryPathThatRecordsAStepRefusesAKindOutsideTheTable(t *testing.T) {
@@ -152,5 +166,5 @@ func TestStepsVersion_TheStepNamesOfABatchMergeMatchTheGoldenListOfTheStepsVersi
 		}
 	}
 
-	assert.Equal(t, goldenBatchSteps, batch, "the steps of batch_merge changed: bump stepsVersion and update the list")
+	assert.Equal(t, goldenBatchSteps, batch, "the steps of batch_merge changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
 }

@@ -231,16 +231,17 @@ func TestUnpack_BindsEachDestinationByItsKeywordNotByItsPlace(t *testing.T) {
 	t.Parallel()
 
 	var (
-		run                    starlark.Value
-		host, timeout, head, n string
+		run                          starlark.Value
+		host, timeout, head, base, n string
 	)
 
-	kwargs := []starlark.Tuple{{starlark.String("timeout"), starlark.String("5m")}, {starlark.String("head"), starlark.String("abc")}}
-	err := workflow.Unpack("gate", nil, kwargs, map[string]any{"head": &head, "name": &n, "timeout": &timeout, "host": &host, "run": &run})
+	kwargs := []starlark.Tuple{{starlark.String("timeout"), starlark.String("5m")}, {starlark.String("head"), starlark.String("abc")}, {starlark.String("base"), starlark.String("main")}}
+	err := workflow.Unpack("gate", nil, kwargs, map[string]any{"head": &head, "base": &base, "name": &n, "timeout": &timeout, "host": &host, "run": &run})
 
 	require.NoError(t, err)
 	assert.Equal(t, "5m", timeout)
 	assert.Equal(t, "abc", head)
+	assert.Equal(t, "main", base)
 }
 
 func TestUnpack_RefusesDestinationsThatDifferFromTheSignature(t *testing.T) {

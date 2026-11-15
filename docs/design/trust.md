@@ -217,7 +217,7 @@ Retention deletes successful runs after 7 days, so a count that reads run record
 
 The package `internal/ledger` owns `<state folder>/ledger.db`, a SQLite file with mode 0600. Retention never touches it. Only `beehave round close <base>` deletes rows. It has three tables:
 
-- `rounds`: one row per round with its status, last pass, integration pull request and steps version.
+- `rounds`: one row per round with its status, last pass, integration pull request and the version of the build with the version of each step module.
 - `round_items`: one row per item with its attempt, run id, branch, pull request, the head that the engine last pushed (the fence) and its state.
 - `spend`: one row per agent execution with its tree, run, step, session, item, pull request, call name and cost. A `NULL` cost means unknown.
 
@@ -227,7 +227,7 @@ An agent step writes its `spend` row with `INSERT OR IGNORE` after the agent exi
 
 The round entry is `round_pass`. One pass reads the round record, audits, queues, spawns, gathers, lands and writes the record. Then it calls `next_pass(name = "round-next-<n>")`. That builtin enqueues the next pass and returns. DBOS dedupes the id, so a replay enqueues nothing twice.
 
-The next pass starts under the binary that runs it, so it has the current steps version. A bump of the steps version strands at most the one open pass. `beehave round restart <base>` starts that pass again. It spawns no item twice, because it reads its children from `round_items` by run id.
+The next pass starts under the binary that runs it, so it has the current module versions. A bump of the version of a step module strands at most the one open pass, and only when the pass recorded a step of that module. `beehave round restart <base>` starts that pass again. It spawns no item twice, because it reads its children from `round_items` by run id.
 
 No pass waits for the owner. When no item can move, the pass sets `status = waiting`, updates the integration pull request and returns. `beehave round continue <base>` starts the next pass.
 

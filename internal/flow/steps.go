@@ -59,13 +59,17 @@ type StepLine struct {
 	Rounds int `json:"rounds,omitempty"`
 	// Spend is the cost of the agent runs of the call, failed runs included, with the marks of an estimate and of an unknown cost. It is empty for a step that is not an agent.
 	agent.Spend
-	Stop    string `json:"stop,omitempty"`
-	Verdict string `json:"verdict,omitempty"`
-	Head    string `json:"head,omitempty"`
+	Stop string `json:"stop,omitempty"`
+	// CapStop is set while the step waits for the owner to raise a cap.
+	CapStop *CapStop `json:"cap_stop,omitempty"`
+	Verdict string   `json:"verdict,omitempty"`
+	Head    string   `json:"head,omitempty"`
 	// Rewrote is set when the commit the agent started on is not in the history of its head: the agent amended, squashed or reset.
 	Rewrote bool       `json:"rewrote,omitempty"`
 	Passed  *bool      `json:"passed,omitempty"`
 	Gate    []GateStep `json:"gate,omitempty"`
+	// NewTests holds the names of the new tests that the gate of a candidate head found. It is empty for any other step.
+	NewTests []string `json:"new_tests,omitempty"`
 	// OutputUnreadable is set when a recorded output of the step did not decode into the type the engine wrote. The other fields are then incomplete.
 	OutputUnreadable bool `json:"output_unreadable,omitempty"`
 }
@@ -280,6 +284,8 @@ func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {
 	case strings.HasPrefix(sub, "read"):
 		return decodeThen(output, func(read recorded[agentRead]) { l.fromAgentRead(read.Outputs) })
+	case strings.HasPrefix(sub, "budget"):
+		return decodeThen(output, func(check capCheck) { l.CapStop = check.Stop })
 	case strings.HasPrefix(sub, "spent"):
 		return decodeThen(output, func(spent recorded[agentFields]) { l.Spend = l.Plus(spent.Outputs.Spend) })
 	}
@@ -341,9 +347,13 @@ func (l *StepLine) fromAgentRead(read agentRead) {
 	l.Spend = l.Plus(read.Spend)
 }
 
-// fromGate takes the result of a gate: pass or fail, the head and the status of each gate step.
+// fromGate takes the result of a gate: pass or fail, the head, the status of each gate step and the names of the new tests.
 func (l *StepLine) fromGate(result GateResult) {
 	l.Passed, l.Head, l.Gate = &result.Passed, cmp.Or(result.Head, l.Head), result.Steps
+
+	if result.Checks != nil {
+		l.NewTests = result.Checks.NewTests
+	}
 }
 
 // fromCommand takes the exit code of a command, and the stop of the item when the command ended it.

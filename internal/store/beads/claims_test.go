@@ -436,3 +436,27 @@ func TestBeadsMissingRowText_BothVersionsOfBdAreRecognised(t *testing.T) {
 	bd.Fail["unclaim"] = model.CommandResult{ExitCode: 1, Stderr: "locked"}
 	require.NoError(t, beadsOver(t, bd).Free(bg(), model.ClaimRow{Item: "5", Holder: "s1"}))
 }
+
+func TestBeadsHeldRows_AClaimRowOfARoundNamesTheRoundItemWithItsSlashes(t *testing.T) {
+	t.Parallel()
+
+	bd := newFakeBd(t)
+	bd.Add("p-lock-round-round_2Fintegration_2Fs1", fields{"title": "lock:round-round/integration/s1", "status": progress, "assignee": "s1"})
+
+	rows, err := beadsOver(t, bd).HeldRows(bg())
+	require.NoError(t, err)
+	assert.Equal(t, []model.ClaimRow{{Item: "round/integration/s1", Holder: "s1"}}, rows)
+}
+
+func TestBeadsFree_ARoundLockRowIsNamedByTheSafeFormOfTheRoundItem(t *testing.T) {
+	t.Parallel()
+
+	bd := newFakeBd(t)
+	beads := beadsOver(t, bd)
+	row := model.ClaimRow{Item: "round/integration/s1", Holder: "s1"}
+
+	require.NoError(t, beads.TryHold(bg(), row))
+	require.NoError(t, beads.Free(bg(), row))
+
+	assert.True(t, bd.Called("unclaim", "p-lock-round-round_2Fintegration_2Fs1", "--if-assignee", "s1", "--actor", "s1"))
+}

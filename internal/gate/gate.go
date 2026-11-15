@@ -95,6 +95,8 @@ type Result struct {
 	Head   string
 	Tree   string
 	Steps  []Step
+	// Checks is what the log of a candidate job that passed says about its new tests and its secret scan. It is nil for any other gate.
+	Checks *Checks
 }
 
 // Request is one gate run. Resume names a host job that an earlier run submitted; the run reads that job again and submits none.
@@ -111,6 +113,9 @@ type Request struct {
 	// the gate, the list, the test report, the build host and the pin check come from the Plan. A zero Plan leaves the project as it is.
 	Plan      Plan
 	Submitted func(model.JobID)
+	// Base is the base branch of a candidate head. A host gate with a Base runs the candidate steps (secret scan, new-tests check) after the head gate.
+	// An empty Base is a sync head or a landing gate: the gate command only. The Plan records the Base with the job.
+	Base string
 
 	// pins are the pinned tools that the probe in front of each gate command checks. Run and Submit read them from the pin file at the base commit.
 	pins []Pin
@@ -199,7 +204,7 @@ func (g Gate) planned(ctx context.Context, request Request) (Request, Plan) {
 	request.pins = check.Tools
 
 	plan := PlanOf(request.Project)
-	plan.Pins = &check
+	plan.Pins, plan.Base = &check, request.Base
 
 	return request, plan
 }
@@ -435,33 +440,59 @@ func (g Gate) remote(ctx context.Context, request Request, head string) (Result,
 		return Result{}, err
 	}
 
-	return wait(ctx, host, project, id, head)
+	return wait(ctx, host, project, id, head, request.Plan.Base != "" || (request.Resume == "" && request.Base != ""))
 }
 
-// wait waits for the host job and maps its state to a result for head.
-func wait(ctx context.Context, host Remote, project model.Project, id model.JobID, head string) (Result, error) {
-	cluster := project.BuildHost
-
+// wait waits for the host job and maps its state to a result for head. A candidate job that passed also gets its checks from its log.
+func wait(ctx context.Context, host Remote, project model.Project, id model.JobID, head string, candidate bool) (Result, error) {
 	state, err := host.Wait(ctx, id)
 	if err != nil {
 		// A wait that ends because the context ended leaves the job running on the host: stop it, so a stopped gate frees the host.
 		if ctx.Err() != nil {
-			err = errors.Join(err, stopJob(ctx, host, cluster, id))
+			err = errors.Join(err, stopJob(ctx, host, project.BuildHost, id))
 		}
 
-		return Result{}, fmt.Errorf("wait for the gate on %s: %w", cluster, err)
+		return Result{}, fmt.Errorf("wait for the gate on %s: %w", project.BuildHost, err)
 	}
 
 	result, err := verdict(ctx, project, head, state)
-
-	// The log of every failed job is evidence: it holds the void line of a pin mismatch, which no setting of the project predicts.
-	if err == nil && state == model.JobFailed {
-		result = explainFailure(ctx, host, project, id, result)
+	if err == nil {
+		result = withLog(ctx, host, project, id, state, candidate, result)
 	}
 
 	result.Head = head
 
 	return result, err
+}
+
+// withLog adds what the log of the job says. The log of every failed job is evidence: it holds the void line of a pin mismatch, which no setting
+// of the project predicts. The log of a passing candidate job holds the lines of the new-tests check.
+func withLog(ctx context.Context, host Remote, project model.Project, id model.JobID, state model.JobState, candidate bool, result Result) Result {
+	switch {
+	case state == model.JobFailed:
+		return explainFailure(ctx, host, project, id, result)
+	case candidate && state == model.JobSucceeded:
+		result.Checks = readChecks(ctx, host, id)
+	}
+
+	return result
+}
+
+// readChecks reads the new-tests lines from the log of a passing candidate job. A log that cannot be read is a cut log: Complete is false, and the reason is the problem.
+func readChecks(ctx context.Context, host Remote, id model.JobID) *Checks {
+	reader, ok := host.(LogReader)
+	if !ok {
+		return &Checks{Problem: "the build host cannot give the log of the gate job"}
+	}
+
+	log, err := reader.Log(ctx, id)
+	if err != nil {
+		return &Checks{Problem: "the log of the gate job cannot be read: " + err.Error()}
+	}
+
+	checks := ReadChecks(log)
+
+	return &checks
 }
 
 // LogReader is a Remote that can read the log of a job. A host that does not have it gives a failed job a report that names both causes.
@@ -561,7 +592,7 @@ func submit(ctx context.Context, host Remote, request Request, head string) (mod
 		return "", err
 	}
 
-	id, err := host.Submit(ctx, model.JobSpec{Name: "gate-" + project.Name, Command: hostCommand(project, request.pins, request.CloneURL, head, clone)})
+	id, err := host.Submit(ctx, model.JobSpec{Name: "gate-" + project.Name, Command: hostCommand(project, request.pins, request.CloneURL, head, clone, request.Base)})
 	if err != nil {
 		return "", fmt.Errorf("start the gate on %s: %w", project.BuildHost, err)
 	}
@@ -610,9 +641,27 @@ func plainWord(word string) bool {
 // When the host has a run limit (`host.max_run`), the gate command runs under `timeout` with that limit, so a hung step ends the job
 // with exit status 124 and the trap still writes the marker and deletes the clone.
 // A clone or checkout that fails, as it does for a commit that is not pushed, ends the command with a failure before the gate runs.
-func hostCommand(project model.Project, pins []Pin, cloneURL, head, clone string) string {
+func hostCommand(project model.Project, pins []Pin, cloneURL, head, clone, base string) string {
+	words := cloneWords(cloneURL, head, clone)
+
+	// A candidate head runs its steps apart (see candidateWord). A sync head and a landing gate keep the gate command only.
+	if base != "" {
+		return strings.Join(append(words, candidateWord(project, pins, base, clone)), " && ")
+	}
+
+	before, after := reportChecks(project.TestReport)
+
+	words = append(words, before...)
+	words = append(words, gateWords(project, pins)...)
+
+	return strings.Join(append(words, after...), " && ")
+}
+
+// cloneWords are the words that make the clone folder and check out head in it.
+func cloneWords(cloneURL, head, clone string) []string {
 	path := model.ShellQuote(clone)
-	words := []string{
+
+	return []string{
 		"trap " + model.ShellQuote("echo "+cloneMarker+"; rm -rf "+path) + " EXIT",
 		"trap 'exit 143' HUP INT TERM",
 		"rm -rf " + path,
@@ -623,13 +672,6 @@ func hostCommand(project model.Project, pins []Pin, cloneURL, head, clone string
 		"git checkout --detach " + model.ShellQuote(head),
 		`[ "$(git rev-parse HEAD)" = ` + model.ShellQuote(head) + ` ]`,
 	}
-
-	before, after := reportChecks(project.TestReport)
-
-	words = append(words, before...)
-	words = append(words, gateWords(project, pins)...)
-
-	return strings.Join(append(words, after...), " && ")
 }
 
 // gateWords are the words that run the gate command. A project with a gate string has one word. A gate list has one word for each step:

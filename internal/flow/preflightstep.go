@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 
 	"go.starlark.net/starlark"
@@ -28,7 +29,23 @@ func preflightOutputs(result preflight.Result) map[string]any {
 		reason = strings.Join(result.Lines, "; ")
 	}
 
-	return map[string]any{"ok": result.OK(), "stop": result.Stop.String(), "code": result.Stop.Code(), reasonKey: reason}
+	return map[string]any{
+		"ok": result.OK(), "stop": result.Stop.String(), "code": result.Stop.Code(), reasonKey: reason,
+		"foreign": result.Foreign, "pr": result.PR, "head": result.Head, "author": result.Author,
+	}
+}
+
+// refuseForeign turns a foreign result into a refusal. The foreign path starts no item on any project yet, and no setting turns it on,
+// so the workflow never sees a foreign result.
+func refuseForeign(result preflight.Result) preflight.Result {
+	if !result.Foreign {
+		return result
+	}
+
+	return preflight.Result{
+		Stop: preflight.Refused, Summary: result.Summary,
+		Lines: []string{fmt.Sprintf("REFUSE: #%d is open and its author is '%s', who is not on the list of own logins. This build does not review the pull request of another author.", result.PR, result.Author)},
+	}
 }
 
 // preflight reads the pull request of the item and returns the first stop in the fixed order of the preflight package.
@@ -58,13 +75,18 @@ func (s *script) preflight(b *starlark.Builtin, args starlark.Tuple, kwargs []st
 // preflightArgs reads the keywords of a preflight call: the request, the hold label, the name of the step and the id of the item to read.
 // The id is empty when the call leaves it out, and the call then reads the item of the run.
 func preflightArgs(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (req preflight.Request, hold, label, id string, err error) {
-	var own starlark.Value
+	var (
+		own     starlark.Value
+		foreign string
+	)
 
 	if err = workflow.Unpack(b.Name(), args, kwargs, map[string]any{
-		headKeyword: &req.ExpectHead, baseKeyword: &req.ExpectBase, holdKeyword: &hold, ownKeyword: &own, nameKeyword: &label, "id": &id,
+		headKeyword: &req.ExpectHead, baseKeyword: &req.ExpectBase, holdKeyword: &hold, ownKeyword: &own, nameKeyword: &label, "id": &id, "foreign": &foreign,
 	}); err != nil {
 		return req, "", "", "", err
 	}
+
+	req.Foreign = foreign != ""
 
 	req.Own, _, err = workflow.OwnerIdentity(own)
 
@@ -76,7 +98,7 @@ func (s *script) ask(id string, req preflight.Request, hold string) func(context
 	return func(ctx context.Context, _ string) (stepResult, error) {
 		result, err := s.e.deps.Preflight.Preflight(ctx, s.in.Project, id, req, hold)
 
-		return stepResult{Outputs: preflightOutputs(result)}, err
+		return stepResult{Outputs: preflightOutputs(refuseForeign(result))}, err
 	}
 }
 

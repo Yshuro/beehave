@@ -47,6 +47,8 @@ func (s fakeSource) Title(context.Context, int) (string, error) { return "", nil
 
 func (s fakeSource) CheckNotStarted(context.Context, string) (bool, error) { return false, nil }
 
+func (s fakeSource) ReadyMarks(context.Context, int) ([]string, error) { return nil, nil }
+
 func (s fakeSource) OwnPulls(context.Context, string) ([]model.OwnPull, error) {
 	return s.own, s.ownErr
 }

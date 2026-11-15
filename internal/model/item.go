@@ -48,6 +48,8 @@ type Item struct {
 	Parent   string
 	Assignee string
 	Title    string
+	// Labels are the tracker labels of the item. A tracker that sends none leaves it empty.
+	Labels []string
 }
 
 // Line returns the item as one line of unit-separated columns.

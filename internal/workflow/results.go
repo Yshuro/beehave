@@ -33,9 +33,11 @@ const (
 	itemReadName     = "item_read"
 	itemStatusName   = "item_status"
 	boardSyncName    = "board_sync"
+	beforeReviewName = "before_review"
 	prAssignName     = "pr_assign"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
+	baseField        = "base"
 	numberField      = "number"
 	statusField      = "status"
 )
@@ -51,21 +53,29 @@ func resultFields() map[string][]string {
 		batchMergeName:   {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", "findings", "note", "unproven"},
 		commandName:      {"stdout", "stderr", "rc"},
 		earlierCallsName: {"count"},
-		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required"},
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
 		mergeName:        {"state", reasonField},
-		preflightName:    {"ok", "stop", "code", reasonField},
+		preflightName:    {"ok", "stop", "code", reasonField, "foreign", "pr", "head", "author"},
 		queueName:        {"rows", "free"},
 		spawnName:        {"runs"},
 		waitName:         {"answer", "answers", "timed_out"},
 		writeName:        {"stdout", "stderr", "rc", "key", "skipped"},
 	}
+	maps.Copy(fields, gateResultFields())
 	maps.Copy(fields, trackerResultFields())
 	maps.Copy(fields, factsResultFields())
 
 	return fields
+}
+
+// gateResultFields holds the fields of the builtins that judge a head: gate and before_review.
+func gateResultFields() map[string][]string {
+	return map[string][]string{
+		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests"},
+		beforeReviewName: {"ok", "findings", "new_tests", baseField, "keywords"},
+	}
 }
 
 // factsResultFields holds the fields of the struct that facts returns.
@@ -74,6 +84,8 @@ func factsResultFields() map[string][]string {
 		"repo", "source", "forge", "tracker", "base_branch", "gate", "gate_steps", "build_host", "people", "epics", "gate_files", "conventions",
 		"brief_rules", "stacked_rules", "limits", "traps", "token_rules", "changelog",
 		"board_number", "board_owner", "board_started", "board_merged",
+		"round_base", "round_next_base", "round_owner", "round_owner_email", "round_source_checkout", "round_lane_cap", "round_fix_rounds", "round_integration_pr", "round_merge",
+		"round_acceptance", "round_base_result", "round_base_reds", "round_base_reds_file", "round_lane_kind", "round_allow_paths", "round_wait_hours",
 	}}
 }
 

@@ -76,7 +76,7 @@ func e2eFlow(dir, path string) cli.Flow {
 		Engine: func(ctx context.Context, cfg config.Config, opts flow.Options) (cli.Runner, error) {
 			files := e2eFiles{dir: dir}
 
-			engine, err := flow.NewEngine(ctx, opts, withBatch(flow.Deps{
+			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
 				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{},
 				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files,
 			}, dir, cfg))
@@ -195,7 +195,7 @@ func e2eHeadOf(ctx context.Context, dir string) (string, error) {
 // e2eGate passes every item.
 type e2eGate struct{ dir string }
 
-func (e2eGate) Submit(context.Context, string, string, string) (flow.GateJob, error) {
+func (e2eGate) Submit(context.Context, string, string, string, string) (flow.GateJob, error) {
 	return flow.GateJob{}, nil
 }
 

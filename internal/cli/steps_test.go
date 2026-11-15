@@ -239,6 +239,31 @@ func TestStatus_ARunIdWithJSONPrintsOneObjectForScripts(t *testing.T) {
 	assert.Empty(t, got.Steps[3].Ended, "a step that runs has no end time")
 }
 
+func TestStatus_ARunIdWithJSONCarriesTheNewTestsOfACandidateGate(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
+		{Name: "gate:g#1", State: "done", Passed: boolPtr(true), NewTests: []string{"pkg TestA", "pkg TestA/case"}},
+		{Name: "gate:h#1", State: "done", Passed: boolPtr(true)},
+	}}
+
+	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1", "--json")
+
+	require.Equal(t, 0, code, stderr)
+
+	var got struct {
+		Steps []struct {
+			NewTests []string `json:"new_tests"`
+		} `json:"steps"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
+	require.Len(t, got.Steps, 2)
+	assert.Equal(t, []string{"pkg TestA", "pkg TestA/case"}, got.Steps[0].NewTests)
+	assert.Empty(t, got.Steps[1].NewTests, "a gate with no candidate checks has no new tests")
+}
+
 func TestStatus_AMissingRunReportsItsError(t *testing.T) {
 	t.Parallel()
 

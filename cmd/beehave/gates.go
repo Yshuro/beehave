@@ -51,16 +51,30 @@ func (g projectGate) Run(ctx context.Context, project, item, cluster string, job
 		return flow.GateResult{}, fmt.Errorf("run the gate of item %s: %w", item, err)
 	}
 
-	return flow.GateResult{Passed: result.Passed, Report: result.Report, Head: result.Head, Tree: result.Tree, Steps: gateSteps(result.Steps)}, nil
+	return flow.GateResult{Passed: result.Passed, Report: result.Report, Head: result.Head, Tree: result.Tree, Steps: gateSteps(result.Steps), Checks: gateChecks(result.Checks)}, nil
+}
+
+// gateChecks gives the checks of a candidate gate to the engine. A gate with none gives nil.
+func gateChecks(checks *gate.Checks) *flow.GateChecks {
+	if checks == nil {
+		return nil
+	}
+
+	return &flow.GateChecks{
+		NewTests: checks.NewTests, Failed: checks.Failed, New: checks.New, FailedCount: checks.FailedCount,
+		Secrets: checks.Secrets, Complete: checks.Complete, Problem: checks.Problem,
+	}
 }
 
 // Submit starts the host job of the gate of the project and returns at once, so the engine can record the job before it waits.
 // A project that builds here has no host job, and its job is empty.
-func (g projectGate) Submit(ctx context.Context, project, item, cluster string) (flow.GateJob, error) {
+func (g projectGate) Submit(ctx context.Context, project, item, cluster, base string) (flow.GateJob, error) {
 	request, err := g.request(ctx, project, item, cluster)
 	if err != nil {
 		return flow.GateJob{}, err
 	}
+
+	request.Base = base
 
 	job, err := g.gate(project).Submit(ctx, request)
 	if err != nil {

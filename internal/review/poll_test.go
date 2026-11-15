@@ -109,6 +109,30 @@ func TestPoll_WhoDoesNotCountAsAReply(t *testing.T) {
 	}
 }
 
+func TestPoll_AWaitingRowReadsItsReplyAndAFollowUpRowDoesNot(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	onePull(w, review1(me, model.ReviewChangesRequested, head, "2026-10-19T00:00:00Z"))
+	w.issueComments[1] = []model.Comment{comment("alice", "2026-10-20T00:00:00Z")}
+
+	rows, err := poll(t, w)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, review.KindReplied, rows[0].Kind)
+	assert.Equal(t, "2026-10-20T00:00:00Z", rows[0].ReplyAt)
+
+	w = newWorld()
+	onePull(w, review1(me, model.ReviewChangesRequested, old, "2026-10-19T00:00:00Z"))
+	w.issueComments[1] = []model.Comment{comment("alice", "2026-10-20T00:00:00Z")}
+
+	rows, err = poll(t, w)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	assert.Equal(t, review.KindFollowUp, rows[0].Kind)
+	assert.Empty(t, rows[0].ReplyAt)
+}
+
 func TestPoll_AReviewCommentOrAReviewByOthersCountsAsAReply(t *testing.T) {
 	t.Parallel()
 

@@ -6,6 +6,8 @@ import "strings"
 const (
 	KindForge = "gh"
 	KindBeads = "bd"
+	// KindRound is the kind of the item that a round starts as: round/<base>. The base is a branch name and holds "/".
+	KindRound = "round"
 )
 
 const (
@@ -13,10 +15,18 @@ const (
 	underscore  = '_'
 )
 
-// ItemKind returns KindForge for a forge number, KindBeads for a beads id and "" for neither.
+// ItemKind returns KindForge for a forge number, KindBeads for a beads id, KindRound for a round id and "" for none of them.
 func ItemKind(item string) string {
 	if IsDigits(item) {
 		return KindForge
+	}
+
+	if kind, base, found := strings.Cut(item, "/"); found && kind == KindRound {
+		if ValidBase(base) {
+			return KindRound
+		}
+
+		return ""
 	}
 
 	prefix, rest, found := strings.Cut(item, string(idSeparator))
@@ -42,4 +52,20 @@ func NotAlnum(r rune) bool {
 
 func notIDRune(r rune) bool {
 	return NotAlnum(r) && r != underscore && r != '.' && r != idSeparator
+}
+
+// ValidBase reports whether text is the name of a round branch: segments of letters, digits, "_", "." and "-" joined by "/".
+// Each segment starts with a letter or a digit, so the name holds no "..", no leading or trailing "/" and no empty segment.
+func ValidBase(text string) bool {
+	if strings.Contains(text, "..") {
+		return false
+	}
+
+	for segment := range strings.SplitSeq(text, "/") {
+		if segment == "" || NotAlnum(rune(segment[0])) || strings.IndexFunc(segment[1:], notIDRune) >= 0 {
+			return false
+		}
+	}
+
+	return true
 }

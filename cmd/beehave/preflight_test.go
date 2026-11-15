@@ -20,12 +20,47 @@ type preflightForge struct {
 	pullForge
 
 	reads []int
+	body  string
 }
 
 func (f *preflightForge) PRView(_ context.Context, pr int, _ ...string) (model.PullRequest, error) {
 	f.reads = append(f.reads, pr)
 
-	return model.Decode[model.PullRequest]("test", `{"number":`+strconv.Itoa(pr)+`,"state":"`+f.state+`","isDraft":false,"headRefName":"bb-1","baseRefName":"integration","headRefOid":"abc","labels":[]}`)
+	return model.Decode[model.PullRequest]("test", `{"number":`+strconv.Itoa(pr)+`,"state":"`+f.state+`","isDraft":false,"headRefName":"bb-1","baseRefName":"integration","headRefOid":"abc","labels":[],"assignees":[],"body":"`+f.body+`"}`)
+}
+
+// assigneeForge is a forge that reads assignees: the issues map holds the logins of each issue number.
+type assigneeForge struct {
+	preflightForge
+
+	issues map[int][]string
+}
+
+func (f *assigneeForge) IssueAssignees(_ context.Context, _ string, number int) ([]string, error) {
+	return f.issues[number], nil
+}
+
+func TestPulls_PreflightReadsALinkedIssueOnAForgeThatReadsAssignees(t *testing.T) {
+	t.Parallel()
+
+	f := &assigneeForge{preflightForge: preflightForge{pullForge: pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 4}}}, state: "OPEN"}, body: "Closes #7"}, issues: map[int][]string{7: {"maintainer"}}}
+	over := pulls{projects: map[string]config.Project{"p": {}}, forge: func(model.Project) (forge.Forge, error) { return f, nil }}
+
+	result, err := over.Preflight(t.Context(), "p", "bb-1", preflight.Request{Own: []string{"me"}}, "")
+
+	require.NoError(t, err)
+	assert.Equal(t, preflight.Assigned, result.Stop)
+	assert.Contains(t, result.Lines[0], "knows=no")
+}
+
+func TestPulls_PreflightRefusesALinkedIssueOnAForgeThatCannotReadAssignees(t *testing.T) {
+	t.Parallel()
+
+	f := &preflightForge{pullForge: pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 4}}}, state: "OPEN"}, body: "Closes #7"}
+
+	_, err := f.over().Preflight(t.Context(), "p", "bb-1", preflight.Request{Own: []string{"me"}}, "")
+
+	require.ErrorIs(t, err, errNoOptionalRead)
 }
 
 // over is the pulls of project p over the forge.

@@ -38,7 +38,7 @@ type script struct {
 
 	// counts holds the number of calls so far of each builtin, which numbers its steps.
 	counts map[string]int
-	// kinds is the table of step kinds that name accepts. It is nil, and so the table of the engine, unless a test sets it.
+	// kinds is the table of step kinds that name accepts. It is nil, and so the table of the registry of the engine, unless a test sets it.
 	kinds []string
 
 	// spent is the sum of the costs that the agent steps of this run recorded so far, marks included. A replay adds the same recorded costs again in the same order.
@@ -80,7 +80,7 @@ type script struct {
 func (s *script) name(builtin, label string) (string, error) {
 	kinds := s.kinds
 	if kinds == nil {
-		kinds = stepKinds()
+		kinds = s.e.registry.Kinds()
 	}
 
 	if err := checkStepKind(kinds, builtin); err != nil {

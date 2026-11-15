@@ -364,7 +364,7 @@ func TestPlanOf_TheSamePlanForEveryStateOfTheLatestRun(t *testing.T) {
 		{name: "open", last: open(dbos.WorkflowStatusPending, version), found: true, want: attemptPlan{Join: runID(testItem, 2)}},
 		{name: "queued", last: open(dbos.WorkflowStatusEnqueued, version), found: true, want: attemptPlan{Join: runID(testItem, 2)}},
 		{name: "ended since the launch", last: open(dbos.WorkflowStatusSuccess, version), found: true, resumed: true, want: attemptPlan{Join: runID(testItem, 2)}},
-		{name: "open on another build", last: open(dbos.WorkflowStatusPending, "v0+"+stepsVersion), found: true, wantErr: errStranded},
+		{name: "open on another build", last: open(dbos.WorkflowStatusPending, applicationVersion("v0")), found: true, wantErr: errStranded},
 	}
 
 	for _, test := range tests {

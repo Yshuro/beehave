@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -12,7 +13,19 @@ import (
 
 const runPrefix = "item-"
 
+// passPrefix starts the id of a pass run of a round, round-<base>-r<k>-p<n>, and passName is the workflow name of a pass run.
+const (
+	passPrefix = "round-"
+	passName   = "round"
+)
+
 const attemptMarker = "-r"
+
+// runIDForm matches the two forms of run id that the engine makes: item-<item>-r<n> and round-<base>-r<k>-p<n>.
+var runIDForm = regexp.MustCompile(`^(item-.+-r[1-9][0-9]*|round-.+-r[1-9][0-9]*-p[1-9][0-9]*)$`)
+
+// errBadRunID is returned when --run names an id that no run of beehave has the form of.
+var errBadRunID = errors.New("not a run id")
 
 // ErrBadItem is returned when an item id is not an item id: digits, or a prefix, a dash and a name.
 var ErrBadItem = errors.New("invalid item")

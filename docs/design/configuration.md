@@ -24,12 +24,13 @@ Each file is Starlark with the step limit of the workflow files. The limits and 
 | `max_turns` | The cap of turns for one agent run. | 0 means no cap. | |
 | `max_budget_usd` | The cap of dollars for one agent run. | 0 means no cap. | |
 | `max_run_budget_usd` | The cap of dollars for the agent steps of one run in all. | 0 means no cap. | `BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD` |
+| `max_tree_budget_usd` | The cap of dollars for the agent steps of an item tree in all: the root run and every run it spawns. A spawned run uses the cap of its root. | 0 means no cap. | `BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD` |
 | `review_poll_minutes` | The minutes between two review polls. | 0 means no poll. | `BEEHAVE_REVIEW_POLL_MINUTES` |
 | `retention_days` | The age in days at which `beehave run` deletes a finished run. | Default 7. 0 keeps every finished run. The most is 36500. | `BEEHAVE_AGENTS_RETENTION_DAYS` |
 
 ### `project(...)`
 
-The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
+The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
 
 The project also takes the config block of the adapter that it chooses. The adapter declares the keys of its block, and the config passes the block to the adapter unread. The beads adapter declares the `beads` block with one key: `beads = beads(prefix = "proj")`. A project that chooses the beads tracker or the beads claim store must give the block. The config refuses a block of an adapter that the project does not choose, and the refusal names the adapters that the project does choose.
 
@@ -54,6 +55,24 @@ The optional `board = board(number, started, merged, owner)` value is the GitHub
 | `number` | A whole number above 0. |
 | `started`, `merged` | The Status columns that a workflow sets. |
 | `owner` | The login that owns the board. It defaults to the owner of the repository. |
+
+#### `rounds`
+
+The optional `rounds = rounds(...)` value holds the settings of one round. With no `rounds` value, the project has no round settings and the queue lists every open item. The workflow reads each key as the fact `round_<key>`.
+
+| Argument | Rule |
+| --- | --- |
+| `base` | Required. The branch of the round, such as `integration/r2`. The round id is `round/<base>`. |
+| `owner` | Required. The login of the owner. |
+| `lane_cap`, `fix_rounds` | Required. A whole number of 1 or more. |
+| `label`, `items` | Required: set exactly one. `label` is the tracker label that marks the items of the round. `items` is a list of item ids. The loader refuses a block with neither, with both, or with a blank label or an id that is not an item. |
+| `next_base`, `owner_email`, `source_checkout`, `acceptance`, `base_result` | Optional text. Empty when left out. |
+| `integration_pr` | Optional. A whole number of 0 or more. 0 means the round finds the pull request. |
+| `wait_hours` | Optional. A whole number of 1 or more when set. |
+| `merge` | Optional bool. The default is false. |
+| `base_reds`, `allow_paths` | Optional lists. |
+| `base_reds_file` | Optional. The default is `base-reds.md`. |
+| `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
 
 #### `schedules`
 
