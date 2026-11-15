@@ -25,7 +25,7 @@ func TestClient_ResumeOnThisBuildMovesARunThatRecordedNoStepOfTheModuleThatChang
 	t.Parallel()
 
 	harness, _, other := strandedHarness(t)
-	buildWithModule(other, moduleGate, 2)
+	buildWithModule(other, moduleGate, 3)
 	expireLease(harness)
 
 	require.NoError(t, other.ResumeOnThisBuild(testItem), "the run recorded agent steps and no gate step")
@@ -64,7 +64,7 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAGateStepWhenTheGateModu
 	waitForTheOwner(t, harness)
 	expireLease(harness)
 
-	other := buildWithModule(harness.client(t, otherBuild), moduleGate, 2)
+	other := buildWithModule(harness.client(t, otherBuild), moduleGate, 3)
 
 	err := other.ResumeOnThisBuild(testItem)
 
@@ -159,7 +159,7 @@ func TestClient_ResumeOnThisBuildMovesARunStoredUnderAListOfSomeModules(t *testi
 	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+core1.agent1", testRun)
 	require.NoError(t, err)
 
-	buildWithModule(other, moduleGate, 2)
+	buildWithModule(other, moduleGate, 3)
 	expireLease(harness)
 
 	require.NoError(t, other.ResumeOnThisBuild(testItem), "the stored list names the modules of the run, and the run used neither the missing ones nor the gate")

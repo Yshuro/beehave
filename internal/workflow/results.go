@@ -73,7 +73,7 @@ func resultFields() map[string][]string {
 // gateResultFields holds the fields of the builtins that judge a head: gate and before_review.
 func gateResultFields() map[string][]string {
 	return map[string][]string{
-		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests"},
+		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests", "host_loss"},
 		beforeReviewName: {"ok", "findings", "new_tests", baseField, "keywords"},
 	}
 }

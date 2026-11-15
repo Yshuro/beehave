@@ -72,6 +72,8 @@ A project gate of a `gate` step is two recorded steps in the exclusive run:
 - `gate:job` reuses the pass of an earlier gate with the same key, or submits the host job and records its id.
 - `gate` waits for that job.
 
+When the wait of `gate` ends as `lost`, the steps `gate:lost-start` and `gate:lost-look.<k>`, with a durable sleep between two looks, wait for a proof that the job can no longer run. A proof gives a void gate with the field `host_loss`. See "The wait for a proof" in [hosts.md](hosts.md).
+
 The workflow library cannot record from inside a step, so the id needs a step of its own. After a crash between the two steps, the replay finds the id on record and the wait reads the same job: the host gets one job. A crash inside `gate:job`, after the host accepted the job and before the step is recorded, can still submit a second job.
 
 The `batch_merge` gate still runs in one step. A gate call that names a program is one step, `gate`.

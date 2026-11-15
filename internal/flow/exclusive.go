@@ -73,6 +73,8 @@ type ExclusiveOutput struct {
 	Key string `json:"key,omitempty"`
 	// Project is the project of a run that holds a Key; the lookup reads a pass only from a run of the same project.
 	Project string `json:"project,omitempty"`
+	// Lost is the host job of a gate whose wait ended as lost, after the wait for its proof. It is nil for every other run.
+	Lost *LostJob `json:"lost,omitempty"`
 }
 
 // exclusive runs one gate or one merge. The exclusive queue holds one run for each repository at a time,
@@ -204,25 +206,36 @@ func (e *Engine) refuseGate(project string, program bool) error {
 	return e.deps.RefuseGate(project, program)
 }
 
-// projectGateCall is the two steps of a project gate, see gateCall.
+// projectGateCall is the two steps of a project gate, see gateCall. A gate step that recorded a lost job is followed by the wait for its proof (endLost),
+// in this run, so the host slot and the exclusive slot of the project stay held while the job may still run.
 func (e *Engine) projectGateCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) (map[string]any, error) {
-	start, err := runStep(e, ctx, gateJobName, func(c context.Context) (gateStart, error) {
+	start, err := e.gateJobStep(ctx, in, out)
+	if err != nil || start.Reused != nil {
+		return start.Reused, err
+	}
+
+	finished, err := runStep(e, ctx, kindGate, func(c context.Context) (gateFinish, error) {
+		finished, key, err := e.finishProjectGate(c, in, start)
+		out.setKey(key, in.Request.Project)
+
+		return finished, err
+	})
+	if err != nil || finished.Lost == nil {
+		return finished.Outputs, err
+	}
+
+	return e.endLost(ctx, in, *finished.Lost, out)
+}
+
+// gateJobStep is the first step of a project gate (gate:job): it reuses an earlier pass and stores its key in out, or submits the host job.
+func (e *Engine) gateJobStep(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) (gateStart, error) {
+	return runStep(e, ctx, gateJobName, func(c context.Context) (gateStart, error) {
 		started, err := e.startProjectGate(c, in.Request)
 		if started.Reused != nil {
 			out.setKey(started.Key.ID, in.Request.Project)
 		}
 
 		return started, err
-	})
-	if err != nil || start.Reused != nil {
-		return start.Reused, err
-	}
-
-	return runStep(e, ctx, kindGate, func(c context.Context) (map[string]any, error) {
-		outputs, key, err := e.finishProjectGate(c, in.Request, start)
-		out.setKey(key, in.Request.Project)
-
-		return outputs, err
 	})
 }
 

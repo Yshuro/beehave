@@ -105,6 +105,7 @@ var rules = map[string]rule{
 	"internal/host/skypilot.Queue.Wait":     {Proof: queueReadProof, Needle: "Wait"},
 	"internal/host/skypilot.Queue.WorkRoot": {Proof: queueReadProof, Needle: "WorkRoot"},
 	"internal/host/skypilot.Queue.Log":      {Proof: queueReadProof, Needle: "Log"},
+	"internal/flow.hostKeeper.LostProof":    {Proof: "TestLostJob_AProofReadThatFailsFailsTheGate", Needle: "proofErr"},
 
 	// Methods that start, create or record something. The error is the result of the action, not a read that a guard depends on.
 	"internal/batch.Recorder.Step":   {Exempt: doesWork},
