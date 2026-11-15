@@ -26,6 +26,10 @@ const (
 	// newTestsError starts the line that says why the new-tests check could not compare.
 	newTestsError = "beehave-new-tests-error "
 
+	// badNameExit is the exit code of junitAwk for a report with a test name or class name that holds a tab or a newline. The tab splits the fields
+	// of the parsed report and the newline splits its lines, so such a name cannot be compared. The job then writes an error line and no end marker, and a cache keeps no report that holds such a name.
+	badNameExit = "3"
+
 	// The names of the steps that the job of a candidate runs apart. Each writes a stepMarker line.
 	stepHeadGate  = model.StepHeadGate
 	stepSecrets   = model.StepSecrets
@@ -42,7 +46,10 @@ function attr(s, k) {
 	}
 	return ""
 }
-function emit() { print cn "\t" nm "\t" st; open = 0 }
+function emit() {
+	if (index(cn nm, "\t") || index(cn nm, "\n")) bad = 1; else print cn "\t" nm "\t" st
+	open = 0
+}
 /^testcase[ \t\n]/ {
 	if (open) emit()
 	cn = attr($0, "classname"); nm = attr($0, "name"); st = "pass"; open = 1
@@ -51,7 +58,8 @@ function emit() { print cn "\t" nm "\t" st; open = 0 }
 }
 /^skipped[ \t\n\/>]/ { if (open) st = "skipped"; next }
 /^(failure|error)[ \t\n\/>]/ { if (open) st = "fail"; next }
-/^\/testcase/ { if (open) emit() }`
+/^\/testcase/ { if (open) emit() }
+END { if (bad) exit ` + badNameExit + ` }`
 
 // compareAwk reads the parsed base report, then the parsed head report. It prints a name line for each test of the head that the base lacks,
 // a marker line for each of those that did not pass, and the end marker. Both kinds of line stop at markerCap, and the end marker counts them all.
@@ -65,7 +73,7 @@ const compareAwk = `FNR == NR { seen[$1 "\t" $2] = 1; next }
 END { print "` + newTestsEnd + `new=" n + 0 " failed=" f + 0 }`
 
 // candidateWord is the word of the job of a candidate head, after the checkout. It runs the head gate, the secret scan and the base suite apart,
-// each in its own subshell with a step marker line, and a failed step never stops a later one. Then it prints the new-tests check.
+// each in its own subshell, and a failed step never stops a later one. Then it prints the new-tests check, and last the step marker lines.
 // The job exits with the exit code of the head gate. A project with no test_command runs no base suite, so only a cached base report can serve.
 func candidateWord(project model.Project, pins []Pin, base, clone string) string {
 	cache := model.ShellQuote(filepathDir(clone) + "/" + baseCache)
@@ -75,13 +83,15 @@ func candidateWord(project model.Project, pins []Pin, base, clone string) string
 
 	parts := []string{
 		`mb=$(git merge-base HEAD ` + model.ShellQuote("origin/"+base) + ` 2>/dev/null)`,
-		stepWord(stepHeadGate, "( "+headGate+" )") + `; headrc=$rc`,
-		stepWord(stepSecrets, `( [ -n "$mb" ] && `+limited(project, `gitleaks git --no-banner --log-opts="$mb..HEAD" .`)+` )`),
+		stepWord("headrc", "( "+headGate+" )"),
+		stepWord("secretrc", `( [ -n "$mb" ] && `+limited(project, `gitleaks git --no-banner --log-opts="$mb..HEAD" .`)+` )`),
 		"cache=" + cache + `; mkdir -p "$cache"`,
 		baseSuite(project, glob),
-		"{ " + `awk ` + model.ShellQuote(junitAwk) + ` ` + glob + ` > ../head.tsv; }`,
-		`if [ -n "$mb" ] && [ -s "$cache/$mb" ]; then awk -F '\t' -v cap=` + strconv.Itoa(markerCap) + ` ` + model.ShellQuote(compareAwk) + ` "$cache/$mb" ../head.tsv; ` +
+		"{ " + `awk ` + model.ShellQuote(junitAwk) + ` ` + glob + ` > ../head.tsv; jrc=$?; }`,
+		`if [ "$jrc" -eq ` + badNameExit + ` ]; then echo "` + newTestsError + `a test name in the head report holds a tab or a newline, so the new tests cannot be named"; ` +
+			`elif [ -n "$mb" ] && [ -s "$cache/$mb" ]; then awk -F '\t' -v cap=` + strconv.Itoa(markerCap) + ` ` + model.ShellQuote(compareAwk) + ` "$cache/$mb" ../head.tsv; ` +
 			`else echo "` + newTestsError + `no base report for $mb"; fi`,
+		closingMarkers(),
 		`[ "$headrc" -eq 0 ]`,
 	}
 
@@ -93,9 +103,19 @@ func filepathDir(clone string) string {
 	return clone[:strings.LastIndex(clone, "/")]
 }
 
-// stepWord runs command, writes the step marker line with its exit code, and leaves the code in rc.
-func stepWord(name, command string) string {
-	return command + `; rc=$?; echo; echo "` + stepMarker + " " + name + ` rc=$rc"`
+// stepWord runs command and keeps its exit code in the shell variable rcVar. It writes no marker line: a step prints any amount of output, and
+// the host reads only the tail of the log, so closingMarkers writes every marker after all other output.
+func stepWord(rcVar, command string) string {
+	return command + `; ` + rcVar + `=$?; echo`
+}
+
+// closingMarkers is the word that writes the step marker lines, after the new-tests check and the end marker, so they are the last lines of the log
+// whatever the steps printed. The base suite step writes a line only when it ran: a job that read the cache has no base-suite code.
+func closingMarkers() string {
+	line := func(name, rcVar string) string { return `echo "` + stepMarker + " " + name + ` rc=$` + rcVar + `"` }
+
+	return `echo; ` + line(stepHeadGate, "headrc") + `; ` + line(stepSecrets, "secretrc") + `; ` +
+		`[ -z "${baserc+x}" ] || ` + line(stepBaseSuite, "baserc")
 }
 
 // baseSuite is the word that runs the test command on the merge base when the cache holds no report for it, parses the report that the run left,
@@ -106,10 +126,9 @@ func baseSuite(project model.Project, glob string) string {
 	}
 
 	run := `( git worktree add --detach ../base "$mb" >/dev/null && cd ../base && ` + limited(project, "sh -c "+model.ShellQuote(project.TestCommand)) + ` )`
-	store := `( cd ../base && awk ` + model.ShellQuote(junitAwk) + ` ` + glob + ` ) > "$cache/.tmp.$mb.$$"; ` +
-		`if [ -s "$cache/.tmp.$mb.$$" ]; then mv "$cache/.tmp.$mb.$$" "$cache/$mb"; fi`
+	store := `if ( cd ../base && awk ` + model.ShellQuote(junitAwk) + ` ` + glob + ` ) > "$cache/.tmp.$mb.$$" && [ -s "$cache/.tmp.$mb.$$" ]; then mv "$cache/.tmp.$mb.$$" "$cache/$mb"; fi`
 
-	return `if [ -n "$mb" ] && [ ! -s "$cache/$mb" ]; then ` + stepWord(stepBaseSuite, run) + `; ` + store + `; fi`
+	return `if [ -n "$mb" ] && [ ! -s "$cache/$mb" ]; then ` + stepWord("baserc", run) + `; ` + store + `; fi`
 }
 
 // Checks is what the engine reads from the log of a candidate job that passed: the new tests, the ones that failed a check, the exit code of

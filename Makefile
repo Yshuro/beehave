@@ -59,7 +59,7 @@ setup:  ## Install the Go tools and generate the agent files
 	command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 	command -v gotestsum >/dev/null 2>&1 || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
 	command -v deadcode >/dev/null 2>&1 || go install $(DEADCODE_VERSION)
-	go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	[ "$$(gitleaks version 2>/dev/null)" = "$(GITLEAKS_VERSION:v%=%)" ] || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 	$(MAKE) governance-generate
 
 build:  ## Build bin/beehave and bin/remedy

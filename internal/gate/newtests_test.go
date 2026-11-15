@@ -14,6 +14,9 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
+// tailBytes is the size of the log tail that the ssh host reads.
+const tailBytes = 16384
+
 const reportScript = `#!/bin/sh
 mkdir -p reports
 { echo '<testsuites><testsuite>'
@@ -55,6 +58,13 @@ func shellRepo(t *testing.T, baseTests, headTests string) (repo, head string) {
 func runCandidate(t *testing.T, root, repo, head string, scan int) string {
 	t.Helper()
 
+	return runCandidateOf(t, model.Project{Name: "demo", Gate: "sh mkreport.sh", TestReport: "reports/*.xml", TestCommand: "sh mkreport.sh"}, root, repo, head, scan)
+}
+
+// runCandidateOf is runCandidate for a project that the test chooses.
+func runCandidateOf(t *testing.T, project model.Project, root, repo, head string, scan int) string {
+	t.Helper()
+
 	bin := filepath.Join(root, "bin")
 	require.NoError(t, os.MkdirAll(bin, 0o750))
 
@@ -65,7 +75,6 @@ func runCandidate(t *testing.T, root, repo, head string, scan int) string {
 		require.NoError(t, os.WriteFile(filepath.Join(bin, "gitleaks"), []byte(fmt.Sprintf("#!/bin/sh\nexit %d\n", scan)), 0o700)) //nolint:gosec // a stub program
 	}
 
-	project := model.Project{Name: "demo", Gate: "sh mkreport.sh", TestReport: "reports/*.xml", TestCommand: "sh mkreport.sh"}
 	command := hostCommand(project, nil, repo, head, root+"/beehave-gate-demo-"+head, "main")
 	job := exec.CommandContext(t.Context(), "sh", "-c", command) //nolint:gosec // the job text under test
 	job.Env = []string{"PATH=" + bin + string(os.PathListSeparator) + "/usr/bin:/bin", "HOME=" + t.TempDir()}
@@ -137,8 +146,8 @@ func TestBeforeReview_TheJobExitsWithTheExitOfTheHeadGate(t *testing.T) {
 	command := hostCommand(project, nil, "/nowhere", "abc", "/tmp/beehave-gate-demo-abc", "main")
 
 	require.Contains(t, command, `[ "$headrc" -eq 0 ]`)
-	require.Contains(t, command, stepMarker+" "+stepHeadGate+" rc=$rc")
-	require.Contains(t, command, stepMarker+" "+stepSecrets+" rc=$rc")
+	require.Contains(t, command, stepMarker+" "+stepHeadGate+" rc=$headrc")
+	require.Contains(t, command, stepMarker+" "+stepSecrets+" rc=$secretrc")
 }
 
 func TestBeforeReview_ALogOverSixteenKiBBeforeTheEndMarkerStillReadsItsNameLines(t *testing.T) {
@@ -154,6 +163,59 @@ func TestBeforeReview_ALogOverSixteenKiBBeforeTheEndMarkerStillReadsItsNameLines
 	require.True(t, checks.Complete)
 	require.Equal(t, []string{"pkg TestA/case", "pkg TestB"}, checks.NewTests)
 	require.Equal(t, 2, checks.New)
+}
+
+func TestBeforeReview_ABaseSuiteThatPrintsOverSixteenKiBLeavesEveryStepMarkerInTheTail(t *testing.T) {
+	t.Parallel()
+
+	repo, head := shellRepo(t, "pass a TestOld\n", "pass a TestOld\npass a TestNew\n")
+	project := model.Project{
+		Name: "demo", Gate: "sh mkreport.sh", TestReport: "reports/*.xml",
+		TestCommand: "sh mkreport.sh; yes 'base suite output line that is long enough to fill the tail' | head -n 1000",
+	}
+
+	out := runCandidateOf(t, project, t.TempDir(), repo, head, 0)
+	require.Greater(t, len(out), tailBytes, "the log is longer than the tail that the host reads")
+
+	tail := out[len(out)-tailBytes:]
+	codes := markerCodes(tail)
+	checks := ReadChecks(tail)
+
+	require.NotNil(t, checks.Secrets, "the secret scan marker is in the tail")
+	require.Zero(t, *checks.Secrets)
+	require.Equal(t, []string{"0"}, codes[stepHeadGate])
+	require.Equal(t, []string{"0"}, codes[stepBaseSuite])
+	require.True(t, checks.Complete)
+	require.Equal(t, []string{"a TestNew"}, checks.NewTests)
+}
+
+func TestBeforeReview_ATestNameWithATabIsRefusedWithAClearError(t *testing.T) {
+	t.Parallel()
+
+	repo, head := shellRepo(t, "pass a TestOld\n", "pass a TestOld\npass a Test\tparam id\n")
+
+	out := runCandidate(t, t.TempDir(), repo, head, 0)
+	checks := ReadChecks(out)
+
+	require.False(t, checks.Complete, "a name that cannot be compared gives no end marker, so the check is cut")
+	require.Contains(t, checks.Problem, "holds a tab or a newline")
+	require.Empty(t, checks.NewTests)
+}
+
+func TestBeforeReview_AJUnitNameWithANewlineMakesTheReaderExitWithTheBadNameCode(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "j.xml"), []byte("<testsuite><testcase classname=\"a\" name=\"T\nx\"></testcase><testcase classname=\"a\" name=\"Ok\"></testcase></testsuite>\n"), 0o600))
+
+	cmd := exec.CommandContext(t.Context(), "awk", junitAwk, filepath.Join(dir, "j.xml")) //nolint:gosec // the reader under test
+	out, err := cmd.Output()
+
+	var exit *exec.ExitError
+
+	require.ErrorAs(t, err, &exit)
+	require.Equal(t, 3, exit.ExitCode())
+	require.Equal(t, "a\tOk\tpass\n", string(out), "the good test stays and the bad name is dropped")
 }
 
 func TestBeforeReview_ALogWithNoEndMarkerIsACutLog(t *testing.T) {
