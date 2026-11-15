@@ -312,6 +312,7 @@ The engine reads only the `mutation-pr:` lines of the job log, and it finds each
 - `applied=N killed=K lived=L timed_out=T` is the counts line. A line with `applied=0` fails, whatever the exit code, because the run tested nothing.
 - `lived <file>:<line> <mutator>` is one mutant that lives on a changed line. A line that the diff of `head` against `base` does not change gives no finding.
 - `end count=N printed=P` is the end marker. A log with no end marker, or with a `printed` value that differs from the `lived` lines read, is a cut log, and the call fails with its own reason. Lines after the marker are fine.
+- `<N> mutant(s) lived. ...` and `no mutant was applied. ...` are summary lines that the command prints on its normal path. The engine ignores them.
 - Any other `mutation-pr:` line with a nonzero exit is a tool error. An exit with no known result line is a tool error too.
 
 Each survivor is one finding: `<file>:<line> a mutant survived: <mutator>. The tests do not fail when this change is made`. When `count` is above `printed`, the findings hold the printed mutants and `survived` holds the total. A finding is a result, not an error: `ok` is false and the workflow decides what to do.

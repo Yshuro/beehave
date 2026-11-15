@@ -44,7 +44,7 @@ type MutationLog struct {
 	// HasEnd is true when the log holds the end marker. Count and Printed are its numbers.
 	HasEnd         bool
 	Count, Printed int
-	// Other holds the first result line that is no known line. The command prints one after a failed counts line, so it is an error only when no known result line is there.
+	// Other holds the first result line that is no known line: the error line that the command prints when it stops. The summary lines of its normal path are known lines.
 	Other string
 }
 
@@ -78,9 +78,23 @@ func (l *MutationLog) take(line string) {
 		l.takeSurvivor(strings.TrimPrefix(line, "lived "))
 	case strings.HasPrefix(line, "end "):
 		l.takeEnd(strings.TrimPrefix(line, "end "))
+	case isSummaryLine(line):
 	case l.Other == "":
 		l.Other = line
 	}
+}
+
+// isSummaryLine is true for the two lines that the command prints on its normal path to tell a reader what the counts mean: "<N> mutant(s) lived. ..." and
+// "no mutant was applied. ...". They carry no data that the engine reads, and they are no error.
+func isSummaryLine(line string) bool {
+	if strings.HasPrefix(line, "no mutant was applied.") {
+		return true
+	}
+
+	number, rest, _ := strings.Cut(line, " ")
+	_, err := strconv.Atoi(number)
+
+	return err == nil && strings.HasPrefix(rest, "mutant(s) lived.")
 }
 
 // takeCounts reads the applied and lived parts of "applied=N killed=K lived=L timed_out=T". A part that does not read gives 0.

@@ -17,6 +17,8 @@ import (
 
 const lived = "mutation-pr: lived internal/a/a.go:10 ARITHMETIC_BASE\n"
 
+const livedSummary = "mutation-pr: 1 mutant(s) lived. Kill each one with a test.\n"
+
 var changedA = lineSet{"internal/a/a.go": {{8, 12}}}
 
 func counts(applied, livedCount int) string {
@@ -59,8 +61,9 @@ func TestMutation_ALogWithNoEndMarkerOrAWrongPrintedValueIsACutLog(t *testing.T)
 	t.Parallel()
 
 	for name, log := range map[string]string{
-		"no end marker": counts(4, 1) + lived,
-		"wrong printed": counts(4, 1) + lived + "mutation-pr: end count=1 printed=2\n",
+		"no end marker":                   counts(4, 1) + lived,
+		"no end marker after the summary": counts(4, 1) + livedSummary + lived,
+		"wrong printed":                   counts(4, 1) + livedSummary + lived + "mutation-pr: end count=1 printed=2\n",
 	} {
 		got := judgeMutation(MutationRun{Failed: true, Log: log}, changedA)
 
@@ -94,6 +97,16 @@ func TestMutation_AToolErrorLineAfterTheCountsLineWithNoEndMarkerIsAToolErrorAnd
 	t.Parallel()
 
 	got := judgeMutation(MutationRun{Failed: true, Log: counts(4, 1) + "mutation-pr: the gremlins report is not readable\n"}, changedA)
+
+	assert.Equal(t, outcomeToolError, got.outcome)
+	require.Len(t, got.findings, 1)
+	assert.Contains(t, got.findings[0], "the gremlins report is not readable")
+}
+
+func TestMutation_AnUnknownLineAfterTheSummaryLineWithNoEndMarkerIsAToolError(t *testing.T) {
+	t.Parallel()
+
+	got := judgeMutation(MutationRun{Failed: true, Log: counts(4, 1) + livedSummary + "mutation-pr: the gremlins report is not readable\n"}, changedA)
 
 	assert.Equal(t, outcomeToolError, got.outcome)
 	require.Len(t, got.findings, 1)
@@ -161,12 +174,29 @@ func TestMutation_ASurvivorInAFileWithANonASCIIOrSpacedNameIsKept(t *testing.T) 
 	t.Parallel()
 
 	diff := "diff --git a/internal/é/a b.go b/internal/é/a b.go\n--- a/internal/é/a b.go\n+++ b/internal/é/a b.go\t\n@@ -0,0 +1 @@\n+x\n" +
-		"diff --git a/q.go b/q.go\n--- a/q.go\n+++ \"b/q\\\"x.go\"\n@@ -0,0 +3 @@\n+x\n"
+		"diff --git a/q.go b/q.go\n--- a/q.go\n+++ \"b/q\\\"x.go\"\n@@ -0,0 +3 @@\n+x\n" +
+		"diff --git \"a/\\303\\251.go\" \"b/\\303\\251.go\"\n--- /dev/null\n+++ \"b/\\303\\251.go\"\n@@ -0,0 +2 @@\n+x\n"
 
 	got := changedLines(diff)
 
+	assert.True(t, got.has("é.go", 2), "git quotes a non-ASCII name with octal escapes, and the reader gives the name back as bytes")
 	assert.True(t, got.has("internal/é/a b.go", 1))
 	assert.True(t, got.has("q\"x.go", 3))
+}
+
+func TestMutation_ASectionHeadingWithAPlusFieldDoesNotChangeTheCountsOfTheHunk(t *testing.T) {
+	t.Parallel()
+
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1,2 @@ x := a +b -c\n+x\n+++ b/other.go\n@@ -9 +11 @@\n-z\n+w\n"
+
+	got := changedLines(diff)
+
+	removed, added := hunkCounts("@@ -4,3 +5,2 @@ x := a +b -c")
+
+	assert.Equal(t, 3, removed)
+	assert.Equal(t, 2, added)
+	assert.True(t, got.has("a.go", 2))
+	assert.False(t, got.has("other.go", 11), "the second added line starts with two pluses and is a line, not a file header")
 }
 
 func TestMutation_AnAddedLineThatStartsWithTwoPlusesIsNotAFileHeader(t *testing.T) {

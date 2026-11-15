@@ -66,6 +66,23 @@ func TestReadMutation_TheFirstUnknownResultLineIsKept(t *testing.T) {
 	assert.False(t, read.HasResult())
 }
 
+func TestReadMutation_TheTwoSummaryLinesOfTheNormalPathAreKnownLines(t *testing.T) {
+	t.Parallel()
+
+	read := gate.ReadMutation("mutation-pr: 3 mutant(s) lived. Kill each one with a test.\nmutation-pr: no mutant was applied. Check that the diff against origin/main touches covered Go code.\n")
+
+	assert.Empty(t, read.Other)
+	assert.False(t, read.HasResult())
+}
+
+func TestReadMutation_ALineThatLooksLikeASummaryLineButIsNotOneIsUnknown(t *testing.T) {
+	t.Parallel()
+
+	for _, line := range []string{"x mutant(s) lived. Kill", "mutant(s) lived.", "3 mutants died."} {
+		assert.Equal(t, line, gate.ReadMutation("mutation-pr: "+line+"\n").Other, line)
+	}
+}
+
 func TestReadMutation_ALivedLineThatDoesNotReadIsAnUnknownLine(t *testing.T) {
 	t.Parallel()
 

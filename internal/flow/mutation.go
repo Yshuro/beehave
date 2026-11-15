@@ -126,7 +126,7 @@ func (s *script) changedByHead(ctx context.Context, call mutationCall) (lineSet,
 		return nil, fmt.Errorf("find the folder of item %s: %w", s.in.Item, err)
 	}
 
-	diff, err := git(ctx, dir, "-c", "core.quotepath=off", "diff", "-U0", "--no-renames", call.base+"..."+call.head)
+	diff, err := git(ctx, dir, "diff", "-U0", "--no-renames", call.base+"..."+call.head)
 	if err != nil {
 		return nil, fmt.Errorf("read the lines that the head changed since the base: %w", err)
 	}
@@ -406,8 +406,13 @@ func headerPath(text string) string {
 }
 
 // hunkCounts reads the count of removed lines and the count of added lines of a hunk header, "@@ -a,b +c,d @@": b and d. A missing count is 1.
+// The section heading after the second "@@" is code, so the reader stops there.
 func hunkCounts(header string) (removed, added int) {
-	for field := range strings.FieldsSeq(header) {
+	for index, field := range strings.Fields(header) {
+		if index > 0 && field == "@@" {
+			break
+		}
+
 		if rest, found := strings.CutPrefix(field, "-"); found {
 			_, removed, _ = spanNumbers(rest)
 		} else if rest, found := strings.CutPrefix(field, "+"); found {

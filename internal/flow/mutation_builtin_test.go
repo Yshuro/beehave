@@ -101,7 +101,8 @@ func TestMutation_TheBuiltinRunsTheCommandOnTheHostAndGivesOneFindingFromTheJobL
 	}{
 		{name: "the host that host_up chose", chooseHost: true, lived: "internal/a/a.go:1", want: finding},
 		{name: "the default build host of the project", lived: "internal/a/a.go:1", want: finding},
-		{name: "a base on another branch reads the lines of the head only", chooseHost: true, lived: "internal/a/a.go:1", useOther: true, want: finding},
+		{name: "a base on another branch still gives the line that the head adds", chooseHost: true, lived: "internal/a/a.go:1", useOther: true, want: finding},
+		{name: "a base on another branch gives no finding for a line that only the other branch changed", chooseHost: true, lived: "shared.go:1", useOther: true, want: "show True  0"},
 		{name: "a lived mutant on a line the diff does not change", chooseHost: true, lived: "internal/a/a.go:9", want: "show True  0"},
 		{name: "a lived mutant in a file the head does not change", chooseHost: true, lived: "elsewhere.txt:1", want: "show True  0"},
 	}
@@ -114,6 +115,7 @@ func TestMutation_TheBuiltinRunsTheCommandOnTheHostAndGivesOneFindingFromTheJobL
 			base := tree.base
 
 			if tc.useOther {
+				tree = divergedTree(t)
 				base = tree.other
 			}
 
@@ -130,12 +132,39 @@ func TestMutation_TheBuiltinRunsTheCommandOnTheHostAndGivesOneFindingFromTheJobL
 			assert.Equal(t, []string{tc.want}, h.commands.ran())
 
 			calls := mutator.recorded()
-			require.Len(t, calls, 1, "one job ran on the queue of the host")
-			assert.Equal(t, map[bool]string{true: "box", false: ""}[tc.chooseHost], calls[0].host, "a chosen host is passed on; an empty host is the default host of the project, which the box queue held")
+			require.Len(t, calls, 1, "one job ran")
+			assert.Equal(t, map[bool]string{true: "box", false: ""}[tc.chooseHost], calls[0].host, "the host argument of Mutate is the chosen host, and empty when no host was chosen. This does not show which queue ran the job")
 			assert.Equal(t, "make mutation-pr BASE=origin/"+base, calls[0].job.Command, "the base of the call stands in for {base}")
 			assert.Equal(t, tree.head, calls[0].job.Head)
 		})
 	}
+}
+
+// divergedTree is an item folder whose base holds shared.go. The branch "elsewhere" (other) changes line 1 of shared.go, and the head adds internal/a/a.go
+// and leaves shared.go as the base has it. The diff `other..head` reads line 1 of shared.go as changed by the head, and `other...head` does not.
+func divergedTree(t *testing.T) reviewTree {
+	t.Helper()
+
+	dir, _ := gitTree(t)
+	putUnder(t, dir, "shared.go", "a\n")
+	gitIn(t, dir, "add", "shared.go")
+	gitIn(t, dir, "commit", "-q", "-m", "base")
+
+	base := gitIn(t, dir, "rev-parse", "HEAD")
+
+	gitIn(t, dir, "checkout", "-q", "-b", "elsewhere")
+	putUnder(t, dir, "shared.go", "z\n")
+	gitIn(t, dir, "add", "shared.go")
+	gitIn(t, dir, "commit", "-q", "-m", "elsewhere")
+
+	other := gitIn(t, dir, "rev-parse", "HEAD")
+
+	gitIn(t, dir, "checkout", "-q", "-b", "work", base)
+	putUnder(t, dir, "internal/a/a.go", "x")
+	gitIn(t, dir, "add", "internal/a/a.go")
+	gitIn(t, dir, "commit", "-q", "-m", "add a")
+
+	return reviewTree{dir: dir, base: base, other: other, head: gitIn(t, dir, "rev-parse", "HEAD")}
 }
 
 // failingMutator fails every job with the error.

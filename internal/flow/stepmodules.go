@@ -68,7 +68,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core1.agent1.tracker1.forge1.land1.gate1.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core2.agent1.tracker1.forge1.land1.gate2.host1.round1.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))
