@@ -122,6 +122,13 @@ func FreePort(tb testing.TB) int {
 func StartDolt(tb testing.TB, root, binary string) int {
 	tb.Helper()
 
+	return StartDoltWithin(tb, root, binary, serverWait)
+}
+
+// StartDoltWithin is StartDolt with the time that one start attempt may take, for the wait for the ready line and for the first connection together.
+func StartDoltWithin(tb testing.TB, root, binary string, wait time.Duration) int {
+	tb.Helper()
+
 	home, data := serverFolders(tb, root)
 
 	var (
@@ -130,7 +137,7 @@ func StartDolt(tb testing.TB, root, binary string) int {
 	)
 
 	for attempt := 0; attempt < startAttempts && !ok; attempt++ {
-		port, ok = startOnFreePort(tb, home, data, binary)
+		port, ok = startOnFreePort(tb, home, data, binary, wait)
 	}
 
 	check(tb, ok, "the private dolt server did not start: it did not print %q and accept a connection", ReadyLine)
@@ -139,7 +146,7 @@ func StartDolt(tb testing.TB, root, binary string) int {
 }
 
 // startOnFreePort starts the server on a free port and reports whether it accepts connections before it ends or the wait is over.
-func startOnFreePort(tb testing.TB, home, data, binary string) (int, bool) {
+func startOnFreePort(tb testing.TB, home, data, binary string, wait time.Duration) (int, bool) {
 	tb.Helper()
 
 	port := FreePort(tb)
@@ -151,8 +158,8 @@ func startOnFreePort(tb testing.TB, home, data, binary string) (int, bool) {
 
 	tb.Cleanup(func() { stopServer(tb, cmd, done) })
 
-	// The context ends when the server ends or when serverWait passes, so one bound covers the wait for the line and the wait for the dial.
-	ctx, bound := context.WithTimeout(ctx, serverWait)
+	// The context ends when the server ends or when wait passes, so one bound covers the wait for the line and the wait for the dial.
+	ctx, bound := context.WithTimeout(ctx, wait)
 	defer bound()
 
 	// A connection to the port proves nothing alone: another process can hold the port while this server ends.

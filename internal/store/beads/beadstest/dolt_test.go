@@ -25,6 +25,7 @@ const (
 	clashServerName = "clashdolt"
 	squatServerName = "squatdolt"
 	chattyName      = "chattydolt"
+	silentName      = "silentdolt"
 	wroteFile       = "wrote"
 
 	squatLife = time.Second
@@ -34,7 +35,7 @@ const (
 // The tests pass a link to the test binary named fakedolt, and testscript runs the command of that name: it listens on P until it is killed.
 // The command clashdolt ends at its first start, like a server whose port another process took, and listens from its second start.
 func TestMain(m *testing.M) {
-	testscript.Main(m, map[string]func(){fakeServerName: serveFake, clashServerName: serveAfterClash, squatServerName: serveAsSquatter, chattyName: serveChatty})
+	testscript.Main(m, map[string]func(){fakeServerName: serveFake, clashServerName: serveAfterClash, squatServerName: serveAsSquatter, chattyName: serveChatty, silentName: serveSilent})
 }
 
 // serveAsSquatter plays a process that holds the port at the first start and is not the server: it listens, answers one connection, and ends without the ready line.
@@ -93,6 +94,11 @@ func serveChatty() {
 
 		return os.WriteFile(wroteFile, nil, 0o600)
 	})
+}
+
+// serveSilent plays a server that lives and prints nothing: it listens like serveFake and never announces.
+func serveSilent() {
+	serve(func() error { return nil })
 }
 
 func say(text string) error {
@@ -320,6 +326,19 @@ func TestStartDolt_FindsTheReadyLineInTheOutputOfAServerThatLogsWhileItStarts(t 
 
 		return err == nil
 	}, 10*time.Second, 20*time.Millisecond, "the server writes after the ready line")
+}
+
+// The server stays alive and prints nothing. Only the bound of the start ends the wait, so the test fails if the bound is missing.
+func TestStartDoltWithin_StopsTheTestWhenALiveServerNeverPrintsTheReadyLine(t *testing.T) {
+	t.Parallel()
+
+	message := failure(t, func(tb testing.TB) {
+		tb.Helper()
+		beadstest.StartDoltWithin(tb, t.TempDir(), serverLink(t, silentName), 200*time.Millisecond)
+	})
+
+	assert.Contains(t, message, "did not start")
+	assert.Contains(t, message, beadstest.ReadyLine)
 }
 
 func TestRealBd_ReturnsTheBinaryWhenDoltIsOnThePath(t *testing.T) {

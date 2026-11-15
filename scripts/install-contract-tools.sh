@@ -19,6 +19,7 @@ if [ "$(uname -s)" != Linux ] || { [ "$(uname -m)" != x86_64 ] && [ "$(uname -m)
 fi
 
 work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 
 # fetch <url> <sha256> <binary name>: download one archive, check it, and install the binary of that name.
 fetch() {
