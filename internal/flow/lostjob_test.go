@@ -260,6 +260,105 @@ func TestLostJob_ACanceledWaitReadsTheProofOnceAndNeverCancelsTheJob(t *testing.
 	assert.EqualValues(t, 2, gated.runs.Load())
 }
 
+// lostOnCancelGate waits on the job of its first gate until the cancel of the run, then reports the job as lost, as a wait does when the cancel
+// comes while it reads a dropped link. Every later gate passes.
+type lostOnCancelGate struct {
+	lostOnceGate
+	waiting atomic.Bool
+}
+
+func (g *lostOnCancelGate) Run(ctx context.Context, project, item, host string, job GateJob) (GateResult, error) {
+	if g.runs.Load() > 0 {
+		return g.lostOnceGate.Run(ctx, project, item, host, job)
+	}
+
+	g.runs.Add(1)
+	g.waiting.Store(true)
+	<-ctx.Done()
+
+	return GateResult{}, lostError()
+}
+
+// everyHostJobStep lists the step names of every host job run of the engine, sorted, and the count of the runs.
+func everyHostJobStep(t *testing.T, engine *Engine) ([]string, int) {
+	t.Helper()
+
+	rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName))
+	require.NoError(t, err)
+
+	var names []string
+	for _, row := range rows {
+		names = append(names, stepNamesOf(t, engine, row.ID)...)
+	}
+
+	slices.Sort(names)
+
+	return names, len(rows)
+}
+
+func TestLostJob_ALossThatACancelEndedStartsNoWaitAndReadsNoProof(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.forge.state = review.Standing{Number: testPull, Head: "A"}
+	hosts := &upHosts{started: true}
+	h.hosts, h.lostPoll = hosts, time.Hour
+
+	gated := &lostOnCancelGate{}
+	engine := launchHostEngine(t, h, gated)
+
+	old := queueHostGate(engine, testProject, testItem, "A", "box")
+
+	eventually(t, gated.waiting.Load)
+	setHead(h, "B")
+
+	current := queueHostGate(engine, testProject, testItem, "B", "box")
+
+	require.ErrorIs(t, endsAfterTicks(t, h, old).err, errSuperseded)
+	require.NoError(t, (<-current).err, "the gate of the new head runs once the canceled gate has ended")
+
+	names, runs := everyHostJobStep(t, engine)
+	require.Equal(t, 2, runs, "one host job run for each head")
+	assert.Equal(t, []string{kindGate, gateJobName, gateJobName}, names,
+		"the canceled run keeps only the step that submitted its job: the gate step of a canceled run is not recorded, and no wait starts")
+	assert.Zero(t, hosts.proofReads(), "a loss after a cancel reads no proof")
+	assert.EqualValues(t, 2, gated.submits.Load(), "one job for each gate")
+}
+
+func TestLostJob_TheWaitHoldsTheHostSoASecondGateOnItStartsOnlyAfterTheProof(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.forge.state = review.Standing{Number: testPull, Head: "A"}
+	hosts := &upHosts{started: true}
+	h.hosts, h.lostPoll = hosts, 50*time.Millisecond
+
+	gated := &lostOnceGate{}
+	engine := launchHostEngine(t, h, gated)
+
+	first := queueHostGate(engine, "project-one", "1", "A", "box")
+
+	eventually(t, func() bool { return hosts.proofReads() >= 1 })
+
+	second := queueHostGate(engine, "project-two", "2", "A", "box")
+
+	eventually(t, waitsOnHost(engine, 1))
+
+	// The queue polls once for each second, so the second gate would have started within three polls had the wait freed the host.
+	require.Never(t, func() bool { return gated.submits.Load() > 1 || gated.runs.Load() > 1 }, 3*storePoll, 100*time.Millisecond,
+		"the second gate waits while the first waits for the proof on the same host")
+	assert.Greater(t, hosts.proofReads(), 1, "the first gate was still looking for the proof")
+
+	hosts.prove(model.LostProof{Kind: model.LostStopped})
+
+	end := <-first
+	require.NoError(t, end.err)
+	require.NotNil(t, end.out.Lost, "the first gate ended with the proof")
+	assert.Equal(t, model.LostStopped, end.out.Lost.Proof.Kind)
+	require.NoError(t, (<-second).err, "the second gate runs once the wait has ended")
+	assert.EqualValues(t, 2, gated.submits.Load())
+}
+
 func TestLostJob_AProofReadThatFailsFailsTheGate(t *testing.T) {
 	t.Parallel()
 
