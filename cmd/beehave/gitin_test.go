@@ -5,7 +5,9 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -119,14 +121,52 @@ func TestGitFailure_AToolThatCannotStartNamesTheSetupError(t *testing.T) {
 }
 
 func TestGitIn_ReturnsWhenAChildOfGitKeepsTheOutputOpen(t *testing.T) {
+	state := t.TempDir()
+	pidFile := filepath.Join(state, "child.pid")
+	// The child holds the output pipe of git and loops until the cleanup kills it. Git ends only after the child wrote its pid, so the child runs when git ends.
+	script := "#!/bin/sh\n" +
+		"sh -c 'echo $$ > \"$1\"; while :; do sleep 0.05; done' child '" + pidFile + "' &\n" +
+		"while [ ! -s '" + pidFile + "' ]; do sleep 0.01; done\n" +
+		"exit 0\n"
 	bin := t.TempDir()
-	script := "#!/bin/sh\nsleep 6 &\nexit 0\n"
 	require.NoError(t, exectest.Write(filepath.Join(bin, "git"), script))
 	t.Setenv("PATH", strings.Join([]string{bin, "/usr/bin", "/bin"}, string(os.PathListSeparator)))
+	// The cleanup runs before the removal of the temporary folders, kills the child, and fails the test if the child outlives it.
+	t.Cleanup(func() { endChild(t, pidFile) })
 
-	start := time.Now()
 	_, err := gitIn(t.Context(), t.TempDir(), "status")
 
 	require.Error(t, err, "the runner reports the pipe that the child kept open")
-	assert.Less(t, time.Since(start), 4*time.Second, "the call waited for the child that holds the output pipe")
+
+	pid := childPid(t, pidFile)
+	require.NoError(t, syscall.Kill(pid, 0), "the call waited for the child that holds the output pipe: the child is gone")
+}
+
+func childPid(t *testing.T, pidFile string) int {
+	t.Helper()
+
+	text, err := os.ReadFile(pidFile) //nolint:gosec // a file of the test
+	require.NoError(t, err)
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(text)))
+	require.NoError(t, err)
+
+	return pid
+}
+
+// endChild kills the child that wrote its pid to pidFile and waits until the process is gone.
+func endChild(t *testing.T, pidFile string) {
+	t.Helper()
+
+	if _, err := os.Stat(pidFile); err != nil {
+		return
+	}
+
+	pid := childPid(t, pidFile)
+	// A child that already ended gives ESRCH, which is fine.
+	if err := syscall.Kill(pid, syscall.SIGKILL); !errors.Is(err, syscall.ESRCH) {
+		require.NoError(t, err)
+	}
+
+	assert.Eventually(t, func() bool { return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH) }, 5*time.Second, 10*time.Millisecond, "the child of git is still alive")
 }

@@ -14,12 +14,13 @@ import (
 )
 
 // forkScript starts 40 sleeps of 2 seconds in the background. A start that the kernel refuses ends the shell with a non-zero code.
-// The loop ends by itself, and the exit trap kills every sleep it started.
+// The loop ends by itself, and the exit trap kills every sleep it started. A sleep has no output pipe of the runner, so the call ends when the shell ends
+// and does not wait for the sleeps to die.
 const forkScript = `pids=
 trap 'kill $pids 2>/dev/null' EXIT
 i=0
 while [ $i -lt 40 ]; do
-  sleep 2 &
+  sleep 2 >/dev/null 2>&1 &
   pids="$pids $!"
   i=$((i + 1))
 done
