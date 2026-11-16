@@ -153,12 +153,12 @@ func TestRun_ALineOfForgeTextThatAPatternMatchesIsLeftOutOfTheResult(t *testing.
 	w := newWorld(t)
 	w.fails["UnresolvedThreads"] = true
 	req := request()
-	req.ForbidText = compiled([]string{"zzz", "down"})
+	req.ForbidText = compiled([]string{"down", "zzz"})
 	result := w.run(req)
 
 	assert.Equal(t, merge.Refused, result.Stop)
 	require.NotEmpty(t, result.Refusal)
-	assert.Equal(t, "(a line is left out: it matches pattern 2 of forbid_text)", result.Refusal[0])
+	assert.Equal(t, "(a line is left out: it matches pattern 1 of forbid_text)", result.Refusal[0])
 	assert.Equal(t, result.Refusal, result.Lines[len(result.Lines)-len(result.Refusal):])
 }
 

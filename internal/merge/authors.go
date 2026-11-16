@@ -39,7 +39,7 @@ func forbiddenLines(view model.PullRequest, forbidden []*regexp.Regexp) []string
 	var hits []string
 
 	for number, line := range strings.Split(whole, "\n")[:strings.Count(whole, "\n")] {
-		if i, found := matchingRule(forbidden, line); found {
+		if i := matchingRule(forbidden, line); i >= 0 {
 			hits = append(hits, fmt.Sprintf("  line %d matches %s", number+1, patternWord(i)))
 		}
 	}

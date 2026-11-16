@@ -23,21 +23,21 @@ func Compile(patterns []string) ([]*regexp.Regexp, error) {
 	return rules, nil
 }
 
-// matchingRule returns the position of the first rule that a line of the text matches, and false when no line matches.
+// matchingRule returns the position of the first rule that a line of the text matches, and -1 when no line matches.
 // It splits the text on newlines and tests each line. It is the one test of the merge guard, of the merge result and, through ForbiddenBy, of the posting steps.
-func matchingRule(rules []*regexp.Regexp, text string) (int, bool) {
+func matchingRule(rules []*regexp.Regexp, text string) int {
 	for line := range strings.SplitSeq(text, "\n") {
 		if i := slices.IndexFunc(rules, func(rule *regexp.Regexp) bool { return rule.MatchString(line) }); i >= 0 {
-			return i, true
+			return i
 		}
 	}
 
-	return -1, false
+	return -1
 }
 
 // ForbiddenBy returns the first rule that a line of the text matches, and false when no line matches.
 func ForbiddenBy(rules []*regexp.Regexp, text string) (*regexp.Regexp, bool) {
-	if i, found := matchingRule(rules, text); found {
+	if i := matchingRule(rules, text); i >= 0 {
 		return rules[i], true
 	}
 
@@ -56,7 +56,7 @@ func withheld(rules []*regexp.Regexp, lines []string) []string {
 
 	for n, line := range lines {
 		out[n] = line
-		if i, found := matchingRule(rules, line); found {
+		if i := matchingRule(rules, line); i >= 0 {
 			out[n] = "(a line is left out: it matches " + patternWord(i) + ")"
 		}
 	}
