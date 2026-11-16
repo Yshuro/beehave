@@ -117,7 +117,7 @@ vuln:  ## Fail on a known vulnerability the code can reach
 	GOTELEMETRY=off govulncheck ./...
 
 test:  ## Run the Go tests with the race detector and write coverage.out, the flow profiles and the JUnit reports in reports/
-	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml; \
+	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml coverage.out coverage-flow-*.out test-*.log; \
 	logs=test-other.log; \
 	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-other.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage.out $$(go list ./... | grep -v '/internal/flow$$') > test-other.log 2>&1 & pids=$$!; \
 	for s in $(FLOW_SHARDS); do \
