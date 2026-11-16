@@ -58,7 +58,7 @@ A gate on a build host also runs its build job as a child run on the queue `host
 
 - The gate keeps its slot in the exclusive queue while the job waits, so a merge of the project still waits for the gate.
 - The queues cannot deadlock. A job queues nothing, so no job on the host queue waits for a slot of the exclusive queue.
-- A gate that a newer head cancels cancels its job. A cancel of the item cancels the build job too.
+- A cancel of a gate, by a newer head or with its item, cancels the build job in the same write. The wait of the gate never cancels the job by its id, so a stop that ends late cannot cancel a job that a resume reopened.
 - The cap is 1. A cap above 1 is not built.
 
 The host of a gate is the cluster that `host_up` recorded, else the default `build_host` of the project. The engine reads it once, when the gate is queued, and keeps it in the input of the gate. So a replay uses the same host after the project file changes.

@@ -299,16 +299,10 @@ func (e *Engine) hostJob(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, 
 	return out, nil
 }
 
-// stopJob cancels the build job of a gate that stopped. A cancel that fails is logged: the job then keeps its place on the host.
-func (e *Engine) stopJob(ctx context.Context, in ExclusiveInput, job string) {
-	if err := dbos.CancelWorkflows(dbos.WithoutCancel(e.ctx), []string{job}); err != nil {
-		e.logger.WarnContext(ctx, "cannot stop the build job of the gate, so it keeps its place on the host", "item", in.Item, "error", err)
-	}
-}
-
-// onHost runs the call of a gate as a job on the host queue, under the HostKey of the gate, and waits for it. A gate that stops waiting because its own run
-// was canceled cancels the job, a queued one before it starts and a running one at the next tick. A stop of the engine leaves the job for the next start.
-// A cancel of the run while no engine runs cancels the job too: WithCancelChildren of DBOS reaches every descendant of the run, grandchildren included.
+// onHost runs the call of a gate as a job on the host queue, under the HostKey of the gate, and waits for it. The job is a child run of the gate,
+// so every cancel of the gate reaches it in the same write: WithCancelChildren of DBOS cancels every descendant, grandchildren included, a queued job before it
+// starts and a running one at the next tick. The wait itself never cancels the job: a cancel by id from a wait that stopped could land after a resume
+// reopened the job, and fail the replay of the gate. A stop of the engine leaves the job for the next start.
 func (e *Engine) onHost(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) error {
 	return e.runJob(ctx, in, e.hostQueue, out)
 }
@@ -324,10 +318,6 @@ func (e *Engine) runJob(ctx dbos.Context, in ExclusiveInput, queue dbos.Queue, o
 
 	done, err := awaitResult(ctx, e.ctx, handle, e.deps.Clock.resultOptions())
 	if err != nil {
-		if ctx.Err() != nil && e.ctx.Err() == nil {
-			e.stopJob(ctx, in, handle.GetWorkflowID())
-		}
-
 		return err
 	}
 
@@ -455,7 +445,7 @@ func (e *Engine) stopOlderGates(run dbos.Context, in ExclusiveInput) error {
 // stopSuperseded cancels each gate of the same pull request that is queued or runs for another head than the tip of in, and returns their ids.
 // It reads the head again, because the read at queue time can be old: a gate cancels only while its tip is the head the forge reports now, so it never cancels
 // the gate of the head. The queue then starts the gate of the new head at once: a queued gate never starts, and a running gate stops at the next tick of this engine.
-// A cancel that fails is logged: the old gate then runs to its end.
+// The cancel reaches the build job of each old gate in the same write, so the host frees its slot too. A cancel that fails is logged: the old gate then runs to its end.
 func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string {
 	standing, read := e.gateStanding(ctx, in)
 	if !read || standing.Head != in.Tip {
@@ -464,7 +454,7 @@ func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string
 
 	old, err := e.olderGates(in)
 	if err == nil && len(old) > 0 {
-		err = dbos.CancelWorkflows(dbos.WithoutCancel(e.ctx), old)
+		err = dbos.CancelWorkflows(dbos.WithoutCancel(e.ctx), old, dbos.WithCancelChildren())
 	}
 
 	if err != nil {
