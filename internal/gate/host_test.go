@@ -170,7 +170,12 @@ func runProjectCommand(t *testing.T, project model.Project, env ...string) (int,
 	require.Len(t, remote.submitted, 1)
 
 	cmd := exec.CommandContext(context.Background(), "/bin/sh", "-c", remote.submitted[0].Command) //nolint:gosec // the command is the one the code under test composes, run against a shim git
-	cmd.Env = append([]string{"HOME=" + home, "PATH=" + bin + ":/usr/bin:/bin"}, env...)
+	path := bin + ":/usr/bin:/bin"
+	if found, lookErr := exec.LookPath("timeout"); lookErr == nil {
+		path += ":" + filepath.Dir(found) // a host without a timeout in /usr/bin (macOS) has it elsewhere
+	}
+
+	cmd.Env = append([]string{"HOME=" + home, "PATH=" + path}, env...)
 
 	code := 0
 
@@ -225,6 +230,29 @@ func TestHostCommand_TheMarkerLineIsWrittenBeforeTheCloneIsDeletedWhateverTheGat
 			assert.Equal(t, 3, code)
 		}
 	}
+}
+
+func TestHostCommand_AHungGateEndsWithExitStatus124UnderTheRunLimitAndTheCloneIsStillDeleted(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("timeout"); err != nil {
+		t.Skip("no timeout binary on this machine")
+	}
+
+	project := hostProject()
+	project.Host = &model.HostConfig{MaxRun: time.Second}
+	project.Gate = "exec sleep 30" // exec, so that the signal of timeout reaches sleep and no child keeps the output open
+
+	start := time.Now()
+	code, home, _, out := runProjectCommand(t, project, "SHIM_HEAD="+headA)
+
+	assert.Equal(t, 124, code, "timeout ends a hung gate with status 124 and the trap keeps it")
+	assert.Less(t, time.Since(start), 20*time.Second, "the run limit ended the gate, not the sleep")
+	assert.Contains(t, out, "beehave-gate-done\n")
+
+	left, err := filepath.Glob(filepath.Join(home, "beehave-gate-*"))
+	require.NoError(t, err)
+	assert.Empty(t, left)
 }
 
 func TestHostCommand_TheMarkerIsInTheCommandBeforeTheDelete(t *testing.T) {
