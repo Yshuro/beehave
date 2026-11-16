@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 	"time"
 
@@ -162,6 +163,43 @@ func TestBatchGate_AReadOfTheProofAfterTheAnswerThatFailsFailsTheCallAndRerunsNo
 	require.ErrorContains(t, outcome.err, "the batch gate lost its job: ")
 	require.ErrorIs(t, outcome.err, errFake)
 	assert.Equal(t, 1, rig.gate.submitted(), "no gate runs on the commit without a proof")
+	assert.Empty(t, rig.merger.landed())
+}
+
+func TestBatchGate_ACanceledWaitForTheProofReadsTheProofOnceAndNeverCancelsTheJob(t *testing.T) {
+	t.Parallel()
+
+	rig, hosts := heldBatchRig(t)
+	rig.h.lostPoll = time.Hour
+	engine := rig.engine(t)
+
+	done := runInBackground2(engine, writeFlow(t, bodyFlow(rig.lostBatchBody())))
+
+	// The first look gives no proof, and the wait sleeps for an hour before the next.
+	eventually(t, func() bool {
+		ids := exclusiveRunsOf(t, engine, kindBatchGate)
+		if len(ids) != 1 {
+			return false
+		}
+
+		steps, err := dbos.GetWorkflowSteps(engine.ctx, ids[0])
+
+		return err == nil && slices.ContainsFunc(steps, func(s dbos.StepInfo) bool { return s.StepName == "DBOS.sleep" })
+	})
+	require.Equal(t, 1, hosts.proofReads())
+
+	require.NoError(t, dbos.CancelWorkflow(engine.ctx, testRun, dbos.WithCancelChildren()))
+	eventually(t, func() bool {
+		rig.h.tick(t)
+
+		return hosts.proofReads() == 2
+	})
+
+	require.Error(t, (<-done).err, "the canceled run has no result")
+	assert.Equal(t, 2, hosts.proofReads(), "the canceled wait reads the proof once more, and never again")
+	assert.Equal(t, []string{"gpu-b/job-1", "gpu-b/job-1"}, hosts.proved)
+	assert.Zero(t, hosts.teardownCount(), "the wait never banks or stops the host")
+	assert.Equal(t, 1, rig.gate.submitted(), "the wait submits no job")
 	assert.Empty(t, rig.merger.landed())
 }
 

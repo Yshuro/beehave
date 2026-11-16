@@ -85,23 +85,22 @@ type ExclusiveOutput struct {
 func (e *Engine) exclusive(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, error) {
 	var out ExclusiveOutput
 
-	run := ctx
-
-	if in.Kind == kindGate {
-		var stop func()
-
-		run, stop = e.trackGate(ctx)
-		defer stop()
-	}
+	run, stop := e.trackGate(ctx, in)
+	defer stop()
 
 	out.Failure = e.failureOf(e.exclusiveCall(run, in, &out))
 
 	return out, nil
 }
 
-// trackGate lists a running gate with the runs that the tick cancels. DBOS does not interrupt a step that runs, so a gate that a newer head canceled
-// stops when the tick cancels its context. The returned function ends the gate: it cancels the context and marks the run as ended.
-func (e *Engine) trackGate(parent dbos.Context) (dbos.Context, func()) { //nolint:ireturn // the context of a run is the interface of the workflow library
+// trackGate lists a running gate or batch gate with the runs that the tick cancels. DBOS does not interrupt a step that runs, so a gate that a newer head
+// or a person canceled stops when the tick cancels its context, and a wait for the proof of a lost job reads the proof once more (lostStopped).
+// The returned function ends the gate: it cancels the context and marks the run as ended. A run of another kind is not listed.
+func (e *Engine) trackGate(parent dbos.Context, in ExclusiveInput) (dbos.Context, func()) { //nolint:ireturn // the context of a run is the interface of the workflow library
+	if in.Kind != kindGate && in.Kind != kindBatchGate {
+		return parent, func() {}
+	}
+
 	run, cancel := dbos.WithCancel(parent)
 
 	ended := make(chan struct{})
@@ -285,14 +284,8 @@ func (in ExclusiveInput) recordedHost() (string, bool) {
 func (e *Engine) hostJob(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, error) {
 	var out ExclusiveOutput
 
-	run := ctx
-
-	if in.Kind == kindGate {
-		var stop func()
-
-		run, stop = e.trackGate(ctx)
-		defer stop()
-	}
+	run, stop := e.trackGate(ctx, in)
+	defer stop()
 
 	out.Failure = e.failureOf(e.runCall(run, in, &out))
 

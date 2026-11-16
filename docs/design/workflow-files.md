@@ -484,20 +484,19 @@ It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`,
 - `findings` holds one line for each finding. `note` says why no read ran (see below).
 - `host_loss` lists one record for each lost gate job of the call, in the shape of the `gate` record, with `kind` `batch_gate` and the union commit in `head_or_commit`. It is an empty list when the call lost nothing.
 - `host_losses` is the count of the host losses in the item tree that the last record of the call read. It is 0 when the call lost nothing.
-
-#### A lost batch gate job
-
-The project gate of the union is two steps in its host job run: `batch_gate:job` checks out the union commit and records the tree and the host job, then `batch_gate` waits for that job. A restart during the wait waits on the recorded job and submits none. A `gate_run` program has no host job and stays one step, `batch_gate`.
-
-- When the wait ends as lost, the host job run waits for a proof as the `gate` call does. See "The wait for a proof" in [hosts.md](hosts.md). With no proof at `host.lost_job_wait`, the item run asks the owner.
-- After a proof, the item run records the loss as the step `batch:<name>.gate#<n>/host-loss`, then gates the same commit once more. The rerun records its own loss as `batch:<name>.gate#<n>@2/host-loss`. The batch counts one gate in `gates`.
-- A second proven loss in one call fails the call with "the gate gave no result". The error names the host and both proofs. No member is rejected or deferred. The call returns no result, so `beehave status <run id> --json` holds the count.
-
 - `name` is required, and each call of a run needs its own.
 - The union is gated in the worktree of the item that runs the workflow.
 - Each member merges through the same guards as `merge`, pinned to its head and to the tree of its prefix.
 - Git 2.38 or newer is the minimum on the gate host.
 - For each member, the step `batch:<name>.intent#<item>` records the pull request as OPEN before the step `batch:<name>.merge#<item>` merges it. A resume after a crash therefore counts a merge that the forge already made as done.
+
+#### A lost batch gate job
+
+The project gate of the union is two steps in its gate run: `batch_gate:job` checks out the union commit and records the tree and the host job, then `batch_gate` waits for that job. A restart during the wait waits on the recorded job and submits none. A `gate_run` program has no host job and stays one step, `batch_gate`.
+
+- When the wait ends as lost, the gate run waits for a proof as the `gate` call does, and a cancel of the run during that wait reads the proof once more. See "The wait for a proof" in [hosts.md](hosts.md). With no proof at `host.lost_job_wait`, the item run asks the owner.
+- After a proof, the item run records the loss as the step `batch:<name>.gate#<n>/host-loss`, then gates the same commit once more. The rerun records its own loss as `batch:<name>.gate#<n>@2/host-loss`. The batch counts one gate in `gates`.
+- A second proven loss in one call fails the call with "the gate gave no result". The error names the host and both proofs. No member is rejected or deferred. The call returns no result, so `beehave status <run id> --json` holds the count.
 
 #### Checks after the batch lands
 
