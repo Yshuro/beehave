@@ -199,7 +199,7 @@ func TestCommand_ASlotClassTheBuildCannotGrantIsRefusedAtTheCall(t *testing.T) {
 func TestSlotQueue_ASetPollIntervalReachesTheQueueAndAZeroPollLeavesTheLibraryDefault(t *testing.T) {
 	t.Parallel()
 
-	engine := newHarness(t).engine(t)
+	engine := idleEngine(t, newHarness(t))
 
 	engine.deps.Clock.Poll = 0
 

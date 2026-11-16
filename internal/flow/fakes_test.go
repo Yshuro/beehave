@@ -690,8 +690,18 @@ func (h *harness) fresh(t *testing.T) {
 func (h *harness) engine(t *testing.T) *Engine {
 	t.Helper()
 
+	return h.engineWith(t, func(*Engine) {})
+}
+
+// engineWith is engine with a change that runs on the built engine before Launch. Nothing reads the engine before Launch, so a field the change sets has no reader to race with.
+func (h *harness) engineWith(t *testing.T, change func(*Engine)) *Engine {
+	t.Helper()
+
 	engine, err := NewEngine(t.Context(), h.opts, h.deps())
 	require.NoError(t, err)
+
+	change(engine)
+
 	require.NoError(t, engine.Launch())
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
