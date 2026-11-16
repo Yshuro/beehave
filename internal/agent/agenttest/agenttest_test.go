@@ -33,6 +33,10 @@ type fakeAdapter struct {
 	invent bool
 	// denies makes Calls report a denial, and nothing else, on every line.
 	denies bool
+	// refuses makes Calls report a refused call, and nothing else, on every line.
+	refuses bool
+	// resulting makes Calls report a result line, and nothing else, on every line.
+	resulting bool
 	// reads makes Calls read dollars from a line "spent <n>".
 	reads bool
 	// files is the Files of the launch of the guard and of the sandbox.
@@ -74,6 +78,14 @@ func (a fakeAdapter) Calls(line string) agent.Seen {
 
 	if a.denies {
 		return agent.Seen{Denied: "paused"}
+	}
+
+	if a.refuses {
+		return agent.Seen{Refused: []string{"rm -rf"}}
+	}
+
+	if a.resulting {
+		return agent.Seen{Result: true}
 	}
 
 	return agent.Seen{}
@@ -475,7 +487,35 @@ func TestCheckCalls_ADenialAloneIsAFailure(t *testing.T) {
 	agenttest.CheckCalls(&r, a)
 
 	require.Len(t, r.failures, 1)
-	assert.Contains(t, r.failures[0], "Limit:<nil> Denied:paused")
+	assert.Contains(t, r.failures[0], "Denied:paused")
+}
+
+func TestCheckCalls_ARefusedCallAloneIsAFailure(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.refuses = true
+
+	var r recorder
+
+	agenttest.CheckCalls(&r, a)
+
+	require.Len(t, r.failures, 1)
+	assert.Contains(t, r.failures[0], "Refused:[rm -rf]")
+}
+
+func TestCheckCalls_AResultLineAloneIsAFailure(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.resulting = true
+
+	var r recorder
+
+	agenttest.CheckCalls(&r, a)
+
+	require.Len(t, r.failures, 1)
+	assert.Contains(t, r.failures[0], "Result:true")
 }
 
 func TestTheSuiteReportsAFakeCLIThatCannotBeWritten(t *testing.T) {
