@@ -475,7 +475,7 @@ func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput
 			return PhaseOutput{}, err
 		}
 
-		ended, err := s.runOnce(name, in, try)
+		ended, err := s.runOnce(name, in)
 		if err != nil || ended.Limit == nil {
 			return ended, err
 		}
@@ -489,13 +489,13 @@ func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput
 // runOnce runs the agent once as a phase. The cost of a run that failed goes to the stream of failed runs, which a resume keeps, so every total
 // and the run cap count it after a resume too. The write and its step record are one transaction, so a replay appends nothing.
 // The error of the failed run stays the error of the step, so a failure to write the cost is not reported over it.
-func (s *script) runOnce(name string, in PhaseInput, try int) (PhaseOutput, error) {
+func (s *script) runOnce(name string, in PhaseInput) (PhaseOutput, error) {
 	ended, err := s.e.queuePhase(s.ctx, in)
 	if err == nil || !s.running() {
 		return ended, err
 	}
 
-	if writeErr := dbos.WriteStream(s.ctx, failedRunsStream, failedRun{Call: name, Try: try, Spend: ended.Spend}); writeErr != nil {
+	if writeErr := dbos.WriteStream(s.ctx, failedRunsStream, failedRun{Call: name, Spend: ended.Spend}); writeErr != nil {
 		s.e.logger.Warn("cannot keep the cost of the failed agent run; the totals leave it out", "item", s.in.Item, "step", name, "error", writeErr)
 	}
 
@@ -515,9 +515,9 @@ func (s *script) read(name string, a agentArgs, ended PhaseOutput, try int) (ste
 	})
 }
 
-// countFailedRun records the cost of a run whose limit step failed. The resume reruns the limit step, which records the cost again from the output
-// of the phase, so this record is past the cut of the rewind and goes with it: the cost counts once. The error of the limit step stays the error
-// of the step, so a failure to record the cost is not reported over it. The caller records it only while the run is running.
+// countFailedRun records the cost of a run whose limit step failed, in a step of its own, so the totals count it. The error of the limit step
+// stays the error of the step, so a failure to record the cost is not reported over it. The caller records it only while the run is running.
+// Only the failure of the limit step writes this record.
 func (s *script) countFailedRun(name string, try int, spend agent.Spend) {
 	_, err := runStep(s.e, s.ctx, name+"/spent"+strconv.Itoa(try), func(context.Context) (stepResult, error) {
 		return stepResult{Outputs: spendOutputs(spend)}, nil

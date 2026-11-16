@@ -190,10 +190,9 @@ func (c *Client) outputsOf(ids []string) (map[string]any, error) {
 // so beehave resume keeps the cost of the failed run that it runs again.
 const failedRunsStream = "failed_runs"
 
-// failedRun is one entry of the stream of failed runs: the agent call, its try and the cost of the run.
+// failedRun is one entry of the stream of failed runs: the agent call and the cost of the run.
 type failedRun struct {
 	Call string `json:"call"`
-	Try  int    `json:"try"`
 	agent.Spend
 }
 
@@ -330,7 +329,7 @@ func (l *StepLine) decode(record dbos.StepInfo) bool {
 }
 
 // decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a look at the caps, the cost record of a run whose limit step failed
-// (and of a failed run that agent module 2 recorded),
+// (and of a failed run that agent module 3 or an earlier one recorded),
 // or the limit record of a run that a provider limit stopped. The look that follows a limit ends its wait. Any other sub-step decodes nothing.
 func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {

@@ -117,6 +117,52 @@ func TestDBOSStream_AnEntryWrittenInTheWorkflowBodyOutlivesARewindToAStepBeforeI
 	assert.Equal(t, []int{1, 2}, entries, "the entry of the first run outlives the rewind, and the rerun appends its own")
 }
 
+func TestDBOSStream_AReplayThatFindsTheRecordOfAWriteAppendsNoSecondEntry(t *testing.T) {
+	t.Parallel()
+
+	var runs atomic.Int32
+
+	// Step 0 runs before the write, step 1 is the write, step 2 fails on the first run only. Each run offers its own number to the write.
+	flow := func(ctx dbos.Context, _ int) (int, error) {
+		if _, err := dbos.RunAsStep(ctx, func(context.Context) (int, error) { return 0, nil }, dbos.WithStepName("before")); err != nil {
+			return 0, err
+		}
+
+		run := int(runs.Add(1))
+		if err := dbos.WriteStream(ctx, premiseKey, run); err != nil {
+			return 0, err
+		}
+
+		return dbos.RunAsStep(ctx, func(context.Context) (int, error) {
+			if run == 1 {
+				return 0, errPremiseFirstRun
+			}
+
+			return run, nil
+		}, dbos.WithStepName("after"))
+	}
+
+	flowCtx := premiseContext(t, flow)
+
+	handle, err := dbos.RunWorkflow(flowCtx, flow, 0, dbos.WithWorkflowID("premise-replay"))
+	require.NoError(t, err)
+
+	_, err = resultWithin(t, handle)
+	require.ErrorIs(t, err, errPremiseFirstRun)
+
+	// The restart replays from step 2, so the record of the write at step 1 is kept and the write is not run again.
+	replayed, err := dbos.RewindWorkflow[int](flowCtx, "premise-replay", dbos.WithRewindStartStep(2))
+	require.NoError(t, err)
+
+	got, err := resultWithin(t, replayed)
+	require.NoError(t, err)
+	assert.Equal(t, 2, got, "the body ran again and offered a second entry")
+
+	entries, _, err := dbos.ReadStream[int](flowCtx, "premise-replay", premiseKey, dbos.WithReadStreamSnapshot())
+	require.NoError(t, err)
+	assert.Equal(t, []int{1}, entries, "the write and its step record commit together, so the replay finds the record and writes nothing")
+}
+
 func TestDBOSStream_ASnapshotReadInsideAStepOfAnOpenRunReturnsTheEntriesAtOnce(t *testing.T) {
 	t.Parallel()
 

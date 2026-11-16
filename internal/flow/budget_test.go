@@ -142,7 +142,7 @@ func TestAgentStep_TheCostOfAFailedRunIsRecordedForTheRunCap(t *testing.T) {
 
 	kept, _, err := dbos.ReadStream[failedRun](engine.ctx, runID(testItem, 1), failedRunsStream, dbos.WithReadStreamSnapshot())
 	require.NoError(t, err)
-	assert.Equal(t, []failedRun{{Call: "agent:a#1", Try: 1, Spend: agent.Spend{Cost: 6}}}, kept, "the run cap counts the 6 dollars that the failed run spent")
+	assert.Equal(t, []failedRun{{Call: "agent:a#1", Spend: agent.Spend{Cost: 6}}}, kept, "the run cap counts the 6 dollars that the failed run spent")
 }
 
 func TestAgentStep_ARunWithNoRunCapStartsEveryStep(t *testing.T) {
