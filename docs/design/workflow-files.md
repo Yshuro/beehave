@@ -39,14 +39,21 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `c
 
 #### A step that ran when the engine stopped
 
-DBOS records a step only when the step ends. If the engine stops after the effect of a step and before its record, the resume runs the step again. A step is safe to run twice when the tracker, the forge or the host answers the repeat. Two things make a step safe, and each row names one of them. The step makes a check first and sends no second write, or the call is documented to treat a repeat as no change, and a test pins the exact call. Four cases are not safe today, and a later change fixes each of them. Two rows rest on the library and not on a check of beehave: `spawn` and `wait`.
+DBOS records a step only when the step ends. If the engine stops after the effect of a step and before its record, the resume runs the step again. A step is safe to run twice when the tracker, the forge or the host answers the repeat. Four bases make a step safe, and each row names the one it uses.
+
+1. Check first. The step reads the state and sends no second write.
+2. A cited rule. The call is documented to treat a repeat as no change, and a test pins the exact call.
+3. The same value. A repeat sets the value that is set already, and no page states that this is a no-op. The edit half of `board_sync`, the beads `item_assign` and the status and comment writes of the `local` tracker use this basis.
+4. The library. DBOS replays the step and not beehave: `spawn` and `wait`.
+
+Four cases are not safe today, and a later change fixes each of them.
 
 | Builtin | A repeat after a crash | Why |
 | --- | --- | --- |
 | `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. |
-| `item_comment` | Safe. | The tracker reads the comments first and finds the key. |
-| `item_status` | Safe. | The tracker reads the state and the labels first and runs only the commands that change them. |
-| `item_assign` | Safe. | On GitHub the tracker reads the assignees first and sends no edit for a login that is on the issue. A test with a repeated call shows one edit. Beads reads first too. The local tracker refuses an assignee. |
+| `item_comment` | Safe. | GitHub and beads read the comments first and find the key. The `local` tracker inserts the comment under its key and ignores a second insert of that key. |
+| `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
+| `item_assign` | Safe. | On GitHub the tracker reads the assignees first and sends no edit for a login that is on the issue. A test with a repeated call shows one edit. Beads reads the assignee and refuses a different login, but for the same login it sends the same update again, and it keeps one assignee. The local tracker refuses an assignee. |
 | `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
 | `pr_assign` | Safe. | The call is a POST that adds a login, and GitHub says: "Users already assigned to an issue are not replaced." ([Assignees](https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue)). A test pins the exact call of two runs, so a change to a call that replaces the assignees turns it red. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
@@ -64,7 +71,7 @@ DBOS records a step only when the step ends. If the engine stops after the effec
 | `gate` with a host job, `command` with `host` or `slots`, and the gate of `batch_merge` | Not safe today. A crash after the host accepts the job and before the record submits a second job. | The job has no key that the host honors. A later change adds one. |
 | `host_up` | Not safe today. If the crash came after the launch, the repeat finds the host up and reports `started` false, so `host_teardown` does not stop it. | The step cannot tell its own launch from a host that was up already. A later change adds a start mark. |
 | `host_teardown` on SkyPilot | Not safe today. If the crash came after the delete, the repeat cannot read the work root of the deleted cluster and reports `down` false with a reason. | The step reads the host before it checks that the host exists. A later change makes a missing host count as down. |
-| `host_teardown` on ssh and Slurm | Safe. | The step banks the work and leaves the machine up. The bank pushes what is not pushed, so a repeat pushes refs that are pushed. A test runs the bank once. |
+| `host_teardown` on ssh and Slurm | Safe. | The step banks the work and leaves the machine up. The bank reads first and pushes only what is not banked, so a repeat pushes nothing. A test runs the bank once, and none runs it twice. |
 | `agent` | The step is a lost step. It resumes the session or runs again with a note. | `durable-loop.md` describes the start mark of a phase. |
 
 The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `before_review`, `earlier_calls`, `gather`) change nothing outside the run, so a repeat is safe.
