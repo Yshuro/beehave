@@ -49,7 +49,7 @@ type Queue struct {
 	bank   func(ctx context.Context) error
 }
 
-// settings are the production values that an Option replaces. They are for tests.
+// settings are the values that an Option replaces. The clock, the bank and the nonce are for tests.
 type settings struct {
 	clock jobwait.Clock
 	bank  func(ctx context.Context) error
@@ -64,6 +64,9 @@ func WithClock(clock jobwait.Clock) Option { return func(s *settings) { s.clock 
 func WithBank(bank func(context.Context) error) Option { return func(s *settings) { s.bank = bank } }
 
 func WithNonce(nonce func() string) Option { return func(s *settings) { s.nonce = nonce } }
+
+// WithLimit makes sbatch end every job at the run limit, with `--time`. Without it the queue sends no limit.
+func WithLimit(limit time.Duration) Option { return func(s *settings) { s.limit = limit } }
 
 // New returns the queue of the cluster that the link reaches.
 func New(l *link.Link, config model.HostConfig, slot Slot, opts ...Option) *Queue {

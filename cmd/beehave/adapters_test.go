@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,16 +21,54 @@ import (
 	"github.com/tobocop2/beehave/internal/forge"
 	forgegithub "github.com/tobocop2/beehave/internal/forge/github"
 	"github.com/tobocop2/beehave/internal/host"
+	"github.com/tobocop2/beehave/internal/host/jobwait"
 	"github.com/tobocop2/beehave/internal/host/link"
 	"github.com/tobocop2/beehave/internal/host/skypilot"
 	"github.com/tobocop2/beehave/internal/host/slurm"
 	"github.com/tobocop2/beehave/internal/host/ssh"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc/proctest"
 	"github.com/tobocop2/beehave/internal/store/beads"
 	"github.com/tobocop2/beehave/internal/store/beads/beadstest"
 	storegithub "github.com/tobocop2/beehave/internal/store/github"
 	"github.com/tobocop2/beehave/internal/store/local"
 )
+
+// heldSlot is a slot that holds and releases nothing.
+type heldSlot struct{}
+
+func (heldSlot) Hold(context.Context, jobwait.Job) error    { return nil }
+func (heldSlot) Release(context.Context, jobwait.Job) error { return nil }
+
+func TestSlurmQueue_TheJobOfTheSkyPilotHostEndsAtTheRunLimitOfTheHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		limit time.Duration
+		want  string
+	}{
+		{"whole minutes", 12 * time.Hour, "--time=720"},
+		{"a part of a minute rounds up", 90 * time.Second, "--time=2"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ssh := &proctest.Scripted{}
+			ssh.Plan("42\n", "sbatch")
+
+			queue := slurmQueue(link.New("lane-host", ssh), model.HostConfig{Provider: skypilot.Name, MaxRun: tc.limit}, heldSlot{})
+
+			_, err := queue.Submit(t.Context(), model.JobSpec{Name: "gate", Command: "make check"})
+
+			require.NoError(t, err)
+			require.Len(t, ssh.Calls, 1)
+			assert.Contains(t, strings.Join(ssh.Calls[0], " "), tc.want+" ", "the word sits before the wrapped command")
+		})
+	}
+}
 
 func TestAdapters_TheTableHasAConstructorForEveryNameAndNothingElse(t *testing.T) {
 	t.Parallel()
