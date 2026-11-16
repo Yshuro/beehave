@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake git: the clone is at one fixed commit.
+case "$*" in
+*'rev-parse HEAD') echo 0123456789abcdef0123456789abcdef01234567 ;;
+*)
+	echo "fake git: unexpected $*" >&2
+	exit 1
+	;;
+esac

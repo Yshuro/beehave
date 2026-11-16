@@ -84,6 +84,24 @@ The unit is stopped and reset after the bank. So the poll that first reads a fin
 
 `host/sshtest` is the fake machine, and the adapter runs `host/hosttest` against it.
 
+#### Make a build host
+
+`scripts/host-setup.sh` makes a linux amd64 machine ready for the ssh provider, then proves it. Run it on the machine, as the login user of the jobs, from a clone of the repository at the commit under test:
+
+```sh
+sh scripts/host-setup.sh --work-root /home/jobs/dogfood --watchdog idle-selfdestruct.service
+```
+
+- **Refusals.** Before any change, it refuses the root user, a machine that is not linux amd64, sudo that asks for a password, and a work root that the adapter refuses.
+- **The watchdog.** The machine needs a self-delete watchdog unit. The script refuses to start, and refuses to finish, unless that unit is active, enabled and `Restart=always`. The host maker installs the watchdog. The script installs none, and it names no cloud.
+- **Tools.** `scripts/host-tools.sh` installs the apt packages, the Go toolchain that `go.mod` names (checked against the sha256 that go.dev lists), uv and actionlint. A host maker with its own idle delete can run it alone. `make setup` and `make contract-tools-install` install the other tools at their pins.
+- **The PATH of a job.** A job runs with the PATH of the user manager, not the login PATH. The script writes `~/.config/environment.d/60-beehave.conf`, which puts the Go folders on that PATH and sets `BEEHAVE_BD_132`. So a gate is plain `make check`.
+- **The proof.** The script runs each tool once as a transient user unit, the way the adapter runs a job. A tool that does not run, or that is not at the pin in `go.mod`, the `Makefile` or `host-tools.sh`, fails the script. Then it runs the reads of `Up`: linger, the user manager, the systemd version and the work root.
+- **The record.** The script writes `<work_root>/.beehave/host-setup.record` and prints it: the time, the commit, the kernel, systemd, the Landlock result, the watchdog state and the version of each tool. A kernel older than 6.7, or one without the Landlock module, is a warning only, because only an agent run on the host needs the sandbox.
+- **A second run.** Each step reads the state first and changes only what differs. A second run gives the same record except the time.
+
+The last line of a pass is `HOST-SETUP-DONE`. No other path prints it.
+
 ### The SkyPilot provider
 
 `host/skypilot` is the SkyPilot adapter. It runs the `sky` and `ssh` command lines through `proc.Runner`, links no cloud library and opens no listener. The `sky` command starts its own local API server; only a project that selects this provider gets it. A project with no `host` block builds no adapter and needs neither `sky` nor Slurm.

@@ -1,0 +1,27 @@
+#!/bin/sh
+# Fake curl: copy the file of FAKE_DL named for the URL to the -o path. The go.dev list is go.json.
+printf 'curl %s\n' "$*" >>"$FAKE_LOG"
+out=
+url=
+while [ $# -gt 0 ]; do
+	case $1 in
+	-o | --retry)
+		[ "$1" = -o ] && out=$2
+		shift 2
+		;;
+	-*) shift ;;
+	*)
+		url=$1
+		shift
+		;;
+	esac
+done
+case $url in
+*mode=json*) name=go.json ;;
+*) name=${url##*/} ;;
+esac
+if [ ! -f "$FAKE_DL/$name" ]; then
+	echo "fake curl: no download $name" >&2
+	exit 22
+fi
+cp "$FAKE_DL/$name" "$out"

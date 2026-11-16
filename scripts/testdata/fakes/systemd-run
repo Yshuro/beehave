@@ -1,0 +1,26 @@
+#!/bin/sh
+# Fake systemd-run: --version prints a version. Any other call runs its last argument with sh -c, in an empty environment
+# whose PATH is the one the user manager builds: FAKE_BIN:/usr/bin:/bin, changed by the PATH lines of ~/.config/environment.d.
+printf 'systemd-run %s\n' "$*" >>"$FAKE_LOG"
+if [ "$1" = --version ]; then
+	echo "systemd ${FAKE_SYSTEMD:-255} (255.4-1ubuntu8)"
+	exit 0
+fi
+for last; do :; done
+unit_path=$FAKE_BIN:/usr/bin:/bin
+marker="\${PATH}"
+for file in "$HOME"/.config/environment.d/*.conf; do
+	[ -f "$file" ] || continue
+	while IFS= read -r line; do
+		case $line in
+		PATH=*)
+			value=${line#PATH=}
+			case $value in
+			*"$marker"*) unit_path=${value%%"$marker"*}$unit_path${value#*"$marker"} ;;
+			*) unit_path=$value ;;
+			esac
+			;;
+		esac
+	done <"$file"
+done
+exec env -i HOME="$HOME" PATH="$unit_path" sh -c "$last"
