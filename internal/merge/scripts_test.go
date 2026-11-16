@@ -92,7 +92,7 @@ func TestScript_M08_ABodyWithAnAttributionLineIsRefusedAndTheLineNumberIsInTheOu
 	result := w.run(request())
 
 	assert.Equal(t, merge.Refused, result.Stop)
-	assert.Equal(t, "  3:Co-Authored-By: Claude <noreply@anthropic.com>", last(result))
+	assert.Equal(t, "  line 3 matches pattern 1 of forbid_text", last(result))
 	assert.Empty(t, w.writes)
 }
 

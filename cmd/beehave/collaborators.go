@@ -978,7 +978,9 @@ func repoRefusal(err error) (merge.Result, bool) {
 		return merge.Result{}, false
 	}
 
-	return merge.Result{Stop: merge.Refused, Lines: []string{wrong.Error()}}, true
+	lines := []string{wrong.Error()}
+
+	return merge.Result{Stop: merge.Refused, Lines: lines, Refusal: lines}, true
 }
 
 // audited returns the issues that the item names, or the line that says why the audit is off.

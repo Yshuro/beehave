@@ -322,16 +322,17 @@ func TestBatchMerge_AGateRunThatIsNotAListIsRefused(t *testing.T) {
 	assert.Empty(t, rig.merger.asked)
 }
 
-func TestBatchMerge_AMemberThatTheMergeRefusesIsRejectedWithItsLastLine(t *testing.T) {
+func TestBatchMerge_ARefusedMemberIsRejectedWithEveryLineOfTheRefusal(t *testing.T) {
 	t.Parallel()
 
 	rig := newBatchRig(t)
-	rig.merger.script["1"] = []merge.Result{{Stop: merge.OwnWork, Lines: []string{"first", "OWN WORK: leave it to the owner"}}}
+	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Lines: []string{"OK: x", "REFUSE: a", "  b"}, Refusal: []string{"REFUSE: a", "  b"}}}
 
 	_, err := rig.walk(t, rig.call("1 3", ""))
 
 	require.NoError(t, err)
-	assert.Contains(t, rig.h.commands.ran()[0], "1:OWN WORK: leave it to the owner")
+	assert.Contains(t, rig.h.commands.ran()[0], "1:REFUSE: a\n  b")
+	assert.NotContains(t, rig.h.commands.ran()[0], "OK: x", "a line of a guard that passed is not the cause")
 }
 
 func TestBatchMerge_EachMemberMergesWithItsOwnApproval(t *testing.T) {
@@ -398,7 +399,7 @@ func TestBatchMerge_ARefusalThatOnlyLooksLikeAStopLineIsARejectionNotAStop(t *te
 	t.Parallel()
 
 	rig := newBatchRig(t)
-	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Lines: []string{"STOP: said by a plain refusal", "REFUSE: mergeable is UNKNOWN"}}}
+	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Lines: []string{"STOP: said by a plain refusal", "REFUSE: mergeable is UNKNOWN"}, Refusal: []string{"REFUSE: mergeable is UNKNOWN"}}}
 
 	_, err := rig.walk(t, rig.call("1", ""))
 
@@ -615,7 +616,7 @@ func TestBatchMerge_ATransientRefusalDefersTheMemberAndTheMergerRunsOnce(t *test
 	t.Parallel()
 
 	rig := newBatchRig(t)
-	failed := merge.Result{Stop: merge.Refused, Reason: merge.Transient, Lines: []string{"first", "REFUSE: MergePR: down"}}
+	failed := merge.Result{Stop: merge.Refused, Reason: merge.Transient, Lines: []string{"first", "REFUSE: MergePR: down"}, Refusal: []string{"REFUSE: MergePR: down"}}
 	rig.merger.script["1"] = []merge.Result{failed, failed, failed}
 	engine := rig.engine(t)
 
@@ -628,6 +629,19 @@ func TestBatchMerge_ATransientRefusalDefersTheMemberAndTheMergerRunsOnce(t *test
 	for _, name := range stepNames(t, engine) {
 		assert.NotContains(t, name, readSeparator, "no later read was made")
 	}
+}
+
+func TestBatchMerge_ADeferredMemberKeepsTheWholeReason(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Reason: merge.Transient, Lines: []string{"OK: x", "REFUSE: checks still running: ci. Wait for them.", "       (above refers to #1)"},
+		Refusal: []string{"REFUSE: checks still running: ci. Wait for them.", "       (above refers to #1)"}}}
+
+	_, err := rig.walk(t, rig.call("1 3", ""))
+
+	require.NoError(t, err)
+	assert.Contains(t, rig.h.commands.ran()[0], "1:REFUSE: checks still running: ci. Wait for them.\n       (above refers to #1)")
 }
 
 func TestBatchMerge_EachMemberRecordsItsIntentStepBeforeItsMergeStep(t *testing.T) {

@@ -157,10 +157,13 @@ type Request struct {
 }
 
 // Result is the verdict. A Done result merged the pull request. Lines are the lines to show, a refusal last.
+// Refusal holds the lines of the guard that stopped the run, and it is empty for a Done result. Lines end with Refusal.
+// No line of Lines or Refusal matches a pattern of the ForbidText of the request.
 type Result struct {
-	Stop   Stop
-	Reason Reason
-	Lines  []string
+	Stop    Stop
+	Reason  Reason
+	Lines   []string
+	Refusal []string
 }
 
 // Reason is why a refusal happened, for a caller that acts on the cause and not on the text of a line.
@@ -234,13 +237,26 @@ func Run(ctx context.Context, forge Forge, req Request) Result {
 
 	for _, guard := range guards() {
 		if stop := guard(run); stop != nil {
-			return Result{Stop: stop.stop, Reason: stop.reason, Lines: append(run.lines, stop.lines...)}
+			return run.result(stop)
 		}
 	}
 
-	if stop := run.conclude(); stop != nil {
-		return Result{Stop: stop.stop, Reason: stop.reason, Lines: append(run.lines, stop.lines...)}
+	return run.result(run.conclude())
+}
+
+// result is the one place that builds a Result: the lines said so far, then the lines of the stop. A nil stop is Done.
+// Every line that a pattern of the request matches is left out here, so no caller posts forbidden text.
+func (a *attempt) result(stop *refusal) Result {
+	if stop == nil {
+		stop = &refusal{stop: Done}
 	}
 
-	return Result{Stop: Done, Lines: run.lines}
+	last := withheld(a.req.ForbidText, stop.lines)
+	out := Result{Stop: stop.stop, Reason: stop.reason, Lines: append(withheld(a.req.ForbidText, a.lines), last...)}
+
+	if stop.stop != Done {
+		out.Refusal = last
+	}
+
+	return out
 }
