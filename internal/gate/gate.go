@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/model"
@@ -765,9 +764,7 @@ func limited(project model.Project, command string) string {
 		return command
 	}
 
-	seconds := (project.Host.MaxRun + time.Second - 1) / time.Second
-
-	return "timeout " + strconv.FormatInt(int64(seconds), 10) + " " + command
+	return "timeout " + strconv.FormatInt(project.Host.RunLimitSeconds(), 10) + " " + command
 }
 
 // verdict maps the final state of a host job to a result. Only a job that succeeded passes, and only one that failed is a failed gate.
