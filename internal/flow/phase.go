@@ -58,6 +58,10 @@ type PhaseInput struct {
 	// ResetPassed is true for the rerun after a provider limit whose reset time had passed. A rerun that a limit with a past reset time stops again fails.
 	// It is left out of a recorded phase for any other run.
 	ResetPassed bool `json:"reset_passed,omitempty"`
+
+	// StartHead is the commit of the item folder when the render step of the call ran. The record of a lost start holds the diff summary since that commit.
+	// It is empty for a plain folder.
+	StartHead string `json:"start_head,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
@@ -79,6 +83,8 @@ type PhaseOutput struct {
 	Rounds int `json:"rounds,omitempty"`
 	// Limit is the provider limit that stopped a run that ended as limited. It is left out of a recorded phase for any other run, so a stored phase keeps its form.
 	Limit *agent.Limit `json:"limit,omitempty"`
+	// Resumed is true for a run that resumed the session of a lost start. It is left out of a recorded phase for any other run.
+	Resumed bool `json:"resumed,omitempty"`
 }
 
 // phase waits for the claim of its run, then runs the agent as a step, so a restart skips the work that finished.
@@ -90,20 +96,21 @@ func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 		return PhaseOutput{}, err
 	}
 
-	in, err = e.markStarts(ctx, in)
+	in, lost, err := e.markStarts(ctx, in)
 	if err != nil {
 		return PhaseOutput{}, err
 	}
 
-	return e.agentStep(ctx, claim, in)
+	return e.agentStep(ctx, claim, in, lost)
 }
 
 // agentStep runs the agent of the phase as a step. A failed step returns no output, so it leaves the cost of the failed run in an event that the queuing run reads.
-func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInput) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
+// lost is the lost run that the start follows, or nil.
+func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
 	var spent agent.Spend
 
 	out, err := runStep(e, ctx, agentStepName, func(c context.Context) (PhaseOutput, error) {
-		ran, runErr := e.runAgent(c, claim, in)
+		ran, runErr := e.runAgent(c, claim, in, lost)
 		spent = ran.Spend
 
 		return ran, runErr
@@ -119,7 +126,8 @@ func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInpu
 // runAgent starts the agent of one phase under the context of the claim of its run, and waits for it. The agent dies with its process group when
 // the claim ends, or when the phase is canceled, times out or ends. A loss of the claim either comes first, and the start finds its context done,
 // or comes after, and the end of the context kills the group: no lock and no list of groups to kill on a loss.
-func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput) (PhaseOutput, error) {
+// ctx is the context of the step, which saves each session id that the agent names.
+func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) {
 	agentCtx, cancel := context.WithCancelCause(claim)
 	defer cancel(nil)
 
@@ -127,7 +135,7 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput) (PhaseOutpu
 	defer e.endGroups(in.Run)
 
 	result, err := e.deps.Agents.Run(agentCtx, AgentRequest{
-		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in),
+		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: e.saveSession(ctx, in), Lost: lost,
 		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
 		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
 	})
@@ -148,7 +156,27 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput) (PhaseOutpu
 func phaseOutput(result agent.Result) PhaseOutput {
 	return PhaseOutput{
 		Outcome: result.Outcome, ExitCode: result.ExitCode, Note: result.Note, Session: result.Session, Transcript: result.Transcript,
-		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Spend: result.Spend, Limit: result.Limit,
+		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Spend: result.Spend, Limit: result.Limit, Resumed: result.Resumed,
+	}
+}
+
+// sessionEvent is the key of the event in which a phase saves the session id of its agent while the agent runs. A lost step records no output,
+// and the event outlives the loss. A rewind of the phase drops the event with the agent step that wrote it.
+const sessionEvent = "session"
+
+// saveSession returns the function that saves a session id of the agent as an event of the phase, from the context of the agent step.
+// The library writes the event of a step at once, with no step of its own. A failed write is logged, and the run goes on: a replay of a lost step then starts fresh.
+func (e *Engine) saveSession(ctx context.Context, in PhaseInput) func(session string) {
+	// The library runs every step body with a context of its own. Any other context leaves step nil, and the write then fails and is logged.
+	var step dbos.Context
+	if c, isStep := ctx.(dbos.Context); isStep {
+		step = c
+	}
+
+	return func(session string) {
+		if err := dbos.SetEvent(step, sessionEvent, session); err != nil {
+			e.logger.WarnContext(ctx, "cannot save the session of the agent", "item", in.Item, "session", session, "error", err)
+		}
 	}
 }
 

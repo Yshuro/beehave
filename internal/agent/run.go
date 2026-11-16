@@ -96,6 +96,7 @@ type Spec struct {
 // Streamed is the sum of the dollars that single output lines reported (Seen.Spent), which the runner adds for a profile with StreamsCost, and 0 for any other.
 // The runner is the one reader of those dollars; the caller takes Streamed and does not read Seen.Spent itself.
 // Limit is the provider limit of a run that ended as OutcomeLimited, and nil for any other run. The caller fills it from the output lines, as Session.
+// Resumed is true for a run that resumed the session of a lost run. The caller that chose to resume sets it.
 type Result struct {
 	Spend
 	Streamed   float64
@@ -109,6 +110,7 @@ type Result struct {
 	Skills     []string
 	Violations []string
 	Limit      *Limit
+	Resumed    bool
 }
 
 // AddNote returns the result with note joined after its Note by "; ". An empty note on either side adds no separator.

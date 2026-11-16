@@ -393,7 +393,7 @@ func TestMarkStarts_ReportsAStartThatIsNotInAWorkflow(t *testing.T) {
 
 	t.Cleanup(func() { assert.NoError(t, engine.Shutdown()) })
 
-	_, err = engine.markStarts(engine.ctx, PhaseInput{Item: testItem})
+	_, _, err = engine.markStarts(engine.ctx, PhaseInput{Item: testItem})
 	require.Error(t, err, "outside a workflow the start mark is not a step")
 }
 

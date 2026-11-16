@@ -504,16 +504,31 @@ The phase records the loss in the step `agent/lost<n>`, a recorded step in the r
 - If the store holds no claim lease for the item, the run time is unknown. The note, the record and the log say so, and no time is made up.
 - The cause is always "the process ended with no record". The agent was a child of the engine that died, and nothing it left shows an exit status or a signal.
 
+#### The saved session
+
+The agent step saves the session id of the agent while the agent runs. The tap of the output gives each new id to the engine at the line that holds it, which is the `init` line, before any tool call. The engine writes the id as the DBOS event `session` of the phase, with `SetEvent` from the context of the agent step. That write takes no step id, so the step count stays the same. A failed write logs a warning and the run goes on. No side file holds the id.
+
+The `agent/lost<n>` step reads the event of the phase with the context of the engine, because DBOS refuses a read of an event inside a step. The record holds the id as `session`, so a second replay resumes the same session. A rewind of the phase drops the event with the agent step that wrote it, so a rerun after `beehave resume` starts a fresh session.
+
+The record also holds `diff_stat`: the output of `git diff --stat --stat-count=50 <start commit>` in the item folder. The start commit is the head that the render step of the call read. The summary covers the commits of the lost agent and its edits to tracked files. A plain folder has no start commit and no summary.
+
+#### Resume or start again
+
+When the loss record holds a session, the agents layer decides once, before the start, whether the session can resume. It cannot resume when the CLI of the runner has no resume option, or when the transcript file of the session is missing (a moved worktree, a cleaned login folder, another login). A session that can resume starts with `--resume <id>` and a short prompt: the engine stopped after N minutes, continue the step, the brief and the output file are earlier in the session. The phase output records `resumed`. The saved session wins over the `resume` keyword of the call.
+
+A session that cannot resume, and a loss before the agent named a session, start the agent again with the prompt and the note. A start that the CLI refuses at run time fails the step as any failed run does.
+
 #### The note in the prompt
 
-The second start of an agent step adds one paragraph to the prompt. The paragraph says:
+The note is one paragraph after the prompt. It says:
 
 - that the step ran before,
 - how many minutes it ran before the loss, or that the time is unknown,
 - that the work tree may hold its edits,
+- the diff summary in a fenced block, or that the engine found no change to tracked files since the step started,
 - that the agent must read `git status` and `git diff` first.
 
-The text is the same for every workflow. It is in the record of the step `agent/lost<n>`, so a replay uses the same prompt. A first start gets no note. The agent still starts again from the beginning: the note is the only part of the resume that the engine adds.
+The text is the same for every workflow. It is in the record of the step `agent/lost<n>`, so a replay uses the same prompt. A first start gets no note.
 
 ### Ready and release
 
@@ -606,7 +621,7 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent2.tracker1.forge1.land3.gate1.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent3.tracker1.forge1.land3.gate1.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 
 A stored version that ends in `+star30` stands for every module at version 1. A change to the recorded steps of one builtin bumps the version of its module and no other module, so a run that never used that module still moves. The first build with module versions has a new application version, so an open run of an older build moves only with this command.

@@ -57,7 +57,9 @@ Not verified here: that a real Claude Code still runs the hook for a call that `
 
 ### How the adapter reads the calls
 
-The adapter reads the calls from the stream-json lines on stdout, which the runner already reads. It does not read the session file on disk. The session path stays in the result as a reference, and no code reads it.
+The adapter reads the calls from the stream-json lines on stdout, which the runner already reads. It does not read the session file on disk. The session path stays in the result as a reference. The only check on the file is whether it exists, before a lost step resumes its session (see "The saved session" in durable-loop.md).
+
+The tap gives each new session id to the request at the line that holds it, so the engine saves the id while the run goes on.
 
 - A Skill call counts in a `tool_use` block of an assistant line.
 - A Bash call counts at any depth of a line.

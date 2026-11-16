@@ -171,8 +171,7 @@ func (a agents) Run(ctx context.Context, request flow.AgentRequest) (agent.Resul
 		return agent.Result{}, err
 	}
 
-	adapter := a.adapter(runner.Agent)
-	protect := a.protection(request, dir)
+	adapter, protect := a.adapter(runner.Agent), a.protection(request, dir)
 	guard := a.guardFor(request.Forbid, protect)
 
 	box, note := a.boxOf(ctx, request, runner, dir, adapter, guard)
@@ -180,9 +179,33 @@ func (a agents) Run(ctx context.Context, request flow.AgentRequest) (agent.Resul
 		return agent.Result{Outcome: agent.OutcomeNotStarted, Note: note}, nil
 	}
 
-	tap := newSessionTap(adapter, a.prices)
+	request, resumed := replayOf(request, runner, dir, adapter)
+	tap := newSessionTap(adapter, a.prices, request.Named)
 
-	return endOf(adapter, runner, dir, tap, a.runCosted(ctx, tap, a.specOf(request, runner, dir, adapter, tap, guard, box), request.Model), request.Forbid, protect)
+	result, err := endOf(adapter, runner, dir, tap, a.runCosted(ctx, tap, a.specOf(request, runner, dir, adapter, tap, guard, box), request.Model), request.Forbid, protect)
+	result.Resumed = resumed
+
+	return result, err
+}
+
+// replayOf returns the request to run for a start that follows a lost run, and whether it resumes the session of that run.
+// The session resumes when the CLI has a resume option and the transcript file of the session exists: the run then continues the session with the short prompt.
+// Otherwise the run starts as the request says, with the note after the prompt. A request that follows no lost run stays as it is.
+func replayOf(request flow.AgentRequest, runner model.Runner, dir string, adapter agent.Adapter) (flow.AgentRequest, bool) {
+	lost := request.Lost
+	if lost == nil {
+		return request, false
+	}
+
+	if _, err := os.Stat(adapter.TranscriptPath(runner.ConfigDir, dir, lost.Session)); err == nil && adapter.Profile().Resume != nil {
+		request.Resume, request.Prompt = lost.Session, lost.Continue
+
+		return request, true
+	}
+
+	request.Prompt += "\n\n" + lost.Note
+
+	return request, false
 }
 
 // runCosted runs the spec and gives the result its cost: the one the CLI reported, or an estimate from the tokens of the run for the model.
@@ -460,11 +483,13 @@ type sessionTap struct {
 	// usage is the sum of the tokens that the lines reported.
 	usage  agent.Tokens
 	prices agent.Prices
+	// named receives each new session id at the line that holds it, or is nil.
+	named func(session string)
 }
 
-// newSessionTap returns a tap that estimates the cost of a run from the price table.
-func newSessionTap(adapter agent.Adapter, prices agent.Prices) *sessionTap {
-	return &sessionTap{adapter: adapter, refused: map[string]bool{}, prices: prices}
+// newSessionTap returns a tap that estimates the cost of a run from the price table, and gives each new session id to named, when named is set.
+func newSessionTap(adapter agent.Adapter, prices agent.Prices, named func(session string)) *sessionTap {
+	return &sessionTap{adapter: adapter, refused: map[string]bool{}, prices: prices, named: named}
 }
 
 // The violation lines that say the check did not see the whole output of the run.
@@ -480,8 +505,9 @@ func (t *sessionTap) Write(data []byte) (int, error) {
 
 	for _, line := range bytes.Split(data, []byte("\n")) {
 		session, text := t.adapter.Line(string(line))
-		if session != "" {
+		if session != "" && session != t.session {
 			t.session = session
+			t.name(session)
 		}
 
 		if text != "" {
@@ -492,6 +518,13 @@ func (t *sessionTap) Write(data []byte) (int, error) {
 	}
 
 	return len(data), nil
+}
+
+// name gives a new session id to the callback of the tap, when it has one. The caller holds the lock, so the ids arrive in the order of the lines.
+func (t *sessionTap) name(session string) {
+	if t.named != nil {
+		t.named(session)
+	}
 }
 
 // see records the calls and the state of the stream that one line holds. The caller holds the lock.
