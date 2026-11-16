@@ -167,6 +167,6 @@ type Adapter interface {
 	// Seen.Spent. The runner reads Seen.Spent once for each line; no other reader does, so a dedupe of the dollars by message id is allowed.
 	Calls(line string) Seen
 	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Before a start that follows
-	// a lost run, the agents resume the session of that run only when the file exists. Nothing reads the file.
+	// a lost run, the agents resume the session of that run only when the file exists, and they do not read it.
 	TranscriptPath(configDir, dir, session string) string
 }

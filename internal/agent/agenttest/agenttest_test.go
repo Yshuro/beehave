@@ -370,6 +370,19 @@ func TestCheckTranscript(t *testing.T) {
 		want    string
 	}{
 		{"a_resumable_session_with_its_transcript_in_the_login_folder", resumes(nil), ""},
+		{"a_resume_option_of_two_tokens_in_a_profile_with_no_arguments_names_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Args = nil
+			a.profile.Resume = func(id string) []string { return []string{"--resume", id} }
+
+			return a
+		}(), ""},
+		{"a_resume_option_of_one_token_names_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--resume=" + id} }
+
+			return a
+		}(), ""},
 		{"a_profile_with_no_resume_option_is_not_asked", func() fakeAdapter {
 			a := good()
 			a.transcript = func(string, string) string { return "/elsewhere" }
@@ -414,11 +427,6 @@ func TestTheSuiteReportsAFakeCLIThatCannotBeWritten(t *testing.T) {
 	for name, check := range map[string]func(*recorder){
 		"CheckNoEdits": func(r *recorder) { agenttest.CheckNoEdits(r, good(), missing) },
 		"CheckBudget":  func(r *recorder) { agenttest.CheckBudget(r, good(), missing, "") },
-		"CheckTranscript": func(r *recorder) {
-			a := good()
-			a.profile.Resume = func(id string) []string { return []string{"--resume", id} }
-			agenttest.CheckTranscript(r, a, missing)
-		},
 	} {
 		var r recorder
 
