@@ -90,25 +90,49 @@ func (e *Engine) treeCap() capLimit {
 
 // checkCaps reads both caps and the sums they count. A cap of 0 is not read. Both sums read the records of the runs, so a resume keeps them.
 func (s *script) checkCaps(name string) (capCheck, error) {
-	if run := s.e.runCap(); run.limit > 0 {
-		if stop, err := s.underCap(name, run, s.ownSpend); err != nil || stop != nil {
+	set := s.capsSet()
+	if len(set) == 0 {
+		return capCheck{}, nil
+	}
+
+	id, err := s.runID()
+	if err != nil {
+		return capCheck{}, err
+	}
+
+	for _, c := range set {
+		if stop, err := underCap(name, c.cap, id, c.sum); err != nil || stop != nil {
 			return capCheck{Stop: stop}, err
 		}
 	}
 
-	tree := s.e.treeCap()
-	if tree.limit <= 0 {
-		return capCheck{}, nil
-	}
-
-	stop, err := s.underCap(name, tree, s.treeSpend)
-
-	return capCheck{Stop: stop}, err
+	return capCheck{}, nil
 }
 
-// underCap reads the sum of a cap and returns the stop of the step, or nil when the step may start.
-func (*script) underCap(name string, c capLimit, sum func() (agent.Spend, error)) (*CapStop, error) {
-	spent, err := sum()
+// cappedSum is a cap with the sum it counts.
+type cappedSum struct {
+	cap capLimit
+	sum func(id string) (agent.Spend, error)
+}
+
+// capsSet lists the caps that are set, the run cap first.
+func (s *script) capsSet() []cappedSum {
+	var set []cappedSum
+
+	if run := s.e.runCap(); run.limit > 0 {
+		set = append(set, cappedSum{run, s.ownSpend})
+	}
+
+	if tree := s.e.treeCap(); tree.limit > 0 {
+		set = append(set, cappedSum{tree, s.treeSpend})
+	}
+
+	return set
+}
+
+// underCap reads the sum of a cap for the run and returns the stop of the step, or nil when the step may start.
+func underCap(name string, c capLimit, id string, sum func(id string) (agent.Spend, error)) (*CapStop, error) {
+	spent, err := sum(id)
 	if err != nil {
 		return nil, err
 	}
@@ -127,12 +151,7 @@ func (s *script) runID() (string, error) {
 }
 
 // ownSpend sums the recorded cost of this run, the failed runs that a resume kept included.
-func (s *script) ownSpend() (agent.Spend, error) {
-	id, err := s.runID()
-	if err != nil {
-		return agent.Spend{}, err
-	}
-
+func (s *script) ownSpend(id string) (agent.Spend, error) {
 	// The read goes through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
 	return runSpend(s.e.ctx, id)
 }
@@ -158,12 +177,7 @@ func overCap(name string, c capLimit, spent agent.Spend) (*CapStop, error) {
 }
 
 // treeSpend sums the recorded cost of the root run of the item tree and of every run below it. It reads the step records of each run, so a resume keeps the sum.
-func (s *script) treeSpend() (agent.Spend, error) {
-	id, err := s.runID()
-	if err != nil {
-		return agent.Spend{}, err
-	}
-
+func (s *script) treeSpend(id string) (agent.Spend, error) {
 	// The reads go through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
 	root, err := rootRun(s.e.ctx, id)
 	if err != nil {

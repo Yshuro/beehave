@@ -138,11 +138,25 @@ func TestCapStop_ARunOutsideAWorkflowCannotSumItsTree(t *testing.T) {
 	t.Parallel()
 
 	engine := deepTree(t, newAgentRig(t))
+	engine.maxRunBudget = 5
 	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: "1"}}
 
-	_, err := s.treeSpend()
+	got, err := s.checkCaps("q")
 
 	require.ErrorContains(t, err, "read the id of the run of item 1")
+	assert.Nil(t, got.Stop)
+}
+
+func TestCapStop_ACapCheckWithNoCapDoesNotReadTheIDOfTheRun(t *testing.T) {
+	t.Parallel()
+
+	engine := deepTree(t, newAgentRig(t))
+	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: "1"}}
+
+	got, err := s.checkCaps("q")
+
+	require.NoError(t, err)
+	assert.Nil(t, got.Stop)
 }
 
 func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
@@ -155,7 +169,7 @@ func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}}
 		s := &script{e: failing, ctx: ctx, in: in}
 
-		_, err := s.treeSpend()
+		_, err := s.treeSpend(runID("1", 1))
 		if err == nil {
 			return "", errors.New("the sum did not fail")
 		}
