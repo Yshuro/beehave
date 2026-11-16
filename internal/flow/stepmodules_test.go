@@ -163,7 +163,7 @@ func TestChangedModule_OnlyAModuleThatTheRunUsedCounts(t *testing.T) {
 	t.Parallel()
 
 	was, _ := parseVersions(stepsVersion)
-	now, _ := parseVersions(versionWithModule("", moduleGate, 2)[1:])
+	now, _ := parseVersions(versionWithModule("", moduleGate, gateVersion+1)[1:])
 
 	_, changed := changedModule(modulesUsed([]string{"item_read:own#1", "item_comment:c#2"}), was, now)
 	assert.False(t, changed, "a run that recorded only tracker steps does not use the gate module")
