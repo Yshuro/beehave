@@ -5,6 +5,7 @@
 # Go, uv and actionlint are read first and installed only when they are not at their pins.
 # A new Go unpacks into /usr/local/go.new and replaces /usr/local/go only after it unpacks, so a failed unpack keeps the old Go.
 # The old Go moves to /usr/local/go.old for the swap and moves back when the swap fails or the new Go is not the pinned one.
+# A stray /usr/local/go.old with no /usr/local/go moves back first, before the script reads the pin from go.mod.
 # /usr/local/go.old is deleted only when the Go in /usr/local/go prints the pinned version.
 # It deletes nothing outside these three folders and its own temporary folder.
 # A new uv version needs a new sha256: take it from the digest of the asset in the release (`gh release view <tag> -R astral-sh/uv --json assets`).
@@ -74,17 +75,23 @@ is_pinned_go() {
 # because the backup can be the only Go that runs.
 restore_go() {
 	if [ ! -e "$go_backup" ]; then return 0; fi
-	if [ ! -e "$go_root" ]; then
-		say "putting the old Go back from $go_backup"
-		sudo mv "$go_backup" "$go_root" || fail "the old Go did not move back from $go_backup to $go_root. Move it back by hand"
-		return 0
-	fi
+	return_stray_go
+	if [ ! -e "$go_backup" ]; then return 0; fi
 	is_pinned_go "$go_root/bin/go" ||
 		fail "the Go in $go_root is not $want, and an old Go is in $go_backup. This script deletes neither folder. Move or delete them by hand, so that the Go that runs is in $go_root and $go_backup is gone. Then run this again"
 	sudo rm -rf "$go_backup"
 }
 
+# return_stray_go puts a stray backup back when no Go is in place. It needs no pin, so it runs before anything reads go.mod.
+return_stray_go() {
+	if [ -e "$go_backup" ] && [ ! -e "$go_root" ]; then
+		say "putting the old Go back from $go_backup"
+		sudo mv "$go_backup" "$go_root" || fail "the old Go did not move back from $go_backup to $go_root. Move it back by hand"
+	fi
+}
+
 install_go() {
+	return_stray_go
 	want=$(go_pin)
 	restore_go
 	if is_pinned_go "$go_root/bin/go"; then

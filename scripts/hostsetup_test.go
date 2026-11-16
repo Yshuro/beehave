@@ -549,6 +549,53 @@ func TestHostSetup_TheFakesRefuseEveryPathWithoutTheTestFolder(t *testing.T) {
 	}
 }
 
+func TestHostSetup_TheFakeStatReportsNoOwnerWithoutTheTestFolder(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		env  func(env []string) []string
+	}{
+		{name: "FAKE_BASE_is_not_set", env: func(env []string) []string {
+			return slices.DeleteFunc(env, func(pair string) bool { return strings.HasPrefix(pair, "FAKE_BASE=") })
+		}},
+		{name: "FAKE_BASE_is_empty", env: func(env []string) []string { return append(env, "FAKE_BASE=") }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The path exists and is outside no folder, so a fake that matches an empty FAKE_BASE reports the login user.
+			h := newFakeHost(t)
+			h.env = tc.env(h.env)
+
+			out, err := h.sh(nil, filepath.Join(h.bin, "stat"), "-c", "%u", "--", h.base)
+
+			require.Error(t, err)
+			assert.Equal(t, "fake stat: refused every path, because FAKE_BASE, the folder of the test, is not set\n", out)
+		})
+	}
+}
+
+func TestHostSetup_PutsAStrayGoBackBeforeItReadsTheGoVersion(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	goRoot := h.sysroot + "/usr/local/go"
+	h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n", 0o644)
+	require.NoError(t, h.root.Rename(h.rel(goRoot), h.rel(goRoot+".old")))
+
+	out, err := h.setup()
+
+	require.Error(t, err)
+	assert.Contains(t, out, "has no toolchain line")
+	assert.Contains(t, h.read(goRoot+"/bin/go"), pinnedGo, "the stray Go is back in place")
+
+	_, err = h.root.Stat(h.rel(goRoot + ".old"))
+	assert.ErrorIs(t, err, fs.ErrNotExist, "no backup is left")
+}
+
 func TestHostSetup_LeavesAnExistingWorkRootAsItIs(t *testing.T) {
 	t.Parallel()
 
