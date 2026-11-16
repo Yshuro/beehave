@@ -240,8 +240,7 @@ func (c *Client) info(row dbos.WorkflowStatus) (RunInfo, error) {
 // addProgress reads the progress of a run from its step records. A run that asks a question waits on it, and the question is what it shows in place of a step.
 // A caller that gets an error ignores the info.
 func (c *Client) addProgress(row dbos.WorkflowStatus, info *RunInfo) error {
-	records, readErr := c.records(row.ID)
-	lines := stepLines(records, info.State, !run{Status: row}.terminal(), time.Now())
+	records, lines, readErr := c.runView(row.ID, info.State, !run{Status: row}.terminal())
 
 	info.RunProgress = progressOf(lines, c.maxRunBudget, !run{Status: row}.terminal())
 	info.Deadline = deadlineFor(row, records, info.Question)

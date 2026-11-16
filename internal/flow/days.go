@@ -162,13 +162,13 @@ func (c *Client) dayRun(row dbos.WorkflowStatus) (DayRun, error) {
 	state := stateOf(row.Status)
 	open := !run{Status: row}.terminal()
 
-	records, err := c.records(row.ID)
+	_, lines, err := c.runView(row.ID, state, open)
 	if err != nil {
 		return DayRun{}, err
 	}
 
 	out := DayRun{Started: row.CreatedAt, State: state}
-	out.Spent = progressOf(stepLines(records, state, open, time.Now()), 0, open).Spent
+	out.Spent = progressOf(lines, 0, open).Spent
 
 	if !open {
 		out.Ended = endOf(row)

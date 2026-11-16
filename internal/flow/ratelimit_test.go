@@ -280,6 +280,181 @@ func TestRateLimit_TheCostOfARunThatFailedAtALimitCountsOnce(t *testing.T) {
 	assert.InDelta(t, 0.7, days[0].Spent.Cost, 1e-9, "the per-day sum")
 }
 
+func TestRateLimit_AResumeKeepsTheCostOfTheFailedRunInEveryTotal(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	inTurn(h, limited(time.Time{}, 0.7), costing(0.3))
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "gives no reset time")
+
+	client := h.client(t, testVersion)
+	_, err = resumeAndJoin(t, engine, client)
+	require.NoError(t, err, "the rerun of the resume ends well")
+
+	assertTotals(t, engine, client, 1.0)
+}
+
+// assertTotals checks the cost of the test run in the status view, the list of runs, the sum that the tree cap reads and the per-day sum.
+func assertTotals(t *testing.T, engine *Engine, client *Client, want float64) {
+	t.Helper()
+
+	steps, err := client.Steps(testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, want, steps.Spent.Cost, 1e-9, "the status view")
+
+	runs, err := client.Status()
+	require.NoError(t, err)
+	require.Len(t, runs, 1)
+	assert.InDelta(t, want, runs[0].Spent.Cost, 1e-9, "the list of runs")
+
+	tree, err := runSpend(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, want, tree.Cost, 1e-9, "the sum that the tree cap reads")
+
+	days, err := client.Days(DaysSince(time.Now(), 1))
+	require.NoError(t, err)
+	require.Len(t, days, 1)
+	assert.InDelta(t, want, days[0].Spent.Cost, 1e-9, "the per-day sum")
+}
+
+func TestRateLimit_AResumeKeepsTheLimitRecordOfAnEarlierRun(t *testing.T) {
+	t.Parallel()
+
+	// Run 0 of the try is limited with a reset time, run 1 fails at a limit with none, and the rerun of the resume ends well.
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0.2), limited(time.Time{}, 0.7), costing(0.3))
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "gives no reset time")
+
+	client := h.client(t, testVersion)
+	_, err = resumeAndJoin(t, engine, client)
+	require.NoError(t, err, "the rerun of the resume ends well")
+
+	assertTotals(t, engine, client, 1.2)
+}
+
+func TestRateLimit_TwoResumesKeepTheCostOfBothFailedRuns(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	inTurn(h, limited(time.Time{}, 0.7), limited(time.Time{}, 0.4), costing(0.3))
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "gives no reset time")
+
+	client := h.client(t, testVersion)
+	_, err = resumeAndJoin(t, engine, client)
+	require.ErrorContains(t, err, "gives no reset time", "the rerun of the first resume fails at the limit again")
+
+	_, err = resumeAndJoin(t, engine, client)
+	require.NoError(t, err, "the rerun of the second resume ends well")
+
+	assertTotals(t, engine, client, 1.4)
+}
+
+func TestRateLimit_AStoreThatRefusesTheCostOfAFailedRunKeepsTheErrorOfTheRun(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	inTurn(h, limited(time.Time{}, 0.7))
+
+	engine := h.engine(t)
+
+	_, err := sqlOf(t, h).ExecContext(t.Context(), "CREATE TRIGGER refuse_failed_run BEFORE INSERT ON streams BEGIN SELECT RAISE(ABORT, 'the store refused the cost'); END")
+	require.NoError(t, err)
+
+	_, err = engine.Run(testItem, testProject)
+
+	require.ErrorContains(t, err, "gives no reset time", "the error of the failed run is the error of the step")
+	assert.NotContains(t, err.Error(), "the store refused the cost")
+}
+
+func TestRateLimit_AStoreThatRefusesTheLimitRecordAndTheCostKeepsTheErrorOfTheLimitStep(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0.7), exited)
+
+	engine := h.engine(t)
+
+	_, err := sqlOf(t, h).ExecContext(t.Context(), "CREATE TRIGGER refuse_limit_and_cost BEFORE INSERT ON operation_outputs "+
+		"WHEN NEW.function_name IN ('agent:fix#1/limit1.0', 'agent:fix#1/spent1') BEGIN SELECT RAISE(ABORT, 'the store refused the record'); END")
+	require.NoError(t, err)
+
+	_, err = engine.Run(testItem, testProject)
+
+	require.ErrorContains(t, err, "the store refused the record")
+	assert.Len(t, h.agents.seen(), 1, "no rerun after a failed limit record")
+}
+
+func TestClient_AStreamOfFailedRunsThatCannotBeReadFailsEveryTotal(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	inTurn(h, exited)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.NoError(t, err)
+
+	_, err = sqlOf(t, h).ExecContext(t.Context(), "ALTER TABLE streams RENAME TO streams_gone")
+	require.NoError(t, err)
+
+	client := h.client(t, testVersion)
+
+	_, err = client.Steps(testRun)
+	require.ErrorContains(t, err, "read the cost of the failed agent runs of "+testRun, "the status view")
+
+	_, err = client.Status()
+	require.ErrorContains(t, err, "read the cost of the failed agent runs of "+testRun, "the list of runs")
+
+	_, err = runSpend(engine.ctx, testRun)
+	require.ErrorContains(t, err, "read the cost of the failed agent runs of "+testRun, "the sum that the caps read")
+
+	_, err = client.Days(DaysSince(time.Now(), 1))
+	require.ErrorContains(t, err, "read the cost of the failed agent runs of "+testRun, "the per-day sum")
+}
+
+func TestBudget_AResumeKeepsTheCostOfTheFailedRunInTheRunCap(t *testing.T) {
+	t.Parallel()
+
+	// Step a fails at a limit after $0.70, the resume reruns it for $0.30, and the look before step b reads the run cap of $0.50.
+	// The look of a itself stays a recorded pass: the resume cuts at the failed phase, after it.
+	rig := newAgentRig(t)
+	rig.h.opts.MaxRunBudget = 0.5
+	inTurn(rig.h, limited(time.Time{}, 0.7), costing(0.3))
+
+	file := capFile(t, bodyFlow(`agent(model = "m", prompt = "prompts/a.md", name = "a")
+agent(model = "m", prompt = "prompts/a.md", name = "b")
+`))
+
+	engine := rig.h.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, file)
+	require.ErrorContains(t, err, "gives no reset time")
+
+	client := rig.h.client(t, testVersion)
+	_ = resumeRun(t, engine, client)
+
+	eventually(t, func() bool { return stoppedRun(t, client, testRun) != nil || len(rig.h.agents.seen()) > 2 })
+
+	stop := stoppedRun(t, client, testRun)
+	require.NotNil(t, stop, "the look before step b stops it at the run cap")
+	assert.Equal(t, scopeRun, stop.Scope)
+	assert.InDelta(t, 1.0, stop.Spent, 1e-9, "the look counts the cost of the failed run and of its rerun")
+	assert.Len(t, rig.h.agents.seen(), 2, "step b does not start past the cap")
+}
+
 func TestRateLimit_AStoreThatRefusesTheLimitRecordFailsTheStepAndTheCostOfTheLimitedRunCounts(t *testing.T) {
 	t.Parallel()
 

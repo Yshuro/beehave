@@ -88,10 +88,10 @@ func (e *Engine) treeCap() capLimit {
 	return capLimit{scopeTree, "the item tree", "agents.max_tree_budget_usd", "BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD", e.maxTreeBudget}
 }
 
-// checkCaps reads both caps and the sums they count. A cap of 0 is not read.
+// checkCaps reads both caps and the sums they count. A cap of 0 is not read. Both sums read the records of the runs, so a resume keeps them.
 func (s *script) checkCaps(name string) (capCheck, error) {
 	if run := s.e.runCap(); run.limit > 0 {
-		if stop, err := overCap(name, run, s.spent); err != nil || stop != nil {
+		if stop, err := s.underCap(name, run, s.ownSpend); err != nil || stop != nil {
 			return capCheck{Stop: stop}, err
 		}
 	}
@@ -101,14 +101,40 @@ func (s *script) checkCaps(name string) (capCheck, error) {
 		return capCheck{}, nil
 	}
 
-	spent, err := s.treeSpend()
-	if err != nil {
-		return capCheck{}, err
-	}
-
-	stop, err := overCap(name, tree, spent)
+	stop, err := s.underCap(name, tree, s.treeSpend)
 
 	return capCheck{Stop: stop}, err
+}
+
+// underCap reads the sum of a cap and returns the stop of the step, or nil when the step may start.
+func (*script) underCap(name string, c capLimit, sum func() (agent.Spend, error)) (*CapStop, error) {
+	spent, err := sum()
+	if err != nil {
+		return nil, err
+	}
+
+	return overCap(name, c, spent)
+}
+
+// runID reads the id of the run of the script.
+func (s *script) runID() (string, error) {
+	id, err := dbos.GetWorkflowID(s.ctx)
+	if err != nil {
+		return "", fmt.Errorf("read the id of the run of item %s: %w", s.in.Item, err)
+	}
+
+	return id, nil
+}
+
+// ownSpend sums the recorded cost of this run, the failed runs that a resume kept included.
+func (s *script) ownSpend() (agent.Spend, error) {
+	id, err := s.runID()
+	if err != nil {
+		return agent.Spend{}, err
+	}
+
+	// The read goes through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
+	return runSpend(s.e.ctx, id)
 }
 
 // overCap is the stop of an agent step that may not start under a cap, or nil when it may. A sum that holds an unknown cost fails the step instead:
@@ -133,9 +159,9 @@ func overCap(name string, c capLimit, spent agent.Spend) (*CapStop, error) {
 
 // treeSpend sums the recorded cost of the root run of the item tree and of every run below it. It reads the step records of each run, so a resume keeps the sum.
 func (s *script) treeSpend() (agent.Spend, error) {
-	id, err := dbos.GetWorkflowID(s.ctx)
+	id, err := s.runID()
 	if err != nil {
-		return agent.Spend{}, fmt.Errorf("read the id of the run of item %s: %w", s.in.Item, err)
+		return agent.Spend{}, err
 	}
 
 	// The reads go through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
@@ -171,16 +197,21 @@ func runAndBelowSpend(ctx dbos.Context, id string) (agent.Spend, error) {
 	return total, nil
 }
 
-// runSpend sums the cost that the step records of one run hold, as the view of the steps reads it.
+// runSpend sums the cost that the step records and the failed runs of one run hold, as the view of the steps reads it.
 func runSpend(ctx dbos.Context, id string) (agent.Spend, error) {
 	records, err := dbos.GetWorkflowSteps(ctx, id, dbos.WithStepsLoadOutput(true))
 	if err != nil {
 		return agent.Spend{}, fmt.Errorf("read the steps of %s: %w", id, err)
 	}
 
+	lines, err := runLines(ctx, id, records, "", false, time.Time{})
+	if err != nil {
+		return agent.Spend{}, err
+	}
+
 	var spent agent.Spend
 
-	for _, line := range stepLines(records, "", false, time.Time{}) {
+	for _, line := range lines {
 		spent = spent.Plus(line.Spend)
 	}
 
