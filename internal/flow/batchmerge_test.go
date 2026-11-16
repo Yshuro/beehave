@@ -635,8 +635,12 @@ func TestBatchMerge_ADeferredMemberKeepsTheWholeReason(t *testing.T) {
 	t.Parallel()
 
 	rig := newBatchRig(t)
-	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Reason: merge.Transient, Lines: []string{"OK: x", "REFUSE: checks still running: ci. Wait for them.", "       (above refers to #1)"},
-		Refusal: []string{"REFUSE: checks still running: ci. Wait for them.", "       (above refers to #1)"}}}
+	rig.merger.script["1"] = []merge.Result{{
+		Stop:    merge.Refused,
+		Reason:  merge.Transient,
+		Lines:   []string{"OK: x", "REFUSE: checks still running: ci. Wait for them.", "       (above refers to #1)"},
+		Refusal: []string{"REFUSE: checks still running: ci. Wait for them.", "       (above refers to #1)"},
+	}}
 
 	_, err := rig.walk(t, rig.call("1 3", ""))
 
