@@ -20,6 +20,9 @@ import (
 	trackerstore "github.com/tobocop2/beehave/internal/store"
 )
 
+// dryExampleVars are the vars of the project that the dry runs of the remediation example read: the command of its mutation step.
+var dryExampleVars = map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}}
+
 var dryExampleEnv = map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
 
 func dryFile(t *testing.T, text string) string {
@@ -33,7 +36,7 @@ func TestDryRun_PrintsEachStepOfTheExampleInOrderAndEndsClean(t *testing.T) {
 
 	var out bytes.Buffer
 
-	err := DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out)
+	err := DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, WithVars(dryExampleVars))
 	require.NoError(t, err, out.String())
 
 	text := out.String()
@@ -189,7 +192,7 @@ func TestDryRun_TheFirstGateIsRedAndTheRunWalksAFixRoundBeforeTheGatePasses(t *t
 
 	var out bytes.Buffer
 
-	require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, WithRedGate()), out.String())
+	require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, WithRedGate(), WithVars(dryExampleVars)), out.String())
 
 	text := out.String()
 	fix := strings.Index(text, "agent:fix")
@@ -238,7 +241,7 @@ func remediationStepNames(t *testing.T, options ...DryOption) []string {
 
 	var out bytes.Buffer
 
-	require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, options...), out.String())
+	require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, append(options, WithVars(dryExampleVars))...), out.String())
 
 	var names []string
 
@@ -260,10 +263,10 @@ func TestDryRun_TheStepListOfTheRemediationExampleIsComplete(t *testing.T) {
 		"claim", "item", "env:QUEUE_SWEEP#1", "env:TAKE_PR#2", "env:ROUND_STEP#3", "env:HOST_UP#4", "env:LAND#5", "env:EXPECT_HEAD#6", "env:BASE#7", "env:OWNER_LOGIN#8", "preflight:intake#1", "env:LANE_KIND#9", "earlier_calls:fix-lanes-spent#1", "env:PATCH_ROUNDS#10", "facts#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1", "env:SOURCE_CHECKOUT#11", "env:BASE#12", "env:ACCEPTANCE#13", "env:BASE_RESULT#14",
 		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "env:BASE#15", "env:PARENT#16", "pr_open:draft#1", "env:BASE#17", "env:OWNER_LOGIN#18", "env:SOURCE_CHECKOUT#19",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "preflight:before-review-1#2",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "env:BASE#20", "host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-1#2",
 		"agent:review#3/render", "agent:review#3/clear1", "agent:review#3/budget1.0", "phase", "DBOS.getResult", "agent:review#3/read1",
-		"env:MERGE#20", "env:REPO#21", "env:BASE#22", "env:OWNER_LOGIN#23", "env:OWNER_EMAIL#24", "ready", "DBOS.setEvent", "watch", "watch", "merge:ship#1",
-		"env:HOST_TEARDOWN#25", "worktree", "release",
+		"env:MERGE#21", "env:REPO#22", "env:BASE#23", "env:OWNER_LOGIN#24", "env:OWNER_EMAIL#25", "ready", "DBOS.setEvent", "watch", "watch", "merge:ship#1",
+		"env:HOST_TEARDOWN#26", "worktree", "release",
 	}, remediationStepNames(t))
 }
 
@@ -276,10 +279,10 @@ func TestDryRun_TheStepListOfTheRemediationExampleWithARedGateHoldsTheFixRound(t
 		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "env:BASE#15", "env:PARENT#16", "pr_open:draft#1", "env:BASE#17", "env:OWNER_LOGIN#18", "env:SOURCE_CHECKOUT#19",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "preflight:before-fix-1#2",
 		"agent:fix#3/render", "agent:fix#3/clear1", "agent:fix#3/budget1.0", "phase", "DBOS.getResult", "agent:fix#3/read1",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:check#2", "preflight:before-review-2#3",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:check#2", "env:BASE#20", "host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-2#3",
 		"agent:review#4/render", "agent:review#4/clear1", "agent:review#4/budget1.0", "phase", "DBOS.getResult", "agent:review#4/read1",
-		"env:MERGE#20", "env:REPO#21", "env:BASE#22", "env:OWNER_LOGIN#23", "env:OWNER_EMAIL#24", "ready", "DBOS.setEvent", "watch", "watch", "merge:ship#1",
-		"env:HOST_TEARDOWN#25", "worktree", "release",
+		"env:MERGE#21", "env:REPO#22", "env:BASE#23", "env:OWNER_LOGIN#24", "env:OWNER_EMAIL#25", "ready", "DBOS.setEvent", "watch", "watch", "merge:ship#1",
+		"env:HOST_TEARDOWN#26", "worktree", "release",
 	}, remediationStepNames(t, WithRedGate()))
 }
 
@@ -551,7 +554,7 @@ func TestDryRun_EveryExampleThatNeedsNoServiceRunsToTheEnd(t *testing.T) {
 
 			var out bytes.Buffer
 
-			require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", name, "workflow.star"), "12", env, &out), out.String())
+			require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", name, "workflow.star"), "12", env, &out, WithVars(dryExampleVars)), out.String())
 		})
 	}
 }

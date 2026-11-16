@@ -1,0 +1,31 @@
+# The first mutation run fails with a lived mutant. The head gets no review: the fix lane gets the finding first.
+# The fixed head gets a clean mutation run, then its review.
+env REPO=o/r BASE=integration OWNER_LOGIN=owner OWNER_EMAIL=owner@example.com SOURCE_CHECKOUT=/own/checkout
+exec beehave run 7 --workflow flow/workflow.star
+stdout 'item 7 finished'
+
+exec beehave status
+stdout '^item-7-r1\tdone\tmerge: merged'
+
+# The job runs on the build host in the slot class, with the base ref as its last word.
+grep -count=2 '^build mutation sh mutation.sh origin/integration$' mutation.log
+
+grep -count=1 '^implement ' calls.log
+grep -count=1 '^fix 1 ' calls.log
+! grep '^fix 2 ' calls.log
+grep -count=1 '^review ' calls.log
+grep -count=1 '^The mutation run failed. Each line is one finding:$' findings.log
+grep -count=1 '^- internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION$' findings.log
+! grep 'KILLED' findings.log
+
+cmp events.log expected-events.log
+
+-- mutations --
+lived
+clean
+-- verdicts --
+approve
+-- expected-events.log --
+claim 7
+ready 7
+release 7

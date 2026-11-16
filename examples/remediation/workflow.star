@@ -14,6 +14,9 @@ SEVERITIES = ["P0", "P1", "P2", "P3", "P4"]
 # The merge adds the pattern of the tracker id of each item (id_patterns); the posting steps use only this list, because their text names the item.
 ATTRIBUTION = ["(?i)noreply@anthropic", "(?i)laude-Session", "(?i)uthored-By: Claude", "(?i)Generated with \\[Claude"]
 
+# A line of the mutation output is a finding only when it starts with this text. The log of the tool prints other lines, such as the line of a killed mutant that gremlins writes as KILLED TYPE at file:line:col.
+FINDING_PREFIX = "finding: "
+
 def _severity(row):
     if row.severity in SEVERITIES:
         return SEVERITIES.index(row.severity)
@@ -258,6 +261,33 @@ def regression_rise(start, end):
         return ""
 
     return "The regression count rose from %d to %d between the plan and a review. A rise blocks the item: a person reads the reports and rules." % (before, after)
+
+def mutation_command(project):
+    """Returns the mutation command of the project: the list of words in the key mutation_command of its vars. The key is required, and the run is refused before any agent starts when it is missing or is not a list of words.
+    The command runs on the build host in the slot class mutation. The workflow adds one word at the end, the base ref (origin/<BASE>), so the command mutates only the lines that differ from it."""
+    words = project.vars.get("mutation_command")
+    if type(words) != "list" or len(words) == 0 or [w for w in words if type(w) != "string" or w == ""] != []:
+        fail("REFUSE: vars.mutation_command of the project file is %r. Set it to the command that runs the mutation tool, a list of words such as [\"sh\", \"scripts/mutation-pr.sh\"]. See docs/design/workflow-files.md, the mutation step" % (words,))
+
+    return words
+
+def check_mutation(words):
+    """Runs the mutation command of the project on the build host, in the slot class mutation, and returns the findings as text. An empty text means the head is clean.
+    The command prints one finding per line, such as finding: path/file.go:12: a mutant lived: ARITHMETIC_BASE, and exits with a code other than 0 when the run fails.
+    A run that applied no mutant is a failed run: the command says so itself. Exit code 0 is a pass, and its output is ignored.
+    The output of a failed host job is the end of its log, so it holds the noise of the tool too. A failed run gives each line that starts with "finding: " as one finding, without the prefix.
+    A failed run with no such line gives each non-blank line, the last 20 at most, as one finding. A failed run that printed no line gives one finding with its exit code."""
+    run = command(name = "mutation", run = words + ["origin/" + env("BASE")], host = "build", slots = "mutation")
+    if run.rc == 0:
+        return ""
+
+    lines = [line.strip() for line in run.stdout.split("\n") if line.strip() != ""]
+    found = [line[len(FINDING_PREFIX):] for line in lines if line.startswith(FINDING_PREFIX)]
+    lines = found if len(found) > 0 else lines[-20:]
+    if len(lines) == 0:
+        return "The mutation command exited with code %d and printed no finding. A run that fails is a finding. Read its log, then fix the cause." % run.rc
+
+    return "The mutation run failed. Each line is one finding:\n" + "\n".join(["- " + line for line in lines])
 
 def id_patterns(ids):
     """Returns the forbid_text patterns of a merge for the ids of its items, to add to the attribution patterns. No line of a pull request body or of a commit message may match them.
@@ -635,6 +665,7 @@ def pipeline(item):
     # The facts of the project file (people, rules, limits, traps and the identity keys). The step records them, so a resume keeps the facts the run started with.
     # Each agent of the example gets them as the input `facts`; no agent reads a path for them. The take-over run and the integration run read them once, before their one agent.
     project = facts()
+    mutation = mutation_command(project)
 
     plan = agent(
         name = "plan",
@@ -694,7 +725,11 @@ def pipeline(item):
     def rise_after_review(review):
         return regression_rise(plan.regressions, review.regressions)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", follow_ups = "forbid", protect = protected(), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review)
+    # The mutation run follows each green gate and comes before the review: a lived mutant is a finding for the fix lane, and the review never judges a head that has one.
+    def mutants(gate):
+        return check_mutation(mutation)
+
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", follow_ups = "forbid", protect = protected(), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, gate_check = mutants)
 
     if loop.stopped:
         return

@@ -77,7 +77,7 @@ func e2eFlow(dir, path string) cli.Flow {
 			files := e2eFiles{dir: dir}
 
 			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
-				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{},
+				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg.Projects),
 				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files,
 			}, dir, cfg))
 			if err != nil {
@@ -209,6 +209,47 @@ func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, err
 	return flow.GateKey{}, nil
 }
 
+// e2eCommands answers the command calls of the example: the mutation job on the host of the project.
+// Each call adds its command line to mutation.log. The Nth call takes the Nth line of the file mutations: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, any other text or no line is a clean run.
+type e2eCommands struct{ dir string }
+
+func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.CommandOutput, error) {
+	log, err := os.OpenFile(filepath.Join(c.dir, "mutation.log"), os.O_APPEND|os.O_CREATE|os.O_RDWR, e2eFileMode)
+	if err != nil {
+		return flow.CommandOutput{}, err
+	}
+
+	if _, err := log.WriteString(request.Host + " " + request.SlotClass + " " + strings.Join(request.Run, " ") + "\n"); err != nil {
+		return flow.CommandOutput{}, errJoin(err, log.Close())
+	}
+
+	text, err := os.ReadFile(log.Name())
+	if err := errJoin(err, log.Close()); err != nil {
+		return flow.CommandOutput{}, err
+	}
+
+	answers, err := os.ReadFile(filepath.Join(c.dir, "mutations"))
+	if err != nil && !os.IsNotExist(err) {
+		return flow.CommandOutput{}, err
+	}
+
+	lines := strings.Split(string(answers), "\n")
+
+	n := strings.Count(string(text), "\n")
+	if n > len(lines) {
+		return flow.CommandOutput{}, nil
+	}
+
+	switch lines[n-1] {
+	case "lived":
+		return flow.CommandOutput{Stdout: "      KILLED CONDITIONALS_NEGATION at internal/a.go:30:4\nfinding: internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION\n", RC: 1}, nil
+	case "silent":
+		return flow.CommandOutput{RC: 1}, nil
+	}
+
+	return flow.CommandOutput{}, nil
+}
+
 // e2eAgents starts the claude program of the script PATH through the real agent runner.
 type e2eAgents struct{ dir, path string }
 
@@ -278,6 +319,8 @@ seen=$(field seen)
 if [ -n "$seen" ]; then echo "$seen" >> seen.log; fi
 found=$(field found)
 if [ -n "$found" ]; then echo "$step: $found" >> found.log; fi
+# A prompt that carries a found value also adds all its lines, from that value to the end, to findings.log.
+if [ -n "$found" ]; then printf '%s\n' "$prompt" | sed -n '/^found=/,$p' >> findings.log; fi
 if [ -e hang ] && [ "$step" = "$(cat hang)" ] && [ ! -e started ]; then
   : > started
   exec sleep 300
@@ -349,6 +392,9 @@ const e2eProject = `project(
     base_branch = "main",
     gate = "true",
     test_report = "r.xml",
+    build_host = "build",
+    host = host(provider = "ssh", disk_floor_gb = 50, slots = {"mutation": 1}, ssh = ssh(address = "10.0.0.5")),
+    vars = {"mutation_command": ["sh", "mutation.sh"]},
 )
 `
 
@@ -514,7 +560,7 @@ func TestScripts(t *testing.T) {
 		Setup: e2eSetup,
 		Cmds: map[string]func(*testscript.TestScript, bool, []string){
 			"waitfile": cmdWaitFile, "waitstatus": cmdWaitStatus,
-			"example": cmdExample, "subst": cmdSubst, "isolate": isolateFunc(tools), "exitcode": cmdExitCode, "noclaims": cmdNoClaims, "mode": cmdMode,
+			"example": cmdExample, "script": cmdScript, "subst": cmdSubst, "isolate": isolateFunc(tools), "exitcode": cmdExitCode, "noclaims": cmdNoClaims, "mode": cmdMode,
 			"swarmfakes": cmdSwarmFakes, "batchsetup": cmdBatchSetup, "replace": cmdReplace, "serve": cmdServe, "fakeclaude": cmdFakeClaude, "deskfakes": cmdDeskFakes, "deskinit": cmdDeskInit,
 			"incidentfakes": cmdIncidentFakes, "incidentinit": cmdIncidentInit, "maintfakes": cmdMaintFakes, "maintinit": cmdMaintInit,
 			"rdinit": cmdResearchDeskInit, "rdfakes": cmdResearchDeskFakes,

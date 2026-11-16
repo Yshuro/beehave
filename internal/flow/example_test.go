@@ -72,6 +72,10 @@ func exampleRigLimited(t *testing.T, verdicts, findings, mechanisms func(review 
 	skill := exampleSkill(t, folder)
 
 	rig := newAgentRig(t)
+	rig.h.mutation = exampleMutationCommand
+	rig.h.slots = func(_, _, class string) (SlotGrant, error) {
+		return SlotGrant{Host: "box", Count: map[string]int{"mutation": 1}[class]}, nil
+	}
 	rig.h.opts.Env = map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
 	rig.h.preflight = &fakePreflight{}
 	rig.h.gate.results = []GateResult{{Passed: true, Head: rig.head, Tree: exampleTree}}
