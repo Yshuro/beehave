@@ -215,6 +215,37 @@ func (q *Queue) Cancel(ctx context.Context, id model.JobID) error {
 	return q.engine.Cancel(ctx, job)
 }
 
+// LostProof runs scancel and then reads the state of the job. A final state that the scheduler named (succeeded, failed, canceled or timed out) is the proof
+// that the job no longer runs. A state that is not final, a read that fails and a link that is down are no proof, and the note says which.
+// The result of scancel is not read: it fails for a job that already ended, and the state read owns that fact.
+// An empty record (died) is no proof either: the accounting record can come late.
+func (q *Queue) LostProof(ctx context.Context, id model.JobID) (model.LostProof, error) {
+	job, err := parseJobID(id)
+	if err != nil {
+		return model.LostProof{}, err
+	}
+
+	q.link.Exec(ctx, "scancel", job.ID)
+
+	state, err := scheduler{q.link}.state(ctx, job)
+
+	switch {
+	case err != nil:
+		return model.LostProof{Note: fmt.Sprintf("job %s: the state cannot be read, so it may still run (%v)", job, err)}, nil
+	case ended(state):
+		return model.LostProof{Kind: model.LostEnded, Note: fmt.Sprintf("job %s: Slurm reads the state %s", job, state)}, nil
+	case state == model.JobDied:
+		return model.LostProof{Note: fmt.Sprintf("job %s: Slurm holds no record of the job yet, and the accounting record can come late", job)}, nil
+	}
+
+	return model.LostProof{Note: fmt.Sprintf("job %s: Slurm reads the state %s, so it may still run", job, state)}, nil
+}
+
+// ended reports whether the state is one that Slurm names for a job that no longer runs. The empty record (died) is not.
+func ended(state model.JobState) bool {
+	return state == model.JobSucceeded || state == model.JobFailed || state == model.JobCanceled || state == model.JobTimedOut
+}
+
 type scheduler struct{ link *link.Link }
 
 // Observe reads the state, and the size of the log only for a running job.

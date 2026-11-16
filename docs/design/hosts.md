@@ -8,7 +8,9 @@ This part describes the build host contract, the three providers, the guards tha
 
 ### The Host contract
 
-`host` holds the `Host` contract: `Up`, `Status`, `Down`, `Submit`, `Wait`, `Cancel`, `Drain` and `Resume`. An adapter is a child package.
+`host` holds the `Host` contract: `Up`, `Status`, `Down`, `Submit`, `Wait`, `Cancel`, `WorkRoot`, `LostProof` and `Log`. An adapter is a child package.
+
+Every provider also has `Drain` and `Resume`. They are not part of the contract, because no run calls them. The conformance suite asserts them on each adapter, and a host without them fails the suite. The disk-floor wrapper does not keep them.
 
 The config names three providers, and each one runs:
 
@@ -32,7 +34,7 @@ The job id, job state, disk reading and host status types live in `model`, so la
 
 ### The Slurm adapter
 
-`host/slurm` is the Slurm adapter. It holds the job half of the contract: `Submit`, `Wait`, `Cancel`, `Log`, `Drain`, `Resume`, the job states and the parsers. It runs over a `proc.Runner` that reaches the head node, which is ssh. It works for any Slurm cluster that beehave can reach, and it creates and deletes no machine.
+`host/slurm` is the Slurm adapter. It holds the job half of the contract (`Submit`, `Wait`, `Cancel`, `LostProof`, `Log`), the `Drain` and `Resume` of a provider, the job states and the parsers. It runs over a `proc.Runner` that reaches the head node, which is ssh. It works for any Slurm cluster that beehave can reach, and it creates and deletes no machine.
 
 | Method | Runs over ssh |
 |---|---|
@@ -50,7 +52,7 @@ The job id, job state, disk reading and host status types live in `model`, so la
 | `Up` | Checks that the head node answers and that `sinfo` lists its nodes. It changes nothing. |
 | `Status` | Absent when ssh cannot connect. Draining when Slurm drains a node. Otherwise up, with the free disk. |
 | `Down` | Sends nothing: beehave did not create the cluster. |
-| `Drain`, `Resume` | Run `scontrol update` on every node, which changes node state on a cluster that beehave does not own. They belong to the `Host` contract. Only the conformance suite calls them; the run never does. |
+| `Drain`, `Resume` | Run `scontrol update` on every node, which changes node state on a cluster that beehave does not own. They are not part of the `Host` contract. Only the conformance suite calls them; the run never does. |
 | `Teardown` | Banks the work and leaves the cluster up. |
 
 - No slot job holds the cluster, because nothing deletes an idle cluster.
@@ -173,6 +175,23 @@ A Slurm or ssh `Wait` can also end with one of these states:
 
 A dropped link never submits the job again.
 
+#### Proof of a lost job
+
+`LostProof` stops a job whose wait ended as `lost`, and then reads whether the job can no longer run. It never waits for the job, never banks, and is safe to call again.
+
+- `Kind` is empty (no proof), `stopped`, `ended` or `gone`.
+- No proof is not an error. A link that is down gives an empty `Kind`, a nil error, and a `Note` that says why.
+- An error is a fault that no later call fixes, such as a job id that `Submit` did not return.
+- The proof comes from the owner of the fact: `systemctl stop`, `scancel` with `sacct` and `squeue`. A list of machines in a cloud console is never a proof.
+
+| Provider | Proof |
+|---|---|
+| `ssh` | `stopped`, when `systemctl --user stop` answers: exit 0, or exit 5 for a unit that is not loaded. The call writes the cancel marker first, and it makes the state folder if the machine has none. After the stop it resets the unit, so no failed unit stays. |
+| `slurm` | `ended`, when `squeue` or `sacct` names a final state after `scancel`: `succeeded`, `failed`, `canceled` or `timed_out`. A state that is not final is no proof. An empty record (`died`) is no proof, because the accounting record can come late. The exit status of `scancel` is not read. |
+| `skypilot` | No proof. The read of the cluster state is issue #401. |
+
+The key `host.lost_job_wait` is the time that the engine waits for a proof. See the host block below. No part of the engine reads the key yet.
+
 ### Host config
 
 A project selects a host with `build_host` and the `host` block.
@@ -185,6 +204,7 @@ A project selects a host with `build_host` and the `host` block.
 - A block of another provider is refused, and the refusal names the block and the provider.
 - `idle_minutes` is refused for `ssh` and `slurm`, because beehave does not delete a machine it does not own.
 - An unknown key or block is refused.
+- `lost_job_wait` is a duration with the default `"60m"`, from `"1m"` to `"24h"`. It is the time that the engine waits for a proof that a lost job no longer runs. It is allowed for all three providers. A value outside the range, or text that is not a duration, is refused, and the refusal names the key and the range.
 - `slots` is an optional dict from a slot class name to a count, such as `{"mutation": 1, "bench": 2}`. See the next section.
 
 #### Slot classes

@@ -55,9 +55,9 @@ func (s *stubHost) Wait(context.Context, model.JobID) (model.JobState, error) {
 
 func (*stubHost) Cancel(context.Context, model.JobID) error { return nil }
 
-func (*stubHost) Drain(context.Context) error { return nil }
-
-func (*stubHost) Resume(context.Context) error { return nil }
+func (*stubHost) LostProof(context.Context, model.JobID) (model.LostProof, error) {
+	return model.LostProof{}, nil
+}
 
 const gb = 1 << 30
 
@@ -254,6 +254,22 @@ func TestDiskGuards_KeepTheTeardownOfAHostThatHasOne(t *testing.T) {
 		_, ok = wrap(&stubHost{}).(keeper)
 		assert.False(t, ok, "%s: a host with no Teardown gets none, so a caller still sees it cannot bank", name)
 	}
+}
+
+func TestHost_AProviderWithNoDrainAndNoResumeMeetsTheContract(t *testing.T) {
+	t.Parallel()
+
+	// stubHost has the nine methods of the contract and no Drain or Resume.
+	var h host.Host = &stubHost{root: "/work", status: model.HostStatus{Disk: model.DiskReading{FreeBytes: 60 * gb, Readable: true}}}
+
+	id, err := host.WithDiskFloor(h, 50).Submit(t.Context(), model.JobSpec{Name: "gate-p"})
+	require.NoError(t, err, "the disk floor wraps a host with no drain")
+	assert.Equal(t, model.JobID("1"), id)
+
+	find := &proctest.Scripted{}
+	find.Plan("/work/a/.git\x00", "/work")
+
+	require.NoError(t, host.Teardown(t.Context(), h, emptyRepo(), find, privateURL), "Teardown stops a host with no drain")
 }
 
 func TestWaitJob(t *testing.T) {

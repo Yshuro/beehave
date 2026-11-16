@@ -459,6 +459,29 @@ func (h *Host) Cancel(ctx context.Context, id model.JobID) error {
 	return h.engine.Cancel(ctx, job)
 }
 
+// LostProof writes the marker of the cancel and stops the unit, as Cancel does, but it never waits, banks or reads the log: a host that came back
+// at the same alias may hold none of the work. A stop that answers (exit 0, or 5 for a unit that is not loaded) is the proof that the job no longer runs.
+// A step that fails, such as a link that is down, is no proof, and the note says which one. After the stop it releases the unit, so no failed unit stays;
+// a release that fails does not undo the stop, and the note names it.
+func (h *Host) LostProof(ctx context.Context, id model.JobID) (model.LostProof, error) {
+	job, err := parseJobID(id)
+	if err != nil {
+		return model.LostProof{}, err
+	}
+
+	if err = (scheduler{h}).Stop(ctx, job); err != nil {
+		return model.LostProof{Note: fmt.Sprintf("job %s: no stop answered, so it may still run (%v)", job.ID, err)}, nil
+	}
+
+	proof := model.LostProof{Kind: model.LostStopped, Note: fmt.Sprintf("job %s: the stop answered", job.ID)}
+
+	if err = h.release(ctx, job); err != nil {
+		proof.Note += fmt.Sprintf(", but the unit is not released (%v)", err)
+	}
+
+	return proof, nil
+}
+
 // Log returns the end of the log of a job, at most logTailBytes bytes.
 func (h *Host) Log(ctx context.Context, id model.JobID) (string, error) {
 	job, err := parseJobID(id)
@@ -577,13 +600,14 @@ func (s scheduler) record(ctx context.Context, base string, r reading, state mod
 }
 
 // Stop writes the marker of the cancel and then stops the unit. The marker comes first, so a stopped unit is never read as a success.
+// It makes the state folder first: a machine that never ran a job of beehave has none, and the marker cannot be written without it.
 func (s scheduler) Stop(ctx context.Context, job jobwait.Job) error {
-	base, err := s.h.base(ctx, job)
+	dir, err := s.h.stateDir(ctx)
 	if err != nil {
 		return err
 	}
 
-	if _, err = s.h.run(ctx, "touch", "touch", base+canceledSuffix); err != nil {
+	if _, err = s.h.run(ctx, "touch", "touch", path.Join(dir, job.ID+canceledSuffix)); err != nil {
 		return err
 	}
 

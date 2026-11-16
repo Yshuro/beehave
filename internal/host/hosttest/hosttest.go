@@ -258,6 +258,39 @@ func (c check) equal(got, want any, what string) {
 	}
 }
 
+// LostJob is a job whose wait ended as lost, with the switches of the link to its machine. A provider test builds it over its fake machine.
+// Proof is the kind of proof that the adapter gives once the link is back: model.LostStopped, model.LostEnded or model.LostGone, or empty for an adapter that reads none yet.
+type LostJob struct {
+	ID       model.JobID
+	LinkDown func()
+	LinkUp   func()
+	Proof    string
+}
+
+// CheckLostProof checks the proof read of a lost job. While the link is down the read gives no proof and no error: an unreachable machine is no proof that the job ended.
+// Once the link is back the read gives the proof of the adapter, and it gives the same one when it runs again.
+func CheckLostProof(r Reporter, h host.Host, job LostJob) {
+	r.Helper()
+
+	c := check{r: r}
+	ctx, cancel := deadline()
+	defer cancel()
+
+	job.LinkDown()
+
+	down, err := h.LostProof(ctx, job.ID)
+	c.noError(err, "LostProof while the link is down")
+	c.equal(down.Kind, "", "the proof while the link is down")
+
+	job.LinkUp()
+
+	for _, what := range []string{"the proof once the link is back", "the proof in a second read"} {
+		got, err := h.LostProof(ctx, job.ID)
+		c.noError(err, "LostProof once the link is back")
+		c.equal(got.Kind, job.Proof, what)
+	}
+}
+
 // CheckHostWorks checks the lifecycle of an absent host: up, a passing and a failing job, drain, resume, down.
 func CheckHostWorks(r Reporter, h host.Host) {
 	r.Helper()
@@ -316,13 +349,46 @@ func checkWorkRoot(ctx context.Context, c check, h host.Host) {
 	c.equal(again, root, "the work root in a second call")
 }
 
+// drainer is the drain of a provider: Drain refuses new jobs and Resume takes them again. It is not in host.Host, because no run calls it.
+// Every provider has it, and the suite asserts it on the adapter.
+type drainer interface {
+	Drain(ctx context.Context) error
+	Resume(ctx context.Context) error
+}
+
+// withDrain runs run with the drain of h. A host without one is a failed check.
+func withDrain(c check, h host.Host, run func(d drainer)) {
+	c.r.Helper()
+
+	d, ok := h.(drainer)
+	if !ok {
+		c.r.Errorf("the host %T has no Drain and Resume: every provider drains", h)
+
+		return
+	}
+
+	run(d)
+}
+
+// CheckDrain checks the drain of a host that is up: Drain gives the state draining and Resume gives up again. A host without Drain and Resume fails the check.
+func CheckDrain(r Reporter, h host.Host) {
+	r.Helper()
+
+	ctx, cancel := deadline()
+	defer cancel()
+
+	checkDrain(ctx, check{r: r}, h)
+}
+
 func checkDrain(ctx context.Context, c check, h host.Host) {
 	c.r.Helper()
 
-	c.noError(h.Drain(ctx), "Drain")
-	c.equal(status(ctx, c, h).State, model.HostDraining, "state after Drain")
-	c.noError(h.Resume(ctx), "Resume")
-	c.equal(status(ctx, c, h).State, model.HostUp, "state after Resume")
+	withDrain(c, h, func(d drainer) {
+		c.noError(d.Drain(ctx), "Drain")
+		c.equal(status(ctx, c, h).State, model.HostDraining, "state after Drain")
+		c.noError(d.Resume(ctx), "Resume")
+		c.equal(status(ctx, c, h).State, model.HostUp, "state after Resume")
+	})
 }
 
 func checkCancel(ctx context.Context, c check, h host.Host) {
@@ -404,8 +470,11 @@ func checkHostFails(r Reporter, h host.Host, owning bool) {
 	checkJobCallsFail(ctx, c, h)
 
 	c.isError(h.Cancel(ctx, "1"), "Cancel")
-	c.isError(h.Drain(ctx), "Drain")
-	c.isError(h.Resume(ctx), "Resume")
+
+	withDrain(c, h, func(d drainer) {
+		c.isError(d.Drain(ctx), "Drain")
+		c.isError(d.Resume(ctx), "Resume")
+	})
 
 	if owning {
 		c.isError(h.Down(ctx), "Down")

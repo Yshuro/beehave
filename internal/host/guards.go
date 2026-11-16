@@ -96,7 +96,7 @@ type floored struct {
 }
 
 // WithDiskFloor returns h with a Submit that first runs DiskFloor. A job does not start on a host under its floor, or on a host that cannot report its free space.
-// Every other method is the method of h.
+// Every other method of Host is the method of h. Of the methods outside Host, the wrapper keeps only Teardown, so a wrapped host has no Drain or Resume.
 func WithDiskFloor(h Host, floorGB int) Host { //nolint:ireturn // the wrapper is a Host of any provider
 	return keepTeardown(floored{Host: h, floorGB: floorGB}, h)
 }

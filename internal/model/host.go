@@ -47,7 +47,9 @@ type HostConfig struct {
 	// DiskWaitMinutes is how long a job waits for free space when the disk is under the floor. Zero means the job is refused at once.
 	DiskWaitMinutes int
 	// BankBudget is the time that the bank scan gives to each repository on the host. Zero means the default of the host package.
-	BankBudget    time.Duration
+	BankBudget time.Duration
+	// LostJobWait is how long the engine waits for a proof that a lost job can no longer run. It is always set by the loader, from one minute to 24 hours.
+	LostJobWait   time.Duration
 	PrivateRemote string
 	// Slots is the number of jobs of each slot class that the host runs at once. A class that is not a key has no slot on the host. It is nil when the block names none.
 	Slots map[string]int
@@ -60,6 +62,24 @@ const (
 	KnownHostsStrict    = "strict"
 	KnownHostsAcceptNew = "accept-new"
 )
+
+// The kinds of LostProof. An empty Kind is no proof.
+const (
+	// LostStopped means the host answered a stop of the job, so the job no longer runs.
+	LostStopped = "stopped"
+	// LostEnded means the scheduler names a final state for the job.
+	LostEnded = "ended"
+	// LostGone means the host that ran the job no longer exists.
+	LostGone = "gone"
+)
+
+// LostProof is what a host adapter read about a job whose wait ended as lost. A Kind that is not empty is the proof that the job can no longer run.
+// An empty Kind is no proof, for example while the link to the host is down; Note then holds the text of the error that stopped the read.
+// No proof is a value, not a failed call. Both fields are text, so the value survives a recorded step.
+type LostProof struct {
+	Kind string
+	Note string
+}
 
 // HostState is whether a build host exists and takes jobs.
 type HostState string
