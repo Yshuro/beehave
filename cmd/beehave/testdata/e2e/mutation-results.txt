@@ -53,6 +53,8 @@ exec git -C repo checkout -q docs
 env PATH=$WORK/bare
 exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: not applicable: no Go source change against main$'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 env PATH=$WORK/fake:$SAVED_PATH
 
 # Changed lines whose operators sit only in a comment, a string or a pointer type: gremlins finds mutants in b.go only,
@@ -62,14 +64,18 @@ env GREMLINS_REPORT=$WORK/allskipped.json
 exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'
 stdout '^mutation-pr: no candidate: no changed line of a\.go holds an operator that gremlins mutates; the report marks all 2 mutant\(s\) of the module skipped$'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 
 # A changed line with an operator and a report with no mutant for it fails: an empty report, a report of other paths,
 # a report with no mutant, or mutants on changed lines that are all not covered.
+# A run that stops before its counts line is a tool error and prints no end marker. A run that fails after it prints the end marker.
 exec git -C repo checkout -q cand
 env GREMLINS_REPORT=$WORK/empty.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: gremlins wrote no report: it found no mutant in the module$'
 ! stdout 'no candidate'
+! stdout '^mutation-pr: end '
 env GREMLINS_REPORT=$WORK/otherpath.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: the gremlins report names files that are not under .*: internal/a\.go internal/b\.go\. Its paths do not match the diff\.$'
@@ -83,6 +89,8 @@ env GREMLINS_REPORT=$WORK/notcovered.json
 stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'
 stdout '^mutation-pr: no mutant was applied\.'
 ! stdout 'no candidate'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 
 # A report that does not match the diff fails, even when its files exist: a skipped mutant on a changed line,
 # or a mutant off the changed lines that gremlins did not skip.
@@ -124,7 +132,31 @@ stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
 ! stdout 'does not match'
 exec git -C repo config --unset diff.noprefix
 
-# More than 50 lived mutants on changed lines: 50 finding lines, and the summary line holds the full count.
+# With diff.noprefix, gremlins reads a file in a subfolder without its first folder, and skips its mutants. So the script
+# gives the git of gremlins a config that keeps the prefixes, after the config that the environment already holds.
+# This fake gremlins reads its own git diff: it keeps the mutant of sub/e.go only when the diff names "b/sub/e.go".
+exec git -C repo checkout -q -b subfolder main
+mkdir repo/sub
+cp cand.go repo/sub/e.go
+exec git -C repo add sub/e.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m subfolder
+exec git -C repo config diff.noprefix true
+env GIT_CONFIG_COUNT=1
+env GIT_CONFIG_KEY_0=e2e.kept
+env GIT_CONFIG_VALUE_0=yes
+env GREMLINS_REPORT=owndiff
+exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
+! stdout 'does not match'
+exec git -C repo config --unset diff.noprefix
+exec git -C repo config diff.mnemonicPrefix true
+exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
+! stdout 'does not match'
+env GIT_CONFIG_COUNT=0
+exec git -C repo config --unset diff.mnemonicPrefix
+
+# More than 50 lived mutants on changed lines: 50 finding lines and 50 marker lines; the summary line and the end marker hold the full count.
 exec git -C repo checkout -q -b many main
 cp many.go repo/a.go
 exec git -C repo add a.go
@@ -136,6 +168,11 @@ stdout -count=50 '^finding: a\.go:[0-9]+: a mutant lived: ARITHMETIC_BASE$'
 stdout '^finding: a\.go:51: '
 ! stdout '^finding: a\.go:52: '
 stdout '^mutation-pr: 51 mutant\(s\) lived, 50 finding line\(s\) printed\. Kill each one with a test\.$'
+stdout -count=50 '^mutation-pr: lived a\.go:[0-9]+ ARITHMETIC_BASE$'
+stdout '^mutation-pr: lived a\.go:51 '
+! stdout '^mutation-pr: lived a\.go:52 '
+stdout '^mutation-pr: end count=51 printed=50$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 
 # The paths of gremlins and git match only at the top folder of the repository, in the module root. Each other place fails before gremlins starts.
 env GREMLINS_REPORT=
@@ -288,6 +325,13 @@ if [ "$GREMLINS_REPORT" = many ]; then
 		done
 		printf ']}]}'
 	} > "$5"
+	exit 0
+fi
+if [ "$GREMLINS_REPORT" = owndiff ]; then
+	[ "$(git config --get e2e.kept)" = yes ] || { echo "the fake gremlins lost the git config of the environment"; exit 98; }
+	state=SKIPPED
+	if git diff --merge-base "$3" | grep -q '^+++ b/sub/e\.go$'; then state=KILLED; fi
+	printf '{"files":[{"file_name":"sub/e.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"%s"}]}]}' "$state" > "$5"
 	exit 0
 fi
 cp "$GREMLINS_REPORT" "$5"

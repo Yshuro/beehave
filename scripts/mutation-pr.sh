@@ -5,7 +5,7 @@
 #   BASE is the branch or commit that the pull request targets, for example origin/integration/r1.
 #   There is no default, because the base differs from one pull request to the next.
 #   MUTATION_TIMEOUT is the time limit for the gremlins run, a positive whole number of seconds. The default is 1200.
-#   A run that exceeds the limit fails. The script needs git, gremlins, jq and timeout (or gtimeout) on the path.
+#   A run that exceeds the limit fails. The script needs git, go, gremlins, jq and timeout (or gtimeout) on the path.
 #   The "not applicable" result needs git only.
 #
 # The script changes to the module root and runs gremlins on the path ".". Gremlins matches the lines of the
@@ -16,8 +16,12 @@
 # "Applied" means killed + lived + timed out, counted from the JSON report of gremlins.
 # The run fails when gremlins exits with a non-zero status, when applied is 0 with a mutant on a changed line,
 # or when a mutant lived.
-# A run with lived mutants prints one line for each, at most 50, as "finding: path:line: a mutant lived: TYPE",
-# then a summary line with the full count and the number of lines printed.
+# A run with lived mutants prints two lines for each, at most 50 mutants: "finding: path:line: a mutant lived: TYPE"
+# and, after the counts line, the marker line "mutation-pr: lived path:line TYPE". A summary line follows, with the
+# full count and the number of mutants printed.
+# The end marker "mutation-pr: end count=N printed=P" is the last "mutation-pr:" line of every run that prints a result
+# line ("not applicable", "no candidate" or the counts line). N is the number of lived mutants, and P is the number of
+# marker lines. A run that stops before its result line is a tool error and prints no end marker.
 # A diff with no Go source change prints "not applicable" and exits 0. A git diff that fails is an error.
 # A diff whose changed non-test lines hold no operator that gremlins mutates prints "no candidate: <reason>" and
 # exits 0. The script reads that from a report whose mutants are all skipped, and only after it proves that the
@@ -40,6 +44,9 @@ case $limit in
 	;;
 esac
 
+# The end marker of a run with no lived mutant. A reader of the job log takes a log with no end marker as cut.
+none_lived='mutation-pr: end count=0 printed=0'
+
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 
@@ -51,6 +58,7 @@ git merge-base "$base" HEAD >/dev/null 2>&1 || { echo "mutation-pr: no merge bas
 changed=$(git diff --merge-base "$base" --name-only -- '*.go' ':!*_test.go') || { echo "mutation-pr: git diff against $base failed"; exit 1; }
 if [ -z "$changed" ]; then
 	echo "mutation-pr: not applicable: no Go source change against $base"
+	echo "$none_lived"
 	exit 0
 fi
 
@@ -73,6 +81,15 @@ fi
 
 report=$(mktemp "${TMPDIR:-/tmp}/mutation-pr.XXXXXX")
 trap 'rm -f "$report"' EXIT INT TERM
+
+# gremlins runs its own "git diff" and drops the first part of each path, which it expects to be "a/" or "b/".
+# With diff.noprefix that part is a folder of the path, and gremlins skips the mutants of each file in a subfolder.
+# So give its git the two settings that keep "a/" and "b/", the prefixes that the diff of this script also has.
+# They go after the settings that the environment already holds, and git lets the last one win.
+git_config_count=${GIT_CONFIG_COUNT:-0}
+export "GIT_CONFIG_KEY_$git_config_count=diff.noprefix" "GIT_CONFIG_VALUE_$git_config_count=false"
+export "GIT_CONFIG_KEY_$((git_config_count + 1))=diff.mnemonicPrefix" "GIT_CONFIG_VALUE_$((git_config_count + 1))=false"
+export GIT_CONFIG_COUNT=$((git_config_count + 2))
 
 status=0
 "$limiter" -k 30 "$limit" gremlins unleash --diff "$base" --output "$report" . || status=$?
@@ -165,23 +182,32 @@ echo "mutation-pr: applied=$applied killed=$killed lived=$lived timed_out=$timed
 
 if [ "$total" -eq 0 ]; then
 	echo "mutation-pr: the gremlins report holds no mutant"
+	echo "$none_lived"
 	exit 1
 fi
 if [ "$candidates" -eq 0 ]; then
 	echo "mutation-pr: no candidate: no changed line of $(printf '%s' "$changed" | tr '\n' ' ') holds an operator that gremlins mutates; the report marks all $total mutant(s) of the module skipped"
+	echo "$none_lived"
 	exit 0
 fi
 
 if [ "$applied" -eq 0 ]; then
 	echo "mutation-pr: no mutant was applied. Check that the diff against $base touches covered Go code."
+	echo "$none_lived"
 	exit 1
 fi
-if [ "$lived" -gt 0 ]; then
-	# One finding per line, as "finding: path:line: text", at most 50. The remediation workflow keeps only the lines with the prefix "finding: ".
-	# gremlins --diff makes mutants only on the lines that it counts as changed, so each lived mutant is in the diff.
-	jq -r '[.files[]? | .file_name as $file | .mutations[]? | select(.status == "LIVED") | "finding: \($file):\(.line): a mutant lived: \(.type)"] | .[:50][]' "$report" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
-	printed=$lived
-	[ "$printed" -le 50 ] || printed=50
-	echo "mutation-pr: $lived mutant(s) lived, $printed finding line(s) printed. Kill each one with a test."
-	exit 1
+if [ "$lived" -eq 0 ]; then
+	echo "$none_lived"
+	exit 0
 fi
+
+# Each lived mutant, at most 50, gives two lines. The remediation workflow keeps the lines with the prefix "finding: ",
+# as "finding: path:line: text". The engine step reads the marker lines, as "mutation-pr: lived path:line TYPE".
+# The check above proved that every mutant that gremlins did not skip is on a changed line, so each lived mutant is in the diff.
+jq -r '[.files[]? | .file_name as $file | .mutations[]? | select(.status == "LIVED") | {at: "\($file):\(.line)", type}] | .[:50]
+	| (.[] | "finding: \(.at): a mutant lived: \(.type)"), (.[] | "mutation-pr: lived \(.at) \(.type)")' "$report" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
+printed=$lived
+[ "$printed" -le 50 ] || printed=50
+echo "mutation-pr: $lived mutant(s) lived, $printed finding line(s) printed. Kill each one with a test."
+echo "mutation-pr: end count=$lived printed=$printed"
+exit 1

@@ -32,12 +32,20 @@ stdout '^      KILLED CONDITIONALS_NEGATION at a.go:30:4$'
 ! stdout 'finding: a.go:5'
 ! stdout 'finding: a.go:6'
 stdout '^mutation-pr: 1 mutant\(s\) lived, 1 finding line\(s\) printed\. Kill each one with a test\.$'
+# The engine reads the lived mutant from its marker line, after the counts line, and the end marker is the last "mutation-pr:" line.
+stdout -count=1 '^mutation-pr: lived '
+stdout '(?s)^mutation-pr: applied=3 .*^mutation-pr: lived a\.go:3 CONDITIONALS_NEGATION$'
+stdout '^mutation-pr: end count=1 printed=1$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 
-# A report with no lived mutant: the script passes and prints no finding.
+# A report with no lived mutant: the script passes and prints no finding, no marker line and the end marker with count 0.
 env GREMLINS_REPORT=$WORK/clean.json
 exec sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
 ! stdout '^finding: '
+! stdout '^mutation-pr: lived '
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 
 -- gomod --
 module example.com/r
