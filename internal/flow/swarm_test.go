@@ -835,8 +835,7 @@ func TestSpawnGather_SpawnReportsAChildTheQueueCannotStart(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	engine := h.engine(t)
-	engine.itemQueue = nil
+	engine := h.engineWith(t, func(e *Engine) { e.itemQueue = nil })
 
 	_, err := engine.RunFile(testItem, testProject, writeFlow(t, swarmFile("")))
 
