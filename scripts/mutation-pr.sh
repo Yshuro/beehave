@@ -18,16 +18,16 @@
 # or when a mutant lived.
 # A run with lived mutants prints two lines for each, at most 50 mutants: "finding: path:line: a mutant lived: TYPE"
 # and, after the counts line, the marker line "mutation-pr: lived path:line TYPE". A summary line follows, with the
-# full count and the number of mutants printed.
+# full count and the number of finding lines printed.
 # The end marker "mutation-pr: end count=N printed=P" is the last "mutation-pr:" line of every run that prints a result
 # line ("not applicable", "no candidate" or the counts line). N is the number of lived mutants, and P is the number of
 # marker lines. A run that stops before its result line is a tool error and prints no end marker.
 # A diff with no Go source change prints "not applicable" and exits 0. A git diff that fails is an error.
 # A diff whose changed non-test lines hold no operator that gremlins mutates prints "no candidate: <reason>" and
-# exits 0. The script reads that from a report whose mutants are all skipped, and only after it proves that the
-# report matches the diff: each file of the report exists, and the mutants that the report does not skip are
-# exactly the mutants on the changed lines of the diff, built the way gremlins builds them. An empty report, or one
-# that does not match, fails.
+# exits 0, with no counts line. The script reads that from a report whose mutants are all skipped, and only after it
+# proves that the report matches the diff: each file of the report exists, and the mutants that the report does not
+# skip are exactly the mutants on the changed lines of the diff, built the way gremlins builds them. An empty report,
+# or one that does not match, fails.
 set -eu
 
 if [ $# -ne 1 ] || [ -z "$1" ]; then
@@ -178,17 +178,20 @@ killed=$(echo "$counts" | cut -f3)
 lived=$(echo "$counts" | cut -f4)
 timed=$(echo "$counts" | cut -f5)
 applied=$((killed + lived + timed))
+
+# "No candidate" is the only result line of its run. A reader of the job log takes a counts line with applied=0 as a
+# failed run, so this path prints no counts line.
+if [ "$total" -gt 0 ] && [ "$candidates" -eq 0 ]; then
+	echo "mutation-pr: no candidate: no changed line of $(printf '%s' "$changed" | tr '\n' ' ') holds an operator that gremlins mutates; the report marks all $total mutant(s) of the module skipped"
+	echo "$none_lived"
+	exit 0
+fi
 echo "mutation-pr: applied=$applied killed=$killed lived=$lived timed_out=$timed"
 
 if [ "$total" -eq 0 ]; then
 	echo "mutation-pr: the gremlins report holds no mutant"
 	echo "$none_lived"
 	exit 1
-fi
-if [ "$candidates" -eq 0 ]; then
-	echo "mutation-pr: no candidate: no changed line of $(printf '%s' "$changed" | tr '\n' ' ') holds an operator that gremlins mutates; the report marks all $total mutant(s) of the module skipped"
-	echo "$none_lived"
-	exit 0
 fi
 
 if [ "$applied" -eq 0 ]; then

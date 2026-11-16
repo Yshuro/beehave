@@ -59,10 +59,11 @@ env PATH=$WORK/fake:$SAVED_PATH
 
 # Changed lines whose operators sit only in a comment, a string or a pointer type: gremlins finds mutants in b.go only,
 # all skipped. The report names files under the module root, so the run passes as "no candidate".
+# This path prints no counts line: a counts line with applied=0 is a failed run for the reader of the job log.
 exec git -C repo checkout -q nocand
 env GREMLINS_REPORT=$WORK/allskipped.json
 exec /bin/sh repo/scripts/mutation-pr.sh main
-stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'
+! stdout '^mutation-pr: applied='
 stdout '^mutation-pr: no candidate: no changed line of a\.go holds an operator that gremlins mutates; the report marks all 2 mutant\(s\) of the module skipped$'
 stdout '^mutation-pr: end count=0 printed=0$'
 ! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
