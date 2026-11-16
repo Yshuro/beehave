@@ -364,7 +364,12 @@ func TestEngine_TheShutdownWaitsForAStartInFlight(t *testing.T) {
 	go func() { down <- engine.Shutdown() }()
 
 	// A new reader fails only while a writer waits for the lock: the shutdown has begun and waits for the start.
+	// A stopped library also ends the poll, so a shutdown that does not wait fails the check below at once.
 	eventually(t, func() bool {
+		if engine.ctx.Err() != nil {
+			return true
+		}
+
 		if engine.starts.TryRLock() {
 			engine.starts.RUnlock()
 
