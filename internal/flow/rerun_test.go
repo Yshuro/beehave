@@ -54,9 +54,9 @@ def main(item):
     gather(spawn(items = ["21"], entry = "worker", name = "fan"), name = "fan")
 `
 
-// The parent stops after the child workflow started and before the parent recorded the wait on it: the first command of the child cancels the parent.
-// The resume replays spawn, and the library returns the recorded child for its run id, so no second run of the child starts.
-func TestSpawn_ACrashAfterTheChildStartedAndBeforeTheParentRecordsItStartsNoSecondChild(t *testing.T) {
+// The parent stops while it waits in gather, after spawn returned: the first command of the child cancels the parent. The resume replays spawn, and the
+// library returns the recorded child for its run id, so no second run of the child starts. No crash inside the start call is tested.
+func TestSpawn_ACrashWhileTheParentWaitsInGatherStartsNoSecondChild(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
