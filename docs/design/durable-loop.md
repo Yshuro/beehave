@@ -506,11 +506,11 @@ The phase records the loss in the step `agent/lost<n>`, a recorded step in the r
 
 #### The saved session
 
-The agent step saves the session id of the agent while the agent runs. The tap of the output gives each new id to the engine at the line that holds it, which is the `init` line, before any tool call. The engine writes the id as the DBOS event `session` of the phase, with `SetEvent` from the context of the agent step. That write takes no step id, so the step count stays the same. A failed write logs a warning and the run goes on. No side file holds the id.
+The agent step saves the session id of the agent while the agent runs. The tap of the output gives each new id to the engine at the line that holds it, which is the `init` line, before any tool call. The engine writes the id as the DBOS event `session` of the phase, with `SetEvent` from the context of the agent step. That write takes no step id, so the step count stays the same. A saver goroutine does the write, and the tap only gives it the newest id, so a slow write never stops the reading of the output. While the store is down, DBOS retries the write until the step ends: the agent runs on, and the idle timer still sees its output. The step waits for the saver before it records its output, so the event comes first. A refused write logs a warning and the run goes on. No side file holds the id.
 
 The `agent/lost<n>` step reads the event of the phase with the context of the engine, because DBOS refuses a read of an event inside a step. The record holds the id as `session`, so a second replay resumes the same session. A rewind of the phase drops the event with the agent step that wrote it, so a rerun after `beehave resume` starts a fresh session.
 
-The record also holds `diff_stat`: the output of `git diff --stat --stat-count=50 <start commit>` in the item folder. The start commit is the head that the render step of the call read. The summary covers the commits of the lost agent and its edits to tracked files. A plain folder has no start commit and no summary.
+The record also holds `diff_stat`: the output of `git diff --stat --stat-count=50 <start commit>` in the item folder. The start commit is the head that the render step of the call read. The summary covers the commits of the lost agent and its edits to tracked files. A plain folder has no start commit and no summary. Only the note uses the summary. If the engine cannot find the folder or read the diff, the step logs a warning with the reason, the note says that the engine could not read the summary, and the session still resumes. A failed read of the event fails the step.
 
 #### Resume or start again
 
@@ -525,7 +525,7 @@ The note is one paragraph after the prompt. It says:
 - that the step ran before,
 - how many minutes it ran before the loss, or that the time is unknown,
 - that the work tree may hold its edits,
-- the diff summary in a fenced block, or that the engine found no change to tracked files since the step started,
+- the diff summary in a fenced block, that the engine found no change to tracked files since the step started, or that the engine could not read the summary,
 - that the agent must read `git status` and `git diff` first.
 
 The text is the same for every workflow. It is in the record of the step `agent/lost<n>`, so a replay uses the same prompt. A first start gets no note.

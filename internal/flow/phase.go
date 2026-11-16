@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -134,11 +135,10 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)) })()
 	defer e.endGroups(in.Run)
 
-	result, err := e.deps.Agents.Run(agentCtx, AgentRequest{
-		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: e.saveSession(ctx, in), Lost: lost,
-		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
-		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
-	})
+	saver := e.saveSession(ctx, in)
+	defer saver.finish()
+
+	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, lost, saver.name))
 
 	out := phaseOutput(result)
 	out.Kind, out.Rounds = workflow.LaneKind(in.Kind, in.Lane), in.Rounds
@@ -150,6 +150,15 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 	// The end of the phase is judged inside the step, so a phase that did not exit with code 0, and that no cap and no provider limit with an end to its wait stopped,
 	// is a failed step that beehave resume reruns.
 	return out, phaseEnd(in, out, e.deps.Clock.wall())
+}
+
+// agentRequest is the request for the agent of a phase. named receives each new session id that the agent names.
+func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, lost *LostRun, named func(session string)) AgentRequest {
+	return AgentRequest{
+		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: named, Lost: lost,
+		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
+		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
+	}
 }
 
 // phaseOutput records how the agent of a phase ended.
@@ -164,20 +173,87 @@ func phaseOutput(result agent.Result) PhaseOutput {
 // and the event outlives the loss. A rewind of the phase drops the event with the agent step that wrote it.
 const sessionEvent = "session"
 
-// saveSession returns the function that saves a session id of the agent as an event of the phase, from the context of the agent step.
-// The library writes the event of a step at once, with no step of its own. A failed write is logged, and the run goes on: a replay of a lost step then starts fresh.
-func (e *Engine) saveSession(ctx context.Context, in PhaseInput) func(session string) {
+// saveSession starts the saver that writes the session ids of the agent as the event of the phase, from the context of the agent step.
+// The library writes the event of a step at once, with no step of its own. A refused write is logged, and the run goes on: a replay of a lost step then starts fresh.
+// While the store is down, the library retries the write until the step ends. Only the saver waits then, so the agent and the reading of its output go on.
+func (e *Engine) saveSession(ctx context.Context, in PhaseInput) *sessionSaver {
 	// The library runs every step body with a context of its own. Any other context leaves step nil, and the write then fails and is logged.
 	var step dbos.Context
 	if c, isStep := ctx.(dbos.Context); isStep {
 		step = c
 	}
 
-	return func(session string) {
+	return startSessionSaver(func(session string) {
 		if err := dbos.SetEvent(step, sessionEvent, session); err != nil {
 			e.logger.WarnContext(ctx, "cannot save the session of the agent", "item", in.Item, "session", session, "error", err)
 		}
+	})
+}
+
+// sessionSaver writes the session ids of an agent on a goroutine of its own. The tap gives it each new id on the goroutine that reads the output of the agent,
+// so a write that waits for the store never stops that reading. Only the newest id waits for a write: the event keeps only the last value,
+// so an id that a newer one replaces before its write is not written.
+type sessionSaver struct {
+	write   func(session string)
+	mu      sync.Mutex
+	pending string
+	// wake holds one signal that an id waits. stop ends the goroutine after it writes the id that waits, and done closes when it ended.
+	wake, stop, done chan struct{}
+}
+
+// startSessionSaver starts the goroutine of a saver that writes each id with write. The caller must call finish once.
+func startSessionSaver(write func(session string)) *sessionSaver {
+	s := &sessionSaver{write: write, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+
+	go s.run()
+
+	return s
+}
+
+// name gives a new session id to the saver. It never waits for the write.
+func (s *sessionSaver) name(session string) {
+	s.mu.Lock()
+	s.pending = session
+	s.mu.Unlock()
+
+	select {
+	case s.wake <- struct{}{}:
+	default: // a signal waits already, and the write that it starts reads the newest id
 	}
+}
+
+// run writes the id that waits after each signal, and once more at the stop.
+func (s *sessionSaver) run() {
+	defer close(s.done)
+
+	for {
+		select {
+		case <-s.wake:
+			s.flush()
+		case <-s.stop:
+			s.flush()
+
+			return
+		}
+	}
+}
+
+// flush writes the id that waits, if one waits.
+func (s *sessionSaver) flush() {
+	s.mu.Lock()
+	session := s.pending
+	s.pending = ""
+	s.mu.Unlock()
+
+	if session != "" {
+		s.write(session)
+	}
+}
+
+// finish waits until the saver wrote the newest id and its goroutine ended, so the event is written before the step records its output.
+func (s *sessionSaver) finish() {
+	close(s.stop)
+	<-s.done
 }
 
 // recordGroup returns the function that writes the process group of an agent to the process file, under the id of the run. A failed write is logged.

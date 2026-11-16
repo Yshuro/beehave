@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -38,9 +39,13 @@ func TestPhase_TheSessionIdIsSavedAsAnEventWhileTheAgentRuns(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, phases, 1)
 
-	session, err := dbos.GetEvent[string](client.flow, phases[0].ID, sessionEvent, 0)
-	require.NoError(t, err)
-	assert.Equal(t, "s-lost", session, "the phase holds the session id while the agent still runs")
+	// The saver writes on a goroutine of its own, so the event comes soon after the agent names the id.
+	eventually(t, func() bool {
+		session, err := dbos.GetEvent[string](client.flow, phases[0].ID, sessionEvent, 0)
+
+		return err == nil && session == "s-lost"
+	})
+	assert.Equal(t, 1, harness.agents.running(), "the phase holds the session id while the agent still runs")
 
 	close(harness.agents.gate)
 	require.NoError(t, (<-done).err)
@@ -87,6 +92,39 @@ func TestPhase_ALostStepThatNamedNoSessionGetsTheNoteAndTheDiffSummary(t *testin
 	assert.Contains(t, requests[1].Prompt, "git status")
 }
 
+func TestPhase_ALostStepWhoseDiffCannotBeReadStillResumesItsSession(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	nameSession(harness, "s-lost")
+	loseAgent(t, harness, 33*time.Minute)
+	nameSession(harness, "")
+	// The lost agent committed one file and left a broken index, so git refuses the diff. The next run of the agent repairs the index.
+	commitIn(t, harness.trees.dir, "done.txt")
+	require.NoError(t, os.WriteFile(filepath.Join(harness.trees.dir, ".git", "index"), []byte("not an index"), 0o600))
+
+	harness.agents.result = func(AgentRequest) agent.Result {
+		// read-tree writes a new index from HEAD and does not read the broken one.
+		gitIn(t, harness.trees.dir, "read-tree", "HEAD")
+
+		return agent.Result{Outcome: agent.OutcomeExited}
+	}
+
+	_, err := harness.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := harness.agents.seen()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[1].Lost, "the diff serves only the note, so its failure keeps the resume")
+	assert.Equal(t, "s-lost", requests[1].Lost.Session)
+	assert.Contains(t, requests[1].Lost.Note, "The engine could not read the diff summary of the changes since the step started.")
+	assert.Contains(t, requests[1].Lost.Note, "Read `git status` and `git diff` before you start")
+
+	log, err := os.ReadFile(filepath.Join(harness.opts.StateDir, logFileName))
+	require.NoError(t, err)
+	assert.Contains(t, string(log), "cannot read the diff summary of the lost agent step", "the log holds the reason")
+}
+
 func TestPhase_AFailedStepThatResumesStartsAFreshSession(t *testing.T) {
 	t.Parallel()
 
@@ -101,12 +139,23 @@ func TestPhase_AFailedStepThatResumesStartsAFreshSession(t *testing.T) {
 	_, err := engine.Run(testItem, testProject)
 	require.Error(t, err)
 
+	phases, err := dbos.ListWorkflows(client.flow, dbos.WithFilterName(phaseName))
+	require.NoError(t, err)
+	require.Len(t, phases, 1)
+
+	session, err := dbos.GetEvent[string](client.flow, phases[0].ID, sessionEvent, 0)
+	require.NoError(t, err)
+	assert.Equal(t, "s-failed", session, "the failed step saved its session")
+
 	harness.agents.mu.Lock()
 	harness.agents.result, harness.agents.named = nil, ""
 	harness.agents.mu.Unlock()
 
-	_, err = resumeAndJoin(t, engine, client)
-	require.NoError(t, err)
+	_, resumed := resumeAndJoin(t, engine, client)
+
+	_, err = dbos.GetEvent[string](client.flow, phases[0].ID, sessionEvent, 0)
+	require.Error(t, err, "the rewind of beehave resume drops the session of the failed step")
+	require.NoError(t, resumed)
 
 	requests := harness.agents.seen()
 	require.Len(t, requests, 2)
@@ -174,7 +223,7 @@ func TestLostDiff_ReportsAFolderThatCannotBeFoundAndADiffThatGitRefuses(t *testi
 	require.ErrorContains(t, err, "read the diff summary of the item folder")
 }
 
-func TestLoss_ALossStepThatCannotReadTheSessionOrTheDiffFails(t *testing.T) {
+func TestLoss_ALossStepThatCannotReadTheDiffSaysSoAndOneThatCannotReadTheSessionFails(t *testing.T) {
 	t.Parallel()
 
 	harness := newHarness(t)
@@ -184,8 +233,10 @@ func TestLoss_ALossStepThatCannotReadTheSessionOrTheDiffFails(t *testing.T) {
 
 	in := PhaseInput{Item: testItem, StartHead: "abc"}
 
-	_, err = engine.loss(in, "phase-none", time.Now())(t.Context())
-	require.ErrorContains(t, err, "find the folder of item "+testItem, "a phase that saved no session reads the diff next")
+	lost, err := engine.loss(in, "phase-none", time.Now())(t.Context())
+	require.NoError(t, err, "a folder that cannot be found changes the note and does not fail the step")
+	assert.Empty(t, lost.DiffStat)
+	assert.Contains(t, lost.Note, "The engine could not read the diff summary of the changes since the step started.")
 
 	require.NoError(t, engine.Shutdown())
 
@@ -200,12 +251,59 @@ func TestSaveSession_AWriteThatFailsIsLoggedAndTheRunGoesOn(t *testing.T) {
 	engine := harness.engine(t)
 
 	// A context that is no step of the library cannot hold an event.
-	engine.saveSession(t.Context(), PhaseInput{Item: testItem})("s-1")
+	saver := engine.saveSession(t.Context(), PhaseInput{Item: testItem})
+	saver.name("s-1")
+	saver.finish()
 
 	log, err := os.ReadFile(filepath.Join(harness.opts.StateDir, logFileName))
 	require.NoError(t, err)
 	assert.Contains(t, string(log), "cannot save the session of the agent")
 	assert.Contains(t, string(log), "session=s-1")
+}
+
+func TestSessionSaver_ANewIdNeverWaitsForAStoreThatBlocksAndTheNewestIdIsWrittenLast(t *testing.T) {
+	t.Parallel()
+
+	release := make(chan struct{})
+
+	var (
+		mu      sync.Mutex
+		written []string
+	)
+
+	// The store is down: each write waits until the test lets it go.
+	saver := startSessionSaver(func(session string) {
+		<-release
+		mu.Lock()
+		defer mu.Unlock()
+
+		written = append(written, session)
+	})
+
+	named := make(chan struct{})
+
+	go func() {
+		defer close(named)
+
+		for _, session := range []string{"s-1", "s-2", "s-3"} {
+			saver.name(session)
+		}
+	}()
+
+	select {
+	case <-named:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a new session id waited for the store, so the output of the agent was not read")
+	}
+
+	close(release)
+	saver.finish()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	require.NotEmpty(t, written)
+	assert.Equal(t, "s-3", written[len(written)-1], "the event holds the newest id when the step ends")
 }
 
 func TestPhaseOutput_RecordsWhetherTheRunResumedALostSession(t *testing.T) {
@@ -220,10 +318,10 @@ func TestLostNote_SaysThatNoTrackedFileChangedForAnEmptySummary(t *testing.T) {
 
 	lost := LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(5 * time.Minute)}
 
-	assert.Contains(t, lost.note(), "The engine found no change to tracked files since the step started.")
+	assert.Contains(t, lost.note(false), "The engine found no change to tracked files since the step started.")
 	assert.Contains(t, lost.continued(), "after 5 minutes")
 
 	lost.DiffStat = " a.txt | 1 +\n 1 file changed, 1 insertion(+)"
-	assert.Contains(t, lost.note(), "The engine read this summary of the changes since the step started:\n\n```\n"+lost.DiffStat+"\n```\n\n")
+	assert.Contains(t, lost.note(false), "The engine read this summary of the changes since the step started:\n\n```\n"+lost.DiffStat+"\n```\n\n")
 	assert.Contains(t, LostStep{Started: time.Unix(100, 0)}.continued(), "after an unknown time")
 }

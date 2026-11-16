@@ -25,7 +25,8 @@ const (
 // Lost is the last renewal of the claim lease of the item that the claim store held when the new engine took over, so Ran is how long the step ran before the loss.
 // Lost is the zero time when the store held no claim lease for the item: the run time is then unknown.
 // Session is the session id that the lost agent named, empty when the loss came before the agent named one.
-// DiffStat is the diff summary of the item folder since the start commit of the call (git diff --stat), empty when nothing tracked changed or the folder has no start commit.
+// DiffStat is the diff summary of the item folder since the start commit of the call (git diff --stat), empty when nothing tracked changed,
+// when the folder has no start commit, or when the engine could not read the diff.
 type LostStep struct {
 	Started  time.Time `json:"started"`
 	Lost     time.Time `json:"lost"`
@@ -52,15 +53,20 @@ func (l LostStep) Ran() time.Duration {
 	return max(l.Lost.Sub(l.Started), 0)
 }
 
-// note is the paragraph that the prompt of a fresh run of the step gets. It quotes the diff summary. The text is the same for every workflow.
-func (l LostStep) note() string {
+// note is the paragraph that the prompt of a fresh run of the step gets. It quotes the diff summary, or says that the engine could not read it
+// when unread is true. The text is the same for every workflow.
+func (l LostStep) note(unread bool) string {
 	ran := "ran before for an unknown time and was lost"
 	if l.Known() {
 		ran = "ran before and was lost after " + minutes(l.Ran())
 	}
 
 	changes := "The engine found no change to tracked files since the step started. "
-	if l.DiffStat != "" {
+
+	switch {
+	case unread:
+		changes = "The engine could not read the diff summary of the changes since the step started. "
+	case l.DiffStat != "":
 		changes = "The engine read this summary of the changes since the step started:\n\n```\n" + l.DiffStat + "\n```\n\n"
 	}
 
@@ -186,11 +192,14 @@ func (e *Engine) lostRecord(ctx context.Context, in PhaseInput, phaseID string, 
 		return lost, err
 	}
 
-	if lost.DiffStat, err = e.lostDiff(ctx, in); err != nil {
-		return lost, err
+	// Only the note uses the diff summary, so a diff that cannot be read changes the note and keeps the session.
+	stat, unread := e.lostDiff(ctx, in)
+	if unread != nil {
+		e.logger.WarnContext(ctx, "cannot read the diff summary of the lost agent step", "item", in.Item, "error", unread)
 	}
 
-	lost.Session, lost.Note = session, lost.note()
+	lost.Session, lost.DiffStat = session, stat
+	lost.Note = lost.note(unread != nil)
 
 	return lost, nil
 }
