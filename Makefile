@@ -38,6 +38,10 @@ FLOW_LETTERS := $(subst $(space),,$(FLOW_SHARDS))
 FLOW_PROFILES := $(subst $(space),,coverage.out$(foreach s,$(FLOW_SHARDS),$(comma)coverage-flow-$(s).out)$(comma)coverage-flow-rest.out)
 GOLANGCI_LINT_VERSION := v2.15.0
 GOTESTSUM_VERSION := v1.13.0
+GO_TEST_COVERAGE_VERSION := v2.20.1
+GOVULNCHECK_VERSION := v1.9.0
+# GO_TOOL_AT succeeds when the binary on PATH was built from module $(2) at version $(3). make setup reinstalls a tool when it fails.
+GO_TOOL_AT = go version -m "$$(command -v $(1))" 2>/dev/null | grep -Eq '^[[:space:]]+mod[[:space:]]+$(subst .,\.,$(2))[[:space:]]+$(subst .,\.,$(3))[[:space:]]'
 # Each run of "test" goes through gotestsum, which writes one JUnit file in REPORT_DIR (the glob reports/*.xml matches them all).
 REPORT_DIR := reports
 GOTESTSUM = gotestsum --format standard-quiet --junitfile $(REPORT_DIR)
@@ -57,10 +61,10 @@ DEADCODE_VERSION := golang.org/x/tools/cmd/deadcode@v0.51.0
 setup:  ## Install the Go tools and generate the agent files
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	$(MAKE) ai-rulez-install
-	command -v go-test-coverage >/dev/null 2>&1 || go install github.com/vladopajic/go-test-coverage/v2@v2.20.1
-	command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-	command -v gotestsum >/dev/null 2>&1 || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
-	command -v deadcode >/dev/null 2>&1 || go install $(DEADCODE_VERSION)
+	$(call GO_TOOL_AT,go-test-coverage,github.com/vladopajic/go-test-coverage/v2,$(GO_TEST_COVERAGE_VERSION)) || go install github.com/vladopajic/go-test-coverage/v2@$(GO_TEST_COVERAGE_VERSION)
+	$(call GO_TOOL_AT,govulncheck,golang.org/x/vuln,$(GOVULNCHECK_VERSION)) || go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	$(call GO_TOOL_AT,gotestsum,gotest.tools/gotestsum,$(GOTESTSUM_VERSION)) || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
+	$(call GO_TOOL_AT,deadcode,golang.org/x/tools,$(word 2,$(subst @, ,$(DEADCODE_VERSION)))) || go install $(DEADCODE_VERSION)
 	[ "$$(gitleaks version 2>/dev/null)" = "$(GITLEAKS_VERSION:v%=%)" ] || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 	$(MAKE) governance-generate
