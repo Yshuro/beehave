@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,28 @@ func TestMergeStep_AWorkflowThatDoesNotSetMergeMarksReadyAndLeavesTheMergeToTheO
 	assert.Equal(t, []int{testPull}, h.watch.reads)
 	assert.Equal(t, "merged", result.Merge)
 	assert.Empty(t, result.SentBack)
+}
+
+func TestMergeStep_ACrashInsideTheMergeStepMergesOnceThroughTheIntent(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Done})
+	host := &repoHost{}
+	h.batch = host
+	crash := newCrash(t, h)
+	h.merge.over = func(_ context.Context, _ string, _ MergeSettings) (merge.Result, error) {
+		crash.after()
+
+		return merge.Result{Stop: merge.Done}, nil
+	}
+
+	result := crashAndResume(t, h, h.deps(), shipCall("merge = True, "))
+
+	require.Len(t, h.merge.given, 2, "the cut-off merge step ran its call again")
+	require.NotNil(t, h.merge.given[0].Intent)
+	assert.Equal(t, h.merge.given[0].Intent, h.merge.given[1].Intent, "the second call carries the intent that the first run recorded")
+	assert.Equal(t, []string{testItem}, host.intents, "the intent was read once: the recorded step answered the rerun")
+	assert.Equal(t, "merged", result.Merge)
 }
 
 func TestMergeStep_AnEnvNameThatTheEnvironmentLacksFailsTheStepAndNamesTheVariable(t *testing.T) {

@@ -362,6 +362,28 @@ func TestPulls_ReadyTakesThePullRequestOutOfDraft(t *testing.T) {
 	require.ErrorIs(t, pullsOver(none).Ready(t.Context(), "p", "bb-1"), forge.ErrNoPull)
 }
 
+// readyPull is a pullForge whose pull request is already out of draft.
+type readyPull struct{ *pullForge }
+
+func (f readyPull) PRView(ctx context.Context, number int, args ...string) (model.PullRequest, error) {
+	view, err := f.pullForge.PRView(ctx, number, args...)
+	notDraft := false
+	view.IsDraft = &notDraft
+
+	return view, err
+}
+
+func TestPulls_ReadyOfAPullRequestThatIsReadyIsDone(t *testing.T) {
+	t.Parallel()
+
+	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, state: "OPEN"}
+	p := pulls{projects: map[string]config.Project{"p": {}}, forge: func(model.Project) (forge.Forge, error) { return readyPull{f}, nil }}
+
+	require.NoError(t, p.Ready(t.Context(), "p", "bb-1"))
+	require.NoError(t, p.Ready(t.Context(), "p", "bb-1"), "a step that runs again after a crash marks the same pull request ready again")
+	assert.Equal(t, []draftCall{{7, false}, {7, false}}, f.drafts)
+}
+
 func TestPulls_WatchReadsOnceAndSetDraftChangesThePullRequest(t *testing.T) {
 	t.Parallel()
 
