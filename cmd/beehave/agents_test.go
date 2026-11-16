@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -47,7 +48,7 @@ func (lineAdapter) Line(line string) (string, string) {
 	return "", ""
 }
 
-// Calls reads the lines "bash=<command>", "bash:<id>=<command>", "refused=<id>", "skill=<name>", "limit=<limit>" (see parseLimit) and "result=end".
+// Calls reads the lines "bash=<command>", "bash:<id>=<command>", "refused=<id>", "skill=<name>", "limit=<limit>" (see parseLimit), "denied=<reason>" and "result=end".
 // A line that starts with "junk" is invalid.
 func (lineAdapter) Calls(line string) agent.Seen {
 	var seen agent.Seen
@@ -92,6 +93,7 @@ func (lineAdapter) Calls(line string) agent.Seen {
 
 	seen.Result = line == "result=end"
 	_, seen.Invalid = cutPrefix(line, "junk")
+	seen.Denied, _ = cutPrefix(line, "denied=")
 
 	return seen
 }
@@ -743,6 +745,148 @@ func TestAgents_ALimitOnARunThatDidNotExitKeepsItsOutcome(t *testing.T) {
 			t.Parallel()
 
 			f := newAgentFixture("session=s1\nlimit=rate/five_hour\nfailed=success\n", tc.result)
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.result, got)
+		})
+	}
+}
+
+// claudeStream returns the lines of a fixture of the claude adapter at the given indexes, then the error result line that ends a refused run.
+func claudeStream(t *testing.T, name string, indexes ...int) string {
+	t.Helper()
+
+	data, err := fs.ReadFile(os.DirFS(filepath.Join("..", "..", "internal", "agent", "claude", "testdata")), name)
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+
+	var stream strings.Builder
+	for _, index := range indexes {
+		stream.WriteString(lines[index] + "\n")
+	}
+
+	stream.WriteString(`{"type":"result","subtype":"success","is_error":true,"session_id":"0b6e2d8a-3c51-4f7e-a9d2-6e4b1c7f3a85"}` + "\n")
+
+	return stream.String()
+}
+
+func TestAgents_AClaudeStreamOfARefusalThatNoWaitCuresEndsFailedWithTheReason(t *testing.T) {
+	t.Parallel()
+
+	const (
+		credits = "the provider asks for usage credits, and no wait buys them: add usage credits or use another model"
+		pause   = "the provider paused the usage of the organization, and no wait ends the pause: contact the support of the provider"
+	)
+
+	tests := []struct {
+		name, fixture string
+		indexes       []int
+		want          string
+	}{
+		{"credits_event_then_credits_assistant_line", "rate-limited-credits-required.jsonl", []int{2, 1}, credits},
+		{"pause_event_then_pause_assistant_line", "rate-limited-paused.jsonl", []int{0, 1}, pause},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name+"/exit_code_one", func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(claudeStream(t, tc.fixture, tc.indexes...), agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1, Note: "write the output: disk full"})
+			f.agents.adapter = func(model.Agent) agent.Adapter { return claude.Adapter{} }
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1, Note: "write the output: disk full; " + tc.want}, got, "the run fails with its exit code and waits for no reset")
+		})
+
+		t.Run(tc.name+"/exit_code_zero", func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(claudeStream(t, tc.fixture, tc.indexes...), agent.Result{Outcome: agent.OutcomeExited})
+			f.agents.adapter = func(model.Agent) agent.Adapter { return claude.Adapter{} }
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.ErrorIs(t, err, errDenied)
+			require.ErrorContains(t, err, tc.want)
+			assert.Equal(t, agent.Result{Outcome: agent.OutcomeExited, Note: tc.want}, got)
+		})
+	}
+}
+
+func TestAgents_ADeniedRunFailsAndWaitsForNoLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, output string
+		noResult     bool
+	}{
+		{"a_limit_came_first", "session=s1\nlimit=rate/five_hour@1795006800\ndenied=paused\nfailed=success\n", false},
+		{"the_first_reason_stays", "session=s1\ndenied=paused\ndenied=no credits\nfailed=success\n", false},
+		{"no_result_line", "denied=paused\n", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(tc.output, agent.Result{Outcome: agent.OutcomeExited})
+			f.noResult = tc.noResult
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.ErrorIs(t, err, errDenied)
+			assert.Equal(t, agent.Result{Outcome: agent.OutcomeExited, Note: "paused"}, got)
+		})
+	}
+}
+
+func TestAgents_ADenialThatTheRunGotPastIsNoFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, output string
+		want         agent.Outcome
+	}{
+		{"success", "session=s1\ndenied=paused\n", agent.OutcomeExited},
+		{"cap", "session=s1\ndenied=paused\nstop=turns\n", agent.OutcomeTurnCap},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(tc.output, agent.Result{Outcome: agent.OutcomeExited})
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.Outcome)
+			assert.Empty(t, got.Note)
+		})
+	}
+}
+
+func TestAgents_ADenialOnARunThatDidNotExitKeepsItsOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result agent.Result
+	}{
+		{"timed_out", agent.Result{Outcome: agent.OutcomeTimedOut, ExitCode: -1}},
+		{"canceled", agent.Result{Outcome: agent.OutcomeCancelled, ExitCode: -1}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture("session=s1\ndenied=paused\nfailed=success\n", tc.result)
 
 			got, err := f.agents.Run(t.Context(), request())
 

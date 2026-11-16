@@ -29,7 +29,7 @@ func (r *recorder) Errorf(format string, args ...any) {
 // fakeAdapter is a correct adapter. Each field of a flawed one switches on one wrong behavior.
 type fakeAdapter struct {
 	profile agent.Profile
-	// invent makes Calls report a call and a limit on every line.
+	// invent makes Calls report a call, a limit and a denial on every line.
 	invent bool
 	// reads makes Calls read dollars from a line "spent <n>".
 	reads bool
@@ -61,7 +61,7 @@ func (a fakeAdapter) Calls(line string) agent.Seen {
 	}
 
 	if a.invent {
-		return agent.Seen{Shell: []agent.Call{{Text: "ls"}}, Skills: []string{"s"}, Limit: &agent.Limit{Kind: agent.LimitRate}}
+		return agent.Seen{Shell: []agent.Call{{Text: "ls"}}, Skills: []string{"s"}, Limit: &agent.Limit{Kind: agent.LimitRate}, Denied: "paused"}
 	}
 
 	return agent.Seen{}

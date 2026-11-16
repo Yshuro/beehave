@@ -28,12 +28,18 @@ const (
 	limitRejected  = "rejected"
 	// rateLimitError is the error of an assistant line that the CLI writes when the provider refused the request at a limit.
 	rateLimitError = "rate_limit"
+	// creditsRequired is the errorCode of a rate_limit_info that asks for usage credits. overageWindow is the rateLimitType of the paid overage.
+	creditsRequired = "credits_required"
+	overageWindow   = "overage"
+	// deniedPause and deniedCredits are the reasons of a refusal that no wait cures.
+	deniedPause   = "the provider paused the usage of the organization, and no wait ends the pause: contact the support of the provider"
+	deniedCredits = "the provider asks for usage credits, and no wait buys them: add usage credits or use another model"
 )
 
 // Calls reads one stream-json line.
 // It returns the Bash calls of the line with their tool_use ids (at any depth), the Skill calls of an assistant line, and the ids of the calls that a PreToolUse hook refused.
 // A hook refusal is the tool_result of a call, with is_error set and a text that starts with "PreToolUse:"; the call never ran.
-// It also returns the rate limit or spend limit that the line reports as the reason the provider refused the request.
+// It also returns the rate limit or spend limit that the line reports as the reason the provider refused the request, or the reason of a refusal that no wait cures.
 // A line that is not valid JSON is Invalid and holds no call.
 func (Adapter) Calls(line string) agent.Seen {
 	if strings.TrimSpace(line) == "" {
@@ -45,42 +51,61 @@ func (Adapter) Calls(line string) agent.Seen {
 		return agent.Seen{Invalid: true}
 	}
 
+	limit, denied := refusalOf(value)
+
 	return agent.Seen{
-		Cost:    costOf(value),
-		Stop:    stopOf(value),
-		Failed:  failedOf(value),
-		Shell:   toolCalls(value, bashTool, bashKey, false),
-		Skills:  skillNames(value),
-		Refused: refusedIDs(value),
-		Result:  lineType(value) == resultType,
-		Limit:   limitOf(value),
+		Cost: costOf(value), Stop: stopOf(value), Failed: failedOf(value), Result: lineType(value) == resultType,
+		Shell: toolCalls(value, bashTool, bashKey, false), Skills: skillNames(value), Refused: refusedIDs(value),
+		Limit: limit, Denied: denied,
 	}
 }
 
-// limitOf returns the provider limit that a line reports as the reason the CLI refused more work, or nil.
-// A rate_limit_event reports one when its status is rejected and no paid overage serves the request. An assistant line with the error rate_limit reports
-// one with no reset time, unless its api_error asks for usage credits.
-func limitOf(value any) *agent.Limit {
-	line, isObject := value.(map[string]any) // a line that is not an object reports no limit
+// refusalOf returns how a line says the provider refused more work: the limit that a wait cures, or the reason of a refusal that no wait cures.
+// A line reports at most one of the two. A rate_limit_event reports one when its status is rejected and no paid overage serves the request.
+// An assistant line with the error rate_limit reports one.
+func refusalOf(value any) (*agent.Limit, string) {
+	line, isObject := value.(map[string]any) // a line that is not an object reports no refusal
 	if !isObject {
-		return nil
+		return nil, ""
 	}
 
 	switch line["type"] {
 	case rateLimitEvent:
-		if info, hasInfo := line["rate_limit_info"].(map[string]any); hasInfo { // the JSON shape is untyped
-			return rejectedLimit(info)
-		}
+		return rejected(object(line, "rate_limit_info"))
 	case assistantType:
-		if line["error"] == rateLimitError && !asksForCredits(line["api_error"]) {
-			return &agent.Limit{Kind: agent.LimitRate}
+		if line["error"] == rateLimitError {
+			return refusedAnswer(line)
 		}
 	}
 
-	return nil
+	return nil, ""
 }
 
-// asksForCredits reports whether the api_error of an assistant rate_limit line asks for usage credits. A wait buys no credits, so such a line is no limit.
+// refusedAnswer returns the refusal of an assistant line with the error rate_limit. A pause of the organization (dailyCapPaused in the rate_limit_info of
+// the api_error_params, which the CLI writes with the api_error usage_limit_reached) and an api_error that asks for usage credits are refusals that no wait
+// cures. The pause is tested first, as the CLI does. Any other line is a rate limit with no reset time.
+func refusedAnswer(line map[string]any) (*agent.Limit, string) {
+	switch {
+	case object(object(line, "api_error_params"), "rate_limit_info")["dailyCapPaused"] == true:
+		return nil, deniedPause
+	case asksForCredits(line["api_error"]):
+		return nil, deniedCredits
+	}
+
+	return &agent.Limit{Kind: agent.LimitRate}, ""
+}
+
+// object returns the JSON object at a key of a JSON object, or nil when the value there is no object.
+func object(parent map[string]any, key string) map[string]any {
+	child, isObject := parent[key].(map[string]any) // the JSON shape is untyped
+	if !isObject {
+		return nil
+	}
+
+	return child
+}
+
+// asksForCredits reports whether the api_error of an assistant rate_limit line asks for usage credits.
 func asksForCredits(apiError any) bool {
 	switch apiError {
 	case "long_context_credits_required", "model_requires_usage_credits":
@@ -90,14 +115,33 @@ func asksForCredits(apiError any) bool {
 	return false
 }
 
-// rejectedLimit returns the limit of the rate_limit_info of an event, or nil when the info does not refuse the request.
+// deniedBy returns the reason why no wait cures the refusal of a rejected rate_limit_info, or "" when a wait cures it. The organization is paused
+// (dailyCapPaused), or the request needs usage credits: errorCode is credits_required and rateLimitType is missing or overage, which is the test of the
+// CLI. The pause is tested first, as the CLI does.
+func deniedBy(info map[string]any) string {
+	switch {
+	case info["dailyCapPaused"] == true:
+		return deniedPause
+	case info["errorCode"] == creditsRequired && (info["rateLimitType"] == nil || info["rateLimitType"] == overageWindow):
+		return deniedCredits
+	}
+
+	return ""
+}
+
+// rejected returns the refusal of the rate_limit_info of an event: nothing when the info does not refuse the request, the reason of a refusal that no
+// wait cures (deniedBy), or else a limit.
 // A rejected plan status with isUsingOverage true refuses nothing: paid overage serves the request. The limit is a spend limit only when paid overage
 // was available and is now refused: overageStatus is rejected and overageDisabledReason says the credits or the spend cap ran out. The provider then
 // takes work again at the earlier of the reset of the plan window and the reset of the spend. Any other reason, or none, means the account had no paid
 // overage to refuse, so the limit is a rate limit with the plan reset time.
-func rejectedLimit(info map[string]any) *agent.Limit {
+func rejected(info map[string]any) (*agent.Limit, string) {
 	if info["status"] != limitRejected || info["isUsingOverage"] == true {
-		return nil
+		return nil, ""
+	}
+
+	if reason := deniedBy(info); reason != "" {
+		return nil, reason
 	}
 
 	limit := &agent.Limit{Kind: agent.LimitRate, ResetsAt: unixTime(info["resetsAt"])}
@@ -109,11 +153,11 @@ func rejectedLimit(info map[string]any) *agent.Limit {
 		limit.Kind, limit.ResetsAt = agent.LimitSpend, earlier(limit.ResetsAt, unixTime(info["overageResetsAt"]))
 	}
 
-	return limit
+	return limit, ""
 }
 
 // spendRanOut reports whether the overageDisabledReason of a rate_limit_info says that paid overage was available and ran out: the account is out of
-// credits, or it reached a spend cap. The CLI writes the reason org_spend_cap_reached as org_level_disabled_until on the stream.
+// credits, or it reached a spend cap. A pause of the organization carries the reason of the spend cap, and deniedBy takes it first. The CLI writes the reason org_spend_cap_reached as org_level_disabled_until on the stream.
 func spendRanOut(reason any) bool {
 	switch reason {
 	case "out_of_credits", "org_level_disabled_until":

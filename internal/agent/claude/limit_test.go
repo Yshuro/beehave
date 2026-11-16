@@ -15,6 +15,12 @@ import (
 // The rate-limited-*.jsonl fixtures are built from the code of the Claude CLI 2.1.325 that writes these lines, not from a captured run: a rate_limit_event
 // carries the rate_limit_info that the CLI builds from the response headers, and the assistant line of a refused request carries error "rate_limit".
 
+// The reasons that the adapter gives for a refusal that no wait cures.
+const (
+	deniedPause   = "the provider paused the usage of the organization, and no wait ends the pause: contact the support of the provider"
+	deniedCredits = "the provider asks for usage credits, and no wait buys them: add usage credits or use another model"
+)
+
 // fixtureLines returns the lines of a fixture file.
 func fixtureLines(t *testing.T, name string) []string {
 	t.Helper()
@@ -179,20 +185,83 @@ func TestCalls_ARejectedRateLimitEventWhilePaidOverageServesIsNoLimit(t *testing
 	assert.Equal(t, agent.Seen{}, claude.Adapter{}.Calls(line), "paid overage serves the request, so the plan limit refuses no work: %s", line)
 }
 
-func TestCalls_AnAssistantRateLimitErrorThatAsksForUsageCreditsIsNoLimit(t *testing.T) {
+func TestCalls_ARefusalThatAsksForUsageCreditsIsDeniedAndNoLimit(t *testing.T) {
 	t.Parallel()
 
 	lines := fixtureLines(t, "rate-limited-credits-required.jsonl")
 	tests := []struct{ name, line string }{
-		{"long_context_credits_required", lines[0]},
-		{"model_requires_usage_credits", lines[1]},
+		{"assistant_long_context_credits_required", lines[0]},
+		{"assistant_model_requires_usage_credits", lines[1]},
+		{"event_with_no_window", lines[2]},
+		{"event_with_the_overage_window", `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"overage","isUsingOverage":false,"errorCode":"credits_required"}}`},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			assert.Nil(t, claude.Adapter{}.Calls(tc.line).Limit, "a wait buys no usage credits, so the run fails")
+			seen := claude.Adapter{}.Calls(tc.line)
+
+			assert.Nil(t, seen.Limit, "a wait buys no usage credits, so the line is no limit")
+			assert.Equal(t, deniedCredits, seen.Denied)
+		})
+	}
+}
+
+func TestCalls_ACreditsErrorCodeOnAPlanWindowIsALimit(t *testing.T) {
+	t.Parallel()
+
+	seen := claude.Adapter{}.Calls(`{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1795100000,"rateLimitType":"five_hour","isUsingOverage":false,"errorCode":"credits_required"}}`)
+
+	require.NotNil(t, seen.Limit, "the plan window resets, so a wait cures the refusal")
+	assert.Equal(t, agent.Limit{Kind: agent.LimitRate, Window: "five_hour", ResetsAt: time.Unix(1795100000, 0).UTC()}, *seen.Limit)
+	assert.Empty(t, seen.Denied)
+}
+
+func TestCalls_AnOrganizationPauseIsDeniedAndNoLimit(t *testing.T) {
+	t.Parallel()
+
+	lines := fixtureLines(t, "rate-limited-paused.jsonl")
+	tests := []struct{ name, line string }{
+		{"event", lines[0]},
+		{"assistant_usage_limit_reached", lines[1]},
+		{"event_that_also_asks_for_credits", `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","isUsingOverage":false,"dailyCapPaused":true,"errorCode":"credits_required"}}`},
+		{
+			"assistant_line_that_also_asks_for_credits",
+			`{"type":"assistant","message":{"content":[]},"error":"rate_limit","api_error":"model_requires_usage_credits","api_error_params":{"rate_limit_info":{"dailyCapPaused":true}}}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			seen := claude.Adapter{}.Calls(tc.line)
+
+			assert.Nil(t, seen.Limit, "no reset ends a pause, so the line is no limit")
+			assert.Equal(t, deniedPause, seen.Denied)
+		})
+	}
+}
+
+func TestCalls_APauseFlagThatIsNotTrueIsALimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct{ name, line string }{
+		{"event", `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","isUsingOverage":false,"dailyCapPaused":false}}`},
+		{"assistant_line", `{"type":"assistant","message":{"content":[]},"error":"rate_limit","api_error":"usage_limit_reached","api_error_params":{"rate_limit_info":{"status":"rejected"}}}`},
+		{"assistant_line_with_params_of_another_shape", `{"type":"assistant","message":{"content":[]},"error":"rate_limit","api_error_params":"none"}`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			seen := claude.Adapter{}.Calls(tc.line)
+
+			require.NotNil(t, seen.Limit)
+			assert.Equal(t, agent.Limit{Kind: agent.LimitRate}, *seen.Limit)
+			assert.Empty(t, seen.Denied)
 		})
 	}
 }

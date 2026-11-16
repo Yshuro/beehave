@@ -34,6 +34,8 @@ var (
 	errNoSession = errors.New("the agent left no session id in its output")
 	// errAgentFailed means the result line of a run that exited with code 0 reports an error that is no cap.
 	errAgentFailed = errors.New("the agent ended with an error result")
+	// errDenied means the provider refused a run that exited with code 0, for a reason that no wait cures.
+	errDenied = errors.New("the provider refused the run")
 )
 
 // agents runs an agent request with the adapter of the runner it names.
@@ -180,7 +182,7 @@ func (a agents) Run(ctx context.Context, request flow.AgentRequest) (agent.Resul
 
 	tap := newSessionTap(adapter, a.prices)
 
-	return describe(adapter, runner, dir, tap, a.runCosted(ctx, tap, a.specOf(request, runner, dir, adapter, tap, guard, box), request.Model), request.Forbid, protect)
+	return endOf(adapter, runner, dir, tap, a.runCosted(ctx, tap, a.specOf(request, runner, dir, adapter, tap, guard, box), request.Model), request.Forbid, protect)
 }
 
 // runCosted runs the spec and gives the result its cost: the one the CLI reported, or an estimate from the tokens of the run for the model.
@@ -334,6 +336,28 @@ func limitNote(limit agent.Limit) string {
 	return fmt.Sprintf("the provider refused more work at its %s until %s", name, limit.ResetsAt.Format(time.RFC3339))
 }
 
+// endOf returns the result of a run with what its output says about its end. A run that exited and that the provider refused for a reason that no wait
+// cures fails (deniedRun), even when a line before the refusal reported a limit. describe reads the end of any other run, so a run that timed out,
+// was canceled, did not start or ended at the budget cap keeps its outcome.
+func endOf(adapter agent.Adapter, runner model.Runner, dir string, tap *sessionTap, result agent.Result, forbid []model.FindingKind, protect shell.Protection) (agent.Result, error) {
+	if reason := tap.denial(); reason != "" && result.Outcome == agent.OutcomeExited {
+		return deniedRun(result, reason)
+	}
+
+	return describe(adapter, runner, dir, tap, result, forbid, protect)
+}
+
+// deniedRun fails a run that the provider refused for a reason that no wait cures. The reason is a note that comes after the note of the runner.
+// A run that exited with another code than 0 fails by that code. A run that exited with code 0 fails with an error that names the reason.
+func deniedRun(result agent.Result, reason string) (agent.Result, error) {
+	result = result.AddNote(reason)
+	if result.ExitCode != 0 {
+		return result, nil
+	}
+
+	return result, fmt.Errorf("%w: %s", errDenied, reason)
+}
+
 // sessionOf adds the cap outcome and the session of a run to the result. A run that the runner ended at the budget cap, or that a provider limit stopped,
 // has its outcome already (ended) and may not have named a session: that is no error.
 func sessionOf(adapter agent.Adapter, runner model.Runner, dir string, tap *sessionTap, result agent.Result, stop agent.Stop, ended bool) (agent.Result, error) {
@@ -429,6 +453,8 @@ type sessionTap struct {
 	failed           string
 	// limit is the first provider limit that a line reported.
 	limit *agent.Limit
+	// denied is the first reason that a line gave for a refusal that no wait cures.
+	denied string
 	// cost is the total cost in dollars of the last result line that reported one.
 	cost float64
 	// usage is the sum of the tokens that the lines reported.
@@ -491,10 +517,12 @@ func (t *sessionTap) see(line string) {
 	}
 }
 
-// addEnd records how one line says the run ended: the result line, its cap, its error, and the first provider limit. The caller holds the lock.
+// addEnd records how one line says the run ended: the result line, its cap, its error, the first provider limit, and the first refusal that no wait cures.
+// The caller holds the lock.
 func (t *sessionTap) addEnd(seen agent.Seen) {
 	t.ended = t.ended || seen.Result
 	t.stop, t.failed = cmp.Or(seen.Stop, t.stop), cmp.Or(seen.Failed, t.failed)
+	t.denied = cmp.Or(t.denied, seen.Denied)
 
 	if t.limit == nil {
 		t.limit = seen.Limit
@@ -588,11 +616,29 @@ func (t *sessionTap) limited() *agent.Limit {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if t.ended && t.failed == "" {
+	if t.wentOn() {
 		return nil
 	}
 
 	return t.limit
+}
+
+// denial returns the first reason that the output gave for a refusal that no wait cures, or "" when it gave none or the run went on to a result line with
+// no error, as limited does.
+func (t *sessionTap) denial() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.wentOn() {
+		return ""
+	}
+
+	return t.denied
+}
+
+// wentOn reports whether the run reached a result line with no error, so no refusal before that line stopped the run. The caller holds the lock.
+func (t *sessionTap) wentOn() bool {
+	return t.ended && t.failed == ""
 }
 
 // failure returns the error subtype that the result line reported, or "" when it reported none.

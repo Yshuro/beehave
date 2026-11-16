@@ -286,7 +286,7 @@ func CheckCalls(r Reporter, adapter agent.Adapter) {
 
 	expect(r, len(seen.Shell) == 0, "a line with no call holds the shell calls %v", seen.Shell)
 	expect(r, len(seen.Skills) == 0, "a line with no call holds the skill calls %q", seen.Skills)
-	expect(r, len(seen.Refused) == 0 && !seen.Result && seen.Limit == nil, "a line with no call holds a refusal, a result or a limit: %+v", seen)
+	expect(r, len(seen.Refused) == 0 && !seen.Result && seen.Limit == nil && seen.Denied == "", "a line with no call holds a refusal, a result, a limit or a denial: %+v", seen)
 }
 
 func hasPrefix(lines []string, prefix string) bool {

@@ -119,6 +119,8 @@ type Call struct {
 // Usage is the tokens that the line reports for the part of the run that it closes, or zero when it reports none; the caller adds the Usage of all lines.
 // Limit is the provider limit that the line reports as the reason the CLI refused more work, or nil when it reports none. A line that only warns that
 // a limit is near reports none.
+// Denied is the reason why the provider refused more work in a way that no wait cures, such as usage credits that the account does not have or a pause of
+// the organization, or empty when the line reports none. A line with Denied reports no Limit.
 type Seen struct {
 	Cost    float64
 	Spent   float64
@@ -132,6 +134,7 @@ type Seen struct {
 	Invalid bool
 	Priced  bool
 	Limit   *Limit
+	Denied  string
 }
 
 // Adapter is one agent CLI. The runner calls Profile and, when the spec sets a guard, Guard before it starts a run.
