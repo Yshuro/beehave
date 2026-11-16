@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -39,28 +39,32 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earl
 
 #### A step that ran when the engine stopped
 
-DBOS records a step only when the step ends. If the engine stops after the effect of a step and before its record, the resume runs the step again. A step is safe to run twice when the tracker, the forge or the host answers the repeat: the step makes a check first, or it sends a key that the other side keeps. Most builtins are safe. Four cases are not safe today, and a later change fixes each of them.
+DBOS records a step only when the step ends. If the engine stops after the effect of a step and before its record, the resume runs the step again. A step is safe to run twice when the tracker, the forge or the host answers the repeat. Two things make a step safe, and each row names one of them. The step makes a check first and sends no second write, or the call is documented to treat a repeat as no change, and a test pins the exact call. Four cases are not safe today, and a later change fixes each of them. Two rows rest on the library and not on a check of beehave: `spawn` and `wait`.
 
 | Builtin | A repeat after a crash | Why |
 | --- | --- | --- |
 | `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. |
 | `item_comment` | Safe. | The tracker reads the comments first and finds the key. |
-| `item_status`, `item_assign` | Safe. | The tracker reads the state first, or keeps one entry for the same login. |
+| `item_status` | Safe. | The tracker reads the state and the labels first and runs only the commands that change them. |
+| `item_assign` | Safe. | On GitHub the tracker reads the assignees first and sends no edit for a login that is on the issue. A test with a repeated call shows one edit. Beads reads first too. The local tracker refuses an assignee. |
 | `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
-| `pr_assign` | Safe. | The forge keeps one entry for a login. |
+| `pr_assign` | Safe. | The call is a POST that adds a login, and GitHub says: "Users already assigned to an issue are not replaced." ([Assignees](https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue)). A test pins the exact call of two runs, so a change to a call that replaces the assignees turns it red. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
-| `board_sync` | Safe. | The forge returns the card that exists and sets the same column. |
-| `merge`: the ready mark | Safe. | Marking a pull request ready that is ready changes nothing. The step reads the head again. |
-| `merge`: the merge | Safe. | The step `merge:intent` is recorded before the merge. The forge shows the pull request as merged at the gated head, and the intent shows the merge is ours. |
+| `board_sync` | Safe. | The call adds the card by its address, and GitHub says: "If you try to add an item that already exists, the existing item ID is returned instead." ([Using the API to manage Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)). The edit then sets the Status field to the same option. A test pins the exact calls of two runs. No test uses a real board. |
+| `merge`: the ready mark | Safe. | The step reads the draft state first and makes no `gh pr ready` call for a pull request that is ready. A test with a ready pull request shows no call. |
+| `merge`: the merge | Safe when a batch host is set, which the real build always does. | The step `merge:intent` is recorded before the merge. The forge shows the pull request as merged at the gated head, and the intent shows the merge is ours. A build with no batch host has no intent step. |
 | `batch_merge`: each member | Safe. | The step `batch:<name>.intent#<item>` does the same for each member. |
-| `spawn` | Safe. | The child run has a fixed workflow id, and DBOS starts it once. |
+| `spawn` | Safe. It rests on the library. | The child run has a fixed workflow id, and DBOS returns the recorded child for it. A test stops the parent after the child started and shows one child run with the same id after the resume. |
+| `wait` | Safe. It rests on the library, and no test in this table stops a wait. | The deadline is the output of a recorded DBOS sleep, and the answer is a durable receive. A resume waits for the same answer. |
 | `write` with `read_back` | Safe. | The read-back runs first and finds a write that is done. |
 | `write` with no `read_back` | Not safe today. The program runs again with the same key. | Neither beehave nor the forge can tell if the outside system dropped the repeat. A later change asks the owner before the repeat. |
-| `command` with no `host` | Runs again. | By design. Put an outside effect in `write`. |
+| `write` undo | The undo is a recorded step named `undo:<write step>`. A crash during the undos runs the one that has no record again with the same key. | The undo must be safe when nothing happened (see `undo`). A repeat after the effect depends on the program. |
+| `command` with no `host`, and `gate` with a program on this machine | Runs again. | By design. Put an outside effect in `write`. |
+| `sandbox` | Safe. | The call builds a setting value and changes nothing outside the run. |
 | `gate` with a host job, `command` with `host` or `slots`, and the gate of `batch_merge` | Not safe today. A crash after the host accepts the job and before the record submits a second job. | The job has no key that the host honors. A later change adds one. |
 | `host_up` | Not safe today. If the crash came after the launch, the repeat finds the host up and reports `started` false, so `host_teardown` does not stop it. | The step cannot tell its own launch from a host that was up already. A later change adds a start mark. |
 | `host_teardown` on SkyPilot | Not safe today. If the crash came after the delete, the repeat cannot read the work root of the deleted cluster and reports `down` false with a reason. | The step reads the host before it checks that the host exists. A later change makes a missing host count as down. |
-| `host_teardown` on ssh and Slurm | Safe. | The bank of the work reads the host first, and the release is the same call. |
+| `host_teardown` on ssh and Slurm | Safe. | The step banks the work and leaves the machine up. The bank pushes what is not pushed, so a repeat pushes refs that are pushed. A test runs the bank once. |
 | `agent` | The step is a lost step. It resumes the session or runs again with a note. | `durable-loop.md` describes the start mark of a phase. |
 
 The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `before_review`, `earlier_calls`, `gather`) change nothing outside the run, so a repeat is safe.

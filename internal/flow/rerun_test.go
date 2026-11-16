@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	trackerstore "github.com/tobocop2/beehave/internal/store"
@@ -12,25 +13,20 @@ import (
 
 // crashOnce stops the run of the test item the first time after is called. An effect calls it right after it applied itself and before its step is recorded,
 // which is where a crash of the engine leaves a run.
-type crashOnce struct {
-	once sync.Once
-	fire func()
-}
+type crashOnce struct{ after func() }
 
 // newCrash makes a crash that cancels the run of the test item and waits for the tick that ends it.
 func newCrash(t *testing.T, h *harness) *crashOnce {
 	t.Helper()
 
-	return &crashOnce{fire: func() {
+	return &crashOnce{after: sync.OnceFunc(func() {
 		if err := h.client(t, testVersion).Cancel(testItem); err != nil {
 			t.Error(err)
 		}
 
 		h.tick(t)
-	}}
+	})}
 }
-
-func (c *crashOnce) after() { c.once.Do(c.fire) }
 
 // crashAndResume runs the body until the crash ends the run, then resumes the run and waits for it to finish. The step that the crash cut off has no record, so the resume runs it again.
 func crashAndResume(t *testing.T, h *harness, deps Deps, body string) ItemResult {
@@ -48,6 +44,49 @@ func crashAndResume(t *testing.T, h *harness, deps Deps, body string) ItemResult
 	require.NoError(t, err)
 
 	return result
+}
+
+// spawnFlow starts one child run of item 21 and waits for it. The child runs one command.
+const spawnFlow = `def worker(item):
+    command(name = "w", run = ["w"])
+
+def main(item):
+    gather(spawn(items = ["21"], entry = "worker", name = "fan"), name = "fan")
+`
+
+// The parent stops after the child workflow started and before the parent recorded the wait on it: the first command of the child cancels the parent.
+// The resume replays spawn, and the library returns the recorded child for its run id, so no second run of the child starts.
+func TestSpawn_ACrashAfterTheChildStartedAndBeforeTheParentRecordsItStartsNoSecondChild(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	crash := newCrash(t, h)
+	h.commands.before = func(_ context.Context, request CommandRequest) error {
+		if request.Item == "21" {
+			crash.after()
+		}
+
+		return nil
+	}
+
+	engine := h.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, spawnFlow))
+	require.Error(t, err, "the crash ends the parent")
+
+	before, found, err := latestRun(engine.ctx, "21")
+	require.NoError(t, err)
+	require.True(t, found, "the child started before the crash")
+
+	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
+	require.NoError(t, err)
+
+	after, found, err := latestRun(engine.ctx, "21")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, before.Status.ID, after.Status.ID, "the resume found the child by its run id")
+	assert.Equal(t, 1, after.Attempt, "no second attempt of the child started")
+	assert.Equal(t, []string{"w"}, h.commands.ran(), "the child ran its command once")
 }
 
 // crashWriter logs each call to the tracker writer as method|arguments, and crashes the run after the first call of the method in on.

@@ -40,6 +40,11 @@ type pullForge struct {
 	// assignErr fails each AddAssignee call after the first assignOK calls.
 	assignErr error
 	assignOK  int
+	// ready makes PRView report a pull request that is out of draft. readyOnCall does so once SetDraft has run. A fake that sets neither reports no draft state.
+	ready       bool
+	readyOnCall bool
+	// viewErr fails PRView.
+	viewErr error
 }
 
 func (f *pullForge) ClosingRefs(context.Context, int) (model.ClosingRefs, error) {
@@ -97,9 +102,18 @@ func (f *pullForge) PRList(_ context.Context, _ int, args ...string) ([]model.Pu
 }
 
 func (f *pullForge) PRView(context.Context, int, ...string) (model.PullRequest, error) {
-	head, state := "abc", f.state
+	f.mu.Lock()
+	defer f.mu.Unlock()
 
-	return model.PullRequest{HeadRefOid: &head, State: &state}, nil
+	head, state := "abc", f.state
+	view := model.PullRequest{HeadRefOid: &head, State: &state}
+
+	if f.ready || (f.readyOnCall && len(f.drafts) > 0) {
+		notDraft := false
+		view.IsDraft = &notDraft
+	}
+
+	return view, f.viewErr
 }
 
 func (*pullForge) OpenChangeRequests(context.Context, int) ([]model.ChangeRequest, error) {
@@ -362,26 +376,33 @@ func TestPulls_ReadyTakesThePullRequestOutOfDraft(t *testing.T) {
 	require.ErrorIs(t, pullsOver(none).Ready(t.Context(), "p", "bb-1"), forge.ErrNoPull)
 }
 
-// readyPull is a pullForge whose pull request is already out of draft.
-type readyPull struct{ *pullForge }
-
-func (f readyPull) PRView(ctx context.Context, number int, args ...string) (model.PullRequest, error) {
-	view, err := f.pullForge.PRView(ctx, number, args...)
-	notDraft := false
-	view.IsDraft = &notDraft
-
-	return view, err
-}
-
-func TestPulls_ReadyOfAPullRequestThatIsReadyIsDone(t *testing.T) {
+func TestPulls_ReadyMakesNoCallForAPullRequestThatIsReady(t *testing.T) {
 	t.Parallel()
 
-	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, state: "OPEN"}
-	p := pulls{projects: map[string]config.Project{"p": {}}, forge: func(model.Project) (forge.Forge, error) { return readyPull{f}, nil }}
+	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, state: "OPEN", ready: true}
 
-	require.NoError(t, p.Ready(t.Context(), "p", "bb-1"))
-	require.NoError(t, p.Ready(t.Context(), "p", "bb-1"), "a step that runs again after a crash marks the same pull request ready again")
-	assert.Equal(t, []draftCall{{7, false}, {7, false}}, f.drafts)
+	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
+	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
+	assert.Empty(t, f.drafts, "the pull request is ready, so no gh pr ready runs")
+}
+
+func TestPulls_ReadyARepeatAfterTheCallFindsTheReadyPullRequestAndSendsNoSecondCall(t *testing.T) {
+	t.Parallel()
+
+	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, state: "OPEN", readyOnCall: true}
+
+	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
+	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
+	assert.Equal(t, []draftCall{{7, false}}, f.drafts)
+}
+
+func TestPulls_ReadyRefusesWhenTheDraftStateCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, viewErr: errFake}
+
+	require.ErrorIs(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"), errFake)
+	assert.Empty(t, f.drafts)
 }
 
 func TestPulls_WatchReadsOnceAndSetDraftChangesThePullRequest(t *testing.T) {
