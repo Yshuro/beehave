@@ -1,7 +1,9 @@
 #!/bin/sh
 # Install the system tools of a linux amd64 build host: the apt packages, the Go toolchain that go.mod names, uv and actionlint.
 # scripts/host-setup.sh runs it. A host maker that owns its own idle delete (such as a SkyPilot task setup) can run it alone.
-# It installs no tool that `make setup` installs. Each step reads the state first and changes only what differs, so a second run changes nothing.
+# It installs no tool that `make setup` installs. `apt-get update` and `apt-get install` run on each run; apt changes no package that is installed.
+# Go, uv and actionlint are read first and installed only when they are not at their pins.
+# A new Go unpacks into /usr/local/go.new and replaces /usr/local/go only after it unpacks, so a failed unpack keeps the old Go.
 # A new uv version needs a new sha256: take it from the digest of the asset in the release (`gh release view <tag> -R astral-sh/uv --json assets`).
 #
 # Usage: sh scripts/host-tools.sh   (from any folder; it reads go.mod next to the scripts folder)
@@ -69,9 +71,20 @@ install_go() {
 	[ -n "$sha" ] || fail "go.dev lists no $file. Check the toolchain line of go.mod"
 	curl -fsSL --retry 3 -o "$work/$file" "https://go.dev/dl/$file"
 	check_sha "$work/$file" "$sha"
+	staging=$go_root.new
+	say "unpacking Go $want into $staging"
+	sudo rm -rf "$staging"
+	sudo mkdir -m 0755 "$staging"
+	sudo tar -C "$staging" -xzf "$work/$file" || fail "the Go archive did not unpack. The Go in $go_root is unchanged"
+	case $("$staging/go/bin/go" version 2>/dev/null || true) in
+	"go version $want "*) ;;
+	*) fail "the Go archive does not hold $want. The Go in $go_root is unchanged" ;;
+	esac
+
 	say "installing Go $want into $go_root"
-	sudo rm -rf "$go_root"
-	sudo tar -C "$(dirname "$go_root")" -xzf "$work/$file"
+	if [ -e "$go_root" ]; then sudo mv "$go_root" "$staging/old"; fi
+	sudo mv "$staging/go" "$go_root"
+	sudo rm -rf "$staging"
 	case $("$go_root/bin/go" version 2>/dev/null || true) in
 	"go version $want "*) ;;
 	*) fail "the Go archive did not install $want into $go_root" ;;
@@ -106,12 +119,15 @@ if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
 	fail 'the pinned archives are for linux amd64 only'
 fi
 
-PATH=$go_root/bin:$HOME/go/bin:$PATH
+PATH=$go_root/bin:$PATH
 export PATH
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
 install_packages
 install_go
+# go install puts actionlint into the bin folder of the first GOPATH entry.
+gopath=$(go env GOPATH)
+PATH=${gopath%%:*}/bin:$PATH
 install_uv
 install_actionlint

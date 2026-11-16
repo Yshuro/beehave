@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake stat: any folder is owned by the login user (1000), or by the user id in FAKE_OWNER_UID.
+if [ "$1 $2" = '-c %u' ]; then
+	echo "${FAKE_OWNER_UID:-1000}"
+	exit 0
+fi
+echo "fake stat: unexpected $*" >&2
+exit 1

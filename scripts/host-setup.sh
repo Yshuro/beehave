@@ -2,7 +2,8 @@
 # Make a linux amd64 machine ready as a beehave build host for the ssh provider, then prove it. See docs/design/hosts.md.
 # Run it on the host, as the login user, from a clone of the repository at the commit under test. A second run changes nothing.
 # It installs no watchdog: it refuses to start and to finish unless the named self-delete watchdog unit is active, enabled and Restart=always.
-# It names no cloud and touches no heartbeat. It deletes nothing outside /usr/local/go and its own temporary folder.
+# It names no cloud and touches no heartbeat. It deletes nothing outside /usr/local/go, /usr/local/go.new and its own temporary folder.
+# It makes a missing work root only. It refuses a system folder, and an existing work root that the login user does not own.
 # The last line of a pass is HOST-SETUP-DONE.
 #
 # Usage: sh scripts/host-setup.sh --work-root <absolute path> --watchdog <systemd unit>
@@ -50,11 +51,40 @@ check_work_root() {
 	/*) ;;
 	*) fail "the work root $work_root must be an absolute path" ;;
 	esac
+	check_work_root_folder
+}
+
+is_system_folder() {
+	case $1 in
+	/ | /bin | /boot | /dev | /etc | /home | /lib | /lib32 | /lib64 | /libx32 | /media | /mnt | /opt | /proc | /root | /run | /sbin | /snap | /srv | /sys | /tmp | /usr | /var) return 0 ;;
+	esac
+	return 1
+}
+
+# check_work_root_folder refuses a system folder, and an existing work root that is not a folder of the login user.
+# The script makes a missing work root only, so it never changes the owner or the mode of a folder that exists.
+check_work_root_folder() {
+	if is_system_folder "$work_root"; then
+		fail "the work root $work_root is a system folder. Name a folder of its own, such as /home/<user>/jobs"
+	fi
+	if [ ! -e "$work_root" ] && [ ! -L "$work_root" ]; then
+		return 0
+	fi
+
+	[ -d "$work_root" ] || fail "the work root $work_root is not a folder"
+	resolved=$(cd -P -- "$work_root" && pwd -P) || fail "the work root $work_root cannot be read"
+	if is_system_folder "$resolved"; then
+		fail "the work root $work_root is a system folder ($resolved). Name a folder of its own, such as /home/<user>/jobs"
+	fi
+	[ "$(stat -c %u -- "$resolved")" = "$(id -u)" ] ||
+		fail "the work root $work_root is not owned by the login user. Name a folder of the login user, or a folder that does not exist yet"
+	[ -w "$resolved" ] || fail "the login user cannot write to the work root $work_root"
 }
 
 check_watchdog_name() {
 	case $watchdog in
 	'') fail "--watchdog is required: name the systemd unit of the self-delete watchdog. $usage" ;;
+	-*) fail "the watchdog $watchdog is not a systemd unit name: it starts with a dash" ;;
 	*[!A-Za-z0-9:_.@-]*) fail "the watchdog $watchdog is not a systemd unit name" ;;
 	esac
 }
@@ -107,10 +137,17 @@ turn_on_linger() {
 	wait_user_manager
 }
 
+# go_bin prints the bin folder of the first GOPATH entry, where go install and make contract-tools-install put the tools.
+go_bin() {
+	gopath=$("$go_root/bin/go" env GOPATH) || fail 'go env GOPATH failed'
+	[ -n "$gopath" ] || fail 'go env GOPATH printed nothing'
+	printf '%s/bin\n' "${gopath%%:*}"
+}
+
 # set_unit_path writes the PATH of the user manager, so a job finds the tools. A daemon-reload keeps the running units.
 set_unit_path() {
-	content="PATH=$go_root/bin:$HOME/go/bin:\${PATH}
-BEEHAVE_BD_132=$HOME/go/bin/bd"
+	content="PATH=$go_root/bin:$gobin:\${PATH}
+BEEHAVE_BD_132=$gobin/bd"
 	if [ -f "$env_file" ] && [ "$(cat "$env_file")" = "$content" ]; then
 		say "$env_file is up to date"
 		return 0
@@ -123,14 +160,19 @@ BEEHAVE_BD_132=$HOME/go/bin/bd"
 	say "wrote $env_file"
 }
 
+# make_work_root makes a missing work root for the login user. It reads the folder again first, and it leaves an existing one as it is.
 make_work_root() {
-	sudo install -d -o "$user" -g "$(id -gn)" -m 0755 "$work_root"
+	check_work_root_folder
+	if [ ! -d "$work_root" ]; then
+		say "making the work root $work_root"
+		sudo install -d -o "$user" -g "$(id -gn)" -m 0755 "$work_root"
+	fi
 	mkdir -p "$work_root/.beehave"
 }
 
 install_project_tools() {
-	PATH=$go_root/bin:$HOME/go/bin:$PATH
-	BEEHAVE_BD_132=$HOME/go/bin/bd
+	PATH=$go_root/bin:$gobin:$PATH
+	BEEHAVE_BD_132=$gobin/bd
 	export PATH BEEHAVE_BD_132
 	make setup
 	make contract-tools-install
@@ -155,7 +197,7 @@ go_pin() {
 	printf '%s\n' "${line#toolchain go}"
 }
 
-# module_version <tool>: the command that prints the module line of a Go binary that has no version flag.
+# module_version <tool>: the command that prints the module line of a Go binary, for a tool whose first version line is not its own version.
 module_version() { printf '%s\n' "go version -m \"\$(command -v $1)\" | grep -m 1 -E '^[[:space:]]+mod[[:space:]]'"; }
 
 # tools prints one line per tool, split by tabs: the name, the command that prints its version, and the pin ("-" for none).
@@ -176,7 +218,7 @@ tools() {
 		gitleaks 'gitleaks version' "$gitleaks_v" \
 		gremlins 'gremlins --version' "$gremlins_v" \
 		go-test-coverage "$(module_version go-test-coverage)" - \
-		govulncheck 'govulncheck -version' - \
+		govulncheck "$(module_version govulncheck)" - \
 		deadcode "$(module_version deadcode)" - \
 		dolt 'dolt version' - \
 		bd 'bd --version' - \
@@ -188,10 +230,11 @@ tools() {
 }
 
 # in_unit <command>: run a command as a transient user unit, the way the ssh adapter runs a job, so it gets the PATH of the user manager.
+# The unit reads no input: --pipe gives it the input of the caller, which is the tool list of prove_tools.
 in_unit() {
 	encoded=$(printf '%s' "$1" | base64 | tr -d '\n')
 	systemd-run --user --wait --pipe --quiet --collect -p WorkingDirectory="$root" \
-		sh -c "eval \"\$(printf %s $encoded | base64 -d)\""
+		sh -c "eval \"\$(printf %s $encoded | base64 -d)\"" </dev/null
 }
 
 # prove_tool <name> <command> <pin>: fail unless the tool runs in a user unit, at its pin when it has one. Print its record line.
@@ -268,6 +311,7 @@ refuse
 check_watchdog
 user=$(id -un)
 sh "$root/scripts/host-tools.sh"
+gobin=$(go_bin)
 turn_on_linger
 set_unit_path
 make_work_root
