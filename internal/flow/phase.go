@@ -174,7 +174,7 @@ func phaseOutput(result agent.Result) PhaseOutput {
 const sessionEvent = "session"
 
 // saveSession starts the saver that writes the session ids of the agent as the event of the phase, from the context of the agent step.
-// The library writes the event of a step at once, with no step of its own. A refused write is logged, and the run goes on: a replay of a lost step then starts fresh.
+// The library writes the event of a step at once, with no step of its own. Each write is logged. A refused write lets the run go on: a replay of a lost step then starts fresh.
 // While the store is down, the library retries the write until the step ends. Only the saver waits then, so the agent and the reading of its output go on.
 func (e *Engine) saveSession(ctx context.Context, in PhaseInput) *sessionSaver {
 	// The library runs every step body with a context of its own. Any other context leaves step nil, and the write then fails and is logged.
@@ -186,7 +186,11 @@ func (e *Engine) saveSession(ctx context.Context, in PhaseInput) *sessionSaver {
 	return startSessionSaver(func(session string) {
 		if err := dbos.SetEvent(step, sessionEvent, session); err != nil {
 			e.logger.WarnContext(ctx, "cannot save the session of the agent", "item", in.Item, "session", session, "error", err)
+
+			return
 		}
+
+		e.logger.InfoContext(ctx, "saved the session of the agent", "item", in.Item, "session", session)
 	})
 }
 

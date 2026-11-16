@@ -35,6 +35,8 @@ type fakeAdapter struct {
 	reads bool
 	// files is the Files of the launch of the guard and of the sandbox.
 	files map[string]string
+	// transcript replaces the transcript path, <configDir>/<session>, when it is set.
+	transcript func(configDir, session string) string
 }
 
 func (a fakeAdapter) Profile() agent.Profile { return a.profile }
@@ -51,7 +53,11 @@ func (fakeAdapter) ReadUsage(context.Context, model.Runner) model.Reading {
 	return model.Unknown("the fake agent cannot report usage")
 }
 
-func (fakeAdapter) TranscriptPath(configDir, _, session string) string {
+func (a fakeAdapter) TranscriptPath(configDir, _, session string) string {
+	if a.transcript != nil {
+		return a.transcript(configDir, session)
+	}
+
 	return filepath.Join(configDir, session)
 }
 
@@ -338,6 +344,68 @@ func TestCheckCalls(t *testing.T) {
 	assert.Contains(t, r.failures[2], "a limit")
 }
 
+func TestTestAdapter_PassesAnAdapterThatResumesASession(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.profile.Resume = func(id string) []string { return []string{"--resume", id} }
+
+	agenttest.TestAdapter(t, func() agent.Adapter { return a })
+}
+
+func TestCheckTranscript(t *testing.T) {
+	t.Parallel()
+
+	resumes := func(transcript func(configDir, session string) string) fakeAdapter {
+		a := good()
+		a.profile.Resume = func(id string) []string { return []string{"--resume", id} }
+		a.transcript = transcript
+
+		return a
+	}
+
+	cases := []struct {
+		name    string
+		adapter fakeAdapter
+		want    string
+	}{
+		{"a_resumable_session_with_its_transcript_in_the_login_folder", resumes(nil), ""},
+		{"a_profile_with_no_resume_option_is_not_asked", func() fakeAdapter {
+			a := good()
+			a.transcript = func(string, string) string { return "/elsewhere" }
+
+			return a
+		}(), ""},
+		{"a_transcript_outside_the_login_folder", resumes(func(_, session string) string { return filepath.Join("/elsewhere", session) }), "is outside the login folder"},
+		{"one_transcript_for_every_session", resumes(func(configDir, _ string) string { return filepath.Join(configDir, "transcript") }), "names one file for the sessions"},
+		{"a_resume_option_that_does_not_name_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(string) []string { return []string{"--continue"} }
+
+			return a
+		}(), "does not name the session"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var r recorder
+
+			agenttest.CheckTranscript(&r, tc.adapter, t.TempDir())
+
+			if tc.want == "" {
+				assert.Empty(t, r.failures)
+
+				return
+			}
+
+			require.Len(t, r.failures, 1)
+			assert.Contains(t, r.failures[0], tc.want)
+		})
+	}
+}
+
 func TestTheSuiteReportsAFakeCLIThatCannotBeWritten(t *testing.T) {
 	t.Parallel()
 
@@ -346,6 +414,11 @@ func TestTheSuiteReportsAFakeCLIThatCannotBeWritten(t *testing.T) {
 	for name, check := range map[string]func(*recorder){
 		"CheckNoEdits": func(r *recorder) { agenttest.CheckNoEdits(r, good(), missing) },
 		"CheckBudget":  func(r *recorder) { agenttest.CheckBudget(r, good(), missing, "") },
+		"CheckTranscript": func(r *recorder) {
+			a := good()
+			a.profile.Resume = func(id string) []string { return []string{"--resume", id} }
+			agenttest.CheckTranscript(r, a, missing)
+		},
 	} {
 		var r recorder
 

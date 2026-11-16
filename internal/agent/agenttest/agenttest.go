@@ -21,6 +21,9 @@ const (
 	prompt   = "do the step"
 	token    = "tok-suite-value"
 	leakName = "BEEHAVE_SUITE_LEAK"
+	// session is the session that a resumed run of the suite continues, and other is a second session.
+	session = "suite-session"
+	other   = "suite-other"
 	// fakeCLI prints the arguments, the standard input and the environment of the run, one item for each line.
 	fakeCLI = "#!/bin/sh\necho \"args=$*\"\necho \"stdin=$(cat)\"\nenv\n"
 )
@@ -63,10 +66,69 @@ func TestAdapter(t *testing.T, make Factory, opts ...Option) {
 	t.Run("a_launch_keeps_its_files_inside_the_run_folder", func(t *testing.T) {
 		CheckLaunch(t, make())
 	})
+	testSessions(t, make)
+	testLimits(t, make, o)
+}
+
+// testSessions runs the arms for the output lines and the transcript of a session.
+func testSessions(t *testing.T, make Factory) {
+	t.Helper()
 	t.Run("a_line_with_no_call_holds_no_call", func(t *testing.T) {
 		CheckCalls(t, make())
 	})
-	testLimits(t, make, o)
+	t.Run("a_resumed_session_has_its_transcript_in_the_login_folder", func(t *testing.T) {
+		CheckTranscript(t, make(), t.TempDir())
+	})
+}
+
+// CheckTranscript checks, for a profile with a resume option, the transcript path that the agents read before a resume: a start after a lost run resumes
+// the session only when that file exists. The suite starts a fake CLI as a resumed run, which must get the resume option with the session and the login
+// folder in each login variable, so the path must be a file of that session inside the login folder. A profile with no resume option is not asked.
+func CheckTranscript(r Reporter, adapter agent.Adapter, dir string) {
+	r.Helper()
+
+	profile := adapter.Profile()
+	if profile.Resume == nil {
+		return
+	}
+
+	option := profile.Resume(session)
+	expect(r, slices.Contains(option, session), "the resume option %q does not name the session %q", option, session)
+	checkTranscriptPath(r, adapter, dir)
+
+	if !writeFake(r, profile, dir) {
+		return
+	}
+
+	var out bytes.Buffer
+
+	runFake(adapter, dir, &out, func(s *agent.Spec) { s.Resume = session })
+	checkResumed(r, profile, dir, option, strings.Split(out.String(), "\n"))
+}
+
+// checkTranscriptPath checks that the transcript of the session of the suite is a file inside the login folder dir, and that another session has another file.
+func checkTranscriptPath(r Reporter, adapter agent.Adapter, dir string) {
+	r.Helper()
+
+	work := filepath.Join(dir, "work")
+	path := adapter.TranscriptPath(dir, work, session)
+	rel, err := filepath.Rel(dir, path)
+	expect(r, err == nil && filepath.IsLocal(rel), "the transcript %q of a session is outside the login folder %q, where the resumed CLI reads it", path, dir)
+	expect(r, path != adapter.TranscriptPath(dir, work, other), "the transcript path %q names one file for the sessions %q and %q", path, session, other)
+}
+
+// checkResumed checks the lines that the fake CLI printed for a resumed run: the resume option in the arguments and the login folder in each login variable.
+func checkResumed(r Reporter, profile agent.Profile, dir string, option, seen []string) {
+	r.Helper()
+
+	args := " " + strings.Join(option, " ")
+	expect(r, slices.ContainsFunc(seen, func(line string) bool {
+		return strings.HasPrefix(line, "args=") && (strings.HasSuffix(line, args) || strings.Contains(line, args+" "))
+	}), "a resumed run did not get the resume option %q", option)
+
+	for _, name := range profile.ConfigVars {
+		expect(r, slices.Contains(seen, name+"="+dir), "the login variable %s of a resumed run does not hold the login folder", name)
+	}
 }
 
 // testLimits runs the arms for the no-edit settings and the cost cap of the profile.
