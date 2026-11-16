@@ -45,11 +45,14 @@ read_args() {
 }
 
 # check_work_root refuses a path that the adapter refuses: systemd expands a percent sign, and a dollar sign is no path.
+# It also refuses a single quote. The by-hand command of check_work_root_folder puts the path in single quotes, and a control
+# character includes a newline, so the printed command runs nothing but the mkdir and the chown when the owner pastes it.
 check_work_root() {
 	case $work_root in
 	'') fail "--work-root is required. $usage" ;;
 	*[%\$]*) fail "the work root $work_root must not hold a percent or dollar sign, which systemd and the shell would expand" ;;
 	*[[:cntrl:]]*) fail 'the work root must hold no control character' ;;
+	*\'*) fail "the work root $work_root must not hold a single quote, which the command that the script prints for the owner of the parent cannot carry" ;;
 	/*) ;;
 	*) fail "the work root $work_root must be an absolute path" ;;
 	esac

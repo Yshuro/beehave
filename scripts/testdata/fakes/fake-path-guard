@@ -1,9 +1,14 @@
 #!/bin/sh
 # Path guard of the fakes that run a real tool: fail unless each path is in FAKE_BASE, the folder of the test.
 # So a script that passes a path it must refuse cannot change the real filesystem.
+# Without FAKE_BASE the pattern would be /*, which is every path, so it refuses every path.
 # Usage: fake-path-guard <name of the fake> <path>...
 name=$1
 shift
+if [ -z "${FAKE_BASE:-}" ]; then
+	echo "fake $name: refused every path, because FAKE_BASE, the folder of the test, is not set" >&2
+	exit 1
+fi
 for path; do
 	canonical=$("$REAL_REALPATH" -m -- "$path") || exit 1
 	case $canonical in

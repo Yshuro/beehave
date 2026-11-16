@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -316,6 +317,8 @@ func TestHostSetup_RefusesAWorkRootThatSystemdWouldExpand(t *testing.T) {
 		{name: "a_percent_sign", workRoot: "/srv/jobs%h", message: "must not hold a percent or dollar sign"},
 		{name: "a_dollar_sign", workRoot: "/srv/$USER", message: "must not hold a percent or dollar sign"},
 		{name: "a_control_character", workRoot: "/srv/a\tb", message: "must hold no control character"},
+		{name: "a_newline", workRoot: "/srv/a\nb", message: "must hold no control character"},
+		{name: "a_single_quote", workRoot: "/srv/a';x;'", message: "must not hold a single quote"},
 		{name: "a_relative_path", workRoot: "srv/jobs", message: "must be an absolute path"},
 		{name: "no_work_root", workRoot: "", message: "--work-root is required"},
 	}
@@ -489,6 +492,7 @@ func TestHostSetup_TheFakesRefuseAPathOutsideTheTestFolder(t *testing.T) {
 		{name: "mv_to_an_outside_path", fake: "mv", path: outside, args: []string{"<base>/file", outside}},
 		{name: "mv_from_an_outside_path", fake: "mv", path: outside, args: []string{outside, "<base>/x"}},
 		{name: "tar_into_an_outside_folder", fake: "tar", path: outside, args: []string{"-C", outside, "-xzf", "<base>/file"}},
+		{name: "curl_to_an_outside_path", fake: "curl", path: outside, args: []string{"-fsSL", "--retry", "3", "-o", outside, "https://example.com/file"}},
 	}
 
 	for _, tc := range cases {
@@ -497,6 +501,7 @@ func TestHostSetup_TheFakesRefuseAPathOutsideTheTestFolder(t *testing.T) {
 
 			h := newFakeHost(t)
 			h.write(filepath.Join(h.base, "file"), "", 0o644)
+			h.write(filepath.Join(h.down, "file"), "", 0o644)
 
 			args := make([]string, 0, len(tc.args))
 			for _, arg := range tc.args {
@@ -507,6 +512,39 @@ func TestHostSetup_TheFakesRefuseAPathOutsideTheTestFolder(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Equal(t, "fake "+tc.fake+": refused "+strings.ReplaceAll(tc.path, "<base>", h.base)+", which is outside the folder of the test\n", out)
+		})
+	}
+}
+
+func TestHostSetup_TheFakesRefuseEveryPathWithoutTheTestFolder(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		env  func(env []string) []string
+	}{
+		{name: "FAKE_BASE_is_not_set", env: func(env []string) []string {
+			return slices.DeleteFunc(env, func(pair string) bool { return strings.HasPrefix(pair, "FAKE_BASE=") })
+		}},
+		{name: "FAKE_BASE_is_empty", env: func(env []string) []string { return append(env, "FAKE_BASE=") }},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// The path is inside the folder of the test, so a guard that passes every path makes only this folder.
+			h := newFakeHost(t)
+			inside := filepath.Join(h.base, "made")
+			h.env = tc.env(h.env)
+
+			out, err := h.sh(nil, filepath.Join(h.bin, "mkdir"), "--", inside)
+
+			require.Error(t, err)
+			assert.Equal(t, "fake mkdir: refused every path, because FAKE_BASE, the folder of the test, is not set\n", out)
+
+			_, err = h.root.Stat(h.rel(inside))
+			assert.ErrorIs(t, err, fs.ErrNotExist, "the fake makes no folder")
 		})
 	}
 }
@@ -669,15 +707,78 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n", 0o644)
 		h.serveGo("go1.27.9", "", false)
 
-		out, err := h.setup("FAKE_MV_SPOIL=" + goRoot + ".new/go")
+		for run := 1; run <= 2; run++ {
+			h.write(h.log, "", 0o644)
+			out, err := h.setup("FAKE_MV_SPOIL=" + goRoot + ".new/go")
+
+			require.Error(t, err, "run %d", run)
+			assert.Contains(t, out, "the Go in "+goRoot+" was not go1.27.9 after the swap. The old Go is back in place", "run %d", run)
+			assert.Contains(t, h.read(goRoot+"/bin/go"), pinnedGo, "run %d: the old Go is back", run)
+
+			log := h.read(h.log)
+			assert.Contains(t, log, "sudo mv "+goRoot+".old "+goRoot+"\n", "run %d: the old Go moves back", run)
+			assert.NotContains(t, log, "sudo rm -rf "+goRoot+".old", "run %d: the backup is deleted only after the new Go passes its check", run)
+			assert.NotContains(t, log, "sudo rm -rf "+goRoot+".new "+goRoot+".old", "run %d: the backup is deleted only after the new Go passes its check", run)
+
+			_, err = h.root.Stat(h.rel(goRoot + ".old"))
+			require.ErrorIs(t, err, fs.ErrNotExist, "run %d: no backup is left", run)
+
+			// The fake sudo runs no rm, so the test removes the go.new folder that the next run clears first.
+			require.NoError(t, h.root.RemoveAll(h.rel(goRoot+".new")))
+		}
+	})
+
+	t.Run("a_second_run_keeps_the_backup_when_the_go_in_place_failed_its_check", func(t *testing.T) {
+		t.Parallel()
+
+		h := newFakeHost(t)
+		goRoot := h.sysroot + "/usr/local/go"
+		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n", 0o644)
+		h.serveGo("go1.27.9", "", false)
+
+		// The new Go fails its check after the swap, and it does not move out again: the old Go stays in the backup.
+		out, err := h.setup("FAKE_MV_SPOIL="+goRoot+".new/go", "FAKE_MV_FAIL_TO="+goRoot+".new/go")
 
 		require.Error(t, err)
-		assert.Contains(t, out, "the Go in "+goRoot+" was not go1.27.9 after the swap. The old Go is back in place")
-		assert.Contains(t, h.read(goRoot+"/bin/go"), pinnedGo, "the old Go is back")
+		assert.Contains(t, out, "it did not move out. The old Go is in "+goRoot+".old. Move it back by hand")
+		assert.Contains(t, h.read(goRoot+".old/bin/go"), pinnedGo, "the old Go is in the backup")
+		assert.Contains(t, h.read(goRoot+"/bin/go"), "spoiled", "the Go that failed its check is in place")
+
+		h.write(h.log, "", 0o644)
+		out, err = h.setup()
+
+		require.Error(t, err)
+		assert.Contains(t, out, "host-tools: the Go in "+goRoot+" is not go1.27.9, and an old Go is in "+goRoot+".old. This script deletes neither folder.")
 
 		log := h.read(h.log)
-		assert.Contains(t, log, "sudo mv "+goRoot+".old "+goRoot+"\n", "the old Go moves back")
-		assert.NotContains(t, log, "sudo rm -rf "+goRoot+".new "+goRoot+".old", "the backup is deleted only after the new Go passes its check")
+		assert.NotContains(t, log, "sudo rm ", "a run deletes no Go when the Go in place is not the pinned one")
+		assert.NotContains(t, log, "sudo mv ", "a run moves no Go when both folders hold one")
+		assert.NotContains(t, log, "\ncurl ", "the run stops before the download")
+		assert.Contains(t, h.read(goRoot+".old/bin/go"), pinnedGo, "the old Go is still in the backup")
+
+		// The user does what the message says: the Go that runs goes back in place. The next run then installs the pinned Go.
+		require.NoError(t, h.root.RemoveAll(h.rel(goRoot)))
+		require.NoError(t, h.root.Rename(h.rel(goRoot+".old"), h.rel(goRoot)))
+		require.NoError(t, h.root.RemoveAll(h.rel(goRoot+".new")))
+
+		out, err = h.setup()
+
+		require.NoError(t, err, out)
+		assert.Contains(t, h.read(goRoot+"/bin/go"), "go1.27.9", "the pinned Go is in place")
+	})
+
+	t.Run("a_backup_beside_the_pinned_go_is_deleted", func(t *testing.T) {
+		t.Parallel()
+
+		h := newFakeHost(t)
+		goRoot := h.sysroot + "/usr/local/go"
+		h.write(goRoot+".old/bin/go", fakeGo("go1.27.0"), 0o755)
+
+		out, err := h.setup()
+
+		require.NoError(t, err, out)
+		assert.Contains(t, out, "host-tools: Go "+pinnedGo+" is installed")
+		assert.Contains(t, h.read(h.log), "sudo rm -rf "+goRoot+".old\n", "the backup goes when the pinned Go is in place")
 	})
 
 	t.Run("a_backup_without_a_go_is_put_back_first", func(t *testing.T) {

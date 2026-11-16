@@ -5,6 +5,7 @@
 # Go, uv and actionlint are read first and installed only when they are not at their pins.
 # A new Go unpacks into /usr/local/go.new and replaces /usr/local/go only after it unpacks, so a failed unpack keeps the old Go.
 # The old Go moves to /usr/local/go.old for the swap and moves back when the swap fails or the new Go is not the pinned one.
+# /usr/local/go.old is deleted only when the Go in /usr/local/go prints the pinned version.
 # It deletes nothing outside these three folders and its own temporary folder.
 # A new uv version needs a new sha256: take it from the digest of the asset in the release (`gh release view <tag> -R astral-sh/uv --json assets`).
 #
@@ -60,27 +61,36 @@ go_pin() {
 	printf '%s\n' "${line#toolchain }"
 }
 
+# is_pinned_go <go command>: succeed when the command runs and prints the pinned version.
+is_pinned_go() {
+	case $("$1" version 2>/dev/null || true) in
+	"go version $want "*) return 0 ;;
+	esac
+	return 1
+}
+
 # restore_go puts the old Go back when a failed swap left it in the backup and no Go in its place.
-# It deletes the backup only when a Go is in place, so it never deletes the only copy.
+# It deletes the backup only when the Go in place prints the pinned version. When another Go is in place, it stops and deletes neither,
+# because the backup can be the only Go that runs.
 restore_go() {
 	if [ ! -e "$go_backup" ]; then return 0; fi
-	if [ -e "$go_root" ]; then
-		sudo rm -rf "$go_backup"
+	if [ ! -e "$go_root" ]; then
+		say "putting the old Go back from $go_backup"
+		sudo mv "$go_backup" "$go_root" || fail "the old Go did not move back from $go_backup to $go_root. Move it back by hand"
 		return 0
 	fi
-	say "putting the old Go back from $go_backup"
-	sudo mv "$go_backup" "$go_root" || fail "the old Go did not move back from $go_backup to $go_root. Move it back by hand"
+	is_pinned_go "$go_root/bin/go" ||
+		fail "the Go in $go_root is not $want, and an old Go is in $go_backup. This script deletes neither folder. Move or delete them by hand, so that the Go that runs is in $go_root and $go_backup is gone. Then run this again"
+	sudo rm -rf "$go_backup"
 }
 
 install_go() {
-	restore_go
 	want=$(go_pin)
-	case $("$go_root/bin/go" version 2>/dev/null || true) in
-	"go version $want "*)
+	restore_go
+	if is_pinned_go "$go_root/bin/go"; then
 		say "Go $want is installed"
 		return 0
-		;;
-	esac
+	fi
 
 	file=$want.linux-amd64.tar.gz
 	curl -fsSL --retry 3 -o "$work/go.json" 'https://go.dev/dl/?mode=json&include=all'
@@ -92,10 +102,7 @@ install_go() {
 	sudo rm -rf "$go_staging"
 	sudo mkdir -m 0755 "$go_staging"
 	sudo tar -C "$go_staging" -xzf "$work/$file" || fail "the Go archive did not unpack. The Go in $go_root is unchanged"
-	case $("$go_staging/go/bin/go" version 2>/dev/null || true) in
-	"go version $want "*) ;;
-	*) fail "the Go archive does not hold $want. The Go in $go_root is unchanged" ;;
-	esac
+	is_pinned_go "$go_staging/go/bin/go" || fail "the Go archive does not hold $want. The Go in $go_root is unchanged"
 
 	say "installing Go $want into $go_root"
 	if [ -e "$go_root" ]; then
@@ -105,10 +112,7 @@ install_go() {
 		restore_go
 		fail "the new Go did not move into $go_root. The old Go is back in place"
 	fi
-	case $("$go_root/bin/go" version 2>/dev/null || true) in
-	"go version $want "*) ;;
-	*) undo_swap ;;
-	esac
+	is_pinned_go "$go_root/bin/go" || undo_swap
 	sudo rm -rf "$go_staging" "$go_backup"
 }
 
@@ -117,7 +121,7 @@ install_go() {
 undo_swap() {
 	[ -e "$go_backup" ] || fail "the Go archive did not install $want into $go_root"
 	sudo mv "$go_root" "$go_staging/go" ||
-		fail "the Go in $go_root was not $want after the swap, and it did not move out. The old Go is in $go_backup. Move it back by hand"
+		fail "the Go in $go_root was not $want after the swap, and it did not move out. The old Go is in $go_backup. Move it back by hand. A second run deletes neither folder"
 	restore_go
 	fail "the Go in $go_root was not $want after the swap. The old Go is back in place"
 }

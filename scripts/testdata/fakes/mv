@@ -1,9 +1,9 @@
 #!/bin/sh
 # Fake mv: run the real mv on two paths. It refuses a path outside the folder of the test.
-# It fails when its first argument is FAKE_MV_FAIL.
+# It fails when its first argument is FAKE_MV_FAIL, or when its second argument is FAKE_MV_FAIL_TO.
 # When its first argument is FAKE_MV_SPOIL, it moves the folder, and the go command of the moved folder then prints no version.
 "$FAKE_BIN/fake-path-guard" mv "$@" || exit 1
-if [ "$1" = "${FAKE_MV_FAIL:-}" ]; then
+if [ "$1" = "${FAKE_MV_FAIL:-}" ] || [ "$2" = "${FAKE_MV_FAIL_TO:-}" ]; then
 	echo 'fake mv: failed' >&2
 	exit 1
 fi
