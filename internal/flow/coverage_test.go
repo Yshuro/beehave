@@ -366,7 +366,7 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 	require.ErrorContains(t, engine.deleteOldRuns(), "list the finished runs")
 	engine.retain()
 
-	_, err = engine.Run(testItem, testProject)
+	_, err = engine.handleFor(ItemInput{Item: testItem, Project: testProject})
 	require.ErrorContains(t, err, "list the runs of item 12")
 
 	// Outside a workflow the run id is empty: hold a trusted claim under it, so the guard on the phase start passes.
