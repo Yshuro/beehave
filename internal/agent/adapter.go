@@ -146,7 +146,8 @@ type Seen struct {
 
 // Adapter is one agent CLI. The runner calls Profile and, when the spec sets a guard, Guard before it starts a run.
 // Call order for one run: Profile, then Guard or Sandbox, before the CLI starts, then Line and Calls for each output line while it runs, then TranscriptPath after it ends.
-// Line and Calls never see a line of an earlier run, and TranscriptPath needs the session id that Line returned.
+// Line and Calls never see a line of an earlier run, and TranscriptPath needs the session id that Line returned. A start that follows a lost run also
+// calls TranscriptPath before the CLI starts, with the session that Line returned in the lost run.
 // ReadUsage runs outside a run, when the pool or the doctor asks for the usage of one runner of this agent.
 type Adapter interface {
 	// Profile returns the command line and the login variables of the CLI.
@@ -165,6 +166,7 @@ type Adapter interface {
 	// the dollars, the caller for the calls), so a call that keeps state for a line must not change what a later reader gets for it in any field but
 	// Seen.Spent. The runner reads Seen.Spent once for each line; no other reader does, so a dedupe of the dollars by message id is allowed.
 	Calls(line string) Seen
-	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Nothing reads the file.
+	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Before a start that follows
+	// a lost run, the agents resume the session of that run only when the file exists, and they do not read it.
 	TranscriptPath(configDir, dir, session string) string
 }

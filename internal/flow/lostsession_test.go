@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -49,6 +50,13 @@ func TestPhase_TheSessionIdIsSavedAsAnEventWhileTheAgentRuns(t *testing.T) {
 		return err == nil && session == "s-lost"
 	})
 	assert.Equal(t, 1, harness.agents.running(), "the phase holds the session id while the agent still runs")
+
+	// The log line follows the write, so it too comes soon after the event.
+	eventually(t, func() bool {
+		log, err := os.ReadFile(filepath.Join(harness.opts.StateDir, logFileName))
+
+		return err == nil && strings.Contains(string(log), `msg="saved the session of the agent" item=`+testItem+" session=s-lost\n")
+	})
 
 	close(harness.agents.gate)
 	require.NoError(t, (<-done).err)
@@ -262,6 +270,7 @@ func TestSaveSession_AWriteThatFailsIsLoggedAndTheRunGoesOn(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, string(log), "cannot save the session of the agent")
 	assert.Contains(t, string(log), "session=s-1")
+	assert.NotContains(t, string(log), "saved the session of the agent", "a refused write is no save")
 }
 
 func TestSessionSaver_ANewIdNeverWaitsForAStoreThatBlocksAndTheNewestIdIsWrittenLast(t *testing.T) {

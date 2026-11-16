@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -254,21 +255,26 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 type e2eAgents struct{ dir, path string }
 
 // It describes the run as the real agents do: the session from the output of the program, the skill calls from the tool_use lines that it printed.
+// A start after a lost run resumes its session or adds the note, as the real agents decide it.
 func (a e2eAgents) Run(ctx context.Context, request flow.AgentRequest) (agent.Result, error) {
-	prompt := "login=" + request.Login + "\n" + request.Prompt
-	env := map[string]string{"PATH": a.path}
 	adapter := newAdapters(nil, nil, nil).agent(claude.Name)
 	runner := model.Runner{Name: request.Login, Agent: claude.Name, ConfigDir: a.dir}
+	request, resumed := replayOf(request, runner, a.dir, adapter)
+	prompt := "login=" + request.Login + "\n" + request.Prompt
+	env := map[string]string{"PATH": a.path}
 	tap := newSessionTap(adapter, agent.DefaultPrices(), request.Named)
 	protect := protectionOf(request.Protect, a.dir)
 
 	result := agent.Runner{}.Run(ctx, agent.Spec{
 		Adapter: adapter, Runner: runner,
-		Dir: a.dir, Prompt: prompt, Env: env, Log: tap, OnStart: request.Started, NoEdits: request.NoEdits,
+		Dir: a.dir, Prompt: prompt, Env: env, Log: tap, OnStart: request.Started, NoEdits: request.NoEdits, Resume: request.Resume,
 		Guard: agents{guard: guardCommand(os.Executable)}.guardFor(request.Forbid, protect),
 	})
 
-	return endOf(adapter, runner, a.dir, tap, result, request.Forbid, protect)
+	result, err := endOf(adapter, runner, a.dir, tap, result, request.Forbid, protect)
+	result.Resumed = resumed
+
+	return result, err
 }
 
 // The agent runs in the work folder of the script and sees no other variable than PATH.
@@ -284,11 +290,18 @@ const e2eClaude = `#!/bin/sh
 # The implement step also makes one Bash call for each line of the file cmds, when it exists.
 # When the file edit-file exists, the implement step writes edited.txt with the Write tool. As with the real claude in print mode,
 # the write is refused unless the start arguments hold --permission-mode acceptEdits: the fake adds a line to refused.log and prints the tool_result of the refusal.
+# When the file hang-session exists, the call that blocks first names the session of that file in an init line and writes the transcript of the session:
+# the prompt, under the transcript folder of the login. A call with --resume <id> adds its prompt to resumed.log.
+# A resumed call whose prompt names no step (the continue prompt) reads the prompt of the session from its transcript, as the real claude continues a session that holds its brief.
+# Each resumed call then adds "<step> --resume <id>" to resumes.log, with the flag and the id as it got them.
 hook=
 mode=
+resume=
+resumed=
 while [ $# -gt 0 ]; do
   if [ "$1" = --settings ]; then hook=$(printf '%s' "$2" | sed 's/.*"command":"\([^"]*\)".*/\1/'); fi
   if [ "$1" = --permission-mode ]; then mode=$2; fi
+  if [ "$1" = --resume ]; then resume=$2; resumed="$1 $2"; fi
   shift
 done
 write_call() {
@@ -313,6 +326,11 @@ bash_call() {
 }
 prompt=$(cat)
 field() { printf '%s\n' "$prompt" | sed -n "s/^$1=//p"; }
+if [ -n "$resume" ]; then
+  printf '%s\n' "$prompt" >> resumed.log
+  if [ -z "$(field step)" ]; then prompt=$(cat "%TRANSCRIPTS%/$resume.jsonl"); fi
+  echo "$(field step) $resumed" >> resumes.log
+fi
 step=$(field step)
 echo "$step $(field round) $(field login) $(field ruling)" >> calls.log
 seen=$(field seen)
@@ -322,6 +340,12 @@ if [ -n "$found" ]; then echo "$step: $found" >> found.log; fi
 # A prompt that carries a found value also adds all its lines, from that value to the end, to findings.log.
 if [ -n "$found" ]; then printf '%s\n' "$prompt" | sed -n '/^found=/,$p' >> findings.log; fi
 if [ -e hang ] && [ "$step" = "$(cat hang)" ] && [ ! -e started ]; then
+  if [ -e hang-session ]; then
+    session=$(cat hang-session)
+    echo '{"type":"system","subtype":"init","session_id":"'"$session"'"}'
+    mkdir -p "%TRANSCRIPTS%"
+    printf '%s\n' "$prompt" > "%TRANSCRIPTS%/$session.jsonl"
+  fi
   : > started
   exec sleep 300
 fi
@@ -356,7 +380,7 @@ if [ "$step" = fix ]; then
     bash_call "toolu_fix$n" "git add -A"
   fi
 fi
-echo '{"type":"result","session_id":"s1","result":"done"}'
+echo '{"type":"result","session_id":"'"${resume:-s1}"'","result":"done"}'
 `
 
 // e2eLogins picks the runner "a" of the config, so no script reads the usage of a login.
@@ -433,11 +457,15 @@ func e2eSetup(env *testscript.Env) error {
 		return err
 	}
 
+	// The fake claude keeps a transcript where the adapter looks for it: the agent of the scripts runs in the work folder with the work folder as its login folder.
+	transcripts := filepath.Dir(newAdapters(nil, nil, nil).agent(claude.Name).TranscriptPath(work, work, "session"))
+	fake := strings.NewReplacer("%SKILL%", skill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
+
 	files := map[string]struct {
 		text string
 		mode os.FileMode
 	}{
-		"bin/claude":                {strings.ReplaceAll(e2eClaude, "%SKILL%", skill), e2eScriptMode},
+		"bin/claude":                {fake, e2eScriptMode},
 		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), e2eFileMode},
 		"config/projects/shop.star": {e2eProject, e2eFileMode},
 	}
@@ -519,6 +547,22 @@ func cmdWaitFile(ts *testscript.TestScript, _ bool, args []string) {
 	})
 }
 
+// cmdWaitSession is "waitsession <id>": it waits until the log of the engine, flow.log in the state folder, says that the engine saved the session id.
+// The engine saves the id on a goroutine of its own after the agent names it, so a kill that only waits for the agent could come before the save.
+func cmdWaitSession(ts *testscript.TestScript, _ bool, args []string) {
+	if len(args) != 1 {
+		ts.Fatalf("usage: waitsession <id>")
+	}
+
+	waitFor(ts, "the engine to save the session "+args[0], func() bool {
+		text, err := os.ReadFile(filepath.Join(ts.Getenv("BEEHAVE_STATE_DIR"), "flow.log"))
+
+		return err == nil && slices.ContainsFunc(strings.Split(string(text), "\n"), func(line string) bool {
+			return strings.Contains(line, `msg="saved the session of the agent"`) && strings.HasSuffix(line, " session="+args[0])
+		})
+	})
+}
+
 // cmdWaitStatus is "waitstatus <text>": it runs beehave status until the output holds the text.
 func cmdWaitStatus(ts *testscript.TestScript, _ bool, args []string) {
 	if len(args) != 1 {
@@ -559,7 +603,7 @@ func TestScripts(t *testing.T) {
 		Dir:   "testdata/e2e",
 		Setup: e2eSetup,
 		Cmds: map[string]func(*testscript.TestScript, bool, []string){
-			"waitfile": cmdWaitFile, "waitstatus": cmdWaitStatus,
+			"waitfile": cmdWaitFile, "waitstatus": cmdWaitStatus, "waitsession": cmdWaitSession,
 			"example": cmdExample, "script": cmdScript, "subst": cmdSubst, "isolate": isolateFunc(tools), "exitcode": cmdExitCode, "noclaims": cmdNoClaims, "mode": cmdMode,
 			"swarmfakes": cmdSwarmFakes, "batchsetup": cmdBatchSetup, "replace": cmdReplace, "serve": cmdServe, "fakeclaude": cmdFakeClaude, "deskfakes": cmdDeskFakes, "deskinit": cmdDeskInit,
 			"incidentfakes": cmdIncidentFakes, "incidentinit": cmdIncidentInit, "maintfakes": cmdMaintFakes, "maintinit": cmdMaintInit,
