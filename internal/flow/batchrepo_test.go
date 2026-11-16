@@ -10,12 +10,14 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/batch"
+	"github.com/tobocop2/beehave/internal/host"
 	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
 )
@@ -278,16 +280,53 @@ type treeGate struct {
 	noSteps bool
 	// void, when set, makes the gate answer as a voided gate does: it did not run, and every step is unknown.
 	void bool
+	// submits counts the host jobs that the gate started: each Submit, and each Run with no job, which submits its own job as the real gate does.
+	submits atomic.Int32
+	// lose is the number of the first waits that end as lost. jobs are the host jobs that Run was given, in order.
+	lose int
+	jobs []GateJob
+	// started, when set, gets one signal from the first wait, which then blocks until its context ends.
+	started chan struct{}
 }
 
-func (*treeGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
-	return GateJob{}, nil
+func (g *treeGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+	return GateJob{ID: fmt.Sprintf("job-%d", g.submits.Add(1))}, nil
 }
 
-func (g *treeGate) Run(ctx context.Context, _, _, host string, _ GateJob) (GateResult, error) {
+// submitted counts the host jobs that the gate started.
+func (g *treeGate) submitted() int {
+	return int(g.submits.Load())
+}
+
+// waitedOn lists the host jobs that Run was given, in order.
+func (g *treeGate) waitedOn() []GateJob {
 	g.mu.Lock()
-	g.hosts = append(g.hosts, host)
+	defer g.mu.Unlock()
+
+	return slices.Clone(g.jobs)
+}
+
+func (g *treeGate) Run(ctx context.Context, _, _, cluster string, job GateJob) (GateResult, error) {
+	if job.ID == "" {
+		g.submits.Add(1)
+	}
+
+	g.mu.Lock()
+	g.hosts = append(g.hosts, cluster)
+	g.jobs = append(g.jobs, job)
+	wait, lost := len(g.jobs), len(g.jobs) <= g.lose
 	g.mu.Unlock()
+
+	if wait == 1 && g.started != nil {
+		g.started <- struct{}{}
+		<-ctx.Done()
+
+		return GateResult{}, ctx.Err()
+	}
+
+	if lost {
+		return GateResult{}, fmt.Errorf("job %s: no read of the job answered for 10m0s: %w. %s", job.ID, host.ErrLost, lostAdvice)
+	}
 
 	tree := strings.TrimSpace(g.repo.Run(ctx, []string{"rev-parse", "HEAD^{tree}"}).Stdout)
 	head := strings.TrimSpace(g.repo.Run(ctx, []string{"rev-parse", "HEAD"}).Stdout)

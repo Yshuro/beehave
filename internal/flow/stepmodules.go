@@ -40,7 +40,9 @@ const agentVersion = 3
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
-const landVersion = 3
+// Version 4 records the host job of the project gate of a batch in its own step (batch_gate:job) before the gate waits, records a lost job
+// that has a proof in the item run (batch:<call>.gate#<n>/host-loss, and @2 for the rerun), and adds host_loss and host_losses to the result of batch_merge.
+const landVersion = 4
 
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step.
 const forgeVersion = 2
@@ -83,7 +85,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core3.agent3.tracker1.forge2.land3.gate4.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core3.agent3.tracker1.forge2.land4.gate4.host1.round1.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

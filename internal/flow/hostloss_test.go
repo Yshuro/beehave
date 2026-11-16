@@ -3,6 +3,7 @@ package flow
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,14 +15,20 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-// lostTwiceFlow is a parent that spawns item 21 and then item 22, one after the other. The gate of each child runs on the host gpu-b.
-const lostTwiceFlow = `def worker(item):
+// lostTreeFlow is a parent with three children, one after the other. The gate of items 21 and 22 runs on the host gpu-b, and item 23 lands
+// the pull requests that replace PRS with one batch_merge there.
+const lostTreeFlow = `def worker(item):
     host_up(name = "start", host = "gpu-b")
     gate(name = "check")
+
+def lander(item):
+    host_up(name = "start", host = "gpu-b")
+    batch_merge(prs = [PRS], base = "main", repo = "o/r", name = "b")
 
 def main(item):
     gather(spawn(items = ["21"], entry = "worker"), fail = "raise")
     gather(spawn(items = ["22"], entry = "worker"), fail = "raise")
+    gather(spawn(items = ["23"], entry = "lander"), fail = "raise")
 `
 
 // lastRunOf is the id of the last run of item.
@@ -82,22 +89,25 @@ func statusJSONOf(t *testing.T, h *harness, id string) map[string]any {
 func TestHostLoss_TheRootRunCountsLossesOfItsChildRuns(t *testing.T) {
 	t.Parallel()
 
-	h, hosts, _ := lostHarness(t, time.Hour)
-	hosts.proofs = []model.LostProof{{Kind: model.LostStopped}}
-	engine := h.engine(t)
+	// The gate loses the first three jobs: the gates of items 21 and 22, then the batch gate of item 23, whose rerun passes.
+	rig, _ := lostBatchRig(t, 3)
+	engine := rig.engine(t)
+	prs := `struct(item = "1", head = "` + rig.heads["1"] + `"), struct(item = "3", head = "` + rig.heads["3"] + `")`
 
-	_, err := engine.RunFile(testItem, testProject, writeFlow(t, lostTwiceFlow))
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, strings.Replace(lostTreeFlow, "PRS", prs, 1)))
 	require.NoError(t, err)
 
-	first, second := lastRunOf(t, engine, "21"), lastRunOf(t, engine, "22")
+	first, second, lander := lastRunOf(t, engine, "21"), lastRunOf(t, engine, "22"), lastRunOf(t, engine, "23")
 
 	assert.Contains(t, stepNamesOf(t, engine, first), "gate:check#1/host-loss", "the item run records the loss as its own step")
 	assert.Contains(t, stepNamesOf(t, engine, second), "gate:check#1/host-loss", "the item run records the loss as its own step")
+	assert.Contains(t, stepNamesOf(t, engine, lander), "batch:b.gate#1/host-loss", "the item run records the loss of the batch gate as its own step")
 	assert.EqualValues(t, 1, gateRecordOf(t, engine, first, "gate:check#1")[hostLossesKey], "the first loss of the tree")
 	assert.EqualValues(t, 2, gateRecordOf(t, engine, second, "gate:check#1")[hostLossesKey], "the second result counts the loss of the first child and its own")
+	assert.Equal(t, []string{"1", "3"}, rig.merger.landed(), "the batch gate ran again after the proof, and the batch landed")
 
-	for _, id := range []string{testRun, first, second} {
-		assert.EqualValues(t, 2, statusJSONOf(t, h, id)[hostLossesKey], "status of %s shows the losses of the tree of the run", id)
+	for _, id := range []string{testRun, first, second, lander} {
+		assert.EqualValues(t, 3, statusJSONOf(t, rig.h, id)[hostLossesKey], "status of %s shows the losses of the tree of the run", id)
 	}
 }
 
@@ -171,7 +181,7 @@ func TestHostLoss_AResumeAfterTheRecordKeepsTheRecordedCountAndWalksNoTree(t *te
 
 	// The run records the loss, then fails as a run that stops after the step. Between the failure and the resume, every read of the tree fails.
 	loss := func(ctx dbos.Context, in ItemInput) (int, error) {
-		outputs, err := counting.recordLoss(ctx, in.Item, "gate:check#1", voidOutputs(LostJob{Kind: kindGate, Job: "job-1", Host: "gpu-b"}))
+		record, err := counting.recordLoss(ctx, in.Item, "gate:check#1", LostJob{Kind: kindGate, Job: "job-1", Host: "gpu-b"})
 		if err != nil {
 			return 0, err
 		}
@@ -180,12 +190,7 @@ func TestHostLoss_AResumeAfterTheRecordKeepsTheRecordedCountAndWalksNoTree(t *te
 			return 0, errors.New("the run stopped after the record of the loss")
 		}
 
-		count, isCount := outputs[hostLossesKey].(int)
-		if !isCount {
-			return 0, errors.New("the count of the replayed record is not an int")
-		}
-
-		return count, nil
+		return record.Losses, nil
 	}
 
 	dbos.RegisterWorkflow(engine.ctx, loss, dbos.WithWorkflowName(itemName))
@@ -219,7 +224,7 @@ func TestHostLoss_TheRecordAndTheCountFailOutsideARun(t *testing.T) {
 
 	engine := idleEngine(t, newHarness(t))
 
-	_, err := engine.recordLoss(engine.ctx, testItem, "gate:check#1", voidOutputs(LostJob{Kind: kindGate, Job: "job-1", Host: "gpu-b"}))
+	_, err := engine.recordLoss(engine.ctx, testItem, "gate:check#1", LostJob{Kind: kindGate, Job: "job-1", Host: "gpu-b"})
 
 	require.ErrorContains(t, err, "record the lost job of the gate: ")
 

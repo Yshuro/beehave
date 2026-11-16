@@ -28,6 +28,8 @@ const (
 	gateJobName = "gate:job"
 	// gateReuseName is the step that reuses an earlier pass before a gate that runs on a build host waits for the host.
 	gateReuseName = "gate:reuse"
+	// batchGateJobName is the step that checks out the union commit of a batch gate and records its tree and its host job before the gate waits.
+	batchGateJobName = "batch_gate:job"
 
 	kindGate      = "gate"
 	kindMerge     = "merge"
@@ -73,7 +75,7 @@ type ExclusiveOutput struct {
 	Key string `json:"key,omitempty"`
 	// Project is the project of a run that holds a Key; the lookup reads a pass only from a run of the same project.
 	Project string `json:"project,omitempty"`
-	// Lost is the host job of a gate whose wait ended as lost, after the wait for its proof. It is nil for every other run.
+	// Lost is the host job of a gate or a batch gate whose wait ended as lost, after the wait for its proof. It is nil for every other run.
 	Lost *LostJob `json:"lost,omitempty"`
 }
 
@@ -162,9 +164,7 @@ func (e *Engine) runCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutp
 			return e.deps.Merge.Merge(c, in.Project, in.Item, in.Head, in.Settings)
 		})
 	case kindBatchGate:
-		out.Batch, err = runStep(e, ctx, kindBatchGate, func(c context.Context) (batch.GateOutcome, error) {
-			return e.batchGateOutcome(c, in)
-		})
+		out.Batch, err = e.batchGateCall(ctx, in, out)
 	case kindCommand:
 		out.Command, err = runStep(e, ctx, kindCommand, func(c context.Context) (CommandOutput, error) { return e.deps.Commands.Run(c, in.Request) })
 	default:

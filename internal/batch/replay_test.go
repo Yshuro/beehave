@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,6 +35,18 @@ func TestRun_TheRecordedGateInputHoldsTheTreeOfTheUnion(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.store.data["batch:q.gate#1"], &env))
 
 	assert.Equal(t, "t:a", env.Input.Tree, "a gate record names the union it gated")
+}
+
+func TestRun_EachGateIsGivenTheNameOfItsOwnStep(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.bad = func(items []string) bool { return slices.Contains(items, "b") }
+
+	_, err := Run(context.Background(), w.deps(), members("a", "b"))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"batch:q.gate#1", "batch:q.gate#2"}, w.gateSteps, "the gate of the union, then the gate of a half, each under the name of its own step")
 }
 
 func TestRun_RecordedGateOutputWithAnotherTreeFailsOnReplay(t *testing.T) {

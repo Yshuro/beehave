@@ -477,11 +477,21 @@ A value of another type fails the step and names the value. An environment name 
 
 `approved` is an optional bool of each member, and a member that leaves it out is not approved. It is the `approved` of `merge` for that member only: a pull request of an `own` identity merges only when its own member sets `approved = True`. The call has no `approved` of its own, so the approval of one member never reaches another. A value that is not a bool fails the call and names the field.
 
-It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note` and `unproven`.
+It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note`, `unproven`, `host_loss` and `host_losses`.
 
 - Each entry of `rejected` and `deferred` has `item` and `reason`. For a member that a merge guard refused, the reason is every line of that refusal, one per line. No line of it matches a pattern of `forbid_text`, with each line tested as the posting steps test it, so a step can post it with the same `forbid_text`. This holds only for patterns that do not match the words of beehave itself, such as "left out".
 - Each entry of `unproven` has `item` and `reason`. An item of `merged` that `unproven` names has not landed.
 - `findings` holds one line for each finding. `note` says why no read ran (see below).
+- `host_loss` lists one record for each lost gate job of the call, in the shape of the `gate` record, with `kind` `batch_gate` and the union commit in `head_or_commit`. It is an empty list when the call lost nothing.
+- `host_losses` is the count of the host losses in the item tree that the last record of the call read. It is 0 when the call lost nothing.
+
+#### A lost batch gate job
+
+The project gate of the union is two steps in its host job run: `batch_gate:job` checks out the union commit and records the tree and the host job, then `batch_gate` waits for that job. A restart during the wait waits on the recorded job and submits none. A `gate_run` program has no host job and stays one step, `batch_gate`.
+
+- When the wait ends as lost, the host job run waits for a proof as the `gate` call does. See "The wait for a proof" in [hosts.md](hosts.md). With no proof at `host.lost_job_wait`, the item run asks the owner.
+- After a proof, the item run records the loss as the step `batch:<name>.gate#<n>/host-loss`, then gates the same commit once more. The rerun records its own loss as `batch:<name>.gate#<n>@2/host-loss`. The batch counts one gate in `gates`.
+- A second proven loss in one call fails the call with "the gate gave no result". The error names the host and both proofs. No member is rejected or deferred. The call returns no result, so `beehave status <run id> --json` holds the count.
 
 - `name` is required, and each call of a run needs its own.
 - The union is gated in the worktree of the item that runs the workflow.

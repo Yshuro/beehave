@@ -56,9 +56,11 @@ type Git interface {
 }
 
 // GateInput is the union to gate. The gate checks out Commit, and Tree is the tree id of that commit.
+// Step is the name of the gate step of the batch, batch:<name>.gate#<n>, which is unique in the call. A gate that records steps of its own names them after it.
 type GateInput struct {
 	Commit string
 	Tree   string
+	Step   string
 }
 
 // ErrGateVoid is a gate that gave no result about the code, for example when a pinned tool is at another version.
