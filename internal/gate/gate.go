@@ -639,7 +639,7 @@ func plainWord(word string) bool {
 // A trap on exit, hang-up, interrupt and terminate writes the marker line and then deletes the folder by its literal path, so the result
 // is written first and the folder goes whether the gate passes, fails or is stopped. The exit status of the gate is kept.
 // When the host has a run limit (`host.max_run`), the gate command runs under `timeout` with that limit, so a hung step ends the job
-// with exit status 124 and the trap still writes the marker and deletes the clone.
+// with exit status 124 and the trap still writes the marker and deletes the clone. A run limit under one second gets no wrap.
 // A clone or checkout that fails, as it does for a commit that is not pushed, ends the command with a failure before the gate runs.
 func hostCommand(project model.Project, pins []Pin, cloneURL, head, clone, base string) string {
 	words := cloneWords(cloneURL, head, clone)
@@ -756,7 +756,8 @@ func globWord(glob string) string {
 // literalRun matches a run of glob text with no wildcard.
 var literalRun = regexp.MustCompile(`[^*?\[\]]+`)
 
-// limited puts command under `timeout` with the run limit of the host, when the project has a host block.
+// limited puts command under `timeout` with the run limit of the host, when the project has a host block. A run limit under one second
+// gets no wrap, because the limit is written in whole seconds.
 func limited(project model.Project, command string) string {
 	if project.Host == nil || project.Host.MaxRun < time.Second {
 		return command

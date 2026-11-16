@@ -2,7 +2,7 @@ package flow
 
 import (
 	"errors"
-	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -235,6 +235,15 @@ func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing
 
 	var looks []string
 
+	// The names that holdForCaps builds: the agent step name, "/budget", the try, a dot and the look. Try 1 is the first try of each step.
+	lookNames := map[string]bool{}
+
+	for _, step := range []string{"agent:a#1", "agent:b#2", "agent:c#3"} {
+		for look := range 10 {
+			lookNames[step+"/budget1."+strconv.Itoa(look)] = true
+		}
+	}
+
 	eventually(t, func() bool {
 		records, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
 		if err != nil {
@@ -244,7 +253,7 @@ func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing
 		looks = looks[:0]
 
 		for _, record := range records {
-			if strings.Contains(record.StepName, "/budget") {
+			if lookNames[record.StepName] {
 				looks = append(looks, record.StepName)
 			}
 		}
