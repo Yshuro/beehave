@@ -359,7 +359,7 @@ func (f flowCommands) ownEngine(stdout, stderr io.Writer, cfg config.Config, opt
 	// The engine writes the start of the run and the start and end of each step to stderr, so that stdout keeps the result lines.
 	opts.Progress = stderr
 
-	err := f.runOnEngine(stdout, cfg, opts, item, project, file)
+	err := f.runOnEngine(stdout, stderr, cfg, opts, item, project, file)
 	if !errors.Is(err, flow.ErrStateBusy) {
 		return err
 	}
@@ -413,7 +413,7 @@ func (f flowCommands) joinEngine(stdout, stderr io.Writer, client Steering, item
 }
 
 // runOnEngine opens the engine, runs the item on it and shuts it down.
-func (f flowCommands) runOnEngine(stdout io.Writer, cfg config.Config, opts flow.Options, item, project, file string) error {
+func (f flowCommands) runOnEngine(stdout, stderr io.Writer, cfg config.Config, opts flow.Options, item, project, file string) error {
 	engine, err := f.factory.Engine(f.ctx, cfg, opts)
 	if err != nil {
 		return err
@@ -423,7 +423,17 @@ func (f flowCommands) runOnEngine(stdout io.Writer, cfg config.Config, opts flow
 		return errors.Join(err, engine.Shutdown())
 	}
 
-	return errors.Join(f.continueOrStart(stdout, engine, item, project, file), engine.Shutdown())
+	runErr := f.continueOrStart(stdout, engine, item, project, file)
+
+	// The shutdown waits for a start that waits for the store. A second interrupt ends the command during that wait.
+	downErr := stopOnSecondInterrupt(engine, stderr)
+
+	var exit *ExitError
+	if errors.As(downErr, &exit) {
+		return downErr
+	}
+
+	return errors.Join(runErr, downErr)
 }
 
 func (f flowCommands) continueOrStart(stdout io.Writer, engine Runner, item, project, file string) error {
