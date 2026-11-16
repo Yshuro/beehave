@@ -363,6 +363,14 @@ func TestCheckTranscript(t *testing.T) {
 
 		return a
 	}
+	option := func(resume func(id string) []string) fakeAdapter {
+		a := resumes(nil)
+		a.profile.Resume = resume
+
+		return a
+	}
+
+	const unnamed = "does not name the session"
 
 	cases := []struct {
 		name    string
@@ -389,31 +397,45 @@ func TestCheckTranscript(t *testing.T) {
 			a.profile.Resume = func(string) []string { return []string{"--continue"} }
 
 			return a
-		}(), "does not name the session"},
+		}(), unnamed},
 		{"a_resume_option_with_the_file_name_of_the_session", func() fakeAdapter {
 			a := resumes(nil)
 			a.profile.Resume = func(id string) []string { return []string{"--resume", id + ".jsonl"} }
 
 			return a
-		}(), "does not name the session"},
+		}(), unnamed},
 		{"a_resume_option_with_a_prefix_on_the_session", func() fakeAdapter {
 			a := resumes(nil)
 			a.profile.Resume = func(id string) []string { return []string{"--resume", "ses_" + id} }
 
 			return a
-		}(), "does not name the session"},
+		}(), unnamed},
 		{"a_resume_option_of_one_token_with_the_file_name_of_the_session", func() fakeAdapter {
 			a := resumes(nil)
 			a.profile.Resume = func(id string) []string { return []string{"--resume=" + id + ".jsonl"} }
 
 			return a
-		}(), "does not name the session"},
+		}(), unnamed},
 		{"an_option_whose_value_after_the_first_equals_sign_is_not_the_session", func() fakeAdapter {
 			a := resumes(nil)
 			a.profile.Resume = func(id string) []string { return []string{"--a=b=" + id} }
 
 			return a
-		}(), "does not name the session"},
+		}(), unnamed},
+		{"a_resume_option_with_an_argument_after_the_session", option(func(id string) []string { return []string{"--resume", id, "--fork-session"} }), ""},
+		{"a_resume_option_with_the_session_in_another_case", option(func(id string) []string { return []string{"--resume", strings.ToUpper(id)} }), unnamed},
+		{"a_resume_option_of_one_token_with_the_session_in_another_case", option(func(id string) []string { return []string{"--resume=" + strings.ToUpper(id)} }), unnamed},
+		{"a_resume_option_with_a_space_before_the_session", option(func(id string) []string { return []string{"--resume", " " + id} }), unnamed},
+		{"a_resume_option_with_a_space_after_the_session", option(func(id string) []string { return []string{"--resume", id + " "} }), unnamed},
+		{"a_resume_option_of_one_token_with_a_space_before_the_session", option(func(id string) []string { return []string{"--resume= " + id} }), unnamed},
+		{"a_resume_option_of_one_token_with_a_space_after_the_session", option(func(id string) []string { return []string{"--resume=" + id + " "} }), unnamed},
+		{"a_resume_option_and_the_session_in_one_token_with_a_space", option(func(id string) []string { return []string{"--resume " + id} }), unnamed},
+		{"a_resume_option_of_one_token_with_quotation_marks_on_the_session", option(func(id string) []string { return []string{`--resume="` + id + `"`} }), unnamed},
+		{"a_resume_option_with_a_part_of_the_session", option(func(id string) []string { return []string{"--resume", id[:len(id)-1]} }), unnamed},
+		{"a_resume_option_of_one_token_with_a_part_of_the_session", option(func(id string) []string { return []string{"--resume=" + id[:len(id)-1]} }), unnamed},
+		{"the_session_with_the_dashes_of_an_option", option(func(id string) []string { return []string{"--" + id} }), unnamed},
+		{"an_option_with_no_name_before_the_equals_sign", option(func(id string) []string { return []string{"=" + id} }), unnamed},
+		{"an_option_with_dashes_and_no_name_before_the_equals_sign", option(func(id string) []string { return []string{"--=" + id} }), unnamed},
 	}
 
 	for _, tc := range cases {

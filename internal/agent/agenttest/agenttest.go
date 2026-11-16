@@ -97,11 +97,12 @@ func CheckTranscript(r Reporter, adapter agent.Adapter, dir string) {
 	checkTranscriptPath(r, adapter, dir)
 }
 
-// namesSession reports whether the argument is the session id, or a --opt=<id> token whose value after the first "=" is the session id.
+// namesSession reports whether the argument is the session id, or a --opt=<id> token whose value after the first "=" is the session id. A token with
+// only dashes before the "=" has no option name and does not count.
 func namesSession(arg string) bool {
-	_, value, _ := strings.Cut(arg, "=")
+	name, value, _ := strings.Cut(arg, "=")
 
-	return arg == session || value == session
+	return arg == session || (strings.TrimLeft(name, "-") != "" && value == session)
 }
 
 // checkTranscriptPath checks that the transcript of the session of the suite is a file inside the login folder dir, and that another session has another file.
