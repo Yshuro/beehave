@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/workflow/workflowtest"
@@ -162,4 +163,47 @@ func TestConformance_EachRowIsWellFormed(t *testing.T) {
 		require.Len(t, words, whereWords, "Where of %s is `<file> <builtin> <name>`", row.id)
 		require.True(t, have[row.where], "%s names the call `%s`, which the example does not hold", row.id, row.where)
 	}
+}
+
+var citedTest = regexp.MustCompile(`\bTest[A-Z]\w*`)
+
+// missingTests lists each test name that a line of the conformance text cites and that no `_test.go` file declares,
+// as "<row>: <name>". A line outside the table counts under the row "prose".
+func missingTests(text string, tests map[string]bool) []string {
+	var missing []string
+
+	for _, line := range strings.Split(text, "\n") {
+		row := "prose"
+
+		if strings.HasPrefix(line, "| ") {
+			row, _, _ = strings.Cut(strings.TrimPrefix(line, "| "), " |")
+		}
+
+		for _, name := range citedTest.FindAllString(line, -1) {
+			if !tests[name] {
+				missing = append(missing, row+": "+name)
+			}
+		}
+	}
+
+	return missing
+}
+
+func TestConformance_EveryTestNameThatAnyColumnCitesExists(t *testing.T) {
+	t.Parallel()
+
+	text, err := os.ReadFile(filepath.Join(exampleDir, "CONFORMANCE.md"))
+	require.NoError(t, err)
+
+	require.Empty(t, missingTests(string(text), testNames(t)), "each name is cited by a row and has no `func <name>(` in a `_test.go` file")
+}
+
+func TestConformance_ACitedNameThatNoTestDeclaresIsNamedWithItsRow(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]bool{"TestReal": true}
+
+	assert.Empty(t, missingTests("| S1-X-01 | rule | core | proven | - | TestReal | S1-X-01 |", tests))
+	assert.Equal(t, []string{"S1-X-01: TestMadeUp_ItIsNotThere"}, missingTests("| S1-X-01 | a (TestReal, TestMadeUp_ItIsNotThere) | core | proven | - | TestReal | S1-X-01 |", tests))
+	assert.Equal(t, []string{"prose: TestGone"}, missingTests("A line outside the table cites TestGone.", tests))
 }
