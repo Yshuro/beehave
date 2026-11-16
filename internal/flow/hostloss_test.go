@@ -2,6 +2,8 @@ package flow
 
 import (
 	"encoding/json"
+	"errors"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -11,9 +13,6 @@ import (
 
 	"github.com/tobocop2/beehave/internal/model"
 )
-
-// lossCount is the field of a gate result and of the status of a run that counts the host losses of the tree.
-const lossCount = "host_losses"
 
 // lostTwiceFlow is a parent that spawns item 21 and then item 22, one after the other. The gate of each child runs on the host gpu-b.
 const lostTwiceFlow = `def worker(item):
@@ -36,15 +35,15 @@ func lastRunOf(t *testing.T, engine *Engine, item string) string {
 	return last.Status.ID
 }
 
-// gateRecordOf is the recorded outputs of the gate call gate:check#1 of a run, as the record holds them.
-func gateRecordOf(t *testing.T, engine *Engine, id string) map[string]any {
+// gateRecordOf is the recorded outputs of the gate call of a run, as the record holds them.
+func gateRecordOf(t *testing.T, engine *Engine, id, call string) map[string]any {
 	t.Helper()
 
 	steps, err := dbos.GetWorkflowSteps(engine.ctx, id, dbos.WithStepsLoadOutput(true))
 	require.NoError(t, err)
 
 	for _, step := range steps {
-		if step.StepName != "gate:check#1" {
+		if step.StepName != call {
 			continue
 		}
 
@@ -58,7 +57,7 @@ func gateRecordOf(t *testing.T, engine *Engine, id string) map[string]any {
 		return gate.Outputs
 	}
 
-	t.Fatalf("the run %s has no gate call", id)
+	t.Fatalf("the run %s has no gate call %s", id, call)
 
 	return nil
 }
@@ -94,12 +93,125 @@ func TestHostLoss_TheRootRunCountsLossesOfItsChildRuns(t *testing.T) {
 
 	assert.Contains(t, stepNamesOf(t, engine, first), "gate:check#1/host-loss", "the item run records the loss as its own step")
 	assert.Contains(t, stepNamesOf(t, engine, second), "gate:check#1/host-loss", "the item run records the loss as its own step")
-	assert.EqualValues(t, 1, gateRecordOf(t, engine, first)[lossCount], "the first loss of the tree")
-	assert.EqualValues(t, 2, gateRecordOf(t, engine, second)[lossCount], "the second result counts the loss of the first child and its own")
+	assert.EqualValues(t, 1, gateRecordOf(t, engine, first, "gate:check#1")[hostLossesKey], "the first loss of the tree")
+	assert.EqualValues(t, 2, gateRecordOf(t, engine, second, "gate:check#1")[hostLossesKey], "the second result counts the loss of the first child and its own")
 
 	for _, id := range []string{testRun, first, second} {
-		assert.EqualValues(t, 2, statusJSONOf(t, h, id)[lossCount], "status of %s shows the losses of the tree of the run", id)
+		assert.EqualValues(t, 2, statusJSONOf(t, h, id)[hostLossesKey], "status of %s shows the losses of the tree of the run", id)
 	}
+}
+
+func TestHostLoss_TwoLossesOfOneRunCountOneThenTwo(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, _ := lostHarness(t, time.Hour)
+	hosts.proofs = []model.LostProof{{Kind: model.LostStopped}}
+	engine := h.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow("host_up(name = \"start\", host = \"gpu-b\")\ngate(name = \"first\")\ngate(name = \"second\")\n")))
+	require.NoError(t, err)
+
+	assert.Subset(t, stepNamesOf(t, engine, testRun), []string{"gate:first#1/host-loss", "gate:second#2/host-loss"}, "the run records each loss as its own step")
+	assert.EqualValues(t, 1, gateRecordOf(t, engine, testRun, "gate:first#1")[hostLossesKey], "the first loss of the run")
+	assert.EqualValues(t, 2, gateRecordOf(t, engine, testRun, "gate:second#2")[hostLossesKey], "the second loss counts the earlier loss of the same run once, and its own")
+	assert.EqualValues(t, 2, statusJSONOf(t, h, testRun)[hostLossesKey], "status counts each loss of the run once")
+}
+
+// treeReads is a context of the engine that counts the reads of runs and of steps once armed, and fails each of them.
+type treeReads struct {
+	dbos.Context
+
+	armed atomic.Bool
+	reads atomic.Int32
+}
+
+func (r *treeReads) read() error {
+	if !r.armed.Load() {
+		return nil
+	}
+
+	r.reads.Add(1)
+
+	return errors.New("the store failed")
+}
+
+func (r *treeReads) ListWorkflows(_ dbos.Client, opts ...dbos.ListWorkflowsOption) ([]dbos.WorkflowStatus, error) {
+	if err := r.read(); err != nil {
+		return nil, err
+	}
+
+	return dbos.ListWorkflows(r.Context, opts...)
+}
+
+func (r *treeReads) GetWorkflowSteps(_ dbos.Client, id string, opts ...dbos.GetWorkflowStepsOption) ([]dbos.StepInfo, error) {
+	if err := r.read(); err != nil {
+		return nil, err
+	}
+
+	return dbos.GetWorkflowSteps(r.Context, id, opts...)
+}
+
+func TestHostLoss_AResumeAfterTheRecordKeepsTheRecordedCountAndWalksNoTree(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	opts := rig.h.opts
+	state, err := openStore(opts)
+	require.NoError(t, err)
+
+	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
+	require.NoError(t, err)
+
+	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
+	require.NoError(t, engine.open(t.Context(), opts, state))
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	tree := &treeReads{Context: engine.ctx}
+	counting := &Engine{ctx: tree, redact: engine.redact}
+
+	// The run records the loss, then fails as a run that stops after the step. Between the failure and the resume, every read of the tree fails.
+	loss := func(ctx dbos.Context, in ItemInput) (int, error) {
+		outputs, err := counting.recordLoss(ctx, in.Item, "gate:check#1", voidOutputs(LostJob{Kind: kindGate, Job: "job-1", Host: "gpu-b"}))
+		if err != nil {
+			return 0, err
+		}
+
+		if !tree.armed.Load() {
+			return 0, errors.New("the run stopped after the record of the loss")
+		}
+
+		count, isCount := outputs[hostLossesKey].(int)
+		if !isCount {
+			return 0, errors.New("the count of the replayed record is not an int")
+		}
+
+		return count, nil
+	}
+
+	dbos.RegisterWorkflow(engine.ctx, loss, dbos.WithWorkflowName(itemName))
+	require.NoError(t, dbos.Launch(engine.ctx))
+
+	id := runID(testItem, 1)
+	handle, err := dbos.RunWorkflow(engine.ctx, loss, ItemInput{Item: testItem, Project: testProject}, dbos.WithWorkflowID(id))
+	require.NoError(t, err)
+
+	_, err = handle.GetResult(dbos.WithHandleTimeout(eventTimeout), dbos.WithHandlePollingInterval(storePoll))
+	require.ErrorContains(t, err, "the run stopped after the record of the loss")
+
+	steps, err := dbos.GetWorkflowSteps(engine.ctx, id)
+	require.NoError(t, err)
+	require.Equal(t, []string{"gate:check#1/host-loss"}, stepNamesOf(t, engine, id), "the run recorded the loss and nothing else")
+
+	tree.armed.Store(true)
+
+	// The rewind keeps every recorded step, as beehave resume does for a run that failed after them, so the run replays the record of the loss.
+	resumed, err := dbos.RewindWorkflow[int](engine.ctx, id, dbos.WithRewindStartStep(uint(len(steps))))
+	require.NoError(t, err)
+
+	count, err := resumed.GetResult(dbos.WithHandleTimeout(eventTimeout), dbos.WithHandlePollingInterval(storePoll))
+	require.NoError(t, err, "the replay reads the recorded count, so a tree that cannot be read does not fail it")
+	assert.Equal(t, 1, count, "the replay keeps the count that the step recorded")
+	assert.Zero(t, tree.reads.Load(), "the replay walks no tree")
 }
 
 func TestHostLoss_TheRecordAndTheCountFailOutsideARun(t *testing.T) {
@@ -142,8 +254,8 @@ func TestHostLoss_AGateThatLostNothingCountsNoneAndStatusOmitsTheCount(t *testin
 	_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow("gate(name = \"check\")\n")))
 	require.NoError(t, err)
 
-	outputs := gateRecordOf(t, engine, testRun)
-	assert.EqualValues(t, 0, outputs[lossCount], "a gate that lost nothing counts no loss")
+	outputs := gateRecordOf(t, engine, testRun, "gate:check#1")
+	assert.EqualValues(t, 0, outputs[hostLossesKey], "a gate that lost nothing counts no loss")
 	assert.Equal(t, map[string]any{}, outputs[hostLossKey])
-	assert.NotContains(t, statusJSONOf(t, h, testRun), lossCount, "status omits a count of 0")
+	assert.NotContains(t, statusJSONOf(t, h, testRun), hostLossesKey, "status omits a count of 0")
 }

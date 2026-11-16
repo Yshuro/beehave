@@ -156,7 +156,7 @@ func (e *Engine) treeRoot(ctx dbos.Context, item string) (string, error) {
 func runAndBelowSpend(ctx dbos.Client, id string) (agent.Spend, error) {
 	var spent agent.Spend
 
-	err := walkTree(ctx, id, func(records []dbos.StepInfo) {
+	err := walkTree(ctx, id, dbos.WithStepsLoadOutput(true), func(records []dbos.StepInfo) {
 		for _, line := range stepLines(records, "", false, time.Time{}) {
 			spent = spent.Plus(line.Spend)
 		}
@@ -166,9 +166,10 @@ func runAndBelowSpend(ctx dbos.Client, id string) (agent.Spend, error) {
 }
 
 // walkTree passes the step records of a run, and then of every item run below it, to fold. It is the one walk of an item tree:
-// the sum of the tree cap and the count of the host losses both fold over it. A read that fails ends the walk with its error.
-func walkTree(ctx dbos.Client, id string, fold func([]dbos.StepInfo)) error {
-	records, err := dbos.GetWorkflowSteps(ctx, id, dbos.WithStepsLoadOutput(true))
+// the sum of the tree cap and the count of the host losses both fold over it. load says whether the records hold the outputs of the steps.
+// A read that fails ends the walk with its error.
+func walkTree(ctx dbos.Client, id string, load dbos.GetWorkflowStepsOption, fold func([]dbos.StepInfo)) error {
+	records, err := dbos.GetWorkflowSteps(ctx, id, load)
 	if err != nil {
 		return fmt.Errorf("read the steps of %s: %w", id, err)
 	}
@@ -181,7 +182,7 @@ func walkTree(ctx dbos.Client, id string, fold func([]dbos.StepInfo)) error {
 	}
 
 	for _, child := range children {
-		if err := walkTree(ctx, child.ID, fold); err != nil {
+		if err := walkTree(ctx, child.ID, load, fold); err != nil {
 			return err
 		}
 	}
