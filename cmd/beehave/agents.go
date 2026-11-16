@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/tobocop2/beehave/internal/agent"
@@ -310,9 +311,33 @@ func withSession(adapter agent.Adapter, runner model.Runner, dir string, tap *se
 	return result, nil
 }
 
-// sessionOf adds the cap outcome and the session of a run to the result. A run that the runner ended at the budget cap may not have named a session: that is no error.
-func sessionOf(adapter agent.Adapter, runner model.Runner, dir string, tap *sessionTap, result agent.Result, stop agent.Stop, budgetCap bool) (agent.Result, error) {
-	if budgetCap {
+// limitedBy gives a run that exited the outcome, the limit and a note of the provider limit that refused more work, and reports whether a limit did.
+// The runner sets no note on a run that exited, so the note of the limit replaces none.
+// A run that timed out, was canceled or did not start keeps its outcome.
+func limitedBy(result agent.Result, limit *agent.Limit) (agent.Result, bool) {
+	if limit == nil || result.Outcome != agent.OutcomeExited {
+		return result, false
+	}
+
+	result.Outcome, result.Limit, result.Note = agent.OutcomeLimited, limit, limitNote(*limit)
+
+	return result, true
+}
+
+// limitNote says which provider limit refused more work and when it resets.
+func limitNote(limit agent.Limit) string {
+	name := strings.TrimSpace(string(limit.Kind) + " limit " + limit.Window)
+	if limit.ResetsAt.IsZero() {
+		return "the provider refused more work at its " + name + ", and the agent gave no reset time"
+	}
+
+	return fmt.Sprintf("the provider refused more work at its %s until %s", name, limit.ResetsAt.Format(time.RFC3339))
+}
+
+// sessionOf adds the cap outcome and the session of a run to the result. A run that the runner ended at the budget cap, or that a provider limit stopped,
+// has its outcome already (ended) and may not have named a session: that is no error.
+func sessionOf(adapter agent.Adapter, runner model.Runner, dir string, tap *sessionTap, result agent.Result, stop agent.Stop, ended bool) (agent.Result, error) {
+	if ended {
 		result, err := withSession(adapter, runner, dir, tap, result)
 		if errors.Is(err, errNoSession) {
 			err = nil
@@ -329,7 +354,8 @@ func sessionOf(adapter agent.Adapter, runner model.Runner, dir string, tap *sess
 	return withSession(adapter, runner, dir, tap, result)
 }
 
-// describe adds the session, the transcript path, the last message, the skill calls and the violations of the forbidden kinds to the result of a run that exited with code 0, or that the runner ended at the budget cap.
+// describe adds the session, the transcript path, the last message, the skill calls and the violations of the forbidden kinds to the result of a run that exited with code 0,
+// that the runner ended at the budget cap, or that a provider limit stopped.
 // It reads them from the output lines that the tap kept. The violations are the second line of defense: the hook of the run refuses a forbidden command before the call.
 func describe(adapter agent.Adapter, runner model.Runner, dir string, tap *sessionTap, result agent.Result, forbid []model.FindingKind, protect shell.Protection) (agent.Result, error) {
 	// The result line says whether a cap stopped the run. The CLI may exit with any code then, so the stop decides, not the exit code.
@@ -337,12 +363,14 @@ func describe(adapter agent.Adapter, runner model.Runner, dir string, tap *sessi
 	// The runner ends a run as a budget cap when the dollars on the output pass the cap, or when a capped run reported none. The cap is an outcome: the run
 	// still produced a session, a message and commands, and the violations check must see them. The run may have been killed before it named a session.
 	budgetCap := result.Outcome == agent.OutcomeBudgetCap
+	// A provider limit is an outcome in the same way, whatever the exit code, and its error result is no failure of the agent.
+	result, limited := limitedBy(result, tap.limited())
 
-	if !budgetCap && (result.Outcome != agent.OutcomeExited || (result.ExitCode != 0 && stop == "")) {
+	if !budgetCap && !limited && (result.Outcome != agent.OutcomeExited || (result.ExitCode != 0 && stop == "")) {
 		return result, nil
 	}
 
-	result, err := sessionOf(adapter, runner, dir, tap, result, stop, budgetCap)
+	result, err := sessionOf(adapter, runner, dir, tap, result, stop, budgetCap || limited)
 	if err != nil {
 		return result, err
 	}
@@ -399,6 +427,8 @@ type sessionTap struct {
 	ended            bool
 	stop             agent.Stop
 	failed           string
+	// limit is the first provider limit that a line reported.
+	limit *agent.Limit
 	// cost is the total cost in dollars of the last result line that reported one.
 	cost float64
 	// usage is the sum of the tokens that the lines reported.
@@ -453,12 +483,21 @@ func (t *sessionTap) see(line string) {
 		t.refused[id] = true
 	}
 
-	t.ended = t.ended || seen.Result
-	t.stop, t.failed = cmp.Or(seen.Stop, t.stop), cmp.Or(seen.Failed, t.failed)
+	t.addEnd(seen)
 	t.addCost(seen)
 
 	if seen.Invalid {
 		t.invalid++
+	}
+}
+
+// addEnd records how one line says the run ended: the result line, its cap, its error, and the first provider limit. The caller holds the lock.
+func (t *sessionTap) addEnd(seen agent.Seen) {
+	t.ended = t.ended || seen.Result
+	t.stop, t.failed = cmp.Or(seen.Stop, t.stop), cmp.Or(seen.Failed, t.failed)
+
+	if t.limit == nil {
+		t.limit = seen.Limit
 	}
 }
 
@@ -541,6 +580,19 @@ func (t *sessionTap) stopped() agent.Stop {
 	defer t.mu.Unlock()
 
 	return t.stop
+}
+
+// limited returns the first provider limit that the output reported, or nil when it reported none or the run went on to a result line with no error.
+// A result line with no error is a success or a cap: the CLI took more work after the limit, so the limit did not stop the run.
+func (t *sessionTap) limited() *agent.Limit {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.ended && t.failed == "" {
+		return nil
+	}
+
+	return t.limit
 }
 
 // failure returns the error subtype that the result line reported, or "" when it reported none.

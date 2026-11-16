@@ -65,6 +65,19 @@ The adapter reads the calls from the stream-json lines on stdout, which the runn
 
 The shape is the one of the Claude Code headless page (https://code.claude.com/docs/en/headless). The shell rules live in `check/shell` (see [Shell rules and the job check](#shell-rules-and-the-job-check)).
 
+### How the adapter reads a provider limit
+
+A rate limit or a spend limit of the provider ends a run with the outcome `limited`, not as a failed run. The adapter reads the limit from the stream, as the CLI reports it:
+
+- A `rate_limit_event` line with `rate_limit_info.status` set to `rejected` is a limit. The status `allowed` or `allowed_warning` is no limit.
+- The limit is a spend limit when `isUsingOverage` is true and `overageStatus` is `rejected`. Otherwise it is a rate limit.
+- `rateLimitType` names the window. `resetsAt` is the reset time in Unix seconds. A spend limit resets at the earlier of `resetsAt` and `overageResetsAt`, because either reset lets work start again.
+- An assistant line with `error` set to `rate_limit` is a rate limit with no reset time.
+
+The runner keeps the first limit of the run. The run is limited only if the run did not go on to a result line with no error: a success or a cap after the limit means the CLI took more work. A limited run keeps its session, its message and its violations, whatever the exit code. Its note names the limit and the reset time. A run that timed out or was canceled keeps that outcome.
+
+The engine still fails a limited agent step. The wait for the reset is a later change.
+
 ### The setting forbid_commands
 
 The setting `forbid_commands` of an `agent` step is a list of finding kinds. A step that sets it installs a hook before the call, and scans the calls after the run. A step with no `forbid_commands` installs no hook and records no violation.

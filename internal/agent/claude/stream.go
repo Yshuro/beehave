@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
@@ -22,11 +23,17 @@ const (
 	toolResult    = "tool_result"
 	hookRefusal   = "PreToolUse:"
 	streamCommand = "the claude output"
+	// rateLimitEvent is the line on which the CLI reports the state of the plan limits. limitRejected is its status when the provider refused the request.
+	rateLimitEvent = "rate_limit_event"
+	limitRejected  = "rejected"
+	// rateLimitError is the error of an assistant line that the CLI writes when the provider refused the request at a limit.
+	rateLimitError = "rate_limit"
 )
 
 // Calls reads one stream-json line.
 // It returns the Bash calls of the line with their tool_use ids (at any depth), the Skill calls of an assistant line, and the ids of the calls that a PreToolUse hook refused.
 // A hook refusal is the tool_result of a call, with is_error set and a text that starts with "PreToolUse:"; the call never ran.
+// It also returns the rate limit or spend limit that the line reports as the reason the provider refused the request.
 // A line that is not valid JSON is Invalid and holds no call.
 func (Adapter) Calls(line string) agent.Seen {
 	if strings.TrimSpace(line) == "" {
@@ -46,7 +53,69 @@ func (Adapter) Calls(line string) agent.Seen {
 		Skills:  skillNames(value),
 		Refused: refusedIDs(value),
 		Result:  lineType(value) == resultType,
+		Limit:   limitOf(value),
 	}
+}
+
+// limitOf returns the provider limit that a line reports as the reason the CLI refused more work, or nil.
+// A rate_limit_event reports one when its status is rejected. An assistant line with the error rate_limit reports one with no reset time.
+func limitOf(value any) *agent.Limit {
+	line, isObject := value.(map[string]any) // a line that is not an object reports no limit
+	if !isObject {
+		return nil
+	}
+
+	switch line["type"] {
+	case rateLimitEvent:
+		if info, hasInfo := line["rate_limit_info"].(map[string]any); hasInfo { // the JSON shape is untyped
+			return rejectedLimit(info)
+		}
+	case assistantType:
+		if line["error"] == rateLimitError {
+			return &agent.Limit{Kind: agent.LimitRate}
+		}
+	}
+
+	return nil
+}
+
+// rejectedLimit returns the limit of the rate_limit_info of an event, or nil when the info does not refuse the request.
+// The limit is a spend limit when the run was spending past its plan and that spend is refused too. The provider then takes work again at the earlier of
+// the reset of the plan window and the reset of the spend.
+func rejectedLimit(info map[string]any) *agent.Limit {
+	if info["status"] != limitRejected {
+		return nil
+	}
+
+	limit := &agent.Limit{Kind: agent.LimitRate, ResetsAt: unixTime(info["resetsAt"])}
+	if window, named := info["rateLimitType"].(string); named { // the JSON shape is untyped
+		limit.Window = window
+	}
+
+	if info["overageStatus"] == limitRejected && info["isUsingOverage"] == true {
+		limit.Kind, limit.ResetsAt = agent.LimitSpend, earlier(limit.ResetsAt, unixTime(info["overageResetsAt"]))
+	}
+
+	return limit
+}
+
+// unixTime returns the time of a count of Unix seconds, or the zero time for a value that is no number above 0.
+func unixTime(value any) time.Time {
+	seconds, isNumber := value.(float64) // the JSON shape is untyped
+	if !isNumber || seconds <= 0 {
+		return time.Time{}
+	}
+
+	return time.Unix(int64(seconds), 0).UTC()
+}
+
+// earlier returns the earlier of two times. A zero time counts as no time.
+func earlier(first, second time.Time) time.Time {
+	if first.IsZero() || (!second.IsZero() && second.Before(first)) {
+		return second
+	}
+
+	return first
 }
 
 // skillNames returns the skill of each Skill call of an assistant line.

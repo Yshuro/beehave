@@ -1,0 +1,2 @@
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed","resetsAt":1795006800,"rateLimitType":"five_hour","utilization":0.42,"isUsingOverage":false},"uuid":"7b0e4c96-5f21-4a8d-b3e7-1c6d9a2f8e05","session_id":"0b6e2d8a-3c51-4f7e-a9d2-6e4b1c7f3a85"}
+{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","resetsAt":1795006800,"rateLimitType":"five_hour","utilization":0.91,"isUsingOverage":false,"surpassedThreshold":0.9},"uuid":"2d5a8e13-9c74-4f06-a1b8-e7f3c0d6b942","session_id":"0b6e2d8a-3c51-4f7e-a9d2-6e4b1c7f3a85"}

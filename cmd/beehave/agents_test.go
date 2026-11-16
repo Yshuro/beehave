@@ -47,7 +47,8 @@ func (lineAdapter) Line(line string) (string, string) {
 	return "", ""
 }
 
-// Calls reads the lines "bash=<command>", "bash:<id>=<command>", "refused=<id>", "skill=<name>" and "result=end". A line that starts with "junk" is invalid.
+// Calls reads the lines "bash=<command>", "bash:<id>=<command>", "refused=<id>", "skill=<name>", "limit=<limit>" (see parseLimit) and "result=end".
+// A line that starts with "junk" is invalid.
 func (lineAdapter) Calls(line string) agent.Seen {
 	var seen agent.Seen
 
@@ -76,6 +77,10 @@ func (lineAdapter) Calls(line string) agent.Seen {
 		seen.Failed = subtype
 	}
 
+	if limit, ok := cutPrefix(line, "limit="); ok {
+		seen.Limit = parseLimit(limit)
+	}
+
 	if dollars, ok := cutPrefix(line, "cost="); ok {
 		parsed, err := strconv.ParseFloat(dollars, 64)
 		if err != nil {
@@ -89,6 +94,24 @@ func (lineAdapter) Calls(line string) agent.Seen {
 	_, seen.Invalid = cutPrefix(line, "junk")
 
 	return seen
+}
+
+// parseLimit reads "<kind>/<window>" or "<kind>/<window>@<unix seconds>".
+func parseLimit(text string) *agent.Limit {
+	kind, rest, _ := strings.Cut(text, "/")
+	window, unix, timed := strings.Cut(rest, "@")
+	limit := &agent.Limit{Kind: agent.LimitKind(kind), Window: window}
+
+	if timed {
+		seconds, err := strconv.ParseInt(unix, 10, 64)
+		if err != nil {
+			panic(err)
+		}
+
+		limit.ResetsAt = time.Unix(seconds, 0).UTC()
+	}
+
+	return limit
 }
 
 func (lineAdapter) TranscriptPath(configDir, dir, session string) string {
@@ -615,6 +638,69 @@ func TestAgents_ACapOnTheResultLineEndsTheRunAsACapWhateverTheExitCode(t *testin
 			assert.Equal(t, "s1", got.Session)
 			assert.Equal(t, "halfway", got.Text)
 		}
+	}
+}
+
+func TestAgents_ARunThatARateLimitStoppedIsLimitedNotFailed(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []int{0, 1} {
+		f := newAgentFixture("session=s1\ntext=halfway\nlimit=rate/five_hour@1795006800\nlimit=spend/seven_day\nfailed=success\n", agent.Result{Outcome: agent.OutcomeExited, ExitCode: code})
+		f.bash = []string{"git add -A"}
+		req := request()
+		req.Forbid = []model.FindingKind{model.FindingBulkStaging}
+
+		got, err := f.agents.Run(t.Context(), req)
+
+		require.NoError(t, err, "exit code %d", code)
+		assert.Equal(t, agent.OutcomeLimited, got.Outcome, "exit code %d", code)
+		assert.Equal(t, code, got.ExitCode)
+		assert.Equal(t, &agent.Limit{Kind: agent.LimitRate, Window: "five_hour", ResetsAt: time.Unix(1795006800, 0).UTC()}, got.Limit, "the first limit of the output stopped the run")
+		assert.Equal(t, "the provider refused more work at its rate limit five_hour until 2026-11-18T13:00:00Z", got.Note)
+		assert.Equal(t, "s1", got.Session)
+		assert.Equal(t, "halfway", got.Text)
+		assert.Equal(t, []string{"bulk-staging: git add -A"}, got.Violations)
+	}
+}
+
+func TestAgents_ARunThatALimitStoppedBeforeItNamedASessionIsNotAnError(t *testing.T) {
+	t.Parallel()
+
+	f := newAgentFixture("limit=spend/\n", agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1})
+	f.noResult = true
+
+	got, err := f.agents.Run(t.Context(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeLimited, got.Outcome)
+	assert.Equal(t, "the provider refused more work at its spend limit, and the agent gave no reset time", got.Note)
+	assert.Empty(t, got.Session)
+}
+
+func TestAgents_ALimitThatTheRunGotPastIsNoLimit(t *testing.T) {
+	t.Parallel()
+
+	for name, output := range map[string]string{"success": "session=s1\nlimit=rate/five_hour\n", "cap": "session=s1\nlimit=rate/five_hour\nstop=turns\n"} {
+		f := newAgentFixture(output, agent.Result{Outcome: agent.OutcomeExited})
+
+		got, err := f.agents.Run(t.Context(), request())
+
+		require.NoError(t, err, name)
+		assert.Equal(t, map[string]agent.Outcome{"success": agent.OutcomeExited, "cap": agent.OutcomeTurnCap}[name], got.Outcome, name)
+		assert.Nil(t, got.Limit, name)
+	}
+}
+
+func TestAgents_ALimitOnARunThatDidNotExitKeepsItsOutcome(t *testing.T) {
+	t.Parallel()
+
+	for _, result := range []agent.Result{{Outcome: agent.OutcomeTimedOut, ExitCode: -1}, {Outcome: agent.OutcomeCancelled, ExitCode: -1}} {
+		f := newAgentFixture("session=s1\nlimit=rate/five_hour\nfailed=success\n", result)
+
+		got, err := f.agents.Run(t.Context(), request())
+
+		require.NoError(t, err)
+		assert.Equal(t, result, got)
 	}
 }
 
