@@ -1,6 +1,8 @@
 package flow
 
 import (
+	"fmt"
+	"strconv"
 	"testing"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -39,13 +41,13 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheModuleThatChan
 	t.Parallel()
 
 	harness, _, other := strandedHarness(t)
-	buildWithModule(other, moduleAgent, 2)
+	buildWithModule(other, moduleAgent, agentVersion+1)
 	expireLease(harness)
 
 	err := other.ResumeOnThisBuild(testItem)
 
 	require.ErrorIs(t, err, errStranded)
-	require.ErrorContains(t, err, "agent module at version 1 and this build has version 2")
+	require.ErrorContains(t, err, fmt.Sprintf("agent module at version %d and this build has version %d", agentVersion, agentVersion+1))
 	require.ErrorContains(t, err, "Start the item again")
 
 	row, rowErr := other.row(testRun)
@@ -156,7 +158,7 @@ func TestClient_ResumeOnThisBuildMovesARunStoredUnderAListOfSomeModules(t *testi
 	t.Parallel()
 
 	harness, _, other := strandedHarness(t)
-	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+core1.agent1", testRun)
+	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+core1.agent"+strconv.Itoa(agentVersion), testRun)
 	require.NoError(t, err)
 
 	buildWithModule(other, moduleGate, 2)

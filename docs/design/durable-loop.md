@@ -137,6 +137,32 @@ When the agent CLI stops a run at `agents.max_turns` or `agents.max_budget_usd`,
 
 `beehave resume` starts a new agent run with the same cap for each run. The cap of one agent run does not count across resumes. For the cap of an item run, see [Cost budgets](#cost-budgets).
 
+#### Provider limits
+
+When a provider limit (a rate limit or a spend limit) stops an agent run, the step does not fail. The phase ends with the outcome `limited` and records the limit in its `limit` field. The item run then waits for the reset and runs the same agent call again.
+
+- The wait is in the item run, after the phase, so it holds no slot of the agents queue.
+- The rerun is part of the same call. It uses no try of `output_tries`, and `earlier_calls` counts the call as one lane.
+- The rerun keeps the login of the limited run, because the session of the run lives in the config folder of that login. It uses the `resume` keyword of the call, as the first run did.
+- Before the rerun, the run cap and the tree cap are checked again. The limited run can spend money before the limit stops it, and that cost is in the sum.
+
+For try `t` and run `k` (from 0) inside the try, the call records these steps:
+
+| Step | When |
+|---|---|
+| `…/budget<t>.<look>` | Before each run. The look number continues across the runs of the try. |
+| `…/limit<t>.<k>` | After a limited run. It holds `limit` (`kind`, `window`, `resets_at`), `login`, `wait_until`, `session` and the cost of the run. |
+| `DBOS.sleep` | After each limit step, until `wait_until`. |
+
+`wait_until` is fixed inside the limit step, so a restart during the wait sleeps only the time that is left and starts the agent once after the reset.
+
+| Case | What the step does |
+|---|---|
+| The limit has a reset time in the future | Sleeps until the reset time, then runs again. |
+| The reset time has passed | Sleeps the least wait (one minute), then runs again. |
+| The next run is limited again and its reset time has passed too | Fails. The error names the limit and the login. The reset time is wrong, and a loop on it has no end. |
+| The agent gives no reset time | Fails. The error names the limit and the login, and says to run `beehave resume <item>` when the limit is gone. |
+
 ### The `rewrote` output
 
 Every agent call returns `rewrote`. It is true when the commit of the item folder before the agent started is not in the history of its commit after the run, so the agent amended, squashed or reset.
@@ -163,7 +189,7 @@ The three outputs `cost_usd`, `cost_estimated` and `cost_unknown` form one cost.
 
 When a run has a cost cap and its CLI does not cap dollars itself, the run does not start if its model has no price. A run cap and a tree cap stop the next step after a cost that is unknown, because the cap cannot be checked. A cost is unknown when its model has no price, or when its recorded cost cannot be read. The stop message names which.
 
-The cost is recorded in the phase and in the read step of the agent call. A replay returns the recorded cost and never asks the CLI again. A run that fails before its result line leaves no cost.
+The cost is recorded in the phase and in the read step of the agent call, and in the limit step of a run that a provider limit stopped. A replay returns the recorded cost and never asks the CLI again. A run that fails before its result line leaves no cost.
 
 #### The three caps
 
@@ -186,7 +212,7 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 **The cap of one item run: `agents.max_run_budget_usd`** (or `BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD`). It caps the sum for one item run.
 
 - A child workflow that the run spawns starts its own sum at 0. The cap applies to each sum alone.
-- Before an agent step starts, the engine adds the `cost_usd` that the earlier agent steps of the item run recorded, and the cost of each run that failed.
+- Before an agent step starts, the engine adds the `cost_usd` that the earlier agent steps of the item run recorded, the cost of each run that a provider limit stopped, and the cost of each run that failed.
 - If the sum is at or past the cap, the step waits before it starts. The run stays open and the step is not a failure. The stop names the cap and the spent sum.
 - The check runs only when a step starts, so one step can pass the cap by its own cost. The cap of the step (`max_budget_usd`) or the global cap limits that. With neither set, a step has no limit.
 - Each look at the caps is a recorded step named `budget`, and a stop is followed by a durable sleep before the next look. A step that started under the cap does not stop on a replay after the cap changes.
@@ -201,6 +227,8 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 - The rule and the wait are the same as for the run cap. Both caps apply when both are set.
 
 **The stop in the status.** `beehave status <run id> --json` shows `cap_stop` with `scope` (`run` or `tree`), `cap_usd`, `spent_usd` and `note` on the run, and on the line of the held agent step, while the run reads `running`.
+
+**The wait for a provider limit in the status.** While an agent step waits for a provider limit to reset, `beehave status <run id> --json` shows `limit_wait` with `limit`, `login` and `wait_until` on the run and on the line of the step. The run reads `running`.
 
 #### Not covered
 
@@ -576,7 +604,7 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent1.tracker1.forge1.land3.gate1.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent2.tracker1.forge1.land3.gate1.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 
 A stored version that ends in `+star30` stands for every module at version 1. A change to the recorded steps of one builtin bumps the version of its module and no other module, so a run that never used that module still moves. The first build with module versions has a new application version, so an open run of an older build moves only with this command.
@@ -587,8 +615,9 @@ A line of the list also shows these facts when the run has them. Each is a tab-s
 
 | Note | Meaning |
 |---|---|
-| `spent $S of $C` | The cost so far against `agents.max_run_budget_usd`: the sum of the `cost_usd` of the read steps and of the failed runs. It is the same sum that the run cap checks. `spent $S` when no cap is set. |
+| `spent $S of $C` | The cost so far against `agents.max_run_budget_usd`: the sum of the `cost_usd` of the read steps, of the limited runs and of the failed runs. It is the same sum that the run cap checks. `spent $S` when no cap is set. |
 | `stopped at the <scope> cap $C, spent $S` | A cap holds an agent step of the open run back. The scope is `run` or `tree`. The step waits until the cap is raised and beehave restarts. |
+| `waits for the <kind> limit <window> of login <login> until <time>` | A provider limit holds an agent step of the open run. The step runs again after that time. |
 | `now <step>` | The step that an open run is in. A run that asks a question shows the question in place of the step and, when the `wait` has a `timeout`, `answer by <time>`. |
 | `gate pass at <head>` or `gate fail at <head>` | The newest gate result and the head it judged. |
 | `fix U of C` and `review U of C` | The count of the agent calls of the lanes `rework` and `review` against the cap that those calls name with the keyword `rounds`. A call that names none shows the count alone. |
@@ -601,6 +630,7 @@ Every value is read from the step records, the events and the options of the cli
 
 - `spent` (`cost_usd`, `cost_estimated`, `cost_unknown`)
 - `cap_usd`
+- `cap_stop` and `limit_wait`, while a cap or a provider limit holds a step
 - `now`
 - `deadline`
 - `gate` (`passed`, `head`)

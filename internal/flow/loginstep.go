@@ -89,7 +89,7 @@ func choiceOf(login string, overCap bool, err error) (loginChoice, error) {
 	return loginChoice{}, err
 }
 
-// waitForReset is the durable sleep until the reset time. A sleep survives a restart of the process, and a resume sleeps only the time that is left.
+// waitForReset is the durable sleep until the reset time of a usage cap of the pool or of a provider limit that stopped a run. A sleep survives a restart of the process, and a resume sleeps only the time that is left.
 func (s *script) waitForReset(reset time.Time) error {
 	clock := s.e.deps.Clock
 
@@ -99,7 +99,7 @@ func (s *script) waitForReset(reset time.Time) error {
 	}
 
 	if _, err := dbos.Sleep(s.ctx, wait); err != nil {
-		return fmt.Errorf("wait for a usage cap of item %s to reset: %w", s.in.Item, err)
+		return fmt.Errorf("wait for a usage cap or a provider limit of item %s to reset: %w", s.in.Item, err)
 	}
 
 	return nil

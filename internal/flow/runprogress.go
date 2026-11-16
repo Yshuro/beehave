@@ -34,6 +34,8 @@ type RunProgress struct {
 	Cap float64 `json:"cap_usd"`
 	// CapStop is the cap that holds an agent step of an open run back. It is nil for a run that no cap holds.
 	CapStop *CapStop `json:"cap_stop,omitempty"`
+	// LimitWait is the provider limit that an agent step of an open run waits for. It is nil for a run that no limit holds.
+	LimitWait *LimitWait `json:"limit_wait,omitempty"`
 	// Now is the step that an open run is in. It is empty for a finished run.
 	Now string `json:"now,omitempty"`
 	// Deadline is the time that the wait of an open run ends. It is the zero time for a run that waits with no timeout, or does not wait.
@@ -72,13 +74,19 @@ func (p RunProgress) NotesAt(now time.Time) []string {
 	return append(notes, p.Review.notes("review")...)
 }
 
-// stopNotes is the note of the cap that holds a step back. A run that no cap holds has none.
+// stopNotes are the notes of the cap and of the provider limit that hold a step back. A run that nothing holds has none.
 func (p RunProgress) stopNotes() []string {
-	if p.CapStop == nil {
-		return nil
+	var notes []string
+
+	if p.CapStop != nil {
+		notes = append(notes, p.CapStop.text())
 	}
 
-	return []string{p.CapStop.text()}
+	if p.LimitWait != nil {
+		notes = append(notes, p.LimitWait.text())
+	}
+
+	return notes
 }
 
 // deadlineNote is the note of the deadline of a wait, with the time left when now is set.
@@ -189,8 +197,8 @@ func progressOf(lines []StepLine, limit float64, open bool) RunProgress {
 func (p *RunProgress) take(line StepLine, open bool) {
 	p.Spent = p.Spent.Plus(line.Spend)
 
-	if open && line.CapStop != nil {
-		p.CapStop = line.CapStop
+	if open {
+		p.takeHolds(line)
 	}
 
 	if line.Passed != nil {
@@ -206,6 +214,17 @@ func (p *RunProgress) take(line StepLine, open bool) {
 
 	if open && (line.State == stepRunning || line.State == string(runRunning)) {
 		p.Now = line.Name
+	}
+}
+
+// takeHolds keeps the cap and the provider limit that hold a step of an open run back.
+func (p *RunProgress) takeHolds(line StepLine) {
+	if line.CapStop != nil {
+		p.CapStop = line.CapStop
+	}
+
+	if line.LimitWait != nil {
+		p.LimitWait = line.LimitWait
 	}
 }
 

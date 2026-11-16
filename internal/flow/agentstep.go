@@ -444,27 +444,55 @@ func (s *script) attempts(name string, a agentArgs, in PhaseInput) (stepResult, 
 	}
 }
 
-// attempt removes the old output file in a recorded step, runs the agent once and reads what it left.
+// attempt removes the old output file in a recorded step, runs the agent and reads what it left.
 // The removal is recorded, so a replay after the agent finished never removes the file again.
+// A run that a provider limit stopped is followed by a wait for the reset and a rerun inside the same try: a limit spends no output try and no lane.
+// Each run checks the caps first, because the limited run can have spent money before the limit stopped it.
 func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (stepResult, error) {
 	if err := s.clearOutput(name, a.file, try); err != nil {
 		return stepResult{}, err
 	}
 
-	if err := s.holdForCaps(name, try); err != nil {
-		return stepResult{}, err
-	}
-
 	in.Severity = string(s.severity)
 
-	ended, err := s.e.queuePhase(s.ctx, in)
+	ended, err := s.runPastLimits(name, in, try)
 	if err != nil {
-		s.countFailedRun(name, try, ended.Spend)
-
 		return stepResult{}, err
 	}
 
 	return s.read(name, a, ended, try)
+}
+
+// runPastLimits runs the agent of one try until a run ends that no provider limit stopped, and returns how that run ended.
+func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput, error) {
+	look, passed := 0, false
+
+	for run := 0; ; run++ {
+		var err error
+
+		if look, err = s.holdForCaps(name, try, look); err != nil {
+			return PhaseOutput{}, err
+		}
+
+		ended, err := s.runOnce(name, in, try)
+		if err != nil || ended.Limit == nil {
+			return ended, err
+		}
+
+		if passed, err = s.waitOutLimit(name, in, ended, try, run, passed); err != nil {
+			return PhaseOutput{}, err
+		}
+	}
+}
+
+// runOnce runs the agent once as a phase. The cost of a run that failed is recorded, so the run cap counts it.
+func (s *script) runOnce(name string, in PhaseInput, try int) (PhaseOutput, error) {
+	ended, err := s.e.queuePhase(s.ctx, in)
+	if err != nil {
+		s.countFailedRun(name, try, ended.Spend)
+	}
+
+	return ended, err
 }
 
 // read reads what a finished run left, in a recorded step, and adds its cost to the sum of the run cap. The cost of a failed read stays out of the sum.
