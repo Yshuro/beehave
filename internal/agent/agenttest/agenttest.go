@@ -82,8 +82,8 @@ func testSessions(t *testing.T, make Factory) {
 }
 
 // CheckTranscript checks, for a profile with a resume option, the resume option and the transcript path that the agents check before a resume: a start
-// after a lost run resumes the session only when that file exists. The option must name the session, as a token of its own or inside one token such as
-// --resume=<id>, and the path must be a file of that session inside the login folder. A profile with no resume option is not asked.
+// after a lost run resumes the session only when that file exists. The option must name the session, as a token of its own or as the whole value of one
+// --opt=<id> token, and the path must be a file of that session inside the login folder. A profile with no resume option is not asked.
 func CheckTranscript(r Reporter, adapter agent.Adapter, dir string) {
 	r.Helper()
 
@@ -93,8 +93,15 @@ func CheckTranscript(r Reporter, adapter agent.Adapter, dir string) {
 	}
 
 	option := profile.Resume(session)
-	expect(r, strings.Contains(strings.Join(option, " "), session), "the resume option %q does not name the session %q", option, session)
+	expect(r, slices.ContainsFunc(option, namesSession), "the resume option %q does not name the session %q", option, session)
 	checkTranscriptPath(r, adapter, dir)
+}
+
+// namesSession reports whether the argument is the session id, or a --opt=<id> token whose value after the first "=" is the session id.
+func namesSession(arg string) bool {
+	_, value, _ := strings.Cut(arg, "=")
+
+	return arg == session || value == session
 }
 
 // checkTranscriptPath checks that the transcript of the session of the suite is a file inside the login folder dir, and that another session has another file.

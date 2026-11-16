@@ -370,13 +370,6 @@ func TestCheckTranscript(t *testing.T) {
 		want    string
 	}{
 		{"a_resumable_session_with_its_transcript_in_the_login_folder", resumes(nil), ""},
-		{"a_resume_option_of_two_tokens_in_a_profile_with_no_arguments_names_the_session", func() fakeAdapter {
-			a := resumes(nil)
-			a.profile.Args = nil
-			a.profile.Resume = func(id string) []string { return []string{"--resume", id} }
-
-			return a
-		}(), ""},
 		{"a_resume_option_of_one_token_names_the_session", func() fakeAdapter {
 			a := resumes(nil)
 			a.profile.Resume = func(id string) []string { return []string{"--resume=" + id} }
@@ -394,6 +387,18 @@ func TestCheckTranscript(t *testing.T) {
 		{"a_resume_option_that_does_not_name_the_session", func() fakeAdapter {
 			a := resumes(nil)
 			a.profile.Resume = func(string) []string { return []string{"--continue"} }
+
+			return a
+		}(), "does not name the session"},
+		{"a_resume_option_with_the_file_name_of_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--resume", id + ".jsonl"} }
+
+			return a
+		}(), "does not name the session"},
+		{"a_resume_option_with_a_prefix_on_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--resume", "ses_" + id} }
 
 			return a
 		}(), "does not name the session"},
