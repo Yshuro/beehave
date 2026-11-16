@@ -1,3 +1,17 @@
 #!/bin/sh
-# Fake mkdir: run the real mkdir, so a folder that sudo makes exists and a folder that exists makes it fail.
+# Fake mkdir: log the call and run the real mkdir, so a folder that the script makes exists and a folder that exists makes it fail.
+# It refuses a path outside the folder of the test.
+printf 'mkdir %s\n' "$*" >>"$FAKE_LOG"
+mode=
+for arg; do
+	if [ -n "$mode" ]; then
+		mode=
+		continue
+	fi
+	case $arg in
+	-m) mode=1 ;;
+	-*) ;;
+	*) "$FAKE_BIN/fake-path-guard" mkdir "$arg" || exit 1 ;;
+	esac
+done
 exec /bin/mkdir "$@"

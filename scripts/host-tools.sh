@@ -4,8 +4,8 @@
 # It installs no tool that `make setup` installs. `apt-get update` and `apt-get install` run on each run; apt changes no package that is installed.
 # Go, uv and actionlint are read first and installed only when they are not at their pins.
 # A new Go unpacks into /usr/local/go.new and replaces /usr/local/go only after it unpacks, so a failed unpack keeps the old Go.
-# The old Go moves to /usr/local/go.old for the swap and moves back when the swap fails. It deletes nothing outside these three
-# folders and its own temporary folder.
+# The old Go moves to /usr/local/go.old for the swap and moves back when the swap fails or the new Go is not the pinned one.
+# It deletes nothing outside these three folders and its own temporary folder.
 # A new uv version needs a new sha256: take it from the digest of the asset in the release (`gh release view <tag> -R astral-sh/uv --json assets`).
 #
 # Usage: sh scripts/host-tools.sh   (from any folder; it reads go.mod next to the scripts folder)
@@ -98,16 +98,28 @@ install_go() {
 	esac
 
 	say "installing Go $want into $go_root"
-	if [ -e "$go_root" ]; then sudo mv "$go_root" "$go_backup"; fi
+	if [ -e "$go_root" ]; then
+		sudo mv "$go_root" "$go_backup" || fail "the old Go did not move from $go_root to $go_backup. The old Go is kept in $go_root"
+	fi
 	if ! sudo mv "$go_staging/go" "$go_root"; then
 		restore_go
 		fail "the new Go did not move into $go_root. The old Go is back in place"
 	fi
-	sudo rm -rf "$go_staging" "$go_backup"
 	case $("$go_root/bin/go" version 2>/dev/null || true) in
 	"go version $want "*) ;;
-	*) fail "the Go archive did not install $want into $go_root" ;;
+	*) undo_swap ;;
 	esac
+	sudo rm -rf "$go_staging" "$go_backup"
+}
+
+# undo_swap stops the install when the Go in place is not the pinned one after the swap. The backup is not deleted yet,
+# so the new Go moves back to the staging folder and the old Go moves back in place.
+undo_swap() {
+	[ -e "$go_backup" ] || fail "the Go archive did not install $want into $go_root"
+	sudo mv "$go_root" "$go_staging/go" ||
+		fail "the Go in $go_root was not $want after the swap, and it did not move out. The old Go is in $go_backup. Move it back by hand"
+	restore_go
+	fail "the Go in $go_root was not $want after the swap. The old Go is back in place"
 }
 
 install_uv() {

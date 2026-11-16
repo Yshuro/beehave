@@ -4,7 +4,8 @@
 # It installs no watchdog: it refuses to start and to finish unless the named self-delete watchdog unit is active, enabled and Restart=always.
 # It names no cloud and touches no heartbeat. It deletes nothing outside /usr/local/go, /usr/local/go.new, /usr/local/go.old and its own temporary folder.
 # It refuses a work root that is not its canonical path, a system folder, and an existing work root that the login user does not own.
-# It makes the last folder of a missing work root only, and never changes the owner or the mode of a folder that exists.
+# It makes the last folder of a missing work root only, as the login user and without sudo, in a folder that the login user owns.
+# It never changes the owner or the mode of a folder.
 # The last line of a pass is HOST-SETUP-DONE.
 #
 # Usage: sh scripts/host-setup.sh --work-root <absolute path> --watchdog <systemd unit>
@@ -64,7 +65,7 @@ is_system_folder() {
 
 # check_work_root_folder refuses a work root that is not its canonical path, a system folder, and an existing work root that is not a
 # folder of the login user. A canonical path has no . or .. part, no doubled or trailing slash and no link, so the path names exactly
-# the folder that the script reads or makes. A missing work root needs a parent folder that exists and is not a system folder.
+# the folder that the script reads or makes. A missing work root needs a parent folder that exists and that the login user owns.
 check_work_root_folder() {
 	canonical=$(realpath -m -- "$work_root") || fail "the work root $work_root cannot be read"
 	[ "$canonical" = "$work_root" ] ||
@@ -84,9 +85,8 @@ check_work_root_folder() {
 	parent=$(dirname -- "$work_root")
 	[ -d "$parent" ] ||
 		fail "the work root $work_root is missing, and its parent $parent is not a folder. Make the parent folder first, or name a work root whose parent exists"
-	if is_system_folder "$parent"; then
-		fail "the parent $parent of the work root $work_root is a system folder. Name a folder of its own, such as /home/<user>/jobs"
-	fi
+	[ "$(stat -c %u -- "$parent")" = "$(id -u)" ] ||
+		fail "the parent $parent of the work root $work_root is not owned by the login user, so the script does not make the work root. The owner of $parent makes it by hand: sudo mkdir -m 0755 -- '$work_root' && sudo chown $(id -un):$(id -gn) -- '$work_root'"
 }
 
 check_watchdog_name() {
@@ -168,15 +168,15 @@ BEEHAVE_BD_132=$gobin/bd"
 	say "wrote $env_file"
 }
 
-# make_work_root makes a missing work root for the login user. It reads the folder again first, and it leaves an existing one as it is.
+# make_work_root makes a missing work root as the login user. It reads the folder again first, and it leaves an existing one as it is.
+# It uses no sudo and no chown, so it can make a folder only where the login user can, and it changes no owner.
 # It makes the last folder only, with mkdir and no -p. mkdir fails on a path that exists, so a folder or a link that appears there
-# between the check and the mkdir makes the step fail instead of taking it over, and chown -h then acts on the new folder only.
+# between the check and the mkdir makes the step fail instead of taking it over.
 make_work_root() {
 	check_work_root_folder
 	if [ ! -e "$work_root" ]; then
 		say "making the work root $work_root"
-		sudo mkdir -m 0755 -- "$work_root"
-		sudo chown -h "$user:$(id -gn)" -- "$work_root"
+		mkdir -m 0755 -- "$work_root"
 	fi
 	[ -d "$work_root/.beehave" ] || mkdir -- "$work_root/.beehave"
 }
