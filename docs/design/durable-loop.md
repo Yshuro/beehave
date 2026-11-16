@@ -163,6 +163,8 @@ For try `t` and run `k` (from 0) inside the try, the call records these steps:
 | The next run is limited again and its reset time has passed too | Fails. The error names the limit and the login. The reset time is wrong, and a loop on it has no end. |
 | The agent gives no reset time | Fails. The error names the limit and the login, and says to run `beehave resume <item>` when the limit is gone. |
 
+In the two cases that fail, the phase is the failed step, and the run records no limit step. The phase input of a rerun after a past reset holds `reset_passed`, so the phase knows that a second past reset fails. `beehave resume <item>` reopens the failed phase, as it reopens any failed agent run, and the agent runs again. The cost of the failed run counts once, in the cost record of a failed run.
+
 ### The `rewrote` output
 
 Every agent call returns `rewrote`. It is true when the commit of the item folder before the agent started is not in the history of its commit after the run, so the agent amended, squashed or reset.

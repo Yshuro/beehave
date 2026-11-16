@@ -167,11 +167,20 @@ func TestRateLimit_ALimitThatNoReadingDatesFailsTheStepAndNamesTheLimit(t *testi
 	h := limitedHarness(t, limitReset)
 	inTurn(h, limited(time.Time{}, 0))
 
-	_, err := h.engine(t).Run(testItem, testProject)
+	engine := h.engine(t)
 
-	require.ErrorContains(t, err, "the agent step agent:fix#1 stopped at the rate limit five_hour of login "+testLogin+", and the agent gives no reset time")
+	_, err := engine.Run(testItem, testProject)
+
+	require.ErrorContains(t, err, "the agent step of item "+testItem+" stopped at the rate limit five_hour of login "+testLogin+", and the agent gives no reset time")
 	require.ErrorContains(t, err, "Run beehave resume "+testItem+" when the limit is gone")
 	assert.Len(t, h.agents.seen(), 1, "no rerun without a time to wait for")
+
+	steps, err := h.client(t, testVersion).Steps(testRun)
+	require.NoError(t, err)
+
+	for _, line := range steps.Steps {
+		assert.Nil(t, line.LimitWait, "the failed line of %s waits for nothing", line.Name)
+	}
 }
 
 func TestRateLimit_TwoLimitsInARowWithAResetInThePastFailTheStep(t *testing.T) {
@@ -182,9 +191,96 @@ func TestRateLimit_TwoLimitsInARowWithAResetInThePastFailTheStep(t *testing.T) {
 
 	_, err := h.engine(t).Run(testItem, testProject)
 
-	require.ErrorContains(t, err, "the agent step agent:fix#1 stopped at the rate limit five_hour of login "+testLogin+" twice in a row with a reset time that has passed")
+	require.ErrorContains(t, err, "the agent step of item "+testItem+" stopped at the rate limit five_hour of login "+testLogin+" twice in a row with a reset time that has passed")
 	require.ErrorContains(t, err, "Run beehave resume "+testItem+" when the limit is gone")
 	assert.Len(t, h.agents.seen(), 2, "one rerun after the first past reset, none after the second")
+}
+
+func TestRateLimit_AResumeAfterALimitWithNoResetTimeRunsTheAgentAgain(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	inTurn(h, limited(time.Time{}, 0), exited)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "gives no reset time")
+
+	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
+
+	require.NoError(t, err, "the resume runs the agent again, and the limit is gone")
+	assert.Len(t, h.agents.seen(), 2, "the limited run, then the run of the resume")
+}
+
+func TestRateLimit_AResumeAfterTwoPastResetsInARowRunsTheAgentAgain(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(time.Hour))
+	inTurn(h, limited(limitReset, 0), limited(limitReset, 0), exited)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "twice in a row")
+
+	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
+
+	require.NoError(t, err, "the resume runs the agent again, and the limit is gone")
+	assert.Len(t, h.agents.seen(), 3, "two limited runs, then the run of the resume")
+}
+
+func TestRateLimit_TheCostOfARunThatFailedAtALimitCountsOnce(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	inTurn(h, limited(time.Time{}, 0.7))
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "gives no reset time")
+
+	client := h.client(t, testVersion)
+
+	steps, err := client.Steps(testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.7, steps.Spent.Cost, 1e-9, "the status view")
+
+	tree, err := runSpend(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.7, tree.Cost, 1e-9, "the sum that the tree cap reads")
+
+	days, err := client.Days(DaysSince(time.Now(), 1))
+	require.NoError(t, err)
+	require.Len(t, days, 1)
+	assert.InDelta(t, 0.7, days[0].Spent.Cost, 1e-9, "the per-day sum")
+}
+
+func TestRateLimit_TheSleepLastsUntilTheRecordedReset(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-time.Hour))
+	inTurn(h, limited(limitReset, 0), exited)
+
+	engine := h.engine(t)
+	done := runInBackground(engine, testItem)
+
+	waitForTheSleep(t, engine)
+
+	var sleep dbos.StepInfo
+
+	for _, step := range recordsOfTestRun(t, engine) {
+		if step.StepName == sleepStep {
+			sleep = step
+		}
+	}
+
+	// The library records the end of the sleep as the end of its step.
+	assert.InDelta(t, time.Hour.Seconds(), sleep.CompletedAt.Sub(sleep.StartedAt).Seconds(), time.Minute.Seconds(), "the sleep ends at the reset, one hour after the wall clock")
+
+	require.NoError(t, engine.Shutdown())
+	<-done
 }
 
 func TestRateLimit_TheCostOfTheLimitedRunCountsInTheRunCapAndTheTreeSum(t *testing.T) {
@@ -317,10 +413,10 @@ func TestRateLimit_ALimitRecordThatCannotBeReadMarksTheCostUnknown(t *testing.T)
 func TestRateLimit_ALimitedRunWithNoLimitFailsThePhase(t *testing.T) {
 	t.Parallel()
 
-	err := phaseEnd(PhaseInput{Item: testItem}, PhaseOutput{Outcome: agent.OutcomeLimited, ExitCode: 1, Note: "no limit"})
+	err := phaseEnd(PhaseInput{Item: testItem}, PhaseOutput{Outcome: agent.OutcomeLimited, ExitCode: 1, Note: "no limit"}, limitReset)
 
 	require.ErrorContains(t, err, "ended as limited (exit 1): no limit")
-	require.NoError(t, phaseEnd(PhaseInput{Item: testItem}, PhaseOutput{Outcome: agent.OutcomeLimited, Limit: limited(limitReset, 0).Limit}))
+	require.NoError(t, phaseEnd(PhaseInput{Item: testItem}, PhaseOutput{Outcome: agent.OutcomeLimited, Limit: limited(limitReset, 0).Limit}, limitReset.Add(-time.Hour)))
 }
 
 func TestRateLimit_AStoredPhaseWithoutALimitDecodesAsBefore(t *testing.T) {

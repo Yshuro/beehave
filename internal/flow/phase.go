@@ -54,6 +54,10 @@ type PhaseInput struct {
 	// OutputFile is the file where the agent writes its declared outputs. Outputs names them. Outputs is left out for a call that declares none.
 	OutputFile string   `json:"output_file,omitempty"`
 	Outputs    []string `json:"outputs,omitempty"`
+
+	// ResetPassed is true for the rerun after a provider limit whose reset time had passed. A rerun that a limit with a past reset time stops again fails.
+	// It is left out of a recorded phase for any other run.
+	ResetPassed bool `json:"reset_passed,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
@@ -135,9 +139,9 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput) (PhaseOutpu
 		return out, err
 	}
 
-	// The end of the phase is judged inside the step, so a phase that did not exit with code 0, and that no cap and no provider limit stopped,
+	// The end of the phase is judged inside the step, so a phase that did not exit with code 0, and that no cap and no provider limit with an end to its wait stopped,
 	// is a failed step that beehave resume reruns.
-	return out, phaseEnd(in, out)
+	return out, phaseEnd(in, out, e.deps.Clock.wall())
 }
 
 // phaseOutput records how the agent of a phase ended.
@@ -266,8 +270,13 @@ func stopError(ctx context.Context) error {
 // phaseEnd turns a phase that did not exit with code 0 into an error that names the step.
 // A run that a cap stopped (turns or dollars) is not a failure: the output `stop` names the cap and the workflow decides what follows.
 // A run that a provider limit stopped is not a failure either: the item run waits for the reset and runs the call again, so the wait holds no slot of the queue.
-func phaseEnd(in PhaseInput, out PhaseOutput) error {
-	if out.Outcome == agent.OutcomeTurnCap || out.Outcome == agent.OutcomeBudgetCap || (out.Outcome == agent.OutcomeLimited && out.Limit != nil) {
+// Only a limit that no wait ends fails the phase (see limitEnd). now is the wall clock at the end of the run.
+func phaseEnd(in PhaseInput, out PhaseOutput, now time.Time) error {
+	if out.Outcome == agent.OutcomeLimited && out.Limit != nil {
+		return limitEnd(in, *out.Limit, now)
+	}
+
+	if out.Outcome == agent.OutcomeTurnCap || out.Outcome == agent.OutcomeBudgetCap {
 		return nil
 	}
 

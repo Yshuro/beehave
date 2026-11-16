@@ -37,11 +37,15 @@ type limitRecord struct {
 }
 
 // waitOutLimit records the limit that stopped run number run of a try, adds the cost of that run to the sum of the run cap, and sleeps until the limit resets.
-// passed tells whether the limit of the run before it in the same try had a reset time that had passed; the result tells the same of this limit.
-// A limit with no reset time, or a second limit in a row whose reset time has passed, fails the call: no wait has an end.
-func (s *script) waitOutLimit(name string, in PhaseInput, ended PhaseOutput, try, run int, passed bool) (bool, error) {
+// It reports whether the reset time had passed, so the next run of the try fails its phase when its limit has a past reset time too.
+func (s *script) waitOutLimit(name string, in PhaseInput, ended PhaseOutput, try, run int) (bool, error) {
 	record, err := runStep(s.e, s.ctx, name+"/limit"+strconv.Itoa(try)+"."+strconv.Itoa(run), func(context.Context) (limitRecord, error) {
-		return s.judgeLimit(name, in, ended, passed)
+		limit := *ended.Limit
+
+		return limitRecord{
+			LimitWait: LimitWait{Limit: limit, Login: in.Login, WaitUntil: limit.ResetsAt}, Session: ended.Session, Spend: ended.Spend,
+			Passed: !limit.ResetsAt.After(s.e.deps.Clock.wall()),
+		}, nil
 	})
 	if err != nil {
 		s.countFailedRun(name, try, ended.Spend)
@@ -54,23 +58,17 @@ func (s *script) waitOutLimit(name string, in PhaseInput, ended PhaseOutput, try
 	return record.Passed, s.waitForReset(record.WaitUntil)
 }
 
-// judgeLimit fixes the time to wait for after a limited run, or fails when no wait has an end.
-func (s *script) judgeLimit(name string, in PhaseInput, ended PhaseOutput, passed bool) (limitRecord, error) {
-	limit := *ended.Limit
-	record := limitRecord{LimitWait: LimitWait{Limit: limit, Login: in.Login, WaitUntil: limit.ResetsAt}, Session: ended.Session, Spend: ended.Spend}
-
+// limitEnd fails the phase of a run that a provider limit stopped when no wait has an end: the limit gives no reset time, or it is the second limit
+// in a row whose reset time has passed. The failed phase is the failed step, so beehave resume reopens the phase and runs the agent again.
+func limitEnd(in PhaseInput, limit agent.Limit, now time.Time) error {
 	switch {
 	case limit.ResetsAt.IsZero():
-		return record, fmt.Errorf("the agent step %s stopped at the %s of login %s, and the agent gives no reset time. Run beehave resume %s when the limit is gone",
-			name, limit.Name(), in.Login, in.Item)
-	case limit.ResetsAt.After(s.e.deps.Clock.wall()):
-		return record, nil
-	case passed:
-		return record, fmt.Errorf("the agent step %s stopped at the %s of login %s twice in a row with a reset time that has passed (%s), so the reset time is wrong. "+
-			"Run beehave resume %s when the limit is gone", name, limit.Name(), in.Login, limit.ResetsAt.Format(time.RFC3339), in.Item)
+		return fmt.Errorf("the agent step of item %s stopped at the %s of login %s, and the agent gives no reset time. Run beehave resume %s when the limit is gone",
+			in.Item, limit.Name(), in.Login, in.Item)
+	case in.ResetPassed && !limit.ResetsAt.After(now):
+		return fmt.Errorf("the agent step of item %s stopped at the %s of login %s twice in a row with a reset time that has passed (%s), so the reset time is wrong. "+
+			"Run beehave resume %s when the limit is gone", in.Item, limit.Name(), in.Login, limit.ResetsAt.Format(time.RFC3339), in.Item)
 	}
 
-	record.Passed = true
-
-	return record, nil
+	return nil
 }
