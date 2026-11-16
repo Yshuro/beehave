@@ -222,18 +222,24 @@ func (s *sessionSaver) name(session string) {
 	}
 }
 
-// run writes the id that waits after each signal, and once more at the stop.
+// run writes the id that waits after each signal. Each turn checks the stop first: once finish closed it, the next turn writes the id that waits
+// and ends, even when a signal waits too.
 func (s *sessionSaver) run() {
 	defer close(s.done)
 
 	for {
 		select {
-		case <-s.wake:
-			s.flush()
 		case <-s.stop:
 			s.flush()
 
 			return
+		default:
+		}
+
+		select {
+		case <-s.wake:
+			s.flush()
+		case <-s.stop: // the next turn writes the id that waits
 		}
 	}
 }

@@ -1,11 +1,14 @@
 package flow
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -304,6 +307,109 @@ func TestSessionSaver_ANewIdNeverWaitsForAStoreThatBlocksAndTheNewestIdIsWritten
 
 	require.NotEmpty(t, written)
 	assert.Equal(t, "s-3", written[len(written)-1], "the event holds the newest id when the step ends")
+}
+
+func TestSessionSaver_TheStopWritesTheIdThatWaitsBehindAWriteThatBlocks(t *testing.T) {
+	t.Parallel()
+
+	synctest.Test(t, func(t *testing.T) {
+		release := make(chan struct{})
+
+		var (
+			mu      sync.Mutex
+			written []string
+		)
+
+		saver := startSessionSaver(func(session string) {
+			<-release
+			mu.Lock()
+			defer mu.Unlock()
+
+			written = append(written, session)
+		})
+
+		saver.name("s-1")
+		synctest.Wait() // the saver waits in the write of s-1
+
+		saver.name("s-2")
+
+		finished := make(chan struct{})
+
+		go func() {
+			defer close(finished)
+
+			saver.finish()
+		}()
+
+		synctest.Wait() // the stop is closed, and both the stop and the signal of s-2 wait
+		close(release)
+		<-finished
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		assert.Equal(t, []string{"s-1", "s-2"}, written, "the stop writes the id that waits, so the event holds the newest id when the step ends")
+	})
+}
+
+// heldSaveHandler holds each record of a refused session write until release closes, and drops every other record.
+type heldSaveHandler struct {
+	entered chan struct{}
+	release chan struct{}
+	once    *sync.Once
+}
+
+func (h heldSaveHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h heldSaveHandler) Handle(_ context.Context, record slog.Record) error {
+	if record.Message == "cannot save the session of the agent" {
+		h.once.Do(func() { close(h.entered) })
+		<-h.release
+	}
+
+	return nil
+}
+
+func (h heldSaveHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+
+func (h heldSaveHandler) WithGroup(string) slog.Handler { return h }
+
+func TestRunAgent_TheAgentStepWaitsForTheWriteOfTheLastSessionIdBeforeItReturns(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	nameSession(harness, "s-last")
+	engine, err := NewEngine(t.Context(), harness.opts, harness.deps())
+	require.NoError(t, err)
+
+	t.Cleanup(func() { assert.NoError(t, engine.Shutdown()) })
+
+	synctest.Test(t, func(t *testing.T) {
+		held := heldSaveHandler{entered: make(chan struct{}), release: make(chan struct{}), once: &sync.Once{}}
+		// A context that is no step of the library refuses the write, and the log of the refusal stands in for a write that waits for the store.
+		engine.logger = slog.New(held)
+
+		returned := make(chan struct{})
+
+		go func() {
+			defer close(returned)
+
+			_, runErr := engine.runAgent(t.Context(), t.Context(), PhaseInput{Item: testItem}, nil)
+			assert.NoError(t, runErr)
+		}()
+
+		synctest.Wait() // the saver waits in the held write, and the step waits for the saver unless it returned already
+		<-held.entered
+
+		select {
+		case <-returned:
+			assert.Fail(t, "the agent step returned while the write of the last session id waited, so DBOS records the output before the event")
+		default:
+		}
+
+		close(held.release)
+		<-returned
+	})
 }
 
 func TestPhaseOutput_RecordsWhetherTheRunResumedALostSession(t *testing.T) {
