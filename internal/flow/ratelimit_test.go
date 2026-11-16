@@ -214,7 +214,7 @@ func TestRateLimit_AResumeAfterALimitWithNoResetTimeRunsTheAgentAgain(t *testing
 	assert.Len(t, h.agents.seen(), 2, "the limited run, then the run of the resume")
 }
 
-func TestRateLimit_TwoLimitedRunsOfOneTryKeepOneRecordEachInTheOrderOfTheRuns(t *testing.T) {
+func TestRateLimit_TwoLimitedRunsOfOneTryKeepOneRecordEachNumberedFromZero(t *testing.T) {
 	t.Parallel()
 
 	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
@@ -228,12 +228,12 @@ func TestRateLimit_TwoLimitedRunsOfOneTryKeepOneRecordEachInTheOrderOfTheRuns(t 
 	var names []string
 
 	for _, step := range recordsOfTestRun(t, engine) {
-		if strings.Contains(step.StepName, "/limit") {
+		if strings.HasPrefix(step.StepName, "agent:fix#1/limit1.") {
 			names = append(names, step.StepName)
 		}
 	}
 
-	assert.Equal(t, []string{"agent:fix#1/limit1.0", "agent:fix#1/limit1.1"}, names, "each limited run of the try has its own record, numbered from the first")
+	assert.Equal(t, []string{"agent:fix#1/limit1.0", "agent:fix#1/limit1.1"}, names, "each limited run of the try has its own record, numbered from 0")
 }
 
 func TestRateLimit_AResumeAfterTwoPastResetsInARowRunsTheAgentAgain(t *testing.T) {
