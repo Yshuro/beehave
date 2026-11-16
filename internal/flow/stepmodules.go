@@ -34,8 +34,9 @@ const (
 const coreVersion = 3
 
 // agentVersion is the version of the agent module. Version 2 added the limit field to the phase output, and the limit step and the later looks at the caps
-// that an agent call records when a provider limit stops its run.
-const agentVersion = 2
+// that an agent call records when a provider limit stops its run. Version 3 added the start_head field to the phase input, the session and diff_stat fields
+// to the record of a lost step, and the resumed field to the phase output.
+const agentVersion = 3
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
@@ -73,7 +74,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core3.agent2.tracker1.forge1.land3.gate1.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core3.agent3.tracker1.forge1.land3.gate1.host1.round1.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

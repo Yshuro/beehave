@@ -1,0 +1,141 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/flow"
+	"github.com/tobocop2/beehave/internal/model"
+)
+
+// resumeAdapter is a lineAdapter whose CLI has a resume option, and whose transcript is <configDir>/<session>.jsonl.
+type resumeAdapter struct{ lineAdapter }
+
+func (resumeAdapter) Profile() agent.Profile {
+	return agent.Profile{BudgetFlag: "--max-budget-usd", Resume: func(id string) []string { return []string{"--resume", id} }}
+}
+
+func (resumeAdapter) TranscriptPath(configDir, _, session string) string {
+	return filepath.Join(configDir, session+".jsonl")
+}
+
+// noResumeAdapter is a resumeAdapter whose CLI has no resume option.
+type noResumeAdapter struct{ resumeAdapter }
+
+func (noResumeAdapter) Profile() agent.Profile { return agent.Profile{BudgetFlag: "--max-budget-usd"} }
+
+// lostFixture is an agent fixture over an adapter, whose login folder is a temporary folder, and a request that follows the loss of session s-lost.
+func lostFixture(t *testing.T, adapter agent.Adapter) (*agentFixture, flow.AgentRequest) {
+	t.Helper()
+
+	f := newAgentFixture("session=s-lost\n", agent.Result{Outcome: agent.OutcomeExited})
+	f.agents.runners[0].ConfigDir = t.TempDir()
+	f.agents.adapter = func(model.Agent) agent.Adapter { return adapter }
+
+	req := request()
+	req.Resume = ""
+	req.Lost = &flow.LostRun{Session: "s-lost", Note: "This step ran before. 1 file changed", Continue: "Continue the step."}
+
+	return f, req
+}
+
+func TestSessionTap_NamesEachNewSessionOnceAtTheLineThatHoldsIt(t *testing.T) {
+	t.Parallel()
+
+	var named []string
+
+	tap := newSessionTap(lineAdapter{}, agent.DefaultPrices(), func(session string) { named = append(named, session) })
+	write := func(lines string) {
+		_, err := tap.Write([]byte(lines))
+		require.NoError(t, err)
+	}
+
+	write("noise\n")
+	assert.Empty(t, named)
+
+	write("session=s1\n")
+	assert.Equal(t, []string{"s1"}, named, "the id is named at the line that holds it, before the run ends")
+
+	write("text=working\nsession=s1\n")
+	assert.Equal(t, []string{"s1"}, named, "an id that repeats is named once")
+
+	write("session=s2\nresult=end\n")
+	assert.Equal(t, []string{"s1", "s2"}, named)
+}
+
+func TestSessionTap_WithNoCallbackKeepsTheSession(t *testing.T) {
+	t.Parallel()
+
+	tap := newSessionTap(lineAdapter{}, agent.DefaultPrices(), nil)
+	_, err := tap.Write([]byte("session=s1\n"))
+	require.NoError(t, err)
+
+	session, _ := tap.found()
+	assert.Equal(t, "s1", session)
+}
+
+func TestAgents_ALostStepWithATranscriptResumesTheSession(t *testing.T) {
+	t.Parallel()
+
+	f, req := lostFixture(t, resumeAdapter{})
+	require.NoError(t, os.WriteFile(filepath.Join(f.agents.runners[0].ConfigDir, "s-lost.jsonl"), []byte("{}\n"), 0o600))
+
+	var named []string
+
+	req.Named = func(session string) { named = append(named, session) }
+
+	got, err := f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, "s-lost", f.spec.Resume, "the saved session is resumed")
+	assert.Equal(t, "Continue the step.", f.spec.Prompt, "a resumed session gets the short prompt: its brief is in the transcript")
+	assert.True(t, got.Resumed)
+	assert.Equal(t, []string{"s-lost"}, named, "the run names its session through the request")
+}
+
+func TestAgents_TheSavedSessionWinsOverTheResumeKeyword(t *testing.T) {
+	t.Parallel()
+
+	f, req := lostFixture(t, resumeAdapter{})
+	require.NoError(t, os.WriteFile(filepath.Join(f.agents.runners[0].ConfigDir, "s-lost.jsonl"), []byte("{}\n"), 0o600))
+
+	req.Resume = "old"
+
+	_, err := f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, "s-lost", f.spec.Resume)
+}
+
+func TestAgents_ALostStepWithNoTranscriptRunsFreshWithTheNoteAndTheDiffSummary(t *testing.T) {
+	t.Parallel()
+
+	f, req := lostFixture(t, resumeAdapter{})
+
+	got, err := f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Empty(t, f.spec.Resume, "a session with no transcript file cannot resume")
+	assert.Equal(t, "do it\n\nThis step ran before. 1 file changed", f.spec.Prompt, "the fresh run gets the whole prompt, the note and the diff summary")
+	assert.False(t, got.Resumed)
+}
+
+func TestAgents_ALostStepOnACLIWithNoResumeOptionRunsFreshWithTheNote(t *testing.T) {
+	t.Parallel()
+
+	f, req := lostFixture(t, noResumeAdapter{})
+	// The transcript exists, but the CLI has no option to resume it.
+	require.NoError(t, os.WriteFile(filepath.Join(f.agents.runners[0].ConfigDir, "s-lost.jsonl"), []byte("{}\n"), 0o600))
+
+	got, err := f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Empty(t, f.spec.Resume)
+	assert.Equal(t, "do it\n\nThis step ran before. 1 file changed", f.spec.Prompt)
+	assert.False(t, got.Resumed)
+}

@@ -259,7 +259,7 @@ func (a e2eAgents) Run(ctx context.Context, request flow.AgentRequest) (agent.Re
 	env := map[string]string{"PATH": a.path}
 	adapter := newAdapters(nil, nil, nil).agent(claude.Name)
 	runner := model.Runner{Name: request.Login, Agent: claude.Name, ConfigDir: a.dir}
-	tap := newSessionTap(adapter, agent.DefaultPrices())
+	tap := newSessionTap(adapter, agent.DefaultPrices(), request.Named)
 	protect := protectionOf(request.Protect, a.dir)
 
 	result := agent.Runner{}.Run(ctx, agent.Spec{

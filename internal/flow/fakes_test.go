@@ -58,9 +58,12 @@ type fakeAgents struct {
 	pid      int
 	result   func(AgentRequest) agent.Result
 	err      error
+	// named is the session id that the agent names before it counts as in flight, when it is set.
+	named string
 }
 
 // Run holds each agent in flight until the test closes gate, when gate is set. It reports pid as the process of the agent, when pid is set.
+// It names the session named before it counts as in flight, so a test that sees the agent in flight sees the saved session.
 // Like the command of the real runner, it starts nothing under a context that is done, and it kills the group of its process when the context ends.
 func (a *fakeAgents) Run(ctx context.Context, request AgentRequest) (agent.Result, error) {
 	if err := ctx.Err(); err != nil {
@@ -77,6 +80,10 @@ func (a *fakeAgents) Run(ctx context.Context, request AgentRequest) (agent.Resul
 	}
 
 	a.mu.Lock()
+	if a.named != "" {
+		request.Named(a.named)
+	}
+
 	a.requests = append(a.requests, request)
 	a.inFlight++
 	a.perLogin[request.Login]++
