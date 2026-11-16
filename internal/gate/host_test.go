@@ -241,7 +241,7 @@ func TestHostCommand_AHungGateEndsWithExitStatus124UnderTheRunLimitAndTheCloneIs
 
 	project := hostProject()
 	project.Host = &model.HostConfig{MaxRun: time.Second}
-	project.Gate = "sleep 30" // runs far longer than the run limit; timeout signals the whole process group, so no child keeps the output open
+	project.Gate = "sleep 30; true" // two commands, so the shell forks sleep as a child; timeout signals the whole process group, so no child keeps the output open
 
 	start := time.Now()
 	code, home, _, out := runProjectCommand(t, project, "SHIM_HEAD="+headA)
