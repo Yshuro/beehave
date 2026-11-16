@@ -12,8 +12,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// These tests pin the behavior of the DBOS streams that the cost of a failed agent run relies on: an entry outlives a rewind to a step before it,
-// and a snapshot read from inside a step returns at once while the run is open.
+// These tests pin the behavior of the DBOS streams that the cost of a failed agent run relies on:
+//   - An entry written in the workflow body outlives a rewind to a step before it, and the rerun appends its own entry.
+//   - A replay that finds the step record of a write appends no second entry.
+//   - A snapshot read from inside a step of an open run returns the entries at once.
+//
+// One more premise rests on the DBOS source, not on a test: a write from the workflow body and its step record commit in one
+// transaction, so no entry is committed without its record. In DBOS v1.8.0, WriteStream runs the write through runAsTxn, which
+// checks the record, writes the entry and records the step in one database transaction.
 
 // premiseKey is the stream that the premise tests write.
 const premiseKey = "premise"
@@ -150,7 +156,7 @@ func TestDBOSStream_AReplayThatFindsTheRecordOfAWriteAppendsNoSecondEntry(t *tes
 	_, err = resultWithin(t, handle)
 	require.ErrorIs(t, err, errPremiseFirstRun)
 
-	// The restart replays from step 2, so the record of the write at step 1 is kept and the write is not run again.
+	// The rewind to step 2 keeps the record of the write at step 1, so the replay does not run the write again.
 	replayed, err := dbos.RewindWorkflow[int](flowCtx, "premise-replay", dbos.WithRewindStartStep(2))
 	require.NoError(t, err)
 
@@ -160,7 +166,7 @@ func TestDBOSStream_AReplayThatFindsTheRecordOfAWriteAppendsNoSecondEntry(t *tes
 
 	entries, _, err := dbos.ReadStream[int](flowCtx, "premise-replay", premiseKey, dbos.WithReadStreamSnapshot())
 	require.NoError(t, err)
-	assert.Equal(t, []int{1}, entries, "the write and its step record commit together, so the replay finds the record and writes nothing")
+	assert.Equal(t, []int{1}, entries, "the replay finds the step record of the write and appends no second entry")
 }
 
 func TestDBOSStream_ASnapshotReadInsideAStepOfAnOpenRunReturnsTheEntriesAtOnce(t *testing.T) {
