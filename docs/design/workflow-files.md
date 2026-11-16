@@ -272,7 +272,7 @@ The four steps that post public text (`item_create`, `item_comment`, `pr_comment
 - A gate, its key and a `command` call with a `host` run on that recorded cluster. A run that did not call `host_up` uses the first declared host.
 - A project with no host, and a build with no host keeper, start nothing and give `started` false.
 - The start is a recorded step, so a replay of a recorded start does not launch again. A crash after the launch and before the record is not covered today: the repeat finds the host up and gives `started` false, so `host_teardown` does not stop it. A crash during the launch fails the repeat, because the host is in a launching state. A later change fixes both cases.
-- The example calls `host_up` first in `main` only when `HOST_UP` is "true".
+- The example calls `host_up` first in the round, with the `build_host` of the project file.
 
 `host_up` reads the host first:
 
@@ -710,7 +710,7 @@ One workflow written in this form, with five prompt files. The method lives in t
 The engine has no mutation builtin. The project owns the tool and the workflow runs it as a host command.
 
 - The project file sets `vars.mutation_command`: a list of words, such as `["sh", "scripts/mutation-pr.sh"]`. A run with no such key, or a value that is not a list of words, is refused before the first agent starts. The message names the key.
-- After each green gate, `check_mutation` runs the command with `host` and `slots = "mutation"`. It adds one word at the end: the base ref, `origin/<BASE>`. The command mutates only the lines that differ from that ref.
+- After each green gate, `check_mutation` runs the command with `host` and `slots = "mutation"`. It adds one word at the end: the base ref, `origin/` and the base of the round (`vars.round.base`). The command mutates only the lines that differ from that ref.
 - The `host` block of the project lists the class: `slots = {"mutation": 1}`.
 - The command exits with code 0 when the head is clean, and with another code when the run fails. A run that applied no mutant is a failed run, and the command says so.
 - A failed run prints one finding per line on its standard output, as `finding: path:line: text`, for example `finding: internal/cli/check.go:112: a mutant lived: CONDITIONALS_NEGATION`. The output of a failed host job is the end of its log, so it can hold other lines of the tool, such as the `KILLED <TYPE> at file:line:col` lines of gremlins. Only a line that starts with the literal prefix `finding: ` is a finding, and the finding is the text after the prefix. A failed run with no such line gives each non-blank line, the last 20 at most.

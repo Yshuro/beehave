@@ -68,6 +68,7 @@ func dryReading() func() time.Time {
 type dryChoice struct {
 	redGate, sendBack bool
 	vars              map[string]any
+	entry             string
 }
 
 // DryOption is a choice for a dry run.
@@ -81,6 +82,10 @@ func WithSendBack() DryOption { return func(c *dryChoice) { c.sendBack = true } 
 
 // WithVars gives the facts of the dry run the vars of a project. The vars are static config, so the dry run reads them as a real run does. Every other fact stays empty.
 func WithVars(vars map[string]any) DryOption { return func(c *dryChoice) { c.vars = vars } }
+
+// WithEntry starts the dry run at the named entry of the file, as a run of the engine does, so that a test walks the file it tests.
+// An entry run skips the finish function. The command beehave check has no flag for it: the option is for tests of the library.
+func WithEntry(name string) DryOption { return func(c *dryChoice) { c.entry = name } }
 
 // chooseDry applies the options of a dry run in order.
 func chooseDry(options []DryOption) dryChoice {
@@ -115,7 +120,7 @@ func DryRun(ctx context.Context, file, item string, env map[string]string, out i
 		return err
 	}
 
-	runErr := dryWalk(ctx, opts, deps, item, file)
+	runErr := dryWalk(ctx, opts, deps, item, file, chosen.entry)
 	last, printErr := printDrySteps(ctx, opts, out)
 
 	return errors.Join(printErr, dryFailure(out, last, runErr))
@@ -139,7 +144,7 @@ func dryPrepare(ctx context.Context, root, file, item string, chosen dryChoice) 
 }
 
 // dryWalk opens an engine over the deps, takes the item through the file and stops the engine.
-func dryWalk(ctx context.Context, opts Options, deps Deps, item, file string) error {
+func dryWalk(ctx context.Context, opts Options, deps Deps, item, file, entry string) error {
 	engine, err := NewEngine(ctx, opts, deps)
 	if err != nil {
 		return err
@@ -147,10 +152,23 @@ func dryWalk(ctx context.Context, opts Options, deps Deps, item, file string) er
 
 	err = engine.Launch() //nolint:contextcheck // the engine owns the context of its runs
 	if err == nil {
-		_, err = engine.RunFile(item, dryProject, file)
+		err = dryRunItem(engine, item, file, entry)
 	}
 
 	return errors.Join(err, engine.Shutdown())
+}
+
+// dryRunItem runs the pinned file for the item, at the entry the caller chose. An empty entry runs main.
+func dryRunItem(engine *Engine, item, file, entry string) error {
+	in, err := pinnedInput(item, dryProject, file)
+	if err != nil {
+		return err
+	}
+
+	in.Entry = entry
+	_, err = engine.run(in)
+
+	return err
 }
 
 // ErrDryRunEndedEarly is returned by DryRun when the run ends at a step that the dry run does not fake. The steps after it are not checked.

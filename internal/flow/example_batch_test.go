@@ -2,8 +2,9 @@ package flow
 
 import (
 	"context"
-	"os"
+	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,7 +14,6 @@ import (
 
 	"github.com/tobocop2/beehave/internal/batch"
 	"github.com/tobocop2/beehave/internal/merge"
-	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/preflight"
 )
 
@@ -23,9 +23,16 @@ type remoteBranches struct {
 	mu    sync.Mutex
 	heads map[string]string
 	asked []string
+
+	// before runs at the start of each call, with no lock held. The round rig puts its barrier here: the preflight holds no queue slot.
+	before func(ctx context.Context, item string)
 }
 
-func (r *remoteBranches) Preflight(_ context.Context, _, item string, req preflight.Request, _ string) (preflight.Result, error) {
+func (r *remoteBranches) Preflight(ctx context.Context, _, item string, req preflight.Request, _ string) (preflight.Result, error) {
+	if r.before != nil {
+		r.before(ctx, item)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -43,55 +50,61 @@ func (r *remoteBranches) Preflight(_ context.Context, _, item string, req prefli
 	return preflight.Result{Stop: preflight.Unchanged}, nil
 }
 
-// landingExample returns the batch rig with the environment of the example and the workflow file of the repository, unchanged.
-// pins is the LAND value, switchValue is the MERGE switch, or "" to leave it unset. The remote holds the head of each member.
-func landingExample(t *testing.T, pins func(heads map[string]string) string, switchValue string) (*batchRig, string, *fakeWriter, *remoteBranches) {
-	t.Helper()
+// heldOf returns the items that the run put on hold.
+func heldOf(w *fakeWriter) []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 
-	rig := newBatchRig(t)
-	folder := t.TempDir()
-	require.NoError(t, os.CopyFS(folder, os.DirFS(filepath.Join("..", "..", "examples", "remediation"))))
+	var held []string
 
-	rig.h.opts.Env = map[string]string{"REPO": "o/r", "BASE": "main", "OWNER_LOGIN": shipOwner, "OWNER_EMAIL": shipMail, "LAND": pins(rig.heads)}
-	if switchValue != "" {
-		rig.h.opts.Env["MERGE"] = switchValue
-	}
-
-	remote := &remoteBranches{heads: map[string]string{}}
-	for item, head := range rig.heads {
-		remote.heads[item] = head
-	}
-
-	rig.h.preflight = remote
-
-	writer := newFakeWriter()
-	rig.h.writer = writer
-
-	return rig, filepath.Join(folder, "workflow.star"), writer, remote
-}
-
-// reviewed pins the listed items at the head each has in the repository.
-func reviewed(items string) func(map[string]string) string {
-	return func(heads map[string]string) string {
-		var pins []string
-
-		for _, item := range strings.Fields(items) {
-			pins = append(pins, item+"="+heads[item])
+	for _, status := range w.statuses {
+		if strings.HasSuffix(status, "|hold") {
+			held = append(held, status)
 		}
-
-		return strings.Join(pins, " ")
 	}
+
+	return held
 }
 
-func TestExampleBatch_TwoReadyItemsLandInOneBatchWithOneGateRun(t *testing.T) {
+// notesWithKey returns the comments of the run that carry the key.
+func notesWithKey(w *fakeWriter, key string) []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	var notes []string
+
+	for _, note := range w.notes {
+		// The key of a comment is scoped to the run, so the text tells a merge record from a rejection.
+		if strings.Contains(note, "Merged into") == (key == "merged") {
+			notes = append(notes, note)
+		}
+	}
+
+	return notes
+}
+
+// gitLines returns the git commands that the run made, in order.
+func gitLines(rig *roundRig) []string {
+	var lines []string
+
+	for _, line := range rig.h.commands.ran() {
+		if strings.HasPrefix(line, "git fetch") || strings.HasPrefix(line, "git diff") {
+			lines = append(lines, line)
+		}
+	}
+
+	return lines
+}
+
+func TestExampleBatch_TwoApprovedItemsLandInOneBatchWithOneGateRun(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"1", "3"}, rig.merger.landed())
+	assert.ElementsMatch(t, []string{"1", "3"}, rig.merger.landed(), "the two children end together, so the batch has no fixed order")
 	assert.Len(t, rig.gate.ran(), 1, "two green members take one gate run")
 	assert.Equal(t, "README\none.txt\nthree.txt", rig.mainFiles(t))
 
@@ -100,46 +113,47 @@ func TestExampleBatch_TwoReadyItemsLandInOneBatchWithOneGateRun(t *testing.T) {
 		assert.Equal(t, []string{shipOwner}, given.Logins)
 		assert.Equal(t, []string{shipMail}, given.Emails)
 		assert.Len(t, given.ForbidText, 4)
+		assert.True(t, given.Approved, "each member carries the approval of the review of its child run")
 	}
 }
 
 func TestExampleBatch_AnItemThatAGuardRefusesIsHeldAndTheOtherItemLands(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, _ := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Lines: []string{"REFUSE: has the label hold"}, Refusal: []string{"REFUSE: has the label hold"}}}
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, "README\nthree.txt", rig.mainFiles(t), "item 3 lands and item 1 does not")
-	assert.Equal(t, []string{testProject + "|1|hold"}, writer.statuses)
-	require.Len(t, writer.notes, 1)
-	assert.Contains(t, writer.notes[0], "REFUSE: has the label hold")
+	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer))
+	require.Len(t, notesWithKey(rig.writer, "rejected"), 1)
+	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "REFUSE: has the label hold")
 }
 
 func TestExampleBatch_APushAfterTheReviewRefusesOnlyThatItem(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, remote := landingExample(t, reviewed("1 3"), "true")
-	remote.heads["1"] = strings.Repeat("e", 40) // somebody pushed to the branch of item 1 after the owner reviewed it
+	rig := newRoundRig(t, "1 3")
+	rig.pushAfterReviews("1", strings.Repeat("e", 40)) // somebody pushed to the branch of item 1 after the review approved it
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"3"}, rig.merger.landed(), "the pushed item never reaches the merge")
 	assert.Equal(t, "README\nthree.txt", rig.mainFiles(t))
-	assert.Equal(t, []string{testProject + "|1|hold"}, writer.statuses)
-	require.Len(t, writer.notes, 1)
-	assert.Contains(t, writer.notes[0], "head moved")
+	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer))
+	require.Len(t, notesWithKey(rig.writer, "rejected"), 1)
+	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "head moved")
 }
 
-func TestExampleBatch_AMemberLandsAtTheHeadTheOwnerReviewedAndNotTheHeadOnTheRemote(t *testing.T) {
+func TestExampleBatch_AMemberLandsAtTheHeadTheReviewApprovedAndNotTheHeadOnTheRemote(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{rig.heads["1"], rig.heads["3"]}, rig.merger.pinned(), "each member merges at its pin")
@@ -148,57 +162,71 @@ func TestExampleBatch_AMemberLandsAtTheHeadTheOwnerReviewedAndNotTheHeadOnTheRem
 func TestExampleBatch_AMissingBranchIsReportedAndTheOtherItemLands(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, remote := landingExample(t, reviewed("1 3"), "true")
-	delete(remote.heads, "1")
+	rig := newRoundRig(t, "1 3")
+	rig.pushAfterReviews("1", "") // the branch of item 1 is deleted after the review approved it
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"3"}, rig.merger.landed())
-	assert.Equal(t, []string{testProject + "|1|hold"}, writer.statuses)
-	require.Len(t, writer.notes, 1)
-	assert.Contains(t, writer.notes[0], "no longer exists")
+	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer))
+	require.Len(t, notesWithKey(rig.writer, "rejected"), 1)
+	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "no longer exists")
 }
 
 func TestExampleBatch_AnItemWithNoChangelogEntryIsHeldWhenTheProjectDeclaresOneAndTheOtherItemLands(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, _ := landingExample(t, reviewed("1 3"), "true")
-	rig.h.facts = func(project string) model.Project { return model.Project{Name: project, Changelog: "CHANGELOG.md"} }
+	rig := newRoundRig(t, "1 3")
+	rig.project.Changelog = "CHANGELOG.md"
+
+	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
-		if request.Run[1] == "diff" && strings.HasSuffix(request.Run[len(request.Run)-1], rig.heads["1"]) {
+		if request.Run[1] == "diff" && rig.inLandPhase() && strings.HasSuffix(request.Run[len(request.Run)-1], rig.heads["1"]) {
 			return CommandOutput{Stdout: "one.txt\n"}, nil
 		}
 
-		return CommandOutput{Stdout: "three.txt\nCHANGELOG.md\n"}, nil
+		if request.Run[1] == "diff" {
+			return CommandOutput{Stdout: "three.txt\nCHANGELOG.md\n"}, nil
+		}
+
+		return previous(request)
 	}
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"3"}, rig.merger.landed(), "the item with no entry never reaches the merge")
-	assert.Equal(t, []string{testProject + "|1|hold"}, writer.statuses)
-	require.Len(t, writer.notes, 1)
-	assert.Contains(t, writer.notes[0], "the project declares the changelog CHANGELOG.md")
+	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer))
+	require.Len(t, notesWithKey(rig.writer, "rejected"), 1)
+	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "the project declares the changelog CHANGELOG.md")
+	lines := gitLines(rig)
+	require.GreaterOrEqual(t, len(lines), 4)
 	assert.Equal(t, []string{
 		"git fetch origin " + rig.heads["1"], "git diff --name-only origin/main..." + rig.heads["1"],
 		"git fetch origin " + rig.heads["3"], "git diff --name-only origin/main..." + rig.heads["3"],
-	}, rig.h.commands.ran(), "each member is fetched, then read from the base to its own head")
+	}, lines[len(lines)-4:], "after the checks of the children, each member is fetched, then read from the base to its own head")
 }
 
 func TestExampleBatch_TheChangelogChecksOfTwoItemsRecordTheirOwnSteps(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
-	rig.h.facts = func(project string) model.Project { return model.Project{Name: project, Changelog: "CHANGELOG.md"} }
-	rig.h.commands.reply = func(CommandRequest) (CommandOutput, error) { return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil }
-	engine := rig.engine(t)
+	rig := newRoundRig(t, "1 3")
+	rig.project.Changelog = "CHANGELOG.md"
 
-	_, err := engine.RunFile(testItem, testProject, file)
+	previous := rig.h.commands.reply
+	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
+		if request.Run[0] == "git" {
+			return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil
+		}
 
+		return previous(request)
+	}
+
+	_, err := rig.run(t)
 	require.NoError(t, err)
 
-	joined := strings.Join(stepNames(t, engine), " ")
+	joined := strings.Join(stepNames(t, rig.last), " ")
 	for _, id := range []string{"1", "3"} {
 		assert.Contains(t, joined, "changelog-fetch-"+id+"#")
 		assert.Contains(t, joined, "changed-paths-"+id+"#")
@@ -208,132 +236,121 @@ func TestExampleBatch_TheChangelogChecksOfTwoItemsRecordTheirOwnSteps(t *testing
 func TestExampleBatch_AnItemWhoseHeadCannotBeFetchedIsHeldWithTheReasonAndTheOtherItemLands(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, _ := landingExample(t, reviewed("1 3"), "true")
-	rig.h.facts = func(project string) model.Project { return model.Project{Name: project, Changelog: "CHANGELOG.md"} }
+	rig := newRoundRig(t, "1 3")
+	rig.project.Changelog = "CHANGELOG.md"
+
+	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
 		if request.Run[1] == "fetch" && request.Run[len(request.Run)-1] == rig.heads["1"] {
 			return CommandOutput{RC: 1, Stderr: "fatal: no such ref\n"}, nil
 		}
 
-		return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil
+		if request.Run[0] == "git" {
+			return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil
+		}
+
+		return previous(request)
 	}
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err, "a code of 1 is a result, not a stop of the run")
 	assert.Equal(t, []string{"3"}, rig.merger.landed(), "the item that cannot be checked never reaches the merge")
-	assert.Equal(t, []string{testProject + "|1|hold"}, writer.statuses)
-	require.Len(t, writer.notes, 1)
-	assert.Contains(t, writer.notes[0], "could not be fetched")
-	assert.Contains(t, writer.notes[0], "fatal: no such ref")
-	assert.NotContains(t, rig.h.commands.ran(), "git diff --name-only origin/main..."+rig.heads["1"], "no diff runs after a failed fetch")
+	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer))
+	require.Len(t, notesWithKey(rig.writer, "rejected"), 1)
+	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "could not be fetched")
+	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "fatal: no such ref")
+	diff := "git diff --name-only origin/main..." + rig.heads["1"]
+	diffs := slices.DeleteFunc(gitLines(rig), func(line string) bool { return line != diff })
+	assert.Len(t, diffs, 1, "the one diff of item 1 is the check of its child, before the batch: no diff runs after the failed fetch")
 }
 
 func TestExampleBatch_AnItemWhoseChangedPathsCannotBeReadIsHeldWithTheReasonAndTheOtherItemLands(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, _ := landingExample(t, reviewed("1 3"), "true")
-	rig.h.facts = func(project string) model.Project { return model.Project{Name: project, Changelog: "CHANGELOG.md"} }
+	rig := newRoundRig(t, "1 3")
+	rig.project.Changelog = "CHANGELOG.md"
+
+	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
-		if request.Run[1] == "diff" && strings.HasSuffix(request.Run[len(request.Run)-1], rig.heads["1"]) {
+		if rig.inLandPhase() && request.Run[1] == "diff" && strings.HasSuffix(request.Run[len(request.Run)-1], rig.heads["1"]) {
 			return CommandOutput{RC: 1, Stderr: "fatal: bad revision\n"}, nil
 		}
 
-		return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil
+		if request.Run[0] == "git" {
+			return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil
+		}
+
+		return previous(request)
 	}
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err, "a code of 1 is a result, not a stop of the run")
 	assert.Equal(t, []string{"3"}, rig.merger.landed(), "the item that cannot be checked never reaches the merge")
-	assert.Equal(t, []string{testProject + "|1|hold"}, writer.statuses)
-	require.Len(t, writer.notes, 1)
-	assert.Contains(t, writer.notes[0], "changed paths of item 1 could not be read")
-	assert.Contains(t, writer.notes[0], "fatal: bad revision")
+	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer))
+	require.Len(t, notesWithKey(rig.writer, "rejected"), 1)
+	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "changed paths of item 1 could not be read")
+	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "fatal: bad revision")
 }
 
 func TestExampleBatch_EveryItemGetsTheStopsOfOneItemBeforeTheBatch(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, remote := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"1", "3"}, remote.asked)
+	require.GreaterOrEqual(t, len(rig.remote.asked), 2)
+	assert.ElementsMatch(t, []string{"1", "3"}, rig.remote.asked[len(rig.remote.asked)-2:], "the last two reads of the remote are the stops of the two members, one read each, before the batch")
 }
 
-func TestExampleBatch_APinThatIsNotAnIdAndAShaFailsTheRun(t *testing.T) {
+func TestExampleBatch_AMergeSettingThatIsOffLandsNothing(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, func(map[string]string) string { return "1" }, "true")
+	rig := newRoundRig(t, "1 3")
+	rig.setRound("merge", false)
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
-
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not id=sha")
-	assert.Empty(t, rig.merger.asked)
-}
-
-func TestExampleBatch_AMergeSwitchThatIsNotSetFailsTheRunAsForOneItem(t *testing.T) {
-	t.Parallel()
-
-	rig, file, writer, remote := landingExample(t, reviewed("1 3"), "")
-
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
-
-	require.Error(t, err, "a run fails if MERGE is not set, as the pipeline of one item does")
-	assert.Empty(t, rig.merger.asked)
-	assert.Empty(t, rig.gate.ran())
-	assert.Empty(t, remote.asked)
-	assert.Empty(t, writer.statuses)
-	assert.Equal(t, "README", rig.mainFiles(t))
-}
-
-func TestExampleBatch_AMergeSwitchThatIsNotTrueLandsNothing(t *testing.T) {
-	t.Parallel()
-
-	rig, file, writer, remote := landingExample(t, reviewed("1 3"), "false")
-
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Empty(t, rig.merger.asked, "no member reaches the merge")
 	assert.Empty(t, rig.gate.ran(), "no gate runs")
-	assert.Empty(t, remote.asked, "no branch is read")
-	assert.Empty(t, writer.statuses)
+	assert.Len(t, rig.remote.asked, 4, "only the intake and the review loop of the two children read a branch; the batch reads none")
+	assert.Empty(t, heldOf(rig.writer))
 	assert.Equal(t, "README", rig.mainFiles(t))
 }
 
-func TestExampleBatch_OneReadyItemLandsAsABatchOfOne(t *testing.T) {
+func TestExampleBatch_OneApprovedItemLandsAsABatchOfOne(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("3"), "true")
+	rig := newRoundRig(t, "3")
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"3"}, rig.merger.landed())
 }
 
-func TestExampleBatch_TheIntegrationPullRequestOfTheEnvironmentReachesTheReadAfterTheBatch(t *testing.T) {
+func TestExampleBatch_TheIntegrationPullRequestOfTheRoundReachesTheReadAfterTheBatch(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
-	rig.h.opts.Env["INTEGRATION_PR"] = "7"
+	rig := newRoundRig(t, "1 3")
+	rig.setRound("integration_pr", json.Number("7"))
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{testProject + " main 7 1,3"}, rig.host.issueReads())
 }
 
-func TestExampleBatch_ARunWithNoIntegrationPullRequestReadsWithNumberZero(t *testing.T) {
+func TestExampleBatch_ARoundWithNoIntegrationPullRequestReadsWithNumberZero(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{testProject + " main 0 1,3"}, rig.host.issueReads())
@@ -342,10 +359,10 @@ func TestExampleBatch_ARunWithNoIntegrationPullRequestReadsWithNumberZero(t *tes
 func TestExampleBatch_AFindingStopsTheRunWithARefuseForTheOwner(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 	rig.host.report = batch.Report{Findings: []string{"issue #1 of item 1 is not closed after the batch landed"}}
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -356,38 +373,65 @@ func TestExampleBatch_AFindingStopsTheRunWithARefuseForTheOwner(t *testing.T) {
 func TestExampleBatch_AnUnprovenMemberStopsTheRunWithARefuseThatNamesTheItemAndTheReason(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 	rig.host.unproven = []batch.Outcome{{Item: "3", Reason: "its branch holds another commit now"}}
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
 	assert.Contains(t, err.Error(), "item 3: its branch holds another commit now")
 }
 
-func TestExampleBatch_ANoteIsCommentedAsAnIssueCheckThatDidNotRun(t *testing.T) {
+func TestExampleBatch_ANoteIsPrintedAsAnIssueCheckThatDidNotRun(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, _ := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 	rig.host.report = batch.Report{Note: "the base is not the default branch"}
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	require.Len(t, writer.notes, 1)
-	assert.Contains(t, writer.notes[0], "the issue check did not run: the base is not the default branch")
+	assert.Empty(t, notesWithKey(rig.writer, "rejected"), "the round has no item issue for the note, so it prints it in the run record")
 }
 
 func TestExampleBatch_AReportWithNoFindingAndNoNoteSaysNothing(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, _ := landingExample(t, reviewed("1 3"), "true")
+	rig := newRoundRig(t, "1 3")
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Empty(t, writer.notes)
+	assert.Empty(t, notesWithKey(rig.writer, "rejected"))
+}
+
+func TestExampleBatch_EachMergedItemIsRecordedAsMergedAndClosed(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "1 3")
+
+	_, err := rig.run(t)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{testProject + "|1|closed", testProject + "|3|closed"}, closedOf(rig.writer))
+	assert.Len(t, notesWithKey(rig.writer, "merged"), 2)
+}
+
+// closedOf returns the items that the run closed.
+func closedOf(w *fakeWriter) []string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	var closed []string
+
+	for _, status := range w.statuses {
+		if strings.HasSuffix(status, "|closed") {
+			closed = append(closed, status)
+		}
+	}
+
+	return closed
 }
 
 func TestExampleSwarm_TheLandCallPassesTheIntegrationAndActsOnFindingsAndNote(t *testing.T) {

@@ -1,176 +1,128 @@
 package flow
 
 import (
-	"slices"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// These tests run the round steps of the example file: the record of a merge, the cut of the next round and the record of the base reds.
+// These tests run the round steps of the example: the integration pull request, the cut of the next round and the record of the base reds.
 
-// recountReply answers the recount tool with the rows and issues before the write, and a pass after it.
-func recountReply(rows, issues string) func(CommandRequest) (CommandOutput, error) {
-	return func(request CommandRequest) (CommandOutput, error) {
-		if len(request.Run) > 1 && request.Run[1] == "recount" && !slices.Contains(request.Run, "--was-rows") {
-			return CommandOutput{Stdout: "rows=" + rows + " issues=" + issues + "\n"}, nil
+// commandsNamed returns the command lines of the run whose program is the first word.
+func commandsNamed(rig *roundRig, first string) []string {
+	var lines []string
+
+	for _, line := range rig.h.commands.ran() {
+		if strings.HasPrefix(line, first+" ") || line == first {
+			lines = append(lines, line)
 		}
-
-		return CommandOutput{}, nil
 	}
+
+	return lines
 }
 
-func mergeRig(t *testing.T, closes string) (*agentRig, string) {
-	t.Helper()
-
-	rig, file := exampleRig(t, func(int) string { return "approve" })
-	rig.h.opts.Env["ROUND_STEP"] = "merge"
-	rig.h.opts.Env["MERGED_PR"] = "41"
-	rig.h.opts.Env["INTEGRATION_PR"] = "9"
-	rig.h.opts.Env["CLOSES"] = closes
-	rig.h.commands.reply = recountReply("4", "2")
-
-	return rig, file
-}
-
-func TestExampleRound_AMergeAddsTheRowThenTheAgentWritesThenTheCountMustHaveMoved(t *testing.T) {
-	t.Parallel()
-
-	rig, file := mergeRig(t, "")
-
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
-	require.NoError(t, err)
-
-	assert.Equal(t, []string{
-		"remedy recount --pr 9",
-		"remedy recount --pr 9 --was-rows 4",
-	}, rig.h.commands.ran(), "the count is read before the agent and asserted after it, and a merge with no issue asserts no issue count")
-
-	require.Len(t, rig.h.agents.seen(), 1)
-	assert.Contains(t, rig.h.agents.seen()[0].Prompt, "Add the integration row")
-	assert.Contains(t, rig.h.agents.seen()[0].Prompt, "The pull request 41 ")
-}
-
-func TestExampleRound_AMergeThatResolvesAnIssueAssertsTheIssueCountToo(t *testing.T) {
-	t.Parallel()
-
-	rig, file := mergeRig(t, "12 13")
-
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
-	require.NoError(t, err)
-
-	assert.Equal(t, "remedy recount --pr 9 --was-rows 4 --was-issues 2", rig.h.commands.ran()[1])
-	assert.Contains(t, rig.h.agents.seen()[0].Prompt, "The issues are: 12 13.")
-}
-
-func TestExampleRound_ACountThatDidNotChangeStopsTheRun(t *testing.T) {
-	t.Parallel()
-
-	rig, file := mergeRig(t, "")
+// integrationState makes the integration tool answer with the pull request 9 in the state.
+func integrationState(rig *roundRig, state string) {
+	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
-		if slices.Contains(request.Run, "--was-rows") {
-			return CommandOutput{RC: 1, Stdout: "rows=4 issues=2\nthe row count is still 4: the write did not land\n"}, nil
+		if len(request.Run) > 1 && request.Run[1] == "integration" {
+			return CommandOutput{Stdout: "pr=9 state=" + state + "\n"}, nil
 		}
 
-		return recountReply("4", "2")(request)
+		return previous(request)
 	}
+}
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+func TestRound_TheRoundAsksTheToolForTheIntegrationPullRequestFromTheRoundBaseIntoTheTrunk(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	rig.setRound("base", "integration")
+	rig.setRound("integration_pr", json.Number("9"))
+
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	require.NotNil(t, result.Stopped)
-	assert.Equal(t, 1, result.Stopped.RC)
-	assert.Contains(t, result.Stopped.Output, "the write did not land")
+	assert.Equal(t, []string{"remedy integration --base integration --into main --pr 9"}, commandsNamed(rig, "remedy"))
 }
 
-func TestExampleRound_ABeforeLineWithNoFigureFailsClosedAndNamesTheMissingLine(t *testing.T) {
+func TestRound_AnIntegrationLineWithNoPullRequestNumberStopsTheRun(t *testing.T) {
 	t.Parallel()
 
-	for name, tc := range map[string]struct{ closes, stdout, missing string }{
-		"no rows figure":   {"", "garbage\n", "rows="},
-		"no issues figure": {"12", "rows=4\n", "issues="},
-		"not a number":     {"", "rows=x issues=2\n", "rows="},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			rig, file := mergeRig(t, tc.closes)
-			rig.h.commands.reply = func(CommandRequest) (CommandOutput, error) {
-				return CommandOutput{Stdout: tc.stdout}, nil
-			}
-
-			_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
-
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "recount-before")
-			assert.Contains(t, err.Error(), tc.missing)
-			assert.Equal(t, []string{"remedy recount --pr 9"}, rig.h.commands.ran(), "no assert runs with -1, and none is skipped")
-			assert.Empty(t, rig.h.agents.seen(), "the agent does not run on an unknown count")
-		})
-	}
-}
-
-func TestExampleRound_ABeforeCountWithAFindingStillLetsTheAgentFixIt(t *testing.T) {
-	t.Parallel()
-
-	rig, file := mergeRig(t, "")
+	rig := newRoundRig(t, "")
+	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
-		if !slices.Contains(request.Run, "--was-rows") {
-			return CommandOutput{RC: 1, Stdout: "rows=4 issues=2\nheading says 3 but the section has 4 rows\n"}, nil
+		if len(request.Run) > 1 && request.Run[1] == "integration" {
+			return CommandOutput{Stdout: "garbage\n"}, nil
 		}
 
-		return CommandOutput{}, nil
+		return previous(request)
 	}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
-	require.NoError(t, err)
-	assert.Len(t, rig.h.agents.seen(), 1, "exit code 1 before the agent is the defect that the agent fixes")
-	assert.Equal(t, "remedy recount --pr 9 --was-rows 4", rig.h.commands.ran()[1])
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no `pr=<n>` figure")
 }
 
-func TestExampleRound_ARoundThatTracksNoIntegrationPullRequestRecordsNothing(t *testing.T) {
+func TestRound_TheNextRoundIsCutFromTheOldBaseAndTheIntegrationPullRequestOnceItMerged(t *testing.T) {
 	t.Parallel()
 
-	rig, file := mergeRig(t, "")
-	rig.h.opts.Env["INTEGRATION_PR"] = "none"
+	rig := newRoundRig(t, "")
+	rig.setRound("base", "integration")
+	rig.setRound("next_base", "round-v")
+	rig.setRound("integration_pr", json.Number("9"))
+	rig.answer = "CONTINUE"
+	integrationState(rig, "MERGED")
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
+
 	require.NoError(t, err)
-
-	assert.Empty(t, rig.h.commands.ran())
-	assert.Empty(t, rig.h.agents.seen())
+	assert.Contains(t, commandsNamed(rig, "remedy"), "remedy cut --old integration --new round-v --pr 9 --trunk main")
 }
 
-func TestExampleRound_TheNextRoundIsCutFromTheOldBaseAndTheIntegrationPullRequest(t *testing.T) {
+func TestRound_AStopFromTheOwnerCutsNoNextRoundEvenWhenTheIntegrationPullRequestMerged(t *testing.T) {
 	t.Parallel()
 
-	rig, file := exampleRig(t, func(int) string { return "approve" })
-	rig.h.opts.Env["ROUND_STEP"] = "cut"
-	rig.h.opts.Env["NEXT_BASE"] = "round-v"
-	rig.h.opts.Env["INTEGRATION_PR"] = "9"
+	rig := newRoundRig(t, "")
+	rig.setRound("next_base", "round-v")
+	integrationState(rig, "MERGED")
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
+
 	require.NoError(t, err)
 
-	assert.Equal(t, []string{"remedy cut --old integration --new round-v --pr 9 --trunk main"}, rig.h.commands.ran())
-	assert.Empty(t, rig.h.agents.seen())
+	for _, line := range commandsNamed(rig, "remedy") {
+		assert.NotContains(t, line, "remedy cut")
+	}
 }
 
-func TestExampleRound_TheCutOfTheNextRoundThatTheToolRefusesEndsTheRunWithItsReason(t *testing.T) {
+func TestRound_TheCutOfTheNextRoundThatTheToolRefusesEndsTheRunWithItsReason(t *testing.T) {
 	t.Parallel()
 
-	rig, file := exampleRig(t, func(int) string { return "approve" })
-	rig.h.opts.Env["ROUND_STEP"] = "cut"
-	rig.h.opts.Env["NEXT_BASE"] = "round-v"
-	rig.h.opts.Env["INTEGRATION_PR"] = "9"
-	rig.h.commands.reply = func(CommandRequest) (CommandOutput, error) {
-		return CommandOutput{RC: 2, Stdout: "REFUSE: pull request 9 is not merged"}, nil
+	rig := newRoundRig(t, "")
+	rig.setRound("next_base", "round-v")
+	rig.answer = "CONTINUE"
+	integrationState(rig, "MERGED")
+
+	previous := rig.h.commands.reply
+	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
+		if len(request.Run) > 1 && request.Run[1] == "cut" {
+			return CommandOutput{RC: 2, Stdout: "REFUSE: pull request 9 is not merged"}, nil
+		}
+
+		return previous(request)
 	}
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := rig.run(t)
 
 	require.NoError(t, err)
 	require.NotNil(t, result.Stopped)
@@ -178,21 +130,23 @@ func TestExampleRound_TheCutOfTheNextRoundThatTheToolRefusesEndsTheRunWithItsRea
 	assert.Contains(t, result.Stopped.Output, "is not merged")
 }
 
-func TestExampleRound_TheBaseRedsAreOneRecordWithTheTimeAndTheTip(t *testing.T) {
+func TestRound_TheBaseRedsAreOneRecordWithTheTimeAndTheTip(t *testing.T) {
 	t.Parallel()
 
-	rig, file := exampleRig(t, func(int) string { return "approve" })
-	rig.h.opts.Env["ROUND_STEP"] = "reds"
-	rig.h.opts.Env["BASE_REDS"] = "lint-a test-b"
+	rig := newRoundRig(t, "")
+	rig.setRound("base_reds", []any{"lint-a", "test-b"})
+	rig.setRound("base_reds_file", "base-reds.md")
+
+	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
 		if request.Run[0] == "git" {
 			return CommandOutput{Stdout: "abc123\n"}, nil
 		}
 
-		return CommandOutput{}, nil
+		return previous(request)
 	}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 	require.NoError(t, err)
 
 	var written CommandRequest
@@ -205,8 +159,116 @@ func TestExampleRound_TheBaseRedsAreOneRecordWithTheTimeAndTheTip(t *testing.T) 
 
 	require.NotEmpty(t, written.Run, "the record is written by one program")
 	assert.Equal(t, []string{"tee", "base-reds.md"}, written.Run)
-	assert.Contains(t, written.Stdin, "tip abc123 of integration")
+	assert.Contains(t, written.Stdin, "tip abc123 of main")
 	assert.Contains(t, written.Stdin, "Measured at 20")
 	assert.Contains(t, written.Stdin, "- lint-a\n- test-b\n")
 	assert.Equal(t, 1, strings.Count(written.Stdin, "# Known base reds"), "one record, not a list of records")
+}
+
+func TestRound_ANoChildIsOpenBeforeTheRoundReadsTheIntegrationPullRequestAndWaits(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "1 3")
+
+	_, err := rig.run(t)
+
+	require.NoError(t, err)
+
+	require.NotEmpty(t, commandsNamed(rig, "remedy integration"), "the round reached its integration read")
+	assert.Equal(t, []string{"1", "3"}, rig.kids.started())
+	assert.ElementsMatch(t, rig.kids.started(), rig.kids.reviewedAtIntegration(), "every child had ended its review before the round asks the owner")
+}
+
+func TestRound_TheWaitTimeoutIsTheRoundWaitHours(t *testing.T) {
+	t.Parallel()
+
+	for _, hours := range []int{24, 3} {
+		rig := newRoundRig(t, "")
+		rig.setRound("wait_hours", json.Number(strconv.Itoa(hours)))
+		start := time.Now()
+
+		_, err := rig.run(t)
+
+		require.NoError(t, err)
+		require.Len(t, rig.deadlines, 1, "the round asked the owner once")
+		assert.WithinDuration(t, start.Add(time.Duration(hours)*time.Hour), rig.deadlines[0], time.Minute, "the wait of the round ends after vars.round.wait_hours")
+	}
+}
+
+// waitOverEngine is the engine of the round rig with a clock that moves one hour at each reading, so a wait of one hour is over at its second reading.
+// The example file stays as it is.
+func waitOverEngine(t *testing.T, rig *roundRig) *Engine {
+	t.Helper()
+
+	start := time.Now()
+
+	var readings atomic.Int64
+
+	return rig.engineWith(t, func(deps *Deps) {
+		deps.Clock.Reading = func() time.Time { return start.Add(time.Duration(readings.Add(1)) * time.Hour) }
+		deps.Clock.OwnerWait = 10 * time.Millisecond
+	})
+}
+
+// roundValue is what the entry round returns: the state of the round, its base and its integration pull request.
+type roundValue struct {
+	State string `json:"state"`
+	Base  string `json:"base"`
+	PR    int    `json:"pr"`
+}
+
+func TestRound_ATimeoutReturnsTheStateWaitingWithTheBaseAndThePullRequestAndCutsNoNextRound(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	rig.setRound("wait_hours", json.Number("1"))
+	rig.setRound("next_base", "round-v")
+	integrationState(rig, "MERGED")
+
+	engine := waitOverEngine(t, rig)
+
+	// The entry round keeps its value in the result, which main drops.
+	in, err := pinnedInput(testItem, testProject, rig.file)
+	require.NoError(t, err)
+
+	in.Entry = "round"
+	result, err := engine.run(in)
+
+	require.NoError(t, err)
+	assert.Nil(t, result.Stopped)
+
+	var value roundValue
+
+	require.NoError(t, json.Unmarshal(result.Value, &value))
+	assert.Equal(t, roundValue{State: "waiting", Base: "main", PR: 9}, value)
+	assert.NotContains(t, strings.Join(stepNames(t, engine), " "), "queue:round-queue-2#", "a timeout ends the round and starts no second pass")
+
+	for _, line := range commandsNamed(rig, "remedy") {
+		assert.NotContains(t, line, "remedy cut", "a timeout is a STOP and cuts nothing")
+	}
+}
+
+func TestRound_AContinueStartsAnotherPassThatAsksTheQueueAgain(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	rig.answers = []string{"CONTINUE", "STOP"}
+
+	_, err := rig.run(t)
+
+	require.NoError(t, err)
+
+	joined := strings.Join(stepNames(t, rig.last), " ")
+	assert.Contains(t, joined, "queue:round-queue-1#")
+	assert.Contains(t, joined, "queue:round-queue-2#", "the answer CONTINUE starts the second pass")
+	assert.NotContains(t, joined, "queue:round-queue-3#", "the answer STOP after it ends the round")
+}
+
+func TestRound_TheFileOfTheExampleReadsNoEnvironmentVariable(t *testing.T) {
+	t.Parallel()
+
+	text, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(text), "env(", "every setting of the round comes from the project file")
 }

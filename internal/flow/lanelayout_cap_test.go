@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -31,18 +32,18 @@ func TestLaneLayout_ACancelledFirstRunStillCountsAgainstTheCapOfThePullRequest(t
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
-	rig.h.opts.Env["PATCH_ROUNDS"] = "2"
+	rig.setRound("fix_rounds", json.Number("2"))
 	engine := rig.h.engine(t)
 	client := rig.h.client(t, testVersion)
 
-	first := runInBackground2(engine, file)
+	first := pipelineInBackground(engine, file)
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, client.Cancel(testItem))
 	rig.h.tick(t)
 	require.Error(t, (<-first).err)
 	require.Equal(t, 2, countFix(rig), "the first run spends the cap before the cancel")
 
-	second := runInBackground2(engine, file)
+	second := pipelineInBackground(engine, file)
 	waitForTheQuestionOfALiveRun(t, rig.h)
 	require.NoError(t, client.Answer(testItem, "park all"))
 	require.NoError(t, (<-second).err)
@@ -62,10 +63,10 @@ func TestLaneLayout_AFailedRunStillCountsItsFixLanes(t *testing.T) {
 
 		return "changes"
 	})
-	rig.h.opts.Env["PATCH_ROUNDS"] = "3"
+	rig.setRound("fix_rounds", json.Number("3"))
 	engine := rig.h.engine(t)
 
-	_, err := engine.RunFile(testItem, testProject, file)
+	_, err := runPipeline(engine, file)
 	require.Error(t, err, "the third review writes no output, so the run fails")
 	require.Equal(t, 2, countFix(rig))
 
@@ -152,16 +153,16 @@ func TestLaneLayout_ASecondRunOfTheItemStartsNoFixLaneAfterTheFirstRunSpentTheCa
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
-	rig.h.opts.Env["PATCH_ROUNDS"] = "2"
+	rig.setRound("fix_rounds", json.Number("2"))
 	engine := rig.h.engine(t)
 
-	first := runInBackground2(engine, file)
+	first := pipelineInBackground(engine, file)
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, (<-first).err)
 	require.Equal(t, 2, countFix(rig), "the first run spends the cap")
 
-	second := runInBackground2(engine, file)
+	second := pipelineInBackground(engine, file)
 	waitForTheOwnerOfASecondRun(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, (<-second).err)
@@ -198,12 +199,12 @@ func TestLaneLayout_ASecondRunOfTheItemGetsTheFixLanesTheFirstRunLeft(t *testing
 	rig.h.writer = newFakeWriter()
 	engine := rig.h.engine(t)
 
-	_, err := engine.RunFile(testItem, testProject, file)
+	_, err := runPipeline(engine, file)
 	require.NoError(t, err)
 	require.Equal(t, 1, countFix(rig))
 
-	rig.h.opts.Env["PATCH_ROUNDS"] = "2"
-	second := runInBackground2(engine, file)
+	rig.setRound("fix_rounds", json.Number("2"))
+	second := pipelineInBackground(engine, file)
 	waitForTheOwnerOfASecondRun(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, (<-second).err)

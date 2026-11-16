@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -10,38 +11,38 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-// withBoard makes the facts of the project hold a board.
-func withBoard(owner string) func(string) model.Project {
-	return func(project string) model.Project {
-		return model.Project{Name: project, Board: model.Board{Owner: owner, Number: 3, Started: "In Progress", Merged: "Done"}}
-	}
+// setBoard makes the facts of the project of the rig hold a board.
+func setBoard(rig *agentRig, owner string) {
+	rig.project.Board = model.Board{Owner: owner, Number: 3, Started: "In Progress", Merged: "Done"}
 }
 
-func TestExampleBoard_AProjectWithABoardMovesTheCardAtTheLaneStartAndAfterTheMergeAndReadsItBackBothTimes(t *testing.T) {
+// roundBoard gives the project of a round rig the board of the tests.
+func roundBoard(rig *roundRig, owner string) {
+	rig.project.Board = model.Board{Owner: owner, Number: 3, Started: "In Progress", Merged: "Done"}
+}
+
+func TestExampleBoard_AProjectWithABoardMovesTheCardAtTheLaneStartAndReadsItBackAndTheChildMovesNoMergedCard(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _ := mergingExample(t, func(head string) *shipWorld { return &shipWorld{pull: shipPull(t, head, nil)} })
-	rig.h.facts = withBoard("acme")
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	setBoard(rig, "acme")
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{
-		testProject + "|" + testItem + "|3|acme|0|In Progress",
-		testProject + "|" + testItem + "|3|acme|0|Done",
-	}, rig.h.forge.placed)
-	assert.Equal(t, 2, rig.h.forge.cardReads, "each move reads the card back")
+	assert.Equal(t, []string{testProject + "|" + testItem + "|3|acme|0|In Progress"}, rig.h.forge.placed, "the merged column is the round's: the child never merges")
+	assert.Equal(t, 1, rig.h.forge.cardReads, "the move reads the card back")
 }
 
 func TestExampleBoard_AProjectWithABoardThatLosesTheWriteStopsTheRunAtTheLaneStart(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _ := mergingExample(t, func(head string) *shipWorld { return &shipWorld{pull: shipPull(t, head, nil)} })
-	rig.h.facts = withBoard("")
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	setBoard(rig, "")
 	rig.h.forge.dropCards = true
 	rig.h.forge.cardStatus = "Todo"
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.ErrorContains(t, err, `shows "Todo"`)
 	assert.Len(t, rig.h.agents.requests, 2, "only the plan and the implement agents ran: the run stops before the review loop")
@@ -50,56 +51,67 @@ func TestExampleBoard_AProjectWithABoardThatLosesTheWriteStopsTheRunAtTheLaneSta
 func TestExampleBoard_ALandRunWithABoardMovesOneCardForEachMergedItem(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
-	rig.h.facts = withBoard("acme")
+	rig := newRoundRig(t, "1 3")
+	roundBoard(rig, "acme")
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{
 		testProject + "|" + testItem + "|3|acme|1|Done",
 		testProject + "|" + testItem + "|3|acme|3|Done",
-	}, rig.h.forge.placed)
-	assert.Equal(t, 2, rig.h.forge.cardReads, "each move reads the card back")
+	}, doneMoves(rig))
+	assert.Equal(t, len(rig.h.forge.placed), rig.h.forge.cardReads, "each move reads the card back")
+}
+
+// doneMoves returns the moves of a card to the merged column. Each child also moves a card to the started column; the land run makes the others.
+func doneMoves(rig *roundRig) []string {
+	var moves []string
+
+	for _, move := range rig.h.forge.placed {
+		if strings.HasSuffix(move, "|Done") {
+			moves = append(moves, move)
+		}
+	}
+
+	return moves
 }
 
 func TestExampleBoard_ALandRunMovesTheCardOfTheMergedItemAndNotTheCardOfARejectedItem(t *testing.T) {
 	t.Parallel()
 
-	rig, file, writer, _ := landingExample(t, reviewed("1 3"), "true")
-	rig.h.facts = withBoard("acme")
+	rig := newRoundRig(t, "1 3")
+	roundBoard(rig, "acme")
 	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Lines: []string{"REFUSE: has the label hold"}, Refusal: []string{"REFUSE: has the label hold"}}}
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{testProject + "|1|hold"}, writer.statuses, "item 1 is rejected and held")
-	assert.Equal(t, []string{testProject + "|" + testItem + "|3|acme|3|Done"}, rig.h.forge.placed, "only the merged item 3 moves")
+	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer), "item 1 is rejected and held")
+	assert.Equal(t, []string{testProject + "|" + testItem + "|3|acme|3|Done"}, doneMoves(rig), "only the merged item 3 moves")
 }
 
 func TestExampleBoard_ALandRunWithNoBoardMovesNoCard(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _, _ := landingExample(t, reviewed("1 3"), "true")
-	rig.h.facts = ownedBy("ann")
+	rig := newRoundRig(t, "1 3")
 
-	_, err := rig.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"1", "3"}, rig.merger.landed())
+	assert.ElementsMatch(t, []string{"1", "3"}, rig.merger.landed(), "the two children end together, so the batch has no fixed order")
 	assert.Empty(t, rig.h.forge.placed)
 }
 
 func TestExampleBoard_AProjectWithNoBoardMakesNoBoardCall(t *testing.T) {
 	t.Parallel()
 
-	rig, file, _ := mergingExample(t, func(head string) *shipWorld { return &shipWorld{pull: shipPull(t, head, nil)} })
-	rig.h.facts = ownedBy("ann")
+	rig, file := exampleRig(t, func(int) string { return "approve" })
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved)
 	assert.Empty(t, rig.h.forge.placed)
 	assert.Zero(t, rig.h.forge.cardReads)
 }

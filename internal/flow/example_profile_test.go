@@ -9,18 +9,21 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-// implementPrompt runs the example with the given project and env additions and returns the text that the implement agent received.
-func implementPrompt(t *testing.T, project model.Project, env map[string]string) string {
+// implementPrompt runs the example with the given project, whose round is that of the example rig with the settings of `round` set, and returns the text that the implement agent received.
+func implementPrompt(t *testing.T, project model.Project, round map[string]any) string {
 	t.Helper()
 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
-	rig.h.facts = func(string) model.Project { return project }
 
-	for key, value := range env {
-		rig.h.opts.Env[key] = value
+	base := exampleProject()
+	project.Name, project.Repo, project.BaseBranch, project.Vars = base.Name, base.Repo, base.BaseBranch, base.Vars
+	rig.project = project
+
+	for key, value := range round {
+		rig.setRound(key, value)
 	}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 	require.NoError(t, err)
 
 	for _, request := range rig.h.agents.requests {
@@ -49,7 +52,7 @@ func TestExampleProfile_TheBriefRulesAndTheGateAndTheLimitsOfTheProfileReachTheI
 func TestExampleProfile_TheAcceptanceAndBaseResultLinesReachTheImplementAgent(t *testing.T) {
 	t.Parallel()
 
-	text := implementPrompt(t, model.Project{}, map[string]string{"ACCEPTANCE": "/work/accept.sh", "BASE_RESULT": "/work/base.out"})
+	text := implementPrompt(t, model.Project{}, map[string]any{"acceptance": "/work/accept.sh", "base_result": "/work/base.out"})
 
 	require.Contains(t, text, "ACCEPTANCE=/work/accept.sh BASE_RESULT=/work/base.out")
 	require.Contains(t, text, "Base of this pull request: `integration`")

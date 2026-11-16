@@ -3,6 +3,7 @@ package flow
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -20,10 +21,17 @@ import (
 	trackerstore "github.com/tobocop2/beehave/internal/store"
 )
 
-// dryExampleVars are the vars of the project that the dry runs of the remediation example read: the command of its mutation step.
-var dryExampleVars = map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}}
+// dryRoundFile is the file of the example as it is. A dry run of it runs the round, which ends at the read of the queue.
+var dryRoundFile = filepath.Join("..", "..", "examples", "remediation", "workflow.star")
 
-var dryExampleEnv = map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
+// dryPipeline starts a dry run at the entry pipeline of the example, so that it walks the gate, the review and the fix round of one item.
+var dryPipeline = WithEntry("pipeline")
+
+// dryRound gives the dry run the vars of the example project: the round settings, which every entry of the example reads, and the command of the mutation step.
+var dryRound = WithVars(with(roundVars(map[string]any{
+	"base": "integration", "owner": "owner", "owner_email": "owner@example.com", "source_checkout": "/own/checkout", "merge": false,
+	"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round",
+}), map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}}))
 
 func dryFile(t *testing.T, text string) string {
 	t.Helper()
@@ -31,12 +39,12 @@ func dryFile(t *testing.T, text string) string {
 	return writeFlow(t, text)
 }
 
-func TestDryRun_PrintsEachStepOfTheExampleInOrderAndEndsClean(t *testing.T) {
+func TestDryRun_ThePipelineOfTheExamplePrintsEachStepInOrderAndEndsClean(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
 
-	err := DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, WithVars(dryExampleVars))
+	err := DryRun(t.Context(), dryRoundFile, "12", nil, &out, dryPipeline, dryRound)
 	require.NoError(t, err, out.String())
 
 	text := out.String()
@@ -192,16 +200,31 @@ func TestDryRun_TheFirstGateIsRedAndTheRunWalksAFixRoundBeforeTheGatePasses(t *t
 
 	var out bytes.Buffer
 
-	require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, WithRedGate(), WithVars(dryExampleVars)), out.String())
+	const text = "def main(item):\n    g = gate(name = \"check\")\n    if not g.passed:\n        agent(name = \"fix\", prompt = \"p.md\", model = \"sonnet\")\n        gate(name = \"check\")\n"
 
-	text := out.String()
-	fix := strings.Index(text, "agent:fix")
-	require.GreaterOrEqual(t, fix, 0, "no fix round ran:\n"+text)
+	require.NoError(t, DryRun(t.Context(), dryFileWithPrompt(t, text), "12", nil, &out, WithRedGate()), out.String())
 
-	first := strings.Index(text, "gate:check#1")
-	last := strings.LastIndex(text, "gate:check#")
+	got := out.String()
+	fix := strings.Index(got, "agent:fix")
+	require.GreaterOrEqual(t, fix, 0, "no fix round ran:\n"+got)
+
+	first := strings.Index(got, "gate:check#1")
+	last := strings.LastIndex(got, "gate:check#")
 	assert.Less(t, first, fix, "the fix round follows the red gate")
 	assert.Greater(t, last, fix, "a gate follows the fix round")
+}
+
+// dryFileWithPrompt writes the workflow text beside a prompt file p.md and returns the workflow file.
+func dryFileWithPrompt(t *testing.T, text string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "p.md"), []byte("Judge the change. Nothing else."), 0o600))
+
+	flow := filepath.Join(dir, "workflow.star")
+	require.NoError(t, os.WriteFile(flow, []byte(text), 0o600))
+
+	return flow
 }
 
 func TestDryGate_EveryRunPassesWithAPassedStepUnlessTheRedGateIsChosen(t *testing.T) {
@@ -235,13 +258,13 @@ func TestDryGate_WithTheRedGateTheFirstRunIsRedWithAFailedStepAndEveryLaterRunPa
 	}
 }
 
-// remediationStepNames dry-runs the remediation example and returns the names of its steps in order.
+// remediationStepNames dry-runs the pipeline of the remediation example with the round settings of the example project, and returns the names of its steps in order.
 func remediationStepNames(t *testing.T, options ...DryOption) []string {
 	t.Helper()
 
 	var out bytes.Buffer
 
-	require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, append(options, WithVars(dryExampleVars))...), out.String())
+	require.NoError(t, DryRun(t.Context(), dryRoundFile, "12", nil, &out, append([]DryOption{dryPipeline, dryRound}, options...)...), out.String())
 
 	var names []string
 
@@ -256,33 +279,32 @@ func remediationStepNames(t *testing.T, options ...DryOption) []string {
 	return names
 }
 
-func TestDryRun_TheStepListOfTheRemediationExampleIsComplete(t *testing.T) {
+// The pipeline of the example ends at the review: the round lands the approved head, so the step list of one item holds no merge.
+func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "env:QUEUE_SWEEP#1", "env:TAKE_PR#2", "env:ROUND_STEP#3", "env:HOST_UP#4", "env:LAND#5", "env:EXPECT_HEAD#6", "env:BASE#7", "env:OWNER_LOGIN#8", "preflight:intake#1", "env:LANE_KIND#9", "earlier_calls:fix-lanes-spent#1", "env:PATCH_ROUNDS#10", "facts#1", "login#1",
-		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1", "env:SOURCE_CHECKOUT#11", "env:BASE#12", "env:ACCEPTANCE#13", "env:BASE_RESULT#14",
-		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "env:BASE#15", "env:PARENT#16", "pr_open:draft#1", "env:BASE#17", "env:OWNER_LOGIN#18", "env:SOURCE_CHECKOUT#19",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "env:BASE#20", "host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-1#2",
+		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:fix-lanes-spent#1", "item_read:parent#1", "login#1",
+		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-1#2",
 		"agent:review#3/render", "agent:review#3/clear1", "agent:review#3/budget1.0", "phase", "DBOS.getResult", "agent:review#3/read1",
-		"env:MERGE#21", "env:REPO#22", "env:BASE#23", "env:OWNER_LOGIN#24", "env:OWNER_EMAIL#25", "ready", "DBOS.setEvent", "watch", "watch", "merge:ship#1",
-		"env:HOST_TEARDOWN#26", "worktree", "release",
+		"worktree", "release",
 	}, remediationStepNames(t))
 }
 
-func TestDryRun_TheStepListOfTheRemediationExampleWithARedGateHoldsTheFixRound(t *testing.T) {
+func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "env:QUEUE_SWEEP#1", "env:TAKE_PR#2", "env:ROUND_STEP#3", "env:HOST_UP#4", "env:LAND#5", "env:EXPECT_HEAD#6", "env:BASE#7", "env:OWNER_LOGIN#8", "preflight:intake#1", "env:LANE_KIND#9", "earlier_calls:fix-lanes-spent#1", "env:PATCH_ROUNDS#10", "facts#1", "login#1",
-		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1", "env:SOURCE_CHECKOUT#11", "env:BASE#12", "env:ACCEPTANCE#13", "env:BASE_RESULT#14",
-		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "env:BASE#15", "env:PARENT#16", "pr_open:draft#1", "env:BASE#17", "env:OWNER_LOGIN#18", "env:SOURCE_CHECKOUT#19",
+		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:fix-lanes-spent#1", "item_read:parent#1", "login#1",
+		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "preflight:before-fix-1#2",
 		"agent:fix#3/render", "agent:fix#3/clear1", "agent:fix#3/budget1.0", "phase", "DBOS.getResult", "agent:fix#3/read1",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:check#2", "env:BASE#20", "host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-2#3",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:check#2", "host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-2#3",
 		"agent:review#4/render", "agent:review#4/clear1", "agent:review#4/budget1.0", "phase", "DBOS.getResult", "agent:review#4/read1",
-		"env:MERGE#21", "env:REPO#22", "env:BASE#23", "env:OWNER_LOGIN#24", "env:OWNER_EMAIL#25", "ready", "DBOS.setEvent", "watch", "watch", "merge:ship#1",
-		"env:HOST_TEARDOWN#26", "worktree", "release",
+		"worktree", "release",
 	}, remediationStepNames(t, WithRedGate()))
 }
 
@@ -543,9 +565,8 @@ func TestDryRun_EveryExampleThatNeedsNoServiceRunsToTheEnd(t *testing.T) {
 	t.Parallel()
 
 	envs := map[string]map[string]string{
-		"local":       {},
-		"remediation": dryExampleEnv,
-		"research":    {"RESEARCH_TOOLS": "/tools", "RESEARCH_OUT": "/out"},
+		"local":    {},
+		"research": {"RESEARCH_TOOLS": "/tools", "RESEARCH_OUT": "/out"},
 	}
 
 	for name, env := range envs {
@@ -554,9 +575,25 @@ func TestDryRun_EveryExampleThatNeedsNoServiceRunsToTheEnd(t *testing.T) {
 
 			var out bytes.Buffer
 
-			require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", name, "workflow.star"), "12", env, &out, WithVars(dryExampleVars)), out.String())
+			require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", name, "workflow.star"), "12", env, &out), out.String())
 		})
 	}
+}
+
+func TestDryRun_ARoundRunsWithNoEnvironmentVariables(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	// The round reads every setting from the project vars, so the run has no environment at all. It ends early at the read of the queue, which the dry run does not fake.
+	err := DryRun(t.Context(), dryRoundFile, "12", nil, &out, dryRound)
+
+	require.ErrorIs(t, err, ErrDryRunEndedEarly, out.String())
+	assert.Contains(t, out.String(), "host_up:round-host#1")
+	assert.Contains(t, out.String(), "agent:queue-audit-1#1")
+	assert.Contains(t, out.String(), "not run in a dry run: read the open work of the project")
+	assert.NotContains(t, out.String(), "FAILED")
+	assert.NotContains(t, out.String(), "env:")
 }
 
 func TestDryRun_TheSwarmExampleFilesItsBacklogAndChecksTheBudgetThenEndsEarlyAtTheReadOfTheOpenWork(t *testing.T) {
@@ -639,17 +676,35 @@ func countStep(names []string, prefix string) int {
 func TestDryRun_WithSendBackTheFirstReviewSendsTheItemToAFixRoundAndTheSecondReviewApproves(t *testing.T) {
 	t.Parallel()
 
-	names := remediationStepNames(t, WithSendBack())
+	names := reviewStepNames(t, WithSendBack())
 
 	assert.Equal(t, 2, countStep(names, "agent:review"), names)
 	assert.Equal(t, 1, countStep(names, "agent:fix"), names)
-	assert.Contains(t, names, "merge:ship#1")
+}
+
+// reviewStepNames dry-runs a small workflow that reviews, fixes on the verdict changes and reviews again, and returns its step names.
+func reviewStepNames(t *testing.T, options ...DryOption) []string {
+	t.Helper()
+
+	const flow = "def main(item):\n    r = agent(name = \"review\", prompt = \"p.md\", model = \"sonnet\", outputs = [\"verdict\"])\n    if r.verdict == \"changes\":\n        agent(name = \"fix\", prompt = \"p.md\", model = \"sonnet\")\n        agent(name = \"review\", prompt = \"p.md\", model = \"sonnet\", outputs = [\"verdict\"])\n"
+
+	var out bytes.Buffer
+
+	require.NoError(t, DryRun(t.Context(), dryFileWithPrompt(t, flow), "12", nil, &out, options...), out.String())
+
+	var names []string
+
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		names = append(names, strings.TrimSuffix(strings.Fields(line)[2], ":"))
+	}
+
+	return names
 }
 
 func TestDryRun_WithoutSendBackTheReviewApprovesAtOnceAndNoFixRoundRuns(t *testing.T) {
 	t.Parallel()
 
-	names := remediationStepNames(t)
+	names := reviewStepNames(t)
 
 	assert.Equal(t, 1, countStep(names, "agent:review"), names)
 	assert.Zero(t, countStep(names, "agent:fix"), names)

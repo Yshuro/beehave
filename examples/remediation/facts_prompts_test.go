@@ -38,7 +38,7 @@ func factRules() []factRule {
 
 // factsLanes lists every prompt of the example: every agent the example starts gets the facts.
 func factsLanes() []string {
-	return []string{plan, implement, fix, review, "design", "take_review", "settle", integrate}
+	return []string{plan, implement, fix, review, "design", "take_review", "settle"}
 }
 
 // promptData holds every input a prompt of the example reads, with the given facts.

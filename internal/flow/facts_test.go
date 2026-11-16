@@ -46,7 +46,9 @@ func TestFacts_TheBoardOfTheProjectIsReadAsFourFieldsAndIsEmptyWhenTheProjectHas
 	t.Parallel()
 
 	h := newHarness(t)
-	h.facts = withBoard("acme")
+	h.facts = func(project string) model.Project {
+		return model.Project{Name: project, Board: model.Board{Owner: "acme", Number: 3, Started: "In Progress", Merged: "Done"}}
+	}
 	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"B=%d/%s/%s/%s\" % (f.board_number, f.board_owner, f.board_started, f.board_merged))\n")
 
 	outcome := <-runInBackground(h.engine(t), testItem)

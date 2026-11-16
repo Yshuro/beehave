@@ -71,8 +71,8 @@ func TestLaneLayout_APatchRoundsCapOfTwoStartsTwoFixLanesAndThenAsksTheOwner(t *
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
-	rig.h.opts.Env["PATCH_ROUNDS"] = "2"
-	done := runInBackground2(rig.h.engine(t), file)
+	rig.setRound("fix_rounds", json.Number("2"))
+	done := pipelineInBackground(rig.h.engine(t), file)
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
@@ -86,7 +86,7 @@ func TestLaneLayout_TheDefaultCapIsFiveFixLanes(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
-	done := runInBackground2(rig.h.engine(t), file)
+	done := pipelineInBackground(rig.h.engine(t), file)
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
@@ -95,34 +95,18 @@ func TestLaneLayout_TheDefaultCapIsFiveFixLanes(t *testing.T) {
 	assert.Equal(t, 5, countFix(rig))
 }
 
-func TestLaneLayout_APatchRoundsCapOutsideOneToFiveIsRefusedBeforeAnyAgent(t *testing.T) {
-	t.Parallel()
-
-	for _, value := range []string{"0", "6", "-1", "many", "2.5"} {
-		rig, file := exampleRig(t, func(int) string { return "approve" })
-		rig.h.opts.Env["PATCH_ROUNDS"] = value
-
-		_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
-
-		require.Error(t, err, value)
-		assert.Contains(t, err.Error(), "PATCH_ROUNDS", value)
-		assert.Empty(t, rig.models(), "no agent starts for %q", value)
-	}
-}
-
 func TestLaneLayout_ARiseInTheRegressionCountHoldsTheItemAndMergesNothing(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	withCounts(rig, "1", "2")
-	rig.h.opts.Env["MERGE"] = "true"
 	writer := newFakeWriter()
 	rig.h.writer = writer
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Empty(t, result.Merge, "a rise blocks the merge")
+	assert.False(t, childOf(t, result).Approved, "a rise is not offered to the round for landing")
 	assert.Equal(t, []string{testProject + "|" + testItem + "|hold"}, writer.statuses)
 	require.Len(t, writer.notes, 1)
 	assert.Contains(t, writer.notes[0], "regression count rose from 1 to 2")
@@ -135,10 +119,10 @@ func TestLaneLayout_ASameOrLowerRegressionCountDoesNotBlock(t *testing.T) {
 		rig, file := exampleRig(t, func(int) string { return "approve" })
 		withCounts(rig, "1", end)
 
-		result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+		result, err := runPipeline(rig.h.engine(t), file)
 
 		require.NoError(t, err)
-		assert.Equal(t, "merged", result.Merge, "end count %s", end)
+		assert.True(t, childOf(t, result).Approved, "end count %s", end)
 	}
 }
 
@@ -151,7 +135,7 @@ func runHeld(t *testing.T, plan, review string) (ItemResult, *fakeWriter) {
 	writer := newFakeWriter()
 	rig.h.writer = writer
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 	require.NoError(t, err)
 
 	return result, writer
@@ -183,7 +167,7 @@ func TestLaneLayout_AnUnknownRegressionCountHoldsTheItemAndMergesNothing(t *test
 	} {
 		result, writer := runHeld(t, reports[0], reports[1])
 
-		assert.Empty(t, result.Merge, name)
+		assert.False(t, childOf(t, result).Approved, name)
 		assert.Equal(t, []string{testProject + "|" + testItem + "|hold"}, writer.statuses, name)
 		require.Len(t, writer.notes, 1, name)
 		assert.Contains(t, writer.notes[0], "no regression count that can be read", name)
@@ -195,7 +179,7 @@ func TestLaneLayout_AnEqualCountMerges(t *testing.T) {
 
 	result, writer := runHeld(t, "1", "1")
 
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved)
 	assert.Empty(t, writer.statuses)
 }
 
@@ -214,11 +198,11 @@ func TestLaneLayout_AFixRoundBetweenTwoEqualCountsDoesNotHoldTheApprovedItem(t *
 	withCounts(rig, "0", "0")
 	rig.h.writer = newFakeWriter()
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, 1, countFix(rig))
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved)
 }
 
 func TestLaneLayout_ARiseAtTheCapHoldsTheItemBeforeTheOwnerIsAskedAndNoSettleLaneStarts(t *testing.T) {
@@ -227,11 +211,11 @@ func TestLaneLayout_ARiseAtTheCapHoldsTheItemBeforeTheOwnerIsAskedAndNoSettleLan
 	for _, review := range []string{"1", "unknown"} {
 		rig, file := exampleRig(t, func(int) string { return "changes" })
 		withCountSequence(rig, "0", "0", review)
-		rig.h.opts.Env["PATCH_ROUNDS"] = "1"
+		rig.setRound("fix_rounds", json.Number("1"))
 		writer := newFakeWriter()
 		rig.h.writer = writer
 
-		_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+		_, err := runPipeline(rig.h.engine(t), file)
 
 		require.NoError(t, err, review)
 		assert.Equal(t, []string{testProject + "|" + testItem + "|hold"}, writer.statuses, review)
@@ -244,8 +228,8 @@ func TestLaneLayout_TheSettleLaneIsTheOnlyEditAfterTheLastReviewAndRunsOnce(t *t
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
-	rig.h.opts.Env["PATCH_ROUNDS"] = "2"
-	done := runInBackground2(rig.h.engine(t), file)
+	rig.setRound("fix_rounds", json.Number("2"))
+	done := pipelineInBackground(rig.h.engine(t), file)
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "fix all"))
@@ -271,7 +255,7 @@ func TestLaneLayout_AResumeKeepsTheCapOfTheFirstStartWhenPatchRoundsChanges(t *t
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
-	rig.h.opts.Env["PATCH_ROUNDS"] = "3"
+	rig.setRound("fix_rounds", json.Number("3"))
 
 	inner := rig.h.agents.result
 	stopped := false
@@ -293,10 +277,10 @@ func TestLaneLayout_AResumeKeepsTheCapOfTheFirstStartWhenPatchRoundsChanges(t *t
 	}
 
 	engine := rig.h.engine(t)
-	_, err := engine.RunFile(testItem, testProject, file)
+	_, err := runPipeline(engine, file)
 	require.Error(t, err, "the run is canceled in the second fix lane")
 
-	rig.h.opts.Env["PATCH_ROUNDS"] = "1"
+	rig.setRound("fix_rounds", json.Number("1"))
 
 	handle := resumeRun(t, engine, rig.h.client(t, testVersion))
 	waitForTheOwner(t, rig.h)
@@ -329,7 +313,7 @@ func TestLaneLayout_TheLanesOfTheItemAreOneReviewForEachGateThatPassedAndFixLane
 	})
 	rig.h.writer = newFakeWriter()
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 	require.NoError(t, err)
 
 	lanes, err := rig.h.client(t, testVersion).Lanes(testItem)

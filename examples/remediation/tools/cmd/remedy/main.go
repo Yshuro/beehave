@@ -14,6 +14,9 @@ import (
 // The GitHub forge gives the closing references; without this line a drift would fall back to the body parse.
 var _ scope.Listing = (*forgegithub.Forge)(nil)
 
+// The integration subcommand opens a pull request and writes a body, so the GitHub forge must have both calls.
+var _ remedy.Integrator = (*forgegithub.Forge)(nil)
+
 func main() {
 	claims := remedy.OpenClaims(openClaims(config.ProcessEnv(), proc.NewExecRunner("bd", "")))
 

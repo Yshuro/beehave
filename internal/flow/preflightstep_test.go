@@ -250,37 +250,26 @@ func preflightPull(t *testing.T, head string, over map[string]any) model.PullReq
 func TestExamplePreflight_AnItemThatChangedStartsNoAgentAndACleanItemStartsOne(t *testing.T) {
 	t.Parallel()
 
-	moved := strings.Repeat("e", 40)
-
 	for name, tc := range map[string]struct {
 		over   map[string]any
-		expect string
-		unset  bool
 		login  string
 		gone   bool
 		agents bool
 		stop   preflight.Stop
 		reason string
 	}{
-		"a clean pull request starts the agents":                        {agents: true},
-		"a merged pull request":                                         {over: map[string]any{"state": "MERGED"}, stop: preflight.Merged, reason: "already MERGED"},
-		"a closed pull request":                                         {over: map[string]any{"state": "CLOSED"}, stop: preflight.Closed, reason: "CLOSED"},
-		"a draft":                                                       {over: map[string]any{"isDraft": true}, stop: preflight.Draft, reason: "is a DRAFT"},
-		"a pull request with the hold label":                            {over: map[string]any{"labels": []any{map[string]any{"name": "hold"}}}, stop: preflight.Held, reason: "hold"},
-		"an open pull request of another author":                        {over: map[string]any{"author": map[string]any{"login": "dev"}}, stop: preflight.Claimed, reason: "dev"},
-		"an own login that differs in case only":                        {login: "Owner", agents: true},
-		"a head that moved":                                             {expect: moved, stop: preflight.HeadMoved, reason: "moved"},
-		"a short EXPECT_HEAD":                                           {expect: "abc", stop: preflight.Refused},
-		"a base that changed":                                           {over: map[string]any{"baseRefName": "main"}, stop: preflight.BaseChanged, reason: "main"},
-		"a head branch that is gone":                                    {gone: true, stop: preflight.BranchGone, reason: "no longer exists"},
-		"a merge and a hold: the merge is reported":                     {over: map[string]any{"state": "MERGED", "labels": []any{map[string]any{"name": "hold"}}}, stop: preflight.Merged, reason: "already MERGED"},
-		"a close and a draft: the close is reported":                    {over: map[string]any{"state": "CLOSED", "isDraft": true}, stop: preflight.Closed, reason: "CLOSED"},
-		"a hold and a draft: the hold is reported":                      {over: map[string]any{"isDraft": true, "labels": []any{map[string]any{"name": "hold"}}}, stop: preflight.Held, reason: "hold"},
-		"a draft and a moved head: the draft is reported":               {over: map[string]any{"isDraft": true}, expect: moved, stop: preflight.Draft, reason: "is a DRAFT"},
-		"a gone branch and a moved head: the branch is reported":        {gone: true, expect: moved, stop: preflight.BranchGone, reason: "no longer exists"},
-		"the head the owner expected":                                   {expect: "$head", agents: true},
-		"an operator who never set EXPECT_HEAD still starts the agents": {unset: true, agents: true},
-		"an operator who never set EXPECT_HEAD still gets a real stop":  {unset: true, over: map[string]any{"state": "MERGED"}, stop: preflight.Merged, reason: "already MERGED"},
+		"a clean pull request starts the agents":     {agents: true},
+		"a merged pull request":                      {over: map[string]any{"state": "MERGED"}, stop: preflight.Merged, reason: "already MERGED"},
+		"a closed pull request":                      {over: map[string]any{"state": "CLOSED"}, stop: preflight.Closed, reason: "CLOSED"},
+		"a draft":                                    {over: map[string]any{"isDraft": true}, stop: preflight.Draft, reason: "is a DRAFT"},
+		"a pull request with the hold label":         {over: map[string]any{"labels": []any{map[string]any{"name": "hold"}}}, stop: preflight.Held, reason: "hold"},
+		"an open pull request of another author":     {over: map[string]any{"author": map[string]any{"login": "dev"}}, stop: preflight.Claimed, reason: "dev"},
+		"an own login that differs in case only":     {login: "Owner", agents: true},
+		"a base that changed":                        {over: map[string]any{"baseRefName": "main"}, stop: preflight.BaseChanged, reason: "main"},
+		"a head branch that is gone":                 {gone: true, stop: preflight.BranchGone, reason: "no longer exists"},
+		"a merge and a hold: the merge is reported":  {over: map[string]any{"state": "MERGED", "labels": []any{map[string]any{"name": "hold"}}}, stop: preflight.Merged, reason: "already MERGED"},
+		"a close and a draft: the close is reported": {over: map[string]any{"state": "CLOSED", "isDraft": true}, stop: preflight.Closed, reason: "CLOSED"},
+		"a hold and a draft: the hold is reported":   {over: map[string]any{"isDraft": true, "labels": []any{map[string]any{"name": "hold"}}}, stop: preflight.Held, reason: "hold"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -294,22 +283,16 @@ func TestExamplePreflight_AnItemThatChangedStartsNoAgentAndACleanItemStartsOne(t
 			}
 
 			if tc.login != "" {
-				rig.h.opts.Env["OWNER_LOGIN"] = tc.login
+				rig.setRound("owner", tc.login)
 			}
 
-			if tc.unset {
-				delete(rig.h.opts.Env, "EXPECT_HEAD")
-			} else {
-				rig.h.opts.Env["EXPECT_HEAD"] = strings.ReplaceAll(tc.expect, "$head", rig.head)
-			}
-
-			result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+			result, err := runPipeline(rig.h.engine(t), file)
 
 			require.NoError(t, err, "a stop is a result and not an error")
 
 			if tc.agents {
 				assert.NotEmpty(t, rig.h.agents.seen())
-				assert.Equal(t, "merged", result.Merge)
+				assert.True(t, childOf(t, result).Approved)
 				assert.Nil(t, result.Stopped)
 
 				return
