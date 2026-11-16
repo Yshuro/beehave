@@ -45,9 +45,10 @@ const landVersion = 3
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step.
 const forgeVersion = 2
 
-// gateVersion is the version of the gate module. Version 2 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>),
-// and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
-const gateVersion = 2
+// gateVersion is the version of the gate module. Version 3 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>
+// with a wait field), and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
+// At the wait limit the host job run ends with no failure and records the lost job with its wait.
+const gateVersion = 3
 
 // stepModule is one module of the table: its version and the step kinds that it records.
 type stepModule struct {
@@ -81,7 +82,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core3.agent3.tracker1.forge2.land3.gate2.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core3.agent3.tracker1.forge2.land3.gate3.host1.round1.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))
