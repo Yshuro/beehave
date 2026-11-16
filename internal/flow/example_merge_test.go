@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
 )
@@ -435,6 +437,42 @@ func TestExampleMerge_TheRoundLandsThroughTheBatchMergerAndTheGuardsOfTheForgeFa
 			}
 		})
 	}
+}
+
+// rejectReviewOf makes the review of the item write the verdict reject in place of the approve of the round rig. The other items keep their approve.
+func rejectReviewOf(t *testing.T, rig *roundRig, item string) {
+	t.Helper()
+
+	inner := rig.h.agents.result
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		result := inner(request)
+
+		if request.Item == item && strings.Contains(request.Prompt, reviewMarker) {
+			if err := os.WriteFile(promptOutput(request.Prompt), []byte(`{"verdict":"reject","mechanism":"","regressions":"0","findings":[]}`), 0o600); err != nil {
+				t.Errorf("write the reject verdict of item %s: %v", item, err)
+			}
+		}
+
+		return result
+	}
+}
+
+// The round sends a child to the batch only when its review approved it. The merger checks the approval only for own work,
+// so the pull request of another author (dev, outside the round) with a rejected head would merge if the round sent it.
+func TestExampleMerge_TheRoundSendsNoChildThatItsReviewDidNotApproveToTheBatch(t *testing.T) {
+	t.Parallel()
+
+	rig, forge := landingRound(t, nil)
+	rejectReviewOf(t, rig, "1")
+
+	_, err := rig.run(t)
+
+	require.NoError(t, err)
+	assert.Empty(t, forge.said("1"), "the rejected child is not a member of the batch, so no merge of it runs")
+	assert.Empty(t, forge.worlds["1"].writes, "nothing of the rejected item is merged")
+	assert.Equal(t, []string{fmt.Sprintf("MergePR %d %s", testPull, rig.heads["3"])}, forge.worlds["3"].writes, "the approved item lands at its pin")
+	assert.Equal(t, "README\nthree.txt", rig.mainFiles(t), "item 3 lands and item 1 does not")
+	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer), "the child holds its rejected item")
 }
 
 // The merge refuses a body with an attribution line and names the line by its number, never by its text. The round posts every line of the refusal

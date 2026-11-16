@@ -165,8 +165,7 @@ func (rig *agentRig) answerLikeTheExample(skill string, verdicts, findings, mech
 
 			// A loop that does not stop where the test expects would run to the rounds cap and then wait for a person. Past the limit the
 			// review writes no output, so the run fails at once and the test reports it as an assertion, not as a timeout.
-			_, rest, _ := strings.Cut(request.Prompt, "Write it to ")
-			path, _, _ := strings.Cut(rest, " as JSON")
+			path := promptOutput(request.Prompt)
 			if verdict := verdicts(reviews); verdict != "" && reviews <= limit {
 				mechanism := ""
 				if mechanisms != nil {
@@ -184,13 +183,19 @@ func (rig *agentRig) answerLikeTheExample(skill string, verdicts, findings, mech
 		putNoParked(rig, request)
 
 		if strings.Contains(request.Prompt, designMarker) {
-			_, rest, _ := strings.Cut(request.Prompt, "Write it to ")
-			path, _, _ := strings.Cut(rest, " as JSON")
-			rig.put(path, design)
+			rig.put(promptOutput(request.Prompt), design)
 		}
 
 		return agent.Result{Outcome: agent.OutcomeExited, Session: "sess-1", Transcript: "/t.jsonl", Text: "all done", Skills: []string{skill}}
 	}
+}
+
+// promptOutput returns the path of the output file that a prompt of the example names: the text between "Write it to " and " as JSON".
+func promptOutput(prompt string) string {
+	_, rest, _ := strings.Cut(prompt, "Write it to ")
+	path, _, _ := strings.Cut(rest, " as JSON")
+
+	return path
 }
 
 // putNoParked makes the settle agent of the example rig leave no finding open: a request that declares the output `parked` gets an empty list.

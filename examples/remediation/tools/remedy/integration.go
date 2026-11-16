@@ -2,6 +2,7 @@ package remedy
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,6 +18,9 @@ const integrationSyntax = "integration --base <round branch> --into <trunk> [--p
 
 // listLimit is the most pull requests that one list call reads.
 const listLimit = 100
+
+// errFullList is the refusal of a list of merged pull requests that reached listLimit, so some can be missing from it.
+var errFullList = errors.New("the list of merged pull requests is full")
 
 // Integrator is the forge of the integration subcommand: the reads of the pull requests, the opening of a draft pull request and the write of a body.
 // A forge that lacks it refuses the subcommand. Every write goes through it, so no tool calls the forge command line itself.
@@ -100,7 +104,7 @@ func integrateOn(ctx context.Context, forge Integrator, given integrationFlags) 
 		return pull.Number, state, nil
 	}
 
-	merged, err := forge.PRList(ctx, listLimit, "--state", "merged", "--base", given.base, "--json", "number,title,state,headRefName")
+	merged, err := mergedInto(ctx, forge, given.base)
 	if err != nil {
 		return 0, "", err
 	}
@@ -110,6 +114,21 @@ func integrateOn(ctx context.Context, forge Integrator, given integrationFlags) 
 	}
 
 	return pull.Number, stateOpen, writeBody(ctx, forge, pull, merged)
+}
+
+// mergedInto lists the pull requests that merged into the round branch. A full list can hold only a part of them,
+// and a body made from it would leave out the rest with no sign, so a full list is a refusal.
+func mergedInto(ctx context.Context, forge Integrator, base string) ([]model.PullRequest, error) {
+	merged, err := forge.PRList(ctx, listLimit, "--state", "merged", "--base", base, "--json", "number,title,state,headRefName")
+	if err != nil {
+		return nil, err
+	}
+
+	if len(merged) >= listLimit {
+		return nil, fmt.Errorf("%w: %s has %d or more merged pull requests. Split the round into smaller rounds, then run the tool again", errFullList, base, listLimit)
+	}
+
+	return merged, nil
 }
 
 // writeBody writes the body of the pull request again when a merged pull request adds a row or an issue to it.

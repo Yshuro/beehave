@@ -192,6 +192,39 @@ func TestIntegration_AnIssueTheBodyAlreadyListsIsNotListedAgain(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(world.bodies[0], "Closes #101"))
 }
 
+func TestIntegration_TwoMergedPullRequestsOfOneIssueGiveOneClosesLine(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{
+		found:  []model.PullRequest{{Number: 7, State: state("OPEN"), Body: "## Pull requests merged into this branch (0 pull requests)\n\n| PR | Change |\n|---|---|\n"}},
+		merged: []model.PullRequest{branchPull(12, "fix the queue", "101"), branchPull(13, "fix the queue again", "101")},
+	}
+
+	code, _, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+	require.Len(t, world.bodies, 1)
+	assert.Equal(t, recount.Tally{Rows: 2, Issues: 1}, recount.Count(world.bodies[0]))
+	assert.Equal(t, 1, strings.Count(world.bodies[0], "Closes #101"))
+}
+
+func TestIntegration_AFullListOfMergedPullRequestsIsARefusalAndWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{found: []model.PullRequest{{Number: 7, State: state("OPEN"), Body: "old"}}}
+	for number := range 100 {
+		world.merged = append(world.merged, mergedPull(number+1, "a change"))
+	}
+
+	code, out, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Empty(t, out)
+	assert.Contains(t, errOut, "remedy integration: the list of merged pull requests is full: "+roundBranch+" has 100 or more merged pull requests")
+	assert.Empty(t, world.bodies, "a body from a part of the list is not written")
+	assert.Empty(t, world.created)
+}
+
 func TestIntegration_WritesNothingWhenTheTableHoldsEveryMergedRow(t *testing.T) {
 	t.Parallel()
 

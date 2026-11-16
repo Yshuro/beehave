@@ -250,8 +250,8 @@ func TestLaneLayout_TheSettleLaneIsTheOnlyEditAfterTheLastReviewAndRunsOnce(t *t
 	assert.NotContains(t, requests[lastReview+1].Prompt, "This is round")
 }
 
-// A resume reads the cap that the first start recorded: a changed PATCH_ROUNDS does not change the loop of a run that is half done.
-func TestLaneLayout_AResumeKeepsTheCapOfTheFirstStartWhenPatchRoundsChanges(t *testing.T) {
+// A resume reads the cap that the first start recorded: a changed vars.round.fix_rounds does not change the loop of a run that is half done.
+func TestLaneLayout_AResumeKeepsTheCapOfTheFirstStartWhenTheFixRoundsChange(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
@@ -298,7 +298,7 @@ func TestLaneLayout_AResumeKeepsTheCapOfTheFirstStartWhenPatchRoundsChanges(t *t
 		}
 	}
 
-	assert.Equal(t, map[string]bool{"1": true, "2": true, "3": true}, rounds, "the cap of 3 holds after the resume, though PATCH_ROUNDS is 1 now")
+	assert.Equal(t, map[string]bool{"1": true, "2": true, "3": true}, rounds, "the cap of 3 holds after the resume, though vars.round.fix_rounds is 1 now")
 }
 
 func TestLaneLayout_TheLanesOfTheItemAreOneReviewForEachGateThatPassedAndFixLanesBetween(t *testing.T) {

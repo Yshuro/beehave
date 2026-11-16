@@ -486,7 +486,7 @@ def record_merge(id, head, base):
 
 def round_integration(project, round_settings):
     """Finds or creates the integration pull request from the round branch into the trunk, and returns its number and state.
-    The tool `remedy integration` uses vars.round.integration_pr when it is not 0, and prints `pr=<n> state=<state>`. The count rows of the table come from `remedy recount`."""
+    The tool `remedy integration` uses vars.round.integration_pr when it is not 0, and prints `pr=<n> state=<state>`. The tool counts the rows of the table itself, with the count rules of `remedy recount`."""
     out = command(
         name = "round-integration",
         run = ["remedy", "integration", "--base", round_settings["base"], "--into", project.base_branch, "--pr", str(round_settings["integration_pr"])],
