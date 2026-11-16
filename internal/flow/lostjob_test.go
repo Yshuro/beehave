@@ -523,7 +523,7 @@ func TestLostJob_NoProofAtTheLimitIsAnOwnerWaitAndNotAFailedStep(t *testing.T) {
 	require.NoError(t, err)
 
 	for _, step := range steps {
-		assert.NoError(t, step.Error, "no step of the child failed: %s", step.StepName)
+		require.NoError(t, step.Error, "no step of the child failed: %s", step.StepName)
 	}
 
 	assert.Equal(t, dbos.WorkflowStatusPending, childStatus(t, engine, "21"), "the parent round keeps the child: the raise of gather cancels no run that waits")

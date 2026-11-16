@@ -186,8 +186,21 @@ func (s *script) gate(b *starlark.Builtin, args starlark.Tuple, kwargs []starlar
 		return nil, err
 	}
 
-	// The gate runs as a child workflow on the exclusive queue, so no merge of the repository starts while it runs.
-	// The call records its outputs as its own step, so a replay reads them and runs no gate again.
+	outputs, err := s.exclusiveGate(request, head, label)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.fixScope(label); err != nil {
+		return nil, err
+	}
+
+	return s.recordGate(label, outputs)
+}
+
+// exclusiveGate runs the gate of a call as a child workflow on the exclusive queue, so no merge of the repository starts while it runs,
+// and returns its outputs. The gate call records them as its own step, so a replay reads them and runs no gate again.
+func (s *script) exclusiveGate(request CommandRequest, head, label string) (map[string]any, error) {
 	in := ExclusiveInput{Kind: kindGate, Project: request.Project, Item: request.Item, Head: head, Request: request, Severity: string(s.severity)}
 
 	ran, err := s.e.queueExclusive(s.ctx, in)
@@ -201,11 +214,7 @@ func (s *script) gate(b *starlark.Builtin, args starlark.Tuple, kwargs []starlar
 		return nil, fmt.Errorf("gate %q lost its job: %w", label, err)
 	}
 
-	if err := s.fixScope(label); err != nil {
-		return nil, err
-	}
-
-	return s.recordGate(label, outputs)
+	return outputs, nil
 }
 
 // programGateOutputs runs the program that a gate call names, with the exit code as the verdict. It has no key: no pass of it stands in for a later gate.

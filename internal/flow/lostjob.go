@@ -110,24 +110,12 @@ func (e *Engine) lostOutputs(ctx dbos.Context, in ExclusiveInput, call string, r
 // for each answer, never a replay of an earlier look. A proof gives the void outputs of the gate and clears the lost job from the status.
 // No proof asks again. It starts no gate job: no rerun of the head comes before a proof.
 func (e *Engine) askLost(ctx dbos.Context, in ExclusiveInput, call string, lost LostJob) (map[string]any, error) {
-	limit := lost.Wait.String()
-	if err := show(ctx, in.Item, lostJobKey, LostJobShown{Job: lost.Job, Host: lost.Host, Since: lost.Since, Limit: limit}, "the lost gate job"); err != nil {
+	if err := show(ctx, in.Item, lostJobKey, LostJobShown{Job: lost.Job, Host: lost.Host, Since: lost.Since, Limit: lost.Wait.String()}, "the lost gate job"); err != nil {
 		return nil, err
 	}
 
-	question := fmt.Sprintf("the gate job %s on host %s was lost, and no proof that it can no longer run came within host.lost_job_wait (%s): %s. "+
-		"Stop the job or bring the host back, then answer CONTINUE: the run reads the proof again, and asks again when there is none", lost.Job, lost.Host, limit, lost.Advice)
-
 	for answer := 0; ; answer++ {
-		if _, err := e.waitOwner(ctx, in.Item, question); err != nil {
-			return nil, err
-		}
-
-		seen, err := runStep(e, ctx, call+"/"+lostAskName+"."+strconv.Itoa(answer), func(c context.Context) (lostLook, error) {
-			proof, err := e.lostProof(c, in.Project, lost)
-
-			return lostLook{Proof: proof, At: e.deps.Clock.reading()}, err
-		})
+		seen, err := e.answerThenRead(ctx, in, call, lost, answer)
 		if err != nil {
 			return nil, err
 		}
@@ -138,6 +126,26 @@ func (e *Engine) askLost(ctx dbos.Context, in ExclusiveInput, call string, lost 
 			return voidOutputs(lost), show(ctx, in.Item, lostJobKey, LostJobShown{}, "that the lost gate job has a proof")
 		}
 	}
+}
+
+// answerThenRead waits for the next answer of the owner, then reads the proof once in the recorded step <call>/lost-ask.<answer>.
+func (e *Engine) answerThenRead(ctx dbos.Context, in ExclusiveInput, call string, lost LostJob, answer int) (lostLook, error) {
+	if _, err := e.waitOwner(ctx, in.Item, lostQuestion(lost)); err != nil {
+		return lostLook{}, err
+	}
+
+	return runStep(e, ctx, call+"/"+lostAskName+"."+strconv.Itoa(answer), func(c context.Context) (lostLook, error) {
+		proof, err := e.lostProof(c, in.Project, lost)
+
+		return lostLook{Proof: proof, At: e.deps.Clock.reading()}, err
+	})
+}
+
+// lostQuestion is the question to the owner about a lost gate job whose wait for a proof reached host.lost_job_wait.
+func lostQuestion(lost LostJob) string {
+	return fmt.Sprintf("the gate job %s on host %s was lost, and no proof that it can no longer run came within host.lost_job_wait (%s): %s. "+
+		"Stop the job or bring the host back, then answer CONTINUE: the run reads the proof again, and asks again when there is none",
+		lost.Job, lost.Host, lost.Wait.String(), lost.Advice)
 }
 
 // holdLost is the timed wait for the proof, in the run that holds the host slot and the exclusive slot of the project, so no other gate starts
