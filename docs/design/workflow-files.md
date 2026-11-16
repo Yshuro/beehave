@@ -673,7 +673,17 @@ The engine has no mutation builtin. The project owns the tool and the workflow r
 - The findings go to the fix lane in the place of the report of a red gate. The loop starts no review on that head. The loop gates the fixed head and runs the mutation step again.
 - With exit code 0 the output is ignored.
 
-A project with another mutation tool sets another command. This repository uses `scripts/mutation-pr.sh`, which `make mutation-pr BASE=<ref>` also runs.
+A project with another mutation tool sets another command. This repository uses `scripts/mutation-pr.sh`, which `make mutation-pr BASE=<ref>` also runs. Its results:
+
+- A diff with no Go source change prints `mutation-pr: not applicable: <reason>` and exits with code 0. This path needs git only.
+- A diff whose changed non-test lines hold no operator that gremlins mutates prints `mutation-pr: no candidate: <reason>` and exits with code 0. This run prints no counts line, because a counts line with `applied=0` is a failed run. The report of gremlins lists every mutant of the module and marks each one that is not on a changed line as skipped. A path mismatch also marks every mutant skipped. So the script reads "no candidate" from an all-skipped report only after three checks: the script runs in the top folder of the repository, which is also the module root; each file that the report names exists under that folder; and the mutants that the report does not skip are exactly the mutants on the changed lines of the diff. The script builds those lines the way gremlins does, from the same `git diff --merge-base` with context lines and renames: for each hunk, the lines start after the leading context lines, one line for each added line.
+- A report that fails one of these checks fails the run: its paths or its changed lines do not match the diff.
+- A run that applied no mutant fails in every other case: an empty report, or mutants on changed lines that are all not covered.
+- A run with lived mutants fails. For each lived mutant, at most 50, it prints one `finding: ` line and one marker line, `mutation-pr: lived <file>:<line> <mutator>`. A summary line follows, with the full count and the number of finding lines printed.
+- The end marker `mutation-pr: end count=N printed=P` is the last `mutation-pr:` line of each run that prints a result line: "not applicable", "no candidate" or the counts line. N is the number of lived mutants, and P is the number of marker lines. Both are 0 when no mutant lived. A run that stops before its result line prints no end marker.
+- The script gives the git of gremlins the settings `diff.noprefix=false` and `diff.mnemonicPrefix=false`, so a repository that sets `diff.noprefix` gets the same result.
+- A run that exceeds `MUTATION_TIMEOUT` fails with its own line and no end marker.
+- `MUTATION_TIMEOUT` accepts only a positive whole number of seconds. Any other value fails before the run starts.
 
 `examples/remediation/CONFORMANCE.md` has one row for each rule of the method, with its home (`core`, `file`, `skill` or `drop`) and its status (`gap`, `expressed`, `proven` or `n/a`). A row moves to `proven` when a behavior test runs it. A test in the `workflow` package fails when:
 
