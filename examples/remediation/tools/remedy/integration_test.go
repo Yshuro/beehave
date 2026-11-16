@@ -31,6 +31,8 @@ type roundWorld struct {
 	listed  [][]string
 	created []model.NewPull
 	bodies  []string
+	// failFind, failMerged and failCreate are the errors of the lookup, of the list of merged pull requests and of the open call. Nil means the call works.
+	failFind, failMerged, failCreate error
 }
 
 func (w *roundWorld) PRView(context.Context, int, ...string) (model.PullRequest, error) {
@@ -41,16 +43,16 @@ func (w *roundWorld) PRList(_ context.Context, _ int, args ...string) ([]model.P
 	w.listed = append(w.listed, args)
 
 	if slices.Contains(args, "merged") {
-		return w.merged, nil
+		return w.merged, w.failMerged
 	}
 
-	return w.found, nil
+	return w.found, w.failFind
 }
 
 func (w *roundWorld) CreatePR(_ context.Context, req model.NewPull) (int, error) {
 	w.created = append(w.created, req)
 
-	return w.nextPR, nil
+	return w.nextPR, w.failCreate
 }
 
 func (w *roundWorld) SetBody(_ context.Context, _ int, body string) error {
@@ -234,6 +236,52 @@ func TestIntegration_ABadArgumentIsARefusal(t *testing.T) {
 		assert.Empty(t, out)
 		assert.Contains(t, errOut, "usage: remedy integration")
 	}
+}
+
+func TestIntegration_AReadOrAWriteThatFailsIsARefusalAndPrintsNoLine(t *testing.T) {
+	t.Parallel()
+
+	for name, world := range map[string]*roundWorld{
+		"the lookup fails":      {failFind: errDown},
+		"the merged list fails": {failMerged: errDown},
+		"the open call fails":   {failCreate: errDown},
+	} {
+		code, out, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+		assert.Equal(t, remedy.ExitRefused, code, name)
+		assert.Empty(t, out, name)
+		assert.Contains(t, errOut, "remedy integration: down", name)
+	}
+}
+
+func TestIntegration_AnOriginOrAForgeThatCannotBeOpenedIsARefusal(t *testing.T) {
+	t.Parallel()
+
+	noForge := roundDeps(&roundWorld{})
+	noForge.Forge = func(string) (remedy.Forge, error) { return nil, errDown }
+
+	for name, deps := range map[string]remedy.Deps{
+		"no origin": {Git: origin("owner/name", nothing)},
+		"no forge":  noForge,
+	} {
+		code, out, errOut := run(t, deps, integrationArgs("0")...)
+
+		assert.Equal(t, remedy.ExitRefused, code, name)
+		assert.Empty(t, out, name)
+		assert.Contains(t, errOut, "remedy integration:", name)
+	}
+}
+
+func TestIntegration_AGivenPullRequestWithNoStateIsReportedAsUnknownAndItsBodyIsLeftAlone(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{view: model.PullRequest{Body: "x"}, merged: []model.PullRequest{mergedPull(12, "fix the queue")}}
+
+	code, out, errOut := run(t, roundDeps(world), integrationArgs("9")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+	assert.Equal(t, "pr=9 state=UNKNOWN\n", out)
+	assert.Empty(t, world.bodies)
 }
 
 func TestIntegration_AForgeThatCannotWriteIsARefusal(t *testing.T) {

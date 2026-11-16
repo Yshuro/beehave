@@ -152,23 +152,10 @@ func dryWalk(ctx context.Context, opts Options, deps Deps, item, file, entry str
 
 	err = engine.Launch() //nolint:contextcheck // the engine owns the context of its runs
 	if err == nil {
-		err = dryRunItem(engine, item, file, entry)
+		_, err = engine.runEntry(item, dryProject, file, entry)
 	}
 
 	return errors.Join(err, engine.Shutdown())
-}
-
-// dryRunItem runs the pinned file for the item, at the entry the caller chose. An empty entry runs main.
-func dryRunItem(engine *Engine, item, file, entry string) error {
-	in, err := pinnedInput(item, dryProject, file)
-	if err != nil {
-		return err
-	}
-
-	in.Entry = entry
-	_, err = engine.run(in)
-
-	return err
 }
 
 // ErrDryRunEndedEarly is returned by DryRun when the run ends at a step that the dry run does not fake. The steps after it are not checked.

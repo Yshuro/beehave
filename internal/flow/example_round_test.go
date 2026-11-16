@@ -89,6 +89,22 @@ func TestRound_TheNextRoundIsCutFromTheOldBaseAndTheIntegrationPullRequestOnceIt
 	assert.Contains(t, commandsNamed(rig, "remedy"), "remedy cut --old integration --new round-v --pr 9 --trunk main")
 }
 
+// vars.round.integration_pr 0 lets the tool find the integration pull request, so the cut takes the number that the tool printed.
+func TestRound_ARoundWithNoIntegrationNumberCutsWithTheNumberThatTheToolFound(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	rig.setRound("base", "integration")
+	rig.setRound("next_base", "round-v")
+	rig.answer = "CONTINUE"
+	integrationState(rig, "MERGED")
+
+	_, err := rig.run(t)
+
+	require.NoError(t, err)
+	assert.Contains(t, commandsNamed(rig, "remedy"), "remedy cut --old integration --new round-v --pr 9 --trunk main")
+}
+
 func TestRound_AStopFromTheOwnerCutsNoNextRoundEvenWhenTheIntegrationPullRequestMerged(t *testing.T) {
 	t.Parallel()
 

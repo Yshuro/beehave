@@ -503,12 +503,13 @@ def round_integration(project, round_settings):
 
     return struct(pr = int(fields["pr"]), merged = fields.get("state", "") == "MERGED")
 
-def next_round(project, round_settings):
-    """Cuts the next round after the integration pull request of the old round merged. vars.round.next_base names the new round branch. vars.round.base is the old one.
+def next_round(project, round_settings, pr):
+    """Cuts the next round after the integration pull request `pr` of the old round merged. vars.round.next_base names the new round branch. vars.round.base is the old one.
+    `pr` is the number that round_integration returned, so a round with vars.round.integration_pr 0 cuts with the pull request that the tool found.
     The cut tool refuses while the integration pull request is not merged (exit code 2), so no round starts before the one before it ended."""
     command(
         name = "round-cut",
-        run = ["remedy", "cut", "--old", round_settings["base"], "--new", round_settings["next_base"], "--pr", str(round_settings["integration_pr"]), "--trunk", project.base_branch],
+        run = ["remedy", "cut", "--old", round_settings["base"], "--new", round_settings["next_base"], "--pr", str(pr), "--trunk", project.base_branch],
         stop_on_rc = [2],
     )
 
@@ -592,7 +593,7 @@ def round(item):
             return {"state": "waiting", "base": round_settings["base"], "pr": integration.pr}
 
         if integration.merged and round_settings["next_base"] != "":
-            next_round(project, round_settings)
+            next_round(project, round_settings, integration.pr)
             return {"state": "cut", "base": round_settings["next_base"]}
 
     return {"state": "waiting", "base": round_settings["base"], "pr": 0}
