@@ -402,6 +402,18 @@ func TestCheckTranscript(t *testing.T) {
 
 			return a
 		}(), "does not name the session"},
+		{"a_resume_option_of_one_token_with_the_file_name_of_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--resume=" + id + ".jsonl"} }
+
+			return a
+		}(), "does not name the session"},
+		{"an_option_whose_value_after_the_first_equals_sign_is_not_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--a=b=" + id} }
+
+			return a
+		}(), "does not name the session"},
 	}
 
 	for _, tc := range cases {
