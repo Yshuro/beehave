@@ -36,6 +36,9 @@ type RunProgress struct {
 	CapStop *CapStop `json:"cap_stop,omitempty"`
 	// LimitWait is the provider limit that an agent step of an open run waits for. It is nil for a run that no limit holds.
 	LimitWait *LimitWait `json:"limit_wait,omitempty"`
+	// HostLosses counts the host losses that the item runs of the tree of the run recorded, from the root: their steps <call>/host-loss.
+	// Only the view of one run (status <run id>) walks the tree for it; the list of runs leaves it at 0. It is omitted at 0.
+	HostLosses int `json:"host_losses,omitempty"`
 	// Now is the step that an open run is in. It is empty for a finished run.
 	Now string `json:"now,omitempty"`
 	// Deadline is the time that the wait of an open run ends. It is the zero time for a run that waits with no timeout, or does not wait.

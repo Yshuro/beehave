@@ -586,8 +586,8 @@ func TestLostJob_EachAnswerReadsTheProofInTheNextNumberedStep(t *testing.T) {
 }
 
 // goldenLostAskSteps are the steps of the item run of lostGateBody whose gate waited for the owner, and whose first answer came after the host came back.
-// The read of the proof after an answer is a sub-step of the gate call, recorded before the gate call itself.
-var goldenLostAskSteps = []string{"host_up:start#1", "gate:tip", "exclusive", "gate:check#1/lost-ask.0", "scope:check#1", "gate:check#1"}
+// The read of the proof after an answer and the record of the loss are sub-steps of the gate call, recorded before the gate call itself.
+var goldenLostAskSteps = []string{"host_up:start#1", "gate:tip", "exclusive", "gate:check#1/lost-ask.0", "gate:check#1/host-loss", "scope:check#1", "gate:check#1"}
 
 func TestLostJob_ContinueAfterTheHostCameBackReadsTheProofBeforeAnyRerun(t *testing.T) {
 	t.Parallel()

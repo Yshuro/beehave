@@ -91,7 +91,18 @@ type RunSteps struct {
 
 // Steps lists the steps of one run from the store, with the outputs decoded. It reads the step listing of the workflow library and copies nothing.
 // A builtin call is one line, however many records it left. A step that runs now shows its elapsed time.
+// It is the view of one run, so it also counts the host losses of the tree of the run.
 func (c *Client) Steps(id string) (RunSteps, error) {
+	view, err := c.runSteps(id)
+	if err != nil {
+		return view, err
+	}
+
+	return view, c.addHostLosses(id, &view.RunProgress)
+}
+
+// runSteps is the view of one run with the figures that its own records give. The view of the lanes of an item reads each run with it and walks no tree.
+func (c *Client) runSteps(id string) (RunSteps, error) {
 	row, err := c.runRow(id)
 	if err != nil {
 		return RunSteps{}, err
@@ -109,6 +120,18 @@ func (c *Client) Steps(id string) (RunSteps, error) {
 	progress.Deadline, err = c.waitDeadlineOf(row, records)
 
 	return RunSteps{Run: id, State: state, Error: errorText(row.Error), Steps: lines, RunProgress: progress}, err
+}
+
+// addHostLosses counts the host losses of the item tree of the run id into the progress, from the root of the tree, with the walk of the engine (walkTree).
+func (c *Client) addHostLosses(id string, progress *RunProgress) error {
+	root, err := rootRun(c.flow, id)
+	if err != nil {
+		return err
+	}
+
+	progress.HostLosses, err = hostLossesBelow(c.flow, root)
+
+	return err
 }
 
 // waitDeadlineOf reads the question of an open run once and returns the deadline of its wait. A finished run has none and reads nothing.

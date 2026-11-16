@@ -73,7 +73,7 @@ A project gate of a `gate` step is two recorded steps in the exclusive run:
 - `gate:job` reuses the pass of an earlier gate with the same key, or submits the host job and records its id.
 - `gate` waits for that job.
 
-When the wait of `gate` ends as `lost`, the steps `gate:lost-start` and `gate:lost-look.<k>`, with a durable sleep between two looks, wait for a proof that the job can no longer run. A proof gives a void gate with the field `host_loss`. See "The wait for a proof" in [hosts.md](hosts.md). When no proof comes within `host.lost_job_wait`, the item run asks the owner, and the step `<call>/lost-ask.<n>` reads the proof after each answer. See "The owner wait for a lost job" in [hosts.md](hosts.md).
+When the wait of `gate` ends as `lost`, the steps `gate:lost-start` and `gate:lost-look.<k>`, with a durable sleep between two looks, wait for a proof that the job can no longer run. A proof gives a void gate with the fields `host_loss` and `host_losses`, and the item run records the loss as the step `<call>/host-loss`. See "The wait for a proof" in [hosts.md](hosts.md). When no proof comes within `host.lost_job_wait`, the item run asks the owner, and the step `<call>/lost-ask.<n>` reads the proof after each answer. See "The owner wait for a lost job" in [hosts.md](hosts.md).
 
 The workflow library cannot record from inside a step, so the id needs a step of its own. After a crash between the two steps, the replay finds the id on record and the wait reads the same job: the host gets one job. A crash inside `gate:job`, after the host accepted the job and before the step is recorded, can still submit a second job.
 

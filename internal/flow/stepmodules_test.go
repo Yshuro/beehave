@@ -74,14 +74,15 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core3.agent3.tracker1.forge2.land3.gate3.host1.round1", applicationVersion("v1"))
-	assert.Equal(t, "v1+core3.agent3.tracker1.forge2.land3.gate4.host1.round1", versionWithModule("v1", moduleGate, 4))
+	assert.Equal(t, "v1+core3.agent3.tracker1.forge2.land3.gate4.host1.round1", applicationVersion("v1"))
+	assert.Equal(t, "v1+core3.agent3.tracker1.forge2.land3.gate5.host1.round1", versionWithModule("v1", moduleGate, 5))
 }
 
-func TestStepModules_TheGateModuleIsAtVersionThree(t *testing.T) {
+func TestStepModules_TheGateModuleIsAtVersionFour(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "gate3", "the gate step records a lost job, the wait for its proof records gate:lost-start and gate:lost-look.<k>, and the owner wait records <call>/lost-ask.<n>")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "gate4", "the gate step records a lost job and host_losses, the wait for its proof records gate:lost-start and gate:lost-look.<k>, "+
+		"the owner wait records <call>/lost-ask.<n>, and the item run records a lost job with a proof as <call>/host-loss")
 }
 
 func TestParseVersions_TheSingleVersionOfTheStepsIsEveryModuleAtVersionOne(t *testing.T) {

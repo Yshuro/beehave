@@ -133,13 +133,7 @@ func overCap(name string, c capLimit, spent agent.Spend) (*CapStop, error) {
 
 // treeSpend sums the recorded cost of the root run of the item tree and of every run below it. It reads the step records of each run, so a resume keeps the sum.
 func (s *script) treeSpend() (agent.Spend, error) {
-	id, err := dbos.GetWorkflowID(s.ctx)
-	if err != nil {
-		return agent.Spend{}, fmt.Errorf("read the id of the run of item %s: %w", s.in.Item, err)
-	}
-
-	// The reads go through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
-	root, err := rootRun(s.e.ctx, id)
+	root, err := s.e.treeRoot(s.ctx, s.in.Item)
 	if err != nil {
 		return agent.Spend{}, err
 	}
@@ -147,48 +141,56 @@ func (s *script) treeSpend() (agent.Spend, error) {
 	return runAndBelowSpend(s.e.ctx, root)
 }
 
-// runAndBelowSpend sums the cost of a run and of every item run below it.
-func runAndBelowSpend(ctx dbos.Context, id string) (agent.Spend, error) {
-	total, err := runSpend(ctx, id)
+// treeRoot is the root run of the item tree of the run of ctx.
+func (e *Engine) treeRoot(ctx dbos.Context, item string) (string, error) {
+	id, err := dbos.GetWorkflowID(ctx)
 	if err != nil {
-		return agent.Spend{}, err
+		return "", fmt.Errorf("read the id of the run of item %s: %w", item, err)
 	}
+
+	// The reads go through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
+	return rootRun(e.ctx, id)
+}
+
+// runAndBelowSpend sums the cost of a run and of every item run below it.
+func runAndBelowSpend(ctx dbos.Client, id string) (agent.Spend, error) {
+	var spent agent.Spend
+
+	err := walkTree(ctx, id, func(records []dbos.StepInfo) {
+		for _, line := range stepLines(records, "", false, time.Time{}) {
+			spent = spent.Plus(line.Spend)
+		}
+	})
+
+	return spent, err
+}
+
+// walkTree passes the step records of a run, and then of every item run below it, to fold. It is the one walk of an item tree:
+// the sum of the tree cap and the count of the host losses both fold over it. A read that fails ends the walk with its error.
+func walkTree(ctx dbos.Client, id string, fold func([]dbos.StepInfo)) error {
+	records, err := dbos.GetWorkflowSteps(ctx, id, dbos.WithStepsLoadOutput(true))
+	if err != nil {
+		return fmt.Errorf("read the steps of %s: %w", id, err)
+	}
+
+	fold(records)
 
 	children, err := itemRuns(ctx, dbos.WithFilterParentWorkflowID(id))
 	if err != nil {
-		return agent.Spend{}, err
+		return err
 	}
 
 	for _, child := range children {
-		below, err := runAndBelowSpend(ctx, child.ID)
-		if err != nil {
-			return agent.Spend{}, err
+		if err := walkTree(ctx, child.ID, fold); err != nil {
+			return err
 		}
-
-		total = total.Plus(below)
 	}
 
-	return total, nil
-}
-
-// runSpend sums the cost that the step records of one run hold, as the view of the steps reads it.
-func runSpend(ctx dbos.Context, id string) (agent.Spend, error) {
-	records, err := dbos.GetWorkflowSteps(ctx, id, dbos.WithStepsLoadOutput(true))
-	if err != nil {
-		return agent.Spend{}, fmt.Errorf("read the steps of %s: %w", id, err)
-	}
-
-	var spent agent.Spend
-
-	for _, line := range stepLines(records, "", false, time.Time{}) {
-		spent = spent.Plus(line.Spend)
-	}
-
-	return spent, nil
+	return nil
 }
 
 // itemRuns lists the item runs that match the filter.
-func itemRuns(ctx dbos.Context, filter dbos.ListWorkflowsOption) ([]dbos.WorkflowStatus, error) {
+func itemRuns(ctx dbos.Client, filter dbos.ListWorkflowsOption) ([]dbos.WorkflowStatus, error) {
 	rows, err := dbos.ListWorkflows(ctx, filter, dbos.WithFilterName(itemName))
 	if err != nil {
 		return nil, fmt.Errorf("list the item runs: %w", err)
@@ -198,7 +200,7 @@ func itemRuns(ctx dbos.Context, filter dbos.ListWorkflowsOption) ([]dbos.Workflo
 }
 
 // rootRun climbs from a run to the highest item run above it. A run that no run spawned is its own root.
-func rootRun(ctx dbos.Context, id string) (string, error) {
+func rootRun(ctx dbos.Client, id string) (string, error) {
 	for {
 		rows, err := itemRuns(ctx, dbos.WithFilterWorkflowIDs(id))
 		if err != nil || len(rows) == 0 || rows[0].ParentWorkflowID == "" {

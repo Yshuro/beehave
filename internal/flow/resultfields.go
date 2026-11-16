@@ -24,7 +24,8 @@ func writeOutputs(stdout, stderr string, rc int, key string, skipped bool) map[s
 // gateOutputs records the fields of a GateResult. A gate with no step records an empty list, never a null.
 // required holds the names that the gate list of the project had when the gate ran. A merge reads them from this record, never from the config of the day.
 // checks is what the log of a candidate job gave. new_tests is the list of its new test names, and a gate with no checks records an empty list and a zero record.
-// host_loss is an empty dict here. Only a gate whose host job was lost and proved unable to run fills it.
+// host_loss is an empty dict and host_losses is 0 here. Only a gate whose host job was lost and proved unable to run fills them: host_losses then counts
+// the host losses of the item tree, this one included (recordLoss).
 func gateOutputs(passed bool, head, tree, report string, steps []GateStep, required []string, checks *GateChecks) map[string]any {
 	recorded := GateChecks{}
 	if checks != nil {
@@ -35,7 +36,7 @@ func gateOutputs(passed bool, head, tree, report string, steps []GateStep, requi
 
 	return map[string]any{
 		"passed": passed, "head": head, treeName: tree, "report": report, "steps": append([]GateStep{}, steps...), "required": append([]string{}, required...),
-		"checks": recorded, "new_tests": recorded.NewTests, hostLossKey: map[string]any{},
+		"checks": recorded, "new_tests": recorded.NewTests, hostLossKey: map[string]any{}, hostLossesKey: 0,
 	}
 }
 
