@@ -2,6 +2,7 @@ package flow
 
 import (
 	"encoding/json"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -211,6 +212,28 @@ func TestRateLimit_AResumeAfterALimitWithNoResetTimeRunsTheAgentAgain(t *testing
 
 	require.NoError(t, err, "the resume runs the agent again, and the limit is gone")
 	assert.Len(t, h.agents.seen(), 2, "the limited run, then the run of the resume")
+}
+
+func TestRateLimit_TwoLimitedRunsOfOneTryKeepOneRecordEachInTheOrderOfTheRuns(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), limited(limitReset, 0), exited)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.NoError(t, err)
+
+	var names []string
+
+	for _, step := range recordsOfTestRun(t, engine) {
+		if strings.Contains(step.StepName, "/limit") {
+			names = append(names, step.StepName)
+		}
+	}
+
+	assert.Equal(t, []string{"agent:fix#1/limit1.0", "agent:fix#1/limit1.1"}, names, "each limited run of the try has its own record, numbered from the first")
 }
 
 func TestRateLimit_AResumeAfterTwoPastResetsInARowRunsTheAgentAgain(t *testing.T) {
