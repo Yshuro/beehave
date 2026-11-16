@@ -4,6 +4,8 @@
 # It installs no tool that `make setup` installs. `apt-get update` and `apt-get install` run on each run; apt changes no package that is installed.
 # Go, uv and actionlint are read first and installed only when they are not at their pins.
 # A new Go unpacks into /usr/local/go.new and replaces /usr/local/go only after it unpacks, so a failed unpack keeps the old Go.
+# The old Go moves to /usr/local/go.old for the swap and moves back when the swap fails. It deletes nothing outside these three
+# folders and its own temporary folder.
 # A new uv version needs a new sha256: take it from the digest of the asset in the release (`gh release view <tag> -R astral-sh/uv --json assets`).
 #
 # Usage: sh scripts/host-tools.sh   (from any folder; it reads go.mod next to the scripts folder)
@@ -17,6 +19,8 @@ actionlint_version=v1.7.12
 root=$(cd "$(dirname "$0")/.." && pwd)
 sysroot=${HOST_SETUP_SYSROOT:-}
 go_root=$sysroot/usr/local/go
+go_staging=$go_root.new
+go_backup=$go_root.old
 bin_dir=$sysroot/usr/local/bin
 
 fail() {
@@ -56,7 +60,20 @@ go_pin() {
 	printf '%s\n' "${line#toolchain }"
 }
 
+# restore_go puts the old Go back when a failed swap left it in the backup and no Go in its place.
+# It deletes the backup only when a Go is in place, so it never deletes the only copy.
+restore_go() {
+	if [ ! -e "$go_backup" ]; then return 0; fi
+	if [ -e "$go_root" ]; then
+		sudo rm -rf "$go_backup"
+		return 0
+	fi
+	say "putting the old Go back from $go_backup"
+	sudo mv "$go_backup" "$go_root" || fail "the old Go did not move back from $go_backup to $go_root. Move it back by hand"
+}
+
 install_go() {
+	restore_go
 	want=$(go_pin)
 	case $("$go_root/bin/go" version 2>/dev/null || true) in
 	"go version $want "*)
@@ -71,20 +88,22 @@ install_go() {
 	[ -n "$sha" ] || fail "go.dev lists no $file. Check the toolchain line of go.mod"
 	curl -fsSL --retry 3 -o "$work/$file" "https://go.dev/dl/$file"
 	check_sha "$work/$file" "$sha"
-	staging=$go_root.new
-	say "unpacking Go $want into $staging"
-	sudo rm -rf "$staging"
-	sudo mkdir -m 0755 "$staging"
-	sudo tar -C "$staging" -xzf "$work/$file" || fail "the Go archive did not unpack. The Go in $go_root is unchanged"
-	case $("$staging/go/bin/go" version 2>/dev/null || true) in
+	say "unpacking Go $want into $go_staging"
+	sudo rm -rf "$go_staging"
+	sudo mkdir -m 0755 "$go_staging"
+	sudo tar -C "$go_staging" -xzf "$work/$file" || fail "the Go archive did not unpack. The Go in $go_root is unchanged"
+	case $("$go_staging/go/bin/go" version 2>/dev/null || true) in
 	"go version $want "*) ;;
 	*) fail "the Go archive does not hold $want. The Go in $go_root is unchanged" ;;
 	esac
 
 	say "installing Go $want into $go_root"
-	if [ -e "$go_root" ]; then sudo mv "$go_root" "$staging/old"; fi
-	sudo mv "$staging/go" "$go_root"
-	sudo rm -rf "$staging"
+	if [ -e "$go_root" ]; then sudo mv "$go_root" "$go_backup"; fi
+	if ! sudo mv "$go_staging/go" "$go_root"; then
+		restore_go
+		fail "the new Go did not move into $go_root. The old Go is back in place"
+	fi
+	sudo rm -rf "$go_staging" "$go_backup"
 	case $("$go_root/bin/go" version 2>/dev/null || true) in
 	"go version $want "*) ;;
 	*) fail "the Go archive did not install $want into $go_root" ;;

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake mkdir: run the real mkdir, so a folder that sudo makes exists and a folder that exists makes it fail.
+exec /bin/mkdir "$@"

@@ -2,8 +2,9 @@
 # Make a linux amd64 machine ready as a beehave build host for the ssh provider, then prove it. See docs/design/hosts.md.
 # Run it on the host, as the login user, from a clone of the repository at the commit under test. A second run changes nothing.
 # It installs no watchdog: it refuses to start and to finish unless the named self-delete watchdog unit is active, enabled and Restart=always.
-# It names no cloud and touches no heartbeat. It deletes nothing outside /usr/local/go, /usr/local/go.new and its own temporary folder.
-# It makes a missing work root only. It refuses a system folder, and an existing work root that the login user does not own.
+# It names no cloud and touches no heartbeat. It deletes nothing outside /usr/local/go, /usr/local/go.new, /usr/local/go.old and its own temporary folder.
+# It refuses a work root that is not its canonical path, a system folder, and an existing work root that the login user does not own.
+# It makes the last folder of a missing work root only, and never changes the owner or the mode of a folder that exists.
 # The last line of a pass is HOST-SETUP-DONE.
 #
 # Usage: sh scripts/host-setup.sh --work-root <absolute path> --watchdog <systemd unit>
@@ -61,24 +62,31 @@ is_system_folder() {
 	return 1
 }
 
-# check_work_root_folder refuses a system folder, and an existing work root that is not a folder of the login user.
-# The script makes a missing work root only, so it never changes the owner or the mode of a folder that exists.
+# check_work_root_folder refuses a work root that is not its canonical path, a system folder, and an existing work root that is not a
+# folder of the login user. A canonical path has no . or .. part, no doubled or trailing slash and no link, so the path names exactly
+# the folder that the script reads or makes. A missing work root needs a parent folder that exists and is not a system folder.
 check_work_root_folder() {
+	canonical=$(realpath -m -- "$work_root") || fail "the work root $work_root cannot be read"
+	[ "$canonical" = "$work_root" ] ||
+		fail "the work root $work_root is not a canonical path: it names $canonical. Name the folder with no . or .. part, no doubled or trailing slash and no link"
 	if is_system_folder "$work_root"; then
 		fail "the work root $work_root is a system folder. Name a folder of its own, such as /home/<user>/jobs"
 	fi
-	if [ ! -e "$work_root" ] && [ ! -L "$work_root" ]; then
+
+	if [ -e "$work_root" ] || [ -L "$work_root" ]; then
+		[ -d "$work_root" ] || fail "the work root $work_root is not a folder"
+		[ "$(stat -c %u -- "$work_root")" = "$(id -u)" ] ||
+			fail "the work root $work_root is not owned by the login user. Name a folder of the login user, or a folder that does not exist yet"
+		[ -w "$work_root" ] || fail "the login user cannot write to the work root $work_root"
 		return 0
 	fi
 
-	[ -d "$work_root" ] || fail "the work root $work_root is not a folder"
-	resolved=$(cd -P -- "$work_root" && pwd -P) || fail "the work root $work_root cannot be read"
-	if is_system_folder "$resolved"; then
-		fail "the work root $work_root is a system folder ($resolved). Name a folder of its own, such as /home/<user>/jobs"
+	parent=$(dirname -- "$work_root")
+	[ -d "$parent" ] ||
+		fail "the work root $work_root is missing, and its parent $parent is not a folder. Make the parent folder first, or name a work root whose parent exists"
+	if is_system_folder "$parent"; then
+		fail "the parent $parent of the work root $work_root is a system folder. Name a folder of its own, such as /home/<user>/jobs"
 	fi
-	[ "$(stat -c %u -- "$resolved")" = "$(id -u)" ] ||
-		fail "the work root $work_root is not owned by the login user. Name a folder of the login user, or a folder that does not exist yet"
-	[ -w "$resolved" ] || fail "the login user cannot write to the work root $work_root"
 }
 
 check_watchdog_name() {
@@ -161,13 +169,16 @@ BEEHAVE_BD_132=$gobin/bd"
 }
 
 # make_work_root makes a missing work root for the login user. It reads the folder again first, and it leaves an existing one as it is.
+# It makes the last folder only, with mkdir and no -p. mkdir fails on a path that exists, so a folder or a link that appears there
+# between the check and the mkdir makes the step fail instead of taking it over, and chown -h then acts on the new folder only.
 make_work_root() {
 	check_work_root_folder
-	if [ ! -d "$work_root" ]; then
+	if [ ! -e "$work_root" ]; then
 		say "making the work root $work_root"
-		sudo install -d -o "$user" -g "$(id -gn)" -m 0755 "$work_root"
+		sudo mkdir -m 0755 -- "$work_root"
+		sudo chown -h "$user:$(id -gn)" -- "$work_root"
 	fi
-	mkdir -p "$work_root/.beehave"
+	[ -d "$work_root/.beehave" ] || mkdir -- "$work_root/.beehave"
 }
 
 install_project_tools() {

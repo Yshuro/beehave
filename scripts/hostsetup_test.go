@@ -58,25 +58,27 @@ var provedTools = []string{
 
 // fakeHost is one machine for the script: a clone, a home, a folder that stands for /, the work root and the fakes.
 type fakeHost struct {
-	t                                                    *testing.T
-	root, source                                         *os.Root
-	base, clone, home, sysroot, workRoot, bin, log, down string
-	env                                                  []string
+	t                                                           *testing.T
+	root, source                                                *os.Root
+	base, clone, home, sysroot, workRoot, bin, log, down, state string
+	env                                                         []string
 }
 
 func newFakeHost(t *testing.T) *fakeHost {
 	t.Helper()
 
-	base := t.TempDir()
+	// The script refuses a work root that is not its canonical path, so the base holds no link (macOS puts /var under /private).
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
 	h := &fakeHost{
 		t: t, root: openRoot(t, base), source: openRoot(t, "."), base: base, clone: filepath.Join(base, "clone"), home: filepath.Join(base, "home"),
 		sysroot: filepath.Join(base, "root"), workRoot: filepath.Join(base, "work"), bin: filepath.Join(base, "bin"), log: filepath.Join(base, "log"),
-		down: filepath.Join(base, "dl"),
+		down: filepath.Join(base, "dl"), state: filepath.Join(base, "state"),
 	}
-	state := filepath.Join(base, "state")
 	tmp := filepath.Join(base, "tmp")
 
-	for _, dir := range []string{h.clone + "/scripts", h.home + "/go/bin", h.sysroot + "/usr/local/go/bin", h.workRoot, h.bin, h.down, state, tmp} {
+	for _, dir := range []string{h.clone + "/scripts", h.home + "/go/bin", h.sysroot + "/usr/local/go/bin", h.workRoot, h.bin, h.down, h.state, tmp} {
 		require.NoError(t, h.root.MkdirAll(h.rel(dir), 0o750))
 	}
 
@@ -94,10 +96,65 @@ func newFakeHost(t *testing.T) *fakeHost {
 
 	h.env = []string{
 		"PATH=" + h.bin + ":/usr/bin:/bin", "HOME=" + h.home, "TMPDIR=" + tmp, "HOST_SETUP_SYSROOT=" + h.sysroot,
-		"FAKE_LOG=" + h.log, "FAKE_BIN=" + h.bin, "FAKE_STATE=" + state, "FAKE_DL=" + h.down, "REAL_JQ=" + jq,
+		"FAKE_LOG=" + h.log, "FAKE_BIN=" + h.bin, "FAKE_STATE=" + h.state, "FAKE_DL=" + h.down, "REAL_JQ=" + jq,
+		"REAL_REALPATH=" + gnuRealpath(t),
 	}
 
 	return h
+}
+
+// gnuRealpath finds the GNU realpath, which knows -m: grealpath on macOS with coreutils, realpath on linux.
+func gnuRealpath(t *testing.T) string {
+	t.Helper()
+
+	for _, name := range []string{"grealpath", "realpath"} {
+		if path, err := exec.LookPath(name); err == nil {
+			return path
+		}
+	}
+
+	require.FailNow(t, "the tests of the host setup need GNU realpath (coreutils)")
+
+	return ""
+}
+
+// owns makes the fake stat report the user id as the owner of the path.
+func (h *fakeHost) owns(uid, path string) {
+	h.t.Helper()
+
+	owners := filepath.Join(h.state, "owners")
+	text := ""
+	if _, err := h.root.Stat(h.rel(owners)); err == nil {
+		text = h.read(owners)
+	}
+
+	h.write(owners, text+uid+" "+path+"\n", 0o644)
+}
+
+// rootActions lists the sudo calls of the log, other than the check that sudo needs no password.
+func rootActions(log string) []string {
+	var actions []string
+
+	for line := range strings.SplitSeq(log, "\n") {
+		if strings.HasPrefix(line, "sudo ") && line != "sudo -n true" {
+			actions = append(actions, line)
+		}
+	}
+
+	return actions
+}
+
+// workRootActions lists the sudo calls of the log that name the work root.
+func workRootActions(log, workRoot string) []string {
+	var actions []string
+
+	for _, line := range rootActions(log) {
+		if strings.Contains(line, " "+workRoot) {
+			actions = append(actions, line)
+		}
+	}
+
+	return actions
 }
 
 func (h *fakeHost) installFakes() {
@@ -281,9 +338,9 @@ func TestHostSetup_RefusesBeforeAnyChange(t *testing.T) {
 		{name: "sudo_that_asks_for_a_password", env: "FAKE_SUDO_RC=1", message: "sudo without a password"},
 		{name: "a_clone_without_go_mod", remove: "go.mod", message: "holds no go.mod and Makefile"},
 		{name: "a_clone_without_a_makefile", remove: "Makefile", message: "holds no go.mod and Makefile"},
-		{name: "no_watchdog_named", message: "--watchdog is required", args: []string{"--work-root", "/srv/jobs"}},
-		{name: "a_watchdog_that_is_no_unit_name", message: "is not a systemd unit name", args: []string{"--work-root", "/srv/jobs", "--watchdog", "a b"}},
-		{name: "a_watchdog_that_starts_with_a_dash", message: "is not a systemd unit name", args: []string{"--work-root", "/srv/jobs", "--watchdog", "--user"}},
+		{name: "no_watchdog_named", message: "--watchdog is required", args: []string{"--work-root", "<work>"}},
+		{name: "a_watchdog_that_is_no_unit_name", message: "is not a systemd unit name", args: []string{"--work-root", "<work>", "--watchdog", "a b"}},
+		{name: "a_watchdog_that_starts_with_a_dash", message: "is not a systemd unit name", args: []string{"--work-root", "<work>", "--watchdog", "--user"}},
 		{name: "an_unknown_argument", message: "unknown argument --cloud", args: []string{"--cloud", "gcp"}},
 	}
 
@@ -296,9 +353,12 @@ func TestHostSetup_RefusesBeforeAnyChange(t *testing.T) {
 				require.NoError(t, h.root.Remove(h.rel(filepath.Join(h.clone, tc.remove))))
 			}
 
-			args := tc.args
-			if args == nil {
-				args = []string{"--work-root", h.workRoot, "--watchdog", watchdogUnit}
+			args := []string{"--work-root", h.workRoot, "--watchdog", watchdogUnit}
+			if tc.args != nil {
+				args = nil
+				for _, arg := range tc.args {
+					args = append(args, strings.ReplaceAll(arg, "<work>", h.workRoot))
+				}
 			}
 
 			out, err := h.run([]string{tc.env}, args...)
@@ -313,12 +373,25 @@ func TestHostSetup_RefusesBeforeAnyChange(t *testing.T) {
 func TestHostSetup_RefusesAWorkRootThatIsNotTheLoginUsers(t *testing.T) {
 	t.Parallel()
 
-	cases := []struct{ name, workRoot, env, message string }{
+	const notCanonical = "is not a canonical path"
+
+	// A work root of <base> stands for the folder of the test, which exists and holds no link.
+	cases := []struct{ name, workRoot, message string }{
 		{name: "the_root_folder", workRoot: "/", message: "is a system folder"},
-		{name: "a_system_folder", workRoot: "/etc", message: "is a system folder"},
-		{name: "a_link_to_the_root_folder", workRoot: "link", message: "is a system folder"},
-		{name: "a_folder_of_another_user", env: "FAKE_OWNER_UID=0", message: "is not owned by the login user"},
-		{name: "a_file", workRoot: "file", message: "is not a folder"},
+		{name: "a_system_folder", workRoot: "/usr", message: "is a system folder"},
+		{name: "a_link_to_the_root_folder", workRoot: "<base>/link", message: notCanonical},
+		{name: "a_folder_of_another_user", workRoot: "<base>/work", message: "is not owned by the login user"},
+		{name: "a_folder_the_login_user_cannot_write", workRoot: "<base>/work", message: "cannot write to the work root"},
+		{name: "a_file", workRoot: "<base>/file", message: "is not a folder"},
+		{name: "dot_dot_after_a_missing_folder", workRoot: "<base>/x/..", message: notCanonical},
+		{name: "dot_dot_to_the_root_folder", workRoot: "/x/..", message: notCanonical},
+		{name: "a_dot_part", workRoot: "<base>/a/./b", message: notCanonical},
+		{name: "a_doubled_slash", workRoot: "<base>//b", message: notCanonical},
+		{name: "a_trailing_slash", workRoot: "<base>/b/", message: notCanonical},
+		{name: "a_trailing_slash_on_an_existing_folder", workRoot: "<base>/work/", message: notCanonical},
+		{name: "a_missing_folder_whose_parent_is_missing", workRoot: "<base>/no/jobs", message: "Make the parent folder first"},
+		{name: "a_missing_folder_whose_parent_is_a_file", workRoot: "<base>/file/jobs", message: "Make the parent folder first"},
+		{name: "a_missing_folder_in_a_system_folder", workRoot: "/usr/beehave-missing-work-root", message: "is a system folder"},
 	}
 
 	for _, tc := range cases {
@@ -326,27 +399,28 @@ func TestHostSetup_RefusesAWorkRootThatIsNotTheLoginUsers(t *testing.T) {
 			t.Parallel()
 
 			h := newFakeHost(t)
-			workRoot := tc.workRoot
+			workRoot := strings.ReplaceAll(tc.workRoot, "<base>", h.base)
 
-			switch workRoot {
-			case "":
-				workRoot = h.workRoot
-			case "link":
-				workRoot = filepath.Join(h.base, "link")
+			switch tc.name {
+			case "a_link_to_the_root_folder":
 				require.NoError(t, h.root.Symlink("/", "link"))
-			case "file":
-				workRoot = filepath.Join(h.base, "file")
-				h.write(workRoot, "", 0o644)
+			case "a_file", "a_missing_folder_whose_parent_is_a_file":
+				h.write(filepath.Join(h.base, "file"), "", 0o644)
+			case "a_folder_of_another_user":
+				h.owns("0", h.workRoot)
+			case "a_folder_the_login_user_cannot_write":
+				require.NoError(t, h.root.Chmod(h.rel(h.workRoot), 0o500))
 			}
 
-			out, err := h.run([]string{tc.env}, "--work-root", workRoot, "--watchdog", watchdogUnit)
+			out, err := h.run(nil, "--work-root", workRoot, "--watchdog", watchdogUnit)
 
 			require.Error(t, err)
 			assert.Contains(t, out, tc.message)
 
 			log := h.read(h.log)
 			assert.NotContains(t, log, "apt-get", "the refusal comes before any change")
-			assert.NotContains(t, log, "sudo install -d", "an existing folder is never chowned or chmodded")
+			assert.Empty(t, rootActions(log), "the refusal comes before any root action")
+			assert.NotContains(t, log, "\nchown ", "no folder changes owner")
 		})
 	}
 }
@@ -355,16 +429,38 @@ func TestHostSetup_MakesOnlyAMissingWorkRoot(t *testing.T) {
 	t.Parallel()
 
 	h := newFakeHost(t)
-	workRoot := filepath.Join(h.base, "new/jobs")
+	workRoot := filepath.Join(h.base, "jobs")
 
 	out, err := h.run(nil, "--work-root", workRoot, "--watchdog", watchdogUnit)
 	require.NoError(t, err, out)
-	assert.Contains(t, h.read(h.log), "\nsudo install -d -o builder -g builder -m 0755 "+workRoot+"\n", "a missing work root is made for the login user")
+
+	log := h.read(h.log)
+	assert.Equal(t, []string{"sudo mkdir -m 0755 -- " + workRoot, "sudo chown -h builder:builder -- " + workRoot}, workRootActions(log, workRoot),
+		"the script makes the last folder only, without -p, then gives it to the login user")
+	assert.NotContains(t, log, "sudo install", "install -d sets the owner and the mode of a folder that exists")
+	assert.NotContains(t, log, "sudo mkdir -p", "mkdir -p does not fail on a folder that exists")
+
+	info, err := h.root.Stat(h.rel(workRoot))
+	require.NoError(t, err)
+	assert.True(t, info.IsDir(), "the root mkdir makes the work root")
 
 	h.write(h.log, "", 0o644)
 	out, err = h.run(nil, "--work-root", workRoot, "--watchdog", watchdogUnit)
 	require.NoError(t, err, out)
-	assert.NotContains(t, h.read(h.log), "sudo install -d", "an existing work root is left as it is")
+	assert.Empty(t, workRootActions(h.read(h.log), workRoot), "an existing work root is left as it is")
+}
+
+func TestHostSetup_LeavesAnExistingWorkRootAsItIs(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.setup()
+	require.NoError(t, err, out)
+
+	log := h.read(h.log)
+	assert.Empty(t, workRootActions(log, h.workRoot), "no root action names an existing work root")
+	assert.NotContains(t, log, "\nchown ", "no folder changes owner")
+	assert.NotContains(t, out, "making the work root")
 }
 
 func TestHostSetup_RefusesAUvArchiveWhoseChecksumDiffers(t *testing.T) {
@@ -420,7 +516,7 @@ func TestHostSetup_ReadsTheGoVersionFromGoMod(t *testing.T) {
 			require.NoError(t, err, out)
 			assert.Contains(t, log, "https://go.dev/dl/go1.27.9.linux-amd64.tar.gz")
 			assert.Contains(t, log, "sudo tar -C "+goRoot+".new -xzf ")
-			assert.Less(t, strings.Index(log, "sudo tar -C "+goRoot+".new"), strings.Index(log, "sudo mv "+goRoot+" "+goRoot+".new/old\n"),
+			assert.Less(t, strings.Index(log, "sudo tar -C "+goRoot+".new"), strings.Index(log, "sudo mv "+goRoot+" "+goRoot+".old\n"),
 				"the old Go moves out only after the new one unpacks")
 			assert.Contains(t, log, "sudo mv "+goRoot+".new/go "+goRoot+"\n")
 			assert.Contains(t, h.record(), "tool go go version go1.27.9 linux/amd64\n")
@@ -429,7 +525,8 @@ func TestHostSetup_ReadsTheGoVersionFromGoMod(t *testing.T) {
 }
 
 // serveGo puts a Go archive of the version and the go.dev list that names it in the downloads. An empty sha means the true one.
-// A broken archive has the true sha but does not unpack. serveGo also puts the fakes of the swap on the PATH.
+// A broken archive has the true sha but does not unpack. serveGo also puts the fakes of the swap on the PATH:
+// tar and mv run the real ones, and mv fails when its first argument is FAKE_MV_FAIL.
 func (h *fakeHost) serveGo(version, sha string, broken bool) {
 	h.t.Helper()
 
@@ -448,9 +545,9 @@ func (h *fakeHost) serveGo(version, sha string, broken bool) {
 		archive.Truncate(archive.Len() / 2)
 	}
 
-	for _, real := range []string{"/usr/bin/tar", "/bin/mv", "/bin/mkdir"} {
-		h.write(filepath.Join(h.bin, filepath.Base(real)), "#!/bin/sh\nexec "+real+" \"$@\"\n", 0o755)
-	}
+	h.write(filepath.Join(h.bin, "tar"), "#!/bin/sh\nexec /usr/bin/tar \"$@\"\n", 0o755)
+	h.write(filepath.Join(h.bin, "mv"), "#!/bin/sh\nif [ \"$1\" = \"${FAKE_MV_FAIL:-}\" ]; then echo 'fake mv: failed' >&2; exit 1; fi\n"+
+		"exec /bin/mv \"$@\"\n", 0o755)
 
 	if sha == "" {
 		sum := sha256.Sum256(archive.Bytes())
@@ -460,6 +557,52 @@ func (h *fakeHost) serveGo(version, sha string, broken bool) {
 	file := version + ".linux-amd64.tar.gz"
 	h.write(filepath.Join(h.down, file), archive.String(), 0o644)
 	h.write(filepath.Join(h.down, "go.json"), `[{"version":"`+version+`","files":[{"filename":"`+file+`","sha256":"`+sha+`"}]}]`, 0o644)
+}
+
+func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the_new_go_does_not_move_in", func(t *testing.T) {
+		t.Parallel()
+
+		h := newFakeHost(t)
+		goRoot := h.sysroot + "/usr/local/go"
+		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n", 0o644)
+		h.serveGo("go1.27.9", "", false)
+
+		for run := 1; run <= 2; run++ {
+			out, err := h.setup("FAKE_MV_FAIL=" + goRoot + ".new/go")
+
+			require.Error(t, err, "run %d", run)
+			assert.Contains(t, out, "the new Go did not move into "+goRoot+". The old Go is back in place", "run %d", run)
+			assert.Contains(t, h.read(goRoot+"/bin/go"), pinnedGo, "run %d: the old Go is in place", run)
+			assert.Contains(t, h.read(h.log), "sudo mv "+goRoot+".old "+goRoot+"\n", "run %d: the old Go moves back", run)
+
+			// The fake sudo runs no rm, so the test removes the go.new folder that the next run clears first.
+			assert.Contains(t, h.read(h.log), "sudo rm -rf "+goRoot+".new\n")
+			require.NoError(t, h.root.RemoveAll(h.rel(goRoot+".new")))
+		}
+	})
+
+	t.Run("a_backup_without_a_go_is_put_back_first", func(t *testing.T) {
+		t.Parallel()
+
+		h := newFakeHost(t)
+		goRoot := h.sysroot + "/usr/local/go"
+		h.serveGo(pinnedGo, "", false)
+		require.NoError(t, h.root.RemoveAll(h.rel(goRoot)))
+		h.write(goRoot+".old/bin/go", fakeGo(pinnedGo), 0o755)
+
+		out, err := h.setup()
+
+		require.NoError(t, err, out)
+		assert.Contains(t, h.read(goRoot+"/bin/go"), pinnedGo, "the old Go is back")
+
+		log := h.read(h.log)
+		assert.Contains(t, log, "sudo mv "+goRoot+".old "+goRoot+"\n")
+		assert.NotContains(t, log, "sudo rm -rf "+goRoot+".old", "the only copy of Go is never deleted")
+		assert.NotContains(t, log, "go.dev/dl/"+pinnedGo, "the Go that comes back is at the pin")
+	})
 }
 
 func TestHostSetup_ProvesEachToolThroughAUserUnit(t *testing.T) {
@@ -602,7 +745,7 @@ func TestHostSetup_ASecondRunChangesNothing(t *testing.T) {
 	assert.Equal(t, first, withoutTime(h.record()))
 
 	log := h.read(h.log)
-	for _, change := range []string{"\nsystemctl --user daemon-reload", "\nsudo loginctl enable-linger", "\ncurl ", "\nsudo tar ", "\nsudo rm "} {
+	for _, change := range []string{"\nsystemctl --user daemon-reload", "\nsudo loginctl enable-linger", "\ncurl ", "\nsudo tar ", "\nsudo rm ", "\nsudo mkdir ", "\nsudo chown ", "\nsudo mv "} {
 		assert.NotContains(t, log, change)
 	}
 }
