@@ -44,6 +44,8 @@ GOTESTSUM = gotestsum --format standard-quiet --junitfile $(REPORT_DIR)
 AI_RULEZ_VERSION := v5.9.2
 # The secret scan of the candidate gate job runs gitleaks. The "git" subcommand exists from 8.19 on.
 GITLEAKS_VERSION := v8.30.1
+# make mutation and make mutation-pr run gremlins. scripts/mutation-pr.sh reads the JSON report of this version.
+GREMLINS_VERSION := v0.6.0
 BIN := bin/beehave
 REMEDY := bin/remedy
 
@@ -60,6 +62,7 @@ setup:  ## Install the Go tools and generate the agent files
 	command -v gotestsum >/dev/null 2>&1 || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
 	command -v deadcode >/dev/null 2>&1 || go install $(DEADCODE_VERSION)
 	[ "$$(gitleaks version 2>/dev/null)" = "$(GITLEAKS_VERSION:v%=%)" ] || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 	$(MAKE) governance-generate
 
 build:  ## Build bin/beehave and bin/remedy
@@ -144,13 +147,14 @@ check-darwin:  ## On a Mac: run the Seatbelt enforcer tests and the contract sui
 	go test -count=1 ./internal/sandbox/...
 
 # Run on one package: make mutation PKG=./internal/cli
-# PKG is a folder, never a "..." pattern: gremlins walks the folder, so "./internal/..." finds no file and reports nothing.
+# PKG is a folder, never a "..." pattern: gremlins reads "./internal/..." as a folder name, finds no file and passes. The target refuses such a PKG.
 mutation:
+	@case "$(PKG)" in *...*) echo 'PKG=$(PKG) holds "...": gremlins reads it as a folder name and mutates nothing. Name one folder, such as PKG=./internal/cli'; exit 2;; esac
 	gremlins unleash $(or $(PKG),.)
 
 # Per-PR run: mutate only the Go lines that differ from BASE, the branch the pull request targets. BASE is required: make mutation-pr BASE=origin/integration/r1
-# Needs gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit in seconds (default 1200).
-# Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes.
+# Needs git, go, gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit, a positive whole number of seconds (default 1200).
+# Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes. A diff whose changed lines hold no operator that gremlins mutates is "no candidate" and passes.
 mutation-pr:
 	sh scripts/mutation-pr.sh "$(BASE)"
 

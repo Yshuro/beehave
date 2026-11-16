@@ -9,11 +9,12 @@ chmod 755 fake/gremlins
 chmod 755 fake/timeout
 env PATH=$WORK/fake:$PATH
 
-# The repository has the script, a base commit and a change to a Go source file.
+# The repository has the module and the script at its top folder, a base commit and a change to a Go source file.
 exec git init -q -b main repo
 cp a.go repo/a.go
+cp gomod repo/go.mod
 script mutation-pr.sh repo/scripts/mutation-pr.sh
-exec git -C repo add a.go scripts/mutation-pr.sh
+exec git -C repo add a.go go.mod scripts
 exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
 exec git -C repo checkout -q -b change
 cp a2.go repo/a.go
@@ -30,6 +31,7 @@ stdout '^      KILLED CONDITIONALS_NEGATION at a.go:30:4$'
 ! stdout 'finding: a.go:4'
 ! stdout 'finding: a.go:5'
 ! stdout 'finding: a.go:6'
+stdout '^mutation-pr: 1 mutant\(s\) lived, 1 finding line\(s\) printed\. Kill each one with a test\.$'
 
 # A report with no lived mutant: the script passes and prints no finding.
 env GREMLINS_REPORT=$WORK/clean.json
@@ -37,12 +39,19 @@ exec sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
 ! stdout '^finding: '
 
+-- gomod --
+module example.com/r
+
+go 1.27
 -- a.go --
 package a
 -- a2.go --
 package a
 
 func F(x int) bool { return x > 0 }
+func G(x int) int  { return x + 1 }
+func H(x int) int  { return -x }
+func I(x int)      { x++ }
 -- fake/gremlins --
 #!/bin/sh
 cp "$GREMLINS_REPORT" "$5"

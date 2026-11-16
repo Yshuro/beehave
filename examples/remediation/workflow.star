@@ -274,7 +274,8 @@ def mutation_command(project):
 def check_mutation(words):
     """Runs the mutation command of the project on the build host, in the slot class mutation, and returns the findings as text. An empty text means the head is clean.
     The command prints one finding per line, such as finding: path/file.go:12: a mutant lived: ARITHMETIC_BASE, and exits with a code other than 0 when the run fails.
-    A run that applied no mutant is a failed run: the command says so itself. Exit code 0 is a pass, and its output is ignored.
+    A run that applied no mutant is a failed run: the command says so itself. A diff that holds nothing to mutate exits with 0, as "not applicable" or "no candidate".
+    Exit code 0 is a pass, and its output is ignored.
     The output of a failed host job is the end of its log, so it holds the noise of the tool too. A failed run gives each line that starts with "finding: " as one finding, without the prefix.
     A failed run with no such line gives each non-blank line, the last 20 at most, as one finding. A failed run that printed no line gives one finding with its exit code."""
     run = command(name = "mutation", run = words + ["origin/" + env("BASE")], host = "build", slots = "mutation")

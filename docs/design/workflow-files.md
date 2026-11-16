@@ -673,7 +673,14 @@ The engine has no mutation builtin. The project owns the tool and the workflow r
 - The findings go to the fix lane in the place of the report of a red gate. The loop starts no review on that head. The loop gates the fixed head and runs the mutation step again.
 - With exit code 0 the output is ignored.
 
-A project with another mutation tool sets another command. This repository uses `scripts/mutation-pr.sh`, which `make mutation-pr BASE=<ref>` also runs.
+A project with another mutation tool sets another command. This repository uses `scripts/mutation-pr.sh`, which `make mutation-pr BASE=<ref>` also runs. Its results:
+
+- A diff with no Go source change prints `mutation-pr: not applicable: <reason>` and exits with code 0. This path needs git only.
+- A diff whose changed non-test lines hold no operator that gremlins mutates prints `mutation-pr: no candidate: <reason>` and exits with code 0. The report of gremlins lists every mutant of the module and marks each one that is not on a changed line as skipped. A path mismatch also marks every mutant skipped. So the script reads "no candidate" from an all-skipped report only after three checks: the script runs in the top folder of the repository, which is also the module root; each file that the report names exists under that folder; and the mutants that the report does not skip are exactly the mutants on the changed lines of the diff. The script builds those lines the way gremlins does, from the same `git diff --merge-base` with context lines and renames: for each hunk, the lines start after the leading context lines, one line for each added line.
+- A report that fails one of these checks fails the run: its paths or its changed lines do not match the diff.
+- A run that applied no mutant fails in every other case: an empty report, or mutants on changed lines that are all not covered.
+- A run with lived mutants fails. It prints one `finding: ` line for each lived mutant, at most 50, then a summary line with the full count and the number of lines printed.
+- `MUTATION_TIMEOUT` accepts only a positive whole number of seconds. Any other value fails before the run starts.
 
 `examples/remediation/CONFORMANCE.md` has one row for each rule of the method, with its home (`core`, `file`, `skill` or `drop`) and its status (`gap`, `expressed`, `proven` or `n/a`). A row moves to `proven` when a behavior test runs it. A test in the `workflow` package fails when:
 
