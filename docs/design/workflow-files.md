@@ -689,7 +689,9 @@ A project with another mutation tool sets another command. This repository uses 
 
 - an ID repeats;
 - a home or status is not one of the allowed words;
-- an `expressed` row names a builtin call that the example and its library do not hold.
+- an `expressed` row names a builtin call that the example and its library do not hold;
+- a `proven` row names no test;
+- the file cites a test name, in any column or in the prose, that no `_test.go` file of the repository declares as a top-level function. A citation `TestX/sub` checks `TestX` only.
 
 #### `examples/research/`
 
