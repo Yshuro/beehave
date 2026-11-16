@@ -268,7 +268,7 @@ func (a e2eAgents) Run(ctx context.Context, request flow.AgentRequest) (agent.Re
 		Guard: agents{guard: guardCommand(os.Executable)}.guardFor(request.Forbid, protect),
 	})
 
-	return describe(adapter, runner, a.dir, tap, result, request.Forbid, protect)
+	return endOf(adapter, runner, a.dir, tap, result, request.Forbid, protect)
 }
 
 // The agent runs in the work folder of the script and sees no other variable than PATH.
