@@ -257,6 +257,28 @@ func TestRateLimit_TheCostOfARunThatFailedAtALimitCountsOnce(t *testing.T) {
 	assert.InDelta(t, 0.7, days[0].Spent.Cost, 1e-9, "the per-day sum")
 }
 
+func TestRateLimit_AStoreThatRefusesTheLimitRecordFailsTheStepAndTheCostOfTheLimitedRunCounts(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0.7), exited)
+
+	engine := h.engine(t)
+
+	_, err := sqlOf(t, h).ExecContext(t.Context(), "CREATE TRIGGER refuse_limit_record BEFORE INSERT ON operation_outputs "+
+		"WHEN NEW.function_name = 'agent:fix#1/limit1.0' BEGIN SELECT RAISE(ABORT, 'the store refused the record'); END")
+	require.NoError(t, err)
+
+	_, err = engine.Run(testItem, testProject)
+
+	require.ErrorContains(t, err, "the store refused the record")
+	assert.Len(t, h.agents.seen(), 1, "no rerun after a failed limit record")
+
+	tree, err := runSpend(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.7, tree.Cost, 1e-9, "the cost of the limited run is recorded by the step of the failed run")
+}
+
 func TestRateLimit_TheSleepLastsUntilTheRecordedReset(t *testing.T) {
 	t.Parallel()
 
