@@ -1,6 +1,9 @@
 package workflow_test
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -35,21 +38,22 @@ type conformanceRow struct {
 	id, home, status, where, test string
 }
 
-var testFunc = regexp.MustCompile(`(?m)^func (\w+)\(`)
-
-// testNames returns the name of every function declared in a `_test.go` file of the repository.
+// testNames returns the name of every top-level function that starts with `Test` and that a `_test.go` file of the
+// repository declares. It reads the syntax tree, so a name in a comment or a string does not count, and it skips
+// `.git` and every `testdata` folder, whose files are fixtures.
 func testNames(t *testing.T) map[string]bool {
 	t.Helper()
 
 	root := os.DirFS(repoRoot)
 	names := map[string]bool{}
+	fset := token.NewFileSet()
 
 	err := fs.WalkDir(root, ".", func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if entry.IsDir() && entry.Name() == ".git" {
+		if entry.IsDir() && (entry.Name() == ".git" || entry.Name() == "testdata") {
 			return fs.SkipDir
 		}
 
@@ -58,16 +62,31 @@ func testNames(t *testing.T) map[string]bool {
 		}
 
 		source, err := fs.ReadFile(root, path)
-
-		for _, match := range testFunc.FindAllSubmatch(source, -1) {
-			names[string(match[1])] = true
+		if err != nil {
+			return err
 		}
 
-		return err
+		return addTestFuncs(fset, path, source, names)
 	})
 	require.NoError(t, err)
 
 	return names
+}
+
+// addTestFuncs adds to names each top-level function of the source whose name starts with `Test`.
+func addTestFuncs(fset *token.FileSet, path string, source []byte, names map[string]bool) error {
+	file, err := parser.ParseFile(fset, path, source, parser.SkipObjectResolution)
+	if err != nil {
+		return err
+	}
+
+	for _, decl := range file.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil && strings.HasPrefix(fn.Name.Name, "Test") {
+			names[fn.Name.Name] = true
+		}
+	}
+
+	return nil
 }
 
 func readConformance(t *testing.T, text string) []conformanceRow {
@@ -138,7 +157,6 @@ func TestConformance_EachRowIsWellFormed(t *testing.T) {
 	require.NotEmpty(t, rows)
 
 	have := calls(t)
-	tests := testNames(t)
 	seen := map[string]bool{}
 
 	for _, row := range rows {
@@ -149,10 +167,9 @@ func TestConformance_EachRowIsWellFormed(t *testing.T) {
 		require.Contains(t, conformanceStatuses, row.status, "the status of %s", row.id)
 		require.Contains(t, conformanceHomes, row.home, "the home of %s", row.id)
 
+		// That a named test exists is checked by TestConformance_EveryTestNameThatAnyColumnCitesExists.
 		if row.test == noTest {
 			require.NotEqual(t, "proven", row.status, "%s is proven and names no test", row.id)
-		} else {
-			require.True(t, tests[row.test], "%s names the test %s, which no `_test.go` file holds", row.id, row.test)
 		}
 
 		if row.status != "expressed" {
@@ -195,7 +212,7 @@ func TestConformance_EveryTestNameThatAnyColumnCitesExists(t *testing.T) {
 	text, err := os.ReadFile(filepath.Join(exampleDir, "CONFORMANCE.md"))
 	require.NoError(t, err)
 
-	require.Empty(t, missingTests(string(text), testNames(t)), "each name is cited by a row and has no `func <name>(` in a `_test.go` file")
+	require.Empty(t, missingTests(string(text), testNames(t)), "each name is cited by a row and has no top-level `func <name>(` in a `_test.go` file; a citation `TestX/sub` checks `TestX` only, not the subtest")
 }
 
 func TestConformance_ACitedNameThatNoTestDeclaresIsNamedWithItsRow(t *testing.T) {
