@@ -54,6 +54,10 @@ type PhaseInput struct {
 	// OutputFile is the file where the agent writes its declared outputs. Outputs names them. Outputs is left out for a call that declares none.
 	OutputFile string   `json:"output_file,omitempty"`
 	Outputs    []string `json:"outputs,omitempty"`
+
+	// ResetPassed is true for the rerun after a provider limit whose reset time had passed. A rerun that a limit with a past reset time stops again fails.
+	// It is left out of a recorded phase for any other run.
+	ResetPassed bool `json:"reset_passed,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
@@ -73,6 +77,8 @@ type PhaseOutput struct {
 	agent.Spend
 	// Rounds is the loop cap that the step named. The status view shows the rounds used against it.
 	Rounds int `json:"rounds,omitempty"`
+	// Limit is the provider limit that stopped a run that ended as limited. It is left out of a recorded phase for any other run, so a stored phase keeps its form.
+	Limit *agent.Limit `json:"limit,omitempty"`
 }
 
 // phase waits for the claim of its run, then runs the agent as a step, so a restart skips the work that finished.
@@ -133,15 +139,16 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput) (PhaseOutpu
 		return out, err
 	}
 
-	// The end of the phase is judged inside the step, so a phase that did not exit with code 0 is a failed step that beehave resume reruns.
-	return out, phaseEnd(in, out)
+	// The end of the phase is judged inside the step, so a phase that did not exit with code 0, and that no cap and no provider limit with an end to its wait stopped,
+	// is a failed step that beehave resume reruns.
+	return out, phaseEnd(in, out, e.deps.Clock.wall())
 }
 
 // phaseOutput records how the agent of a phase ended.
 func phaseOutput(result agent.Result) PhaseOutput {
 	return PhaseOutput{
 		Outcome: result.Outcome, ExitCode: result.ExitCode, Note: result.Note, Session: result.Session, Transcript: result.Transcript,
-		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Spend: result.Spend,
+		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Spend: result.Spend, Limit: result.Limit,
 	}
 }
 
@@ -262,7 +269,13 @@ func stopError(ctx context.Context) error {
 
 // phaseEnd turns a phase that did not exit with code 0 into an error that names the step.
 // A run that a cap stopped (turns or dollars) is not a failure: the output `stop` names the cap and the workflow decides what follows.
-func phaseEnd(in PhaseInput, out PhaseOutput) error {
+// A run that a provider limit stopped is not a failure either: the item run waits for the reset and runs the call again, so the wait holds no slot of the queue.
+// Only a limit that no wait ends fails the phase (see limitEnd). now is the wall clock at the end of the run.
+func phaseEnd(in PhaseInput, out PhaseOutput, now time.Time) error {
+	if out.Outcome == agent.OutcomeLimited && out.Limit != nil {
+		return limitEnd(in, *out.Limit, now)
+	}
+
 	if out.Outcome == agent.OutcomeTurnCap || out.Outcome == agent.OutcomeBudgetCap {
 		return nil
 	}

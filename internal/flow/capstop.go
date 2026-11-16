@@ -52,17 +52,19 @@ type capLimit struct {
 // holdForCaps holds an agent step back while the run cap or the tree cap stops it. Each look is a recorded step, and a stop is followed by a durable sleep,
 // so the run stays open and a restart replays the earlier looks. The look that follows reads the caps of the config of the engine that runs it,
 // so a raised cap plus a restart lets the step start. A look that passed stays a pass on replay.
-func (s *script) holdForCaps(name string, try int) error {
-	for look := 0; ; look++ {
+// The looks of one try go on from look, the number of the first look of this hold, so every run of the try records looks under new names.
+// It returns the number of the next look.
+func (s *script) holdForCaps(name string, try, look int) (int, error) {
+	for ; ; look++ {
 		check, err := runStep(s.e, s.ctx, name+"/budget"+strconv.Itoa(try)+"."+strconv.Itoa(look), func(context.Context) (capCheck, error) {
 			return s.checkCaps(name)
 		})
 		if err != nil || check.Stop == nil {
-			return err
+			return look + 1, err
 		}
 
 		if err := s.waitForCap(); err != nil {
-			return err
+			return look + 1, err
 		}
 	}
 }

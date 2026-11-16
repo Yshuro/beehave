@@ -328,7 +328,7 @@ func limitedBy(result agent.Result, limit *agent.Limit) (agent.Result, bool) {
 
 // limitNote says which provider limit refused more work and when it resets.
 func limitNote(limit agent.Limit) string {
-	name := strings.TrimSpace(string(limit.Kind) + " limit " + limit.Window)
+	name := limit.Name()
 	if limit.ResetsAt.IsZero() {
 		return "the provider refused more work at its " + name + ", and the agent gave no reset time"
 	}

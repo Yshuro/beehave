@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
@@ -63,10 +64,16 @@ const (
 
 // Limit is a provider limit that refused more work. Window is the name that the CLI gives the limit, such as five_hour, or empty when it names none.
 // ResetsAt is the time when the provider takes work again, or the zero time when the line gives none.
+// The JSON form is the form that the engine records.
 type Limit struct {
-	Kind     LimitKind
-	Window   string
-	ResetsAt time.Time
+	Kind     LimitKind `json:"kind"`
+	Window   string    `json:"window,omitempty"`
+	ResetsAt time.Time `json:"resets_at,omitzero"`
+}
+
+// Name names the limit for a message, such as "rate limit five_hour", or "rate limit" when the CLI names no window.
+func (l Limit) Name() string {
+	return strings.TrimSpace(string(l.Kind) + " limit " + l.Window)
 }
 
 // Launch is what an adapter adds to the start of one run, beyond the arguments of its profile.
