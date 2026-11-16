@@ -34,7 +34,8 @@ const (
 const coreVersion = 3
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
-const landVersion = 2
+// Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
+const landVersion = 3
 
 // stepModule is one module of the table: its version and the step kinds that it records.
 type stepModule struct {
@@ -68,7 +69,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core3.agent1.tracker1.forge1.land2.gate1.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core3.agent1.tracker1.forge1.land3.gate1.host1.round1.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

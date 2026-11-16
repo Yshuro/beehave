@@ -2,6 +2,7 @@ package merge
 
 import (
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -151,10 +152,19 @@ func (a *attempt) reviews() *refusal {
 
 	lines := []string{fmt.Sprintf("REFUSE: unresolved review threads on #%d (address each, then resolve the thread):", a.req.PR)}
 	for _, thread := range open {
-		lines = append(lines, thread.Summary())
+		lines = append(lines, threadLine(thread, a.req.ForbidText))
 	}
 
 	return refuse(lines...)
+}
+
+// threadLine is the summary of an open thread. A first comment is left out when a pattern of the request matches one of its lines, and the line names the pattern by its position.
+func threadLine(thread model.ReviewThread, forbidden []*regexp.Regexp) string {
+	if i := matchingRule(forbidden, thread.Comment()); i >= 0 {
+		return thread.Where() + ": (the comment is left out: it matches " + patternWord(i) + ")"
+	}
+
+	return thread.Summary()
 }
 
 // reviewed refuses a pull request whose approvals all name a commit other than the head that merges. The forge records the commit that each review saw.

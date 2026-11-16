@@ -29,17 +29,12 @@ func Poll(ctx context.Context, forge Forge, req Request, last bool) Result {
 
 	queue, ok := forge.(Queuer)
 	if !ok {
-		return Result{Stop: Refused, Lines: []string{"REFUSE: the forge cannot queue a merge, so it cannot read one."}}
+		return run.result(refuse("REFUSE: the forge cannot queue a merge, so it cannot read one."))
 	}
 
 	run.queue = queue
 
-	stop := run.poll(last)
-	if stop == nil {
-		return Result{Stop: Done, Lines: run.lines}
-	}
-
-	return Result{Stop: stop.stop, Reason: stop.reason, Lines: append(run.lines, stop.lines...)}
+	return run.result(run.poll(last))
 }
 
 // poll reads the pull request and decides. The merged check comes first: a merge that happened cannot be disarmed.
@@ -126,18 +121,20 @@ func (a *attempt) disarmed(stop *refusal) *refusal {
 // A read that fails does not stop the disarm: the merge may be armed, and turning it off is safe when none is. If the pull request was in fact merged and
 // the forge refuses to turn off a merge on it, the caller gets a refusal for a pull request that landed. The result is Done when no merge stays armed.
 func Disarm(ctx context.Context, forge Forge, req Request) Result {
+	run := &attempt{ctx: ctx, forge: forge, req: req}
+
 	queue, ok := forge.(Queuer)
 	if !ok {
-		return Result{Stop: Refused, Lines: []string{"REFUSE: the forge cannot queue a merge, so it cannot turn one off."}}
+		return run.result(refuse("REFUSE: the forge cannot queue a merge, so it cannot turn one off."))
 	}
 
-	run := &attempt{ctx: ctx, forge: forge, req: req, queue: queue}
+	run.queue = queue
 
 	if view, err := forge.PRView(ctx, req.PR, "state", "headRefOid", "headRefName"); err == nil && model.Deref(view.State) == stateMerged {
-		return Result{Stop: Done, Lines: []string{fmt.Sprintf("#%d is merged, so no queued merge is armed", req.PR)}}
+		run.say(fmt.Sprintf("#%d is merged, so no queued merge is armed", req.PR))
+
+		return run.result(nil)
 	}
 
-	stop := run.disarmed(&refusal{stop: Done})
-
-	return Result{Stop: stop.stop, Reason: stop.reason, Lines: stop.lines}
+	return run.result(run.disarmed(&refusal{stop: Done}))
 }

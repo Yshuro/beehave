@@ -77,13 +77,13 @@ func TestExampleFiling_TheMergeRefusesATextThatNamesTheTrackerIDOfTheItemAndAllo
 	t.Parallel()
 
 	for name, tc := range map[string]struct {
-		item, body, refusal string
+		item, body, refusal, forbidden string
 	}{
-		"a tracker id in the body":        {"bb-12", "Fixes the loop.\nSee bb-12 for more.", "2:See bb-12 for more."},
-		"the id in another case":          {"bb-12", "see BB-12", "1:see BB-12"},
-		"a longer id is another id":       {"bb-12", "see bb-123", ""},
-		"a GitHub number is allowed":      {"12", "Addresses #12", ""},
-		"a body without the id is merged": {"bb-12", "Fixes the loop.", ""},
+		"a tracker id in the body":        {"bb-12", "Fixes the loop.\nSee bb-12 for more.", "line 2 matches pattern 5 of forbid_text", "See bb-12 for more."},
+		"the id in another case":          {"bb-12", "see BB-12", "line 1 matches pattern 5 of forbid_text", "see BB-12"},
+		"a longer id is another id":       {"bb-12", "see bb-123", "", ""},
+		"a GitHub number is allowed":      {"12", "Addresses #12", "", ""},
+		"a body without the id is merged": {"bb-12", "Fixes the loop.", "", ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -104,6 +104,7 @@ func TestExampleFiling_TheMergeRefusesATextThatNamesTheTrackerIDOfTheItemAndAllo
 
 			require.ErrorIs(t, err, errMergeRefused)
 			require.ErrorContains(t, err, tc.refusal)
+			assert.NotContains(t, err.Error(), tc.forbidden, "the refusal names the line by number and does not post its text")
 			assert.Empty(t, world.writes)
 		})
 	}

@@ -470,7 +470,7 @@ func TestMerge_M08_ABodyWithAnAttributionLineIsRefusedWithItsLineNumber(t *testi
 
 	require.NoError(t, err)
 	assert.Equal(t, merge.Refused, result.Stop)
-	assert.Equal(t, "  3:Generated with [Claude Code]", result.Lines[len(result.Lines)-1])
+	assert.Equal(t, "  line 3 matches pattern 4 of forbid_text", result.Lines[len(result.Lines)-1])
 	assert.Empty(t, f.writes)
 }
 
@@ -527,6 +527,7 @@ func TestMerge_ARepoThatIsNotTheRepositoryOfTheProjectIsRefusedAndNothingIsRead(
 	require.NoError(t, err)
 	assert.Equal(t, merge.Refused, result.Stop)
 	assert.Equal(t, []string{"REFUSE: the merge step names the repository someone/else, and the project p uses o/r. Set `repo` to o/r."}, result.Lines)
+	assert.Equal(t, result.Lines, result.Refusal, "the whole refusal is the cause")
 	assert.Zero(t, f.views)
 	assert.Empty(t, f.writes)
 }

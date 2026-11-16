@@ -212,7 +212,7 @@ func TestExampleMerge_TheMergeStepOfTheExampleMergesThroughTheEngineAndTheForgeF
 		},
 		"a body with an attribution line is refused with its line number": {
 			over:    map[string]any{"body": "a\nb\nGenerated with [Claude Code]"},
-			refusal: "3:Generated with [Claude Code]",
+			refusal: "line 3 matches pattern 4 of forbid_text",
 		},
 		"a standing change request is refused": {
 			setup: func(w *shipWorld) {

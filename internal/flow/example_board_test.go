@@ -68,7 +68,7 @@ func TestExampleBoard_ALandRunMovesTheCardOfTheMergedItemAndNotTheCardOfARejecte
 
 	rig, file, writer, _ := landingExample(t, reviewed("1 3"), "true")
 	rig.h.facts = withBoard("acme")
-	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Lines: []string{"REFUSE: has the label hold"}}}
+	rig.merger.script["1"] = []merge.Result{{Stop: merge.Refused, Lines: []string{"REFUSE: has the label hold"}, Refusal: []string{"REFUSE: has the label hold"}}}
 
 	_, err := rig.engine(t).RunFile(testItem, testProject, file)
 

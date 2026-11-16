@@ -19,6 +19,12 @@ Part of the [beehave architecture](../architecture.md).
 
 The request carries every policy value: the repository, the base, the own identities, `Approved`, the hold label, the `forbid_text` patterns and `Retarget`. The engine holds no pattern of its own.
 
+### The refusal and the forbidden text
+
+The `Result` keeps the lines of the guard that stopped in their own field, `Refusal`. `Lines` is the whole log of the run, and it ends with `Refusal`. A caller that shows why a pull request was refused uses `Refusal`, so it shows every line of the cause and no line of a guard that passed.
+
+No line of a `Result` that `Run`, `Poll` or `Disarm` builds matches a pattern of the `forbid_text` of its request, because callers post these lines. The test is the one that the posting steps use: it splits a text at each newline and tests each part, so an anchored pattern such as `^Co-Authored-By` finds the second line of a comment or of a forge error. The forbidden text guard names each hit by its line number and by the position of the pattern in `forbid_text`, for example `line 3 matches pattern 4 of forbid_text`. It never quotes the line or the pattern, because a pattern such as `(?i)noreply@anthropic` matches its own source. The open threads guard leaves out a first comment when a pattern matches one of its lines, and names the pattern in the same way. The one place that builds the result then tests every line once: the lines of the guards that passed and the lines of the refusal. It replaces a line that a pattern still matches with `(a line is left out: it matches pattern N of forbid_text)`. A line that holds a newline is replaced whole. This holds only for patterns that do not match the words of beehave itself, such as "left out" in the replacement line or the fixed header of a refusal. No replacement can satisfy such a pattern.
+
 ### Tree proof
 
 A request with `GatedTree` set gets a tree proof after the merge. The run reads the tree of the base tip and compares it with the gated tree. A different tree ends the run as refused, and the lines list the paths that differ.
@@ -288,9 +294,9 @@ Each member that the merge refuses (own work, hold, checks, review) costs one mo
 
 | Outcome | Effect |
 |---|---|
-| A refusal by a guard of the member (own work, hold label, checks, review, a head that moved while preparing) | Rejects that member with the reason. The members after it are folded and gated again on the tip. |
+| A refusal by a guard of the member (own work, hold label, checks, review, a head that moved while preparing) | Rejects that member with the reason: every line of the `Refusal` of `merge.Run`, one per line. The members after it are folded and gated again on the tip. |
 | Unsettled (`mergeable` stayed unknown for three reads, 10 seconds apart) | Defers that member and all members not yet decided, with the reason |
-| A transient refusal of `merge.Run` (`merge.Transient`: a failed read of the forge, checks that still run, a base that moved while preparing, an error of the forge merge call) | Defers the same way, with no second read, because the merge step of a member never runs twice in one attempt |
+| A transient refusal of `merge.Run` (`merge.Transient`: a failed read of the forge, checks that still run, a base that moved while preparing, an error of the forge merge call) | Defers the same way, with every line of the `Refusal` as the reason and no second read, because the merge step of a member never runs twice in one attempt |
 | A pull request that is not OPEN at the intent read | Rejects that member, and the call goes on |
 | An error | Stops the call |
 

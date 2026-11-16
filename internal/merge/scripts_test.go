@@ -92,7 +92,7 @@ func TestScript_M08_ABodyWithAnAttributionLineIsRefusedAndTheLineNumberIsInTheOu
 	result := w.run(request())
 
 	assert.Equal(t, merge.Refused, result.Stop)
-	assert.Equal(t, "  3:Co-Authored-By: Claude <noreply@anthropic.com>", last(result))
+	assert.Equal(t, "  line 3 matches pattern 1 of forbid_text", last(result))
 	assert.Empty(t, w.writes)
 }
 
@@ -131,7 +131,7 @@ func TestScript_M08_APatternOfTheRequestIsTheRule(t *testing.T) {
 	req.ForbidText = []*regexp.Regexp{regexp.MustCompile("(?i)wip")}
 	w := newWorld(t).set(t, map[string]any{"body": "fine\nWIP do not ship"})
 
-	assert.Equal(t, "  2:WIP do not ship", last(w.run(req)))
+	assert.Equal(t, "  line 2 matches pattern 1 of forbid_text", last(w.run(req)))
 }
 
 func TestScript_R07_M12_M06_AChangeRequestAnOpenThreadAndAMissingCheckEachRefuseAndNoSettingLiftsThem(t *testing.T) {
