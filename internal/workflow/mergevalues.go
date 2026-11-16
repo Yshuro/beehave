@@ -13,6 +13,9 @@ import (
 // The functions of this file own the rules for the arguments of the builtins that land pull requests: merge, batch_merge and preflight.
 // The run and the check both call them.
 
+// approvedField is the optional bool field of a member of prs that carries the approval of that member.
+const approvedField = "approved"
+
 // The errors for the steps argument of a merge call that merges.
 var (
 	errStepsMissing = errors.New("this merge call names no gate steps. Add `steps = <gate>.steps` to the call, or remove `merge = True` and the owner merges")
@@ -120,8 +123,11 @@ func GatedTree(v starlark.Value) (string, error) {
 	return tree, nil
 }
 
-// PullRequest is one member of the prs argument of a batch_merge call.
-type PullRequest struct{ Item, Head string }
+// PullRequest is one member of the prs argument of a batch_merge call. Approved is true when another step accepted the head of this member.
+type PullRequest struct {
+	Item, Head string
+	Approved   bool
+}
 
 // errNoPullRequest is returned for a prs argument with no member.
 var errNoPullRequest = errors.New("`prs` is empty. Pass a list of struct(item = ..., head = ...), one for each pull request to land")
@@ -153,8 +159,32 @@ func pullRequest(entry starlark.Value) (PullRequest, error) {
 	}
 
 	head, err := prField(pr, "head")
+	if err != nil {
+		return PullRequest{}, err
+	}
 
-	return PullRequest{Item: item, Head: head}, err
+	approved, err := prApproved(pr)
+
+	return PullRequest{Item: item, Head: head, Approved: approved}, err
+}
+
+// prApproved reads the optional bool field approved of a member struct. A member that leaves it out is not approved.
+func prApproved(pr *starlarkstruct.Struct) (bool, error) {
+	fields := starlark.StringDict{}
+	pr.ToStringDict(fields)
+
+	value, found := fields[approvedField]
+	if !found {
+		return false, nil
+	}
+
+	// The field holds any Starlark value that the file gave, and only a bool is an approval.
+	approved, isBool := value.(starlark.Bool)
+	if !isBool {
+		return false, fmt.Errorf("`approved` of a member of `prs` must be a bool, not %s. Use approved = True or approved = False", value.Type())
+	}
+
+	return bool(approved), nil
 }
 
 // prField reads a text field of a member struct.

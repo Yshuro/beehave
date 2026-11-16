@@ -411,7 +411,9 @@ A value of another type fails the step and names the value. An environment name 
 
 ### `batch_merge`
 
-`batch_merge(prs, base, repo, hold, own, forbid_text, gate_run, integration, name)` lands a list of `struct(item, head)` with one gate run on the union tree of the base tip and all heads. It splits the list when the gate is red. A forge with a native merge queue needs no `batch_merge`.
+`batch_merge(prs, base, repo, hold, own, forbid_text, gate_run, integration, name)` lands a list of `struct(item, head, approved)` with one gate run on the union tree of the base tip and all heads. It splits the list when the gate is red. A forge with a native merge queue needs no `batch_merge`.
+
+`approved` is an optional bool of each member, and a member that leaves it out is not approved. It is the `approved` of `merge` for that member only: a pull request of an `own` identity merges only when its own member sets `approved = True`. The call has no `approved` of its own, so the approval of one member never reaches another. A value that is not a bool fails the call and names the field.
 
 It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note` and `unproven`.
 

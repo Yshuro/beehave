@@ -334,6 +334,53 @@ func TestBatchMerge_AMemberThatTheMergeRefusesIsRejectedWithItsLastLine(t *testi
 	assert.Contains(t, rig.h.commands.ran()[0], "1:OWN WORK: leave it to the owner")
 }
 
+func TestBatchMerge_EachMemberMergesWithItsOwnApproval(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	prs := `[struct(item = "1", head = "` + rig.heads["1"] + `", approved = True), struct(item = "3", head = "` + rig.heads["3"] + `")]`
+
+	_, err := rig.walk(t, `out = batch_merge(prs = `+prs+`, base = "main", repo = "o/r", name = "b")`)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"1", "3"}, rig.merger.landed())
+
+	approved := map[string]bool{}
+	for i, item := range rig.merger.landed() {
+		approved[item] = rig.merger.given[i].Approved
+	}
+
+	assert.Equal(t, map[string]bool{"1": true, "3": false}, approved, "the approval of member 1 reaches only the merge of member 1")
+}
+
+func TestBatchMerge_AnOwnMemberWithNoApprovalIsRefusedAsOwnWork(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	world := &shipWorld{pull: shipPull(t, rig.heads["1"], map[string]any{"author": map[string]any{"login": shipOwner}})}
+	merger := &fakeMerge{over: mergerOver(world)}
+
+	deps := rig.deps()
+	deps.Merge = merger
+
+	engine, err := NewEngine(t.Context(), rig.h.opts, deps)
+	require.NoError(t, err)
+	require.NoError(t, engine.Launch())
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	own := `own = {"logins": ["` + shipOwner + `"], "emails": ["` + shipMail + `"]}, `
+	_, err = engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(rig.call("1", own))))
+
+	require.NoError(t, err)
+	require.Len(t, rig.h.commands.ran(), 1)
+	assert.Contains(t, rig.h.commands.ran()[0], "1:", "member 1 is rejected")
+	assert.Contains(t, rig.h.commands.ran()[0], "The owner merges it in the forge")
+	assert.Contains(t, rig.h.commands.ran()[0], "the field of the member of batch_merge", "the refusal names the fix for a batch member")
+	assert.Equal(t, 1, merger.askedCount(), "the merge guard saw the member once")
+	assert.Empty(t, world.writes, "a refused member has had no write on the forge")
+	assert.Equal(t, "README", rig.mainFiles(t), "nothing landed")
+}
+
 func TestBatchMerge_ATreeProofStopEndsTheRunWithTheLines(t *testing.T) {
 	t.Parallel()
 
@@ -427,6 +474,9 @@ func TestBatchMerge_ACallThatTheBuildOrTheArgumentsCannotServeFailsWithAFix(t *t
 		"member with empty item": {body: func(r *batchRig) string {
 			return bad(r, `[struct(item = "", head = "h")]`)
 		}, want: "`item` of a member of `prs` must be text that is not empty"},
+		"member with approved that is not a bool": {body: func(r *batchRig) string {
+			return bad(r, `[`+member(r, `, approved = "yes"`)+`]`)
+		}, want: "`approved` of a member of `prs` must be a bool, not string"},
 		"empty base": {body: func(r *batchRig) string {
 			return `batch_merge(prs = [` + member(r, "") + `], base = "", repo = "o/r", name = "b")`
 		}, want: "base must not be empty"},
