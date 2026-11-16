@@ -120,6 +120,52 @@ func TestIntegration_CreatesThePullRequestWhenNoneExistsWithTheMergedRowsInItsBo
 	assert.Equal(t, recount.Tally{Rows: 2}, recount.Count(world.created[0].Body))
 	assert.Empty(t, recount.Check(world.created[0].Title, world.created[0].Body))
 	assert.Contains(t, world.created[0].Body, "| #12 | fix the queue |")
+	assert.Equal(t, "Integration round s1", world.created[0].Title, "the title names the last part of the round branch")
+}
+
+func TestIntegration_TheOpenPullRequestWinsOverAMergedOneThatTheLookupListsFirst(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{found: []model.PullRequest{{Number: 6, State: state("MERGED"), Body: "old"}, {Number: 7, State: state("OPEN"), Body: "old"}}}
+
+	code, out, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+	assert.Equal(t, "pr=7 state=OPEN\n", out)
+}
+
+func TestIntegration_OneRowGoesAtTheEndOfTheTableAndTheHeadingCountsOnePullRequest(t *testing.T) {
+	t.Parallel()
+
+	body := "intro\n\n## Pull requests merged into this branch (0 pull requests)\n\n| PR | Change |\n|---|---|\n\n## Notes\n\ntext"
+	world := &roundWorld{
+		found:  []model.PullRequest{{Number: 7, State: state("OPEN"), Body: body}},
+		merged: []model.PullRequest{mergedPull(12, "fix the queue")},
+	}
+
+	code, _, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+	require.Len(t, world.bodies, 1)
+	assert.Equal(t, "intro\n\n## Pull requests merged into this branch (1 pull request)\n\n| PR | Change |\n|---|---|\n| #12 | fix the queue |\n\n## Notes\n\ntext", world.bodies[0],
+		"the table keeps one header, the row follows it, and a body with no issue to close gets no closes heading")
+}
+
+func TestIntegration_AnIssueGoesIntoAClosesSectionAtTheTopAndAddsNoTable(t *testing.T) {
+	t.Parallel()
+
+	body := "## Issues this batch closes\n\n- Closes #5\n\n## Changes\n\n| #12 | fix the queue |"
+	world := &roundWorld{
+		found:  []model.PullRequest{{Number: 7, State: state("OPEN"), Body: body}},
+		merged: []model.PullRequest{branchPull(12, "fix the queue", "101")},
+	}
+
+	code, _, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+	require.Len(t, world.bodies, 1)
+	assert.Equal(t, "## Issues this batch closes\n\n- Closes #5\n- Closes #101\n\n## Changes\n\n| #12 | fix the queue |", world.bodies[0],
+		"the body has a row for each merged pull request, so only the closes line is new")
 }
 
 func TestIntegration_AddsOneRowForEachMergedPullRequestThatTheTableLacks(t *testing.T) {

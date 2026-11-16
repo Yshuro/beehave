@@ -156,13 +156,20 @@ func findIntegration(ctx context.Context, forge Integrator, given integrationFla
 		return model.PullRequest{}, err
 	}
 
+	return firstOpenOrMerged(found), nil
+}
+
+// firstOpenOrMerged returns the first open pull request of the list, else the first merged one, else a pull request with a zero Number.
+func firstOpenOrMerged(found []model.PullRequest) model.PullRequest {
 	for _, want := range []string{stateOpen, "MERGED"} {
-		if i := slices.IndexFunc(found, func(p model.PullRequest) bool { return stateOf(p) == want }); i >= 0 {
-			return found[i], nil
+		for _, pull := range found {
+			if stateOf(pull) == want {
+				return pull
+			}
 		}
 	}
 
-	return model.PullRequest{}, nil
+	return model.PullRequest{}
 }
 
 // openIntegration opens the draft pull request from the round branch into the trunk, with a table of the pull requests that merged so far.
@@ -297,7 +304,9 @@ func addIssues(lines, issues []string) []string {
 		return append(lines, issues...)
 	}
 
-	return slices.Insert(lines, lastLine(lines, at, func(l string) bool { return strings.TrimSpace(l) != "" })+1, issues...)
+	last := lastLine(lines, at, func(l string) bool { return strings.TrimSpace(l) != "" })
+
+	return slices.Insert(lines, last+1, issues...)
 }
 
 // lastLine returns the index of the last line of the section of the heading at the index that the test accepts, or the index of the heading when none is.

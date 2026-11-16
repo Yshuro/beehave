@@ -83,6 +83,21 @@ func TestDryRun_ACommandWithASlotClassRunsItsFakeProgram(t *testing.T) {
 	assert.NotContains(t, out.String(), "FAILED")
 }
 
+// The pipeline of the example holds no merge, so this file walks one: the dry forge reads the reviewed head and the dry watch shows the pull request as merged.
+func TestDryRun_AMergeMarksThePullRequestReadyAndTheWatchShowsItMerged(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	file := dryFile(t, bodyFlow("c = gate(name = \"check\")\nm = merge(head = c.head, tree = c.tree, steps = c.steps, name = \"ship\")\nif m.state != \"merged\":\n    fail(\"the merge state is \" + m.state)"))
+
+	require.NoError(t, DryRun(t.Context(), file, "12", map[string]string{}, &out), out.String())
+	assert.Contains(t, out.String(), " ready")
+	assert.Contains(t, out.String(), " watch")
+	assert.Contains(t, out.String(), "merge:ship#1")
+	assert.NotContains(t, out.String(), "FAILED")
+}
+
 func TestDryRun_AFailedRunNamesTheErrorWithItsLineAndTheLastStepOnItsOwnLine(t *testing.T) {
 	t.Parallel()
 
