@@ -312,16 +312,16 @@ func withSession(adapter agent.Adapter, runner model.Runner, dir string, tap *se
 }
 
 // limitedBy gives a run that exited the outcome, the limit and a note of the provider limit that refused more work, and reports whether a limit did.
-// The runner sets no note on a run that exited, so the note of the limit replaces none.
+// The note of the limit comes after the note of the runner, such as an error that wrote the output, as the budget cap adds its note.
 // A run that timed out, was canceled or did not start keeps its outcome.
 func limitedBy(result agent.Result, limit *agent.Limit) (agent.Result, bool) {
 	if limit == nil || result.Outcome != agent.OutcomeExited {
 		return result, false
 	}
 
-	result.Outcome, result.Limit, result.Note = agent.OutcomeLimited, limit, limitNote(*limit)
+	result.Outcome, result.Limit = agent.OutcomeLimited, limit
 
-	return result, true
+	return result.AddNote(limitNote(*limit)), true
 }
 
 // limitNote says which provider limit refused more work and when it resets.

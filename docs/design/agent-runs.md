@@ -70,9 +70,11 @@ The shape is the one of the Claude Code headless page (https://code.claude.com/d
 A rate limit or a spend limit of the provider ends a run with the outcome `limited`, not as a failed run. The adapter reads the limit from the stream, as the CLI reports it:
 
 - A `rate_limit_event` line with `rate_limit_info.status` set to `rejected` is a limit. The status `allowed` or `allowed_warning` is no limit.
-- The limit is a spend limit when `isUsingOverage` is true and `overageStatus` is `rejected`. Otherwise it is a rate limit.
+- A rejected status with `isUsingOverage` set to true is no limit. Paid overage serves the request, and the CLI keeps working.
+- The limit is a spend limit only when paid overage was available and is now refused: `overageStatus` is `rejected` and `overageDisabledReason` is `out_of_credits` or `org_level_disabled_until` (a spend cap). Any other reason, such as `overage_not_provisioned`, or no reason, means the account had no paid overage to refuse, so the limit is a rate limit with the plan reset time.
 - `rateLimitType` names the window. `resetsAt` is the reset time in Unix seconds. A spend limit resets at the earlier of `resetsAt` and `overageResetsAt`, because either reset lets work start again.
 - An assistant line with `error` set to `rate_limit` is a rate limit with no reset time.
+- An assistant `rate_limit` line whose `api_error` asks for usage credits (`long_context_credits_required`, `model_requires_usage_credits`) is no limit. A wait buys no credits, so the run fails.
 
 The runner keeps the first limit of the run. The run is limited only if the run did not go on to a result line with no error: a success or a cap after the limit means the CLI took more work. A limited run keeps its session, its message and its violations, whatever the exit code. Its note names the limit and the reset time. A run that timed out or was canceled keeps that outcome.
 

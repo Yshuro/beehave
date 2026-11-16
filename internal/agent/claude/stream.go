@@ -58,7 +58,8 @@ func (Adapter) Calls(line string) agent.Seen {
 }
 
 // limitOf returns the provider limit that a line reports as the reason the CLI refused more work, or nil.
-// A rate_limit_event reports one when its status is rejected. An assistant line with the error rate_limit reports one with no reset time.
+// A rate_limit_event reports one when its status is rejected and no paid overage serves the request. An assistant line with the error rate_limit reports
+// one with no reset time, unless its api_error asks for usage credits.
 func limitOf(value any) *agent.Limit {
 	line, isObject := value.(map[string]any) // a line that is not an object reports no limit
 	if !isObject {
@@ -71,7 +72,7 @@ func limitOf(value any) *agent.Limit {
 			return rejectedLimit(info)
 		}
 	case assistantType:
-		if line["error"] == rateLimitError {
+		if line["error"] == rateLimitError && !asksForCredits(line["api_error"]) {
 			return &agent.Limit{Kind: agent.LimitRate}
 		}
 	}
@@ -79,11 +80,23 @@ func limitOf(value any) *agent.Limit {
 	return nil
 }
 
+// asksForCredits reports whether the api_error of an assistant rate_limit line asks for usage credits. A wait buys no credits, so such a line is no limit.
+func asksForCredits(apiError any) bool {
+	switch apiError {
+	case "long_context_credits_required", "model_requires_usage_credits":
+		return true
+	}
+
+	return false
+}
+
 // rejectedLimit returns the limit of the rate_limit_info of an event, or nil when the info does not refuse the request.
-// The limit is a spend limit when the run was spending past its plan and that spend is refused too. The provider then takes work again at the earlier of
-// the reset of the plan window and the reset of the spend.
+// A rejected plan status with isUsingOverage true refuses nothing: paid overage serves the request. The limit is a spend limit only when paid overage
+// was available and is now refused: overageStatus is rejected and overageDisabledReason says the credits or the spend cap ran out. The provider then
+// takes work again at the earlier of the reset of the plan window and the reset of the spend. Any other reason, or none, means the account had no paid
+// overage to refuse, so the limit is a rate limit with the plan reset time.
 func rejectedLimit(info map[string]any) *agent.Limit {
-	if info["status"] != limitRejected {
+	if info["status"] != limitRejected || info["isUsingOverage"] == true {
 		return nil
 	}
 
@@ -92,11 +105,22 @@ func rejectedLimit(info map[string]any) *agent.Limit {
 		limit.Window = window
 	}
 
-	if info["overageStatus"] == limitRejected && info["isUsingOverage"] == true {
+	if info["overageStatus"] == limitRejected && spendRanOut(info["overageDisabledReason"]) {
 		limit.Kind, limit.ResetsAt = agent.LimitSpend, earlier(limit.ResetsAt, unixTime(info["overageResetsAt"]))
 	}
 
 	return limit
+}
+
+// spendRanOut reports whether the overageDisabledReason of a rate_limit_info says that paid overage was available and ran out: the account is out of
+// credits, or it reached a spend cap. The CLI writes the reason org_spend_cap_reached as org_level_disabled_until on the stream.
+func spendRanOut(reason any) bool {
+	switch reason {
+	case "out_of_credits", "org_level_disabled_until":
+		return true
+	}
+
+	return false
 }
 
 // unixTime returns the time of a count of Unix seconds, or the zero time for a value that is no number above 0.

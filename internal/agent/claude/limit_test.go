@@ -25,11 +25,21 @@ func fixtureLines(t *testing.T, name string) []string {
 func TestCalls_ARejectedRateLimitEventReportsALimit(t *testing.T) {
 	t.Parallel()
 
-	for _, name := range []string{"rate-limited-five-hour.jsonl", "rate-limited-seven-day.jsonl", "rate-limited-overage.jsonl"} {
-		seen := claude.Adapter{}.Calls(fixtureLines(t, name)[0])
+	tests := []struct{ name, fixture string }{
+		{"five_hour", "rate-limited-five-hour.jsonl"},
+		{"seven_day", "rate-limited-seven-day.jsonl"},
+		{"overage_out_of_credits", "rate-limited-overage.jsonl"},
+	}
 
-		assert.NotEqual(t, agent.Seen{}, seen, "the adapter reads nothing from the rejected rate_limit_event of %s", name)
-		assert.NotNil(t, seen.Limit, "the rejected rate_limit_event of %s reports no limit", name)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			seen := claude.Adapter{}.Calls(fixtureLines(t, tc.fixture)[0])
+
+			assert.NotEqual(t, agent.Seen{}, seen, "the adapter reads nothing from the rejected rate_limit_event")
+			assert.NotNil(t, seen.Limit, "the rejected rate_limit_event reports no limit")
+		})
 	}
 }
 
@@ -40,9 +50,9 @@ func TestCalls_ARejectedRateLimitEventCarriesItsKindWindowAndResetTime(t *testin
 		name, fixture string
 		want          agent.Limit
 	}{
-		{"five_hour", "rate-limited-five-hour.jsonl", agent.Limit{Kind: agent.LimitRate, Window: "five_hour", ResetsAt: time.Unix(1795006800, 0).UTC()}},
-		{"seven_day", "rate-limited-seven-day.jsonl", agent.Limit{Kind: agent.LimitRate, Window: "seven_day", ResetsAt: time.Unix(1795392000, 0).UTC()}},
-		{"overage_takes_the_earlier_spend_reset", "rate-limited-overage.jsonl", agent.Limit{Kind: agent.LimitSpend, Window: "seven_day", ResetsAt: time.Unix(1795132800, 0).UTC()}},
+		{"seven_day_with_no_overage_is_a_rate_limit", "rate-limited-seven-day.jsonl", agent.Limit{Kind: agent.LimitRate, Window: "seven_day", ResetsAt: time.Unix(1795392000, 0).UTC()}},
+		{"five_hour_with_overage_not_provisioned_is_a_rate_limit", "rate-limited-five-hour.jsonl", agent.Limit{Kind: agent.LimitRate, Window: "five_hour", ResetsAt: time.Unix(1795006800, 0).UTC()}},
+		{"overage_out_of_credits_takes_the_earlier_spend_reset", "rate-limited-overage.jsonl", agent.Limit{Kind: agent.LimitSpend, Window: "seven_day", ResetsAt: time.Unix(1795132800, 0).UTC()}},
 	}
 
 	for _, tc := range tests {
@@ -75,7 +85,7 @@ func TestCalls_ASpendLimitResetsAtTheEarlierOfThePlanResetAndTheSpendReset(t *te
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			line := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","overageStatus":"rejected","isUsingOverage":true,` + tc.info + `}}`
+			line := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","overageStatus":"rejected","overageDisabledReason":"out_of_credits","isUsingOverage":false,` + tc.info + `}}`
 			seen := claude.Adapter{}.Calls(line)
 
 			require.NotNil(t, seen.Limit)
@@ -85,25 +95,125 @@ func TestCalls_ASpendLimitResetsAtTheEarlierOfThePlanResetAndTheSpendReset(t *te
 	}
 }
 
+// The overageDisabledReason values are the enum of the CLI 2.1.325. The CLI writes org_spend_cap_reached as org_level_disabled_until on the stream.
+func TestCalls_ARefusedOverageIsASpendLimitOnlyWhenPaidOverageWasAvailable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		reason string
+		want   agent.LimitKind
+	}{
+		{"out_of_credits", agent.LimitSpend},
+		{"org_level_disabled_until", agent.LimitSpend},
+		{"overage_not_provisioned", agent.LimitRate},
+		{"org_level_disabled", agent.LimitRate},
+		{"seat_tier_level_disabled", agent.LimitRate},
+		{"member_level_disabled", agent.LimitRate},
+		{"seat_tier_zero_credit_limit", agent.LimitRate},
+		{"group_zero_credit_limit", agent.LimitRate},
+		{"member_zero_credit_limit", agent.LimitRate},
+		{"org_service_level_disabled", agent.LimitRate},
+		{"no_limits_configured", agent.LimitRate},
+		{"fetch_error", agent.LimitRate},
+		{"unknown", agent.LimitRate},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.reason, func(t *testing.T) {
+			t.Parallel()
+
+			line := `{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1795100000,"rateLimitType":"five_hour","overageStatus":"rejected",` +
+				`"overageResetsAt":1795000000,"overageDisabledReason":"` + tc.reason + `","isUsingOverage":false}}`
+			want := agent.Limit{Kind: tc.want, Window: "five_hour", ResetsAt: time.Unix(1795100000, 0).UTC()}
+			if tc.want == agent.LimitSpend {
+				want.ResetsAt = time.Unix(1795000000, 0).UTC()
+			}
+
+			seen := claude.Adapter{}.Calls(line)
+
+			require.NotNil(t, seen.Limit)
+			assert.Equal(t, want, *seen.Limit)
+		})
+	}
+
+	t.Run("no_reason", func(t *testing.T) {
+		t.Parallel()
+
+		seen := claude.Adapter{}.Calls(`{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":1795100000,"overageStatus":"rejected","isUsingOverage":false}}`)
+
+		require.NotNil(t, seen.Limit)
+		assert.Equal(t, agent.Limit{Kind: agent.LimitRate, ResetsAt: time.Unix(1795100000, 0).UTC()}, *seen.Limit)
+	})
+}
+
 func TestCalls_ARejectedRateLimitEventWithNoUsableResetTimeHasTheZeroTime(t *testing.T) {
 	t.Parallel()
 
-	for name, reset := range map[string]string{"missing": `"rateLimitType":"five_hour"`, "zero": `"resetsAt":0`, "negative": `"resetsAt":-5`, "text": `"resetsAt":"soon"`} {
-		seen := claude.Adapter{}.Calls(`{"type":"rate_limit_event","rate_limit_info":{"status":"rejected",` + reset + `}}`)
+	tests := []struct {
+		name, info string
+		want       agent.Limit
+	}{
+		{"missing", `"rateLimitType":"five_hour","isUsingOverage":false`, agent.Limit{Kind: agent.LimitRate, Window: "five_hour"}},
+		{"zero", `"resetsAt":0,"isUsingOverage":false`, agent.Limit{Kind: agent.LimitRate}},
+		{"negative", `"resetsAt":-5,"isUsingOverage":false`, agent.Limit{Kind: agent.LimitRate}},
+		{"not_a_number", `"resetsAt":null,"isUsingOverage":false`, agent.Limit{Kind: agent.LimitRate}},
+	}
 
-		require.NotNil(t, seen.Limit, name)
-		assert.Equal(t, agent.Limit{Kind: agent.LimitRate, Window: map[string]string{"missing": "five_hour"}[name]}, *seen.Limit, name)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			seen := claude.Adapter{}.Calls(`{"type":"rate_limit_event","rate_limit_info":{"status":"rejected",` + tc.info + `}}`)
+
+			require.NotNil(t, seen.Limit)
+			assert.Equal(t, tc.want, *seen.Limit)
+		})
+	}
+}
+
+func TestCalls_ARejectedRateLimitEventWhilePaidOverageServesIsNoLimit(t *testing.T) {
+	t.Parallel()
+
+	line := fixtureLines(t, "rate-limited-overage-in-use.jsonl")[0]
+
+	assert.Equal(t, agent.Seen{}, claude.Adapter{}.Calls(line), "paid overage serves the request, so the plan limit refuses no work: %s", line)
+}
+
+func TestCalls_AnAssistantRateLimitErrorThatAsksForUsageCreditsIsNoLimit(t *testing.T) {
+	t.Parallel()
+
+	lines := fixtureLines(t, "rate-limited-credits-required.jsonl")
+	tests := []struct{ name, line string }{
+		{"long_context_credits_required", lines[0]},
+		{"model_requires_usage_credits", lines[1]},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Nil(t, claude.Adapter{}.Calls(tc.line).Limit, "a wait buys no usage credits, so the run fails")
+		})
 	}
 }
 
 func TestCalls_AnAllowedOrWarningRateLimitEventIsNoLimit(t *testing.T) {
 	t.Parallel()
 
-	for _, line := range fixtureLines(t, "rate-limited-allowed.jsonl") {
-		assert.Equal(t, agent.Seen{}, claude.Adapter{}.Calls(line), "a rate_limit_event that allows the request is no limit: %s", line)
+	lines := fixtureLines(t, "rate-limited-allowed.jsonl")
+	tests := []struct{ name, line string }{
+		{"allowed", lines[0]},
+		{"allowed_warning", lines[1]},
+		{"no_rate_limit_info", `{"type":"rate_limit_event"}`},
 	}
 
-	assert.Nil(t, claude.Adapter{}.Calls(`{"type":"rate_limit_event"}`).Limit, "an event with no rate_limit_info is no limit")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, agent.Seen{}, claude.Adapter{}.Calls(tc.line), "a rate_limit_event that allows the request is no limit")
+		})
+	}
 }
 
 func TestCalls_AnAssistantRateLimitErrorIsALimitWithNoTime(t *testing.T) {
@@ -119,12 +229,18 @@ func TestCalls_AnAssistantRateLimitErrorIsALimitWithNoTime(t *testing.T) {
 func TestCalls_AnAssistantLineWithAnotherErrorOrOnARejectedLineOfAnotherTypeIsNoLimit(t *testing.T) {
 	t.Parallel()
 
-	for _, line := range []string{
-		`{"type":"assistant","message":{"content":[]},"error":"server_error"}`,
-		`{"type":"assistant","message":{"content":[]}}`,
-		`{"type":"result","subtype":"success","is_error":true,"error":"rate_limit","rate_limit_info":{"status":"rejected"}}`,
-		`["rate_limit_event"]`,
-	} {
-		assert.Nil(t, claude.Adapter{}.Calls(line).Limit, line)
+	tests := []struct{ name, line string }{
+		{"another_error", `{"type":"assistant","message":{"content":[]},"error":"server_error"}`},
+		{"no_error", `{"type":"assistant","message":{"content":[]}}`},
+		{"a_result_line", `{"type":"result","subtype":"success","is_error":true,"error":"rate_limit","rate_limit_info":{"status":"rejected"}}`},
+		{"not_an_object", `["rate_limit_event"]`},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Nil(t, claude.Adapter{}.Calls(tc.line).Limit)
+		})
 	}
 }

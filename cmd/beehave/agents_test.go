@@ -644,22 +644,34 @@ func TestAgents_ACapOnTheResultLineEndsTheRunAsACapWhateverTheExitCode(t *testin
 func TestAgents_ARunThatARateLimitStoppedIsLimitedNotFailed(t *testing.T) {
 	t.Parallel()
 
-	for _, code := range []int{0, 1} {
-		f := newAgentFixture("session=s1\ntext=halfway\nlimit=rate/five_hour@1795006800\nlimit=spend/seven_day\nfailed=success\n", agent.Result{Outcome: agent.OutcomeExited, ExitCode: code})
-		f.bash = []string{"git add -A"}
-		req := request()
-		req.Forbid = []model.FindingKind{model.FindingBulkStaging}
+	tests := []struct {
+		name string
+		code int
+	}{
+		{"exit_code_zero", 0},
+		{"exit_code_one", 1},
+	}
 
-		got, err := f.agents.Run(t.Context(), req)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		require.NoError(t, err, "exit code %d", code)
-		assert.Equal(t, agent.OutcomeLimited, got.Outcome, "exit code %d", code)
-		assert.Equal(t, code, got.ExitCode)
-		assert.Equal(t, &agent.Limit{Kind: agent.LimitRate, Window: "five_hour", ResetsAt: time.Unix(1795006800, 0).UTC()}, got.Limit, "the first limit of the output stopped the run")
-		assert.Equal(t, "the provider refused more work at its rate limit five_hour until 2026-11-18T13:00:00Z", got.Note)
-		assert.Equal(t, "s1", got.Session)
-		assert.Equal(t, "halfway", got.Text)
-		assert.Equal(t, []string{"bulk-staging: git add -A"}, got.Violations)
+			f := newAgentFixture("session=s1\ntext=halfway\nlimit=rate/five_hour@1795006800\nlimit=spend/seven_day\nfailed=success\n", agent.Result{Outcome: agent.OutcomeExited, ExitCode: tc.code})
+			f.bash = []string{"git add -A"}
+			req := request()
+			req.Forbid = []model.FindingKind{model.FindingBulkStaging}
+
+			got, err := f.agents.Run(t.Context(), req)
+
+			require.NoError(t, err)
+			assert.Equal(t, agent.OutcomeLimited, got.Outcome)
+			assert.Equal(t, tc.code, got.ExitCode)
+			assert.Equal(t, &agent.Limit{Kind: agent.LimitRate, Window: "five_hour", ResetsAt: time.Unix(1795006800, 0).UTC()}, got.Limit, "the first limit of the output stopped the run")
+			assert.Equal(t, "the provider refused more work at its rate limit five_hour until 2026-11-18T13:00:00Z", got.Note)
+			assert.Equal(t, "s1", got.Session)
+			assert.Equal(t, "halfway", got.Text)
+			assert.Equal(t, []string{"bulk-staging: git add -A"}, got.Violations)
+		})
 	}
 }
 
@@ -677,30 +689,66 @@ func TestAgents_ARunThatALimitStoppedBeforeItNamedASessionIsNotAnError(t *testin
 	assert.Empty(t, got.Session)
 }
 
+func TestAgents_ALimitedRunKeepsTheNoteOfTheRunnerAndAddsTheNoteOfTheLimit(t *testing.T) {
+	t.Parallel()
+
+	f := newAgentFixture("session=s1\nlimit=rate/five_hour\nfailed=success\n", agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1, Note: "write the output: disk full"})
+
+	got, err := f.agents.Run(t.Context(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeLimited, got.Outcome)
+	assert.Equal(t, "write the output: disk full; the provider refused more work at its rate limit five_hour, and the agent gave no reset time", got.Note)
+}
+
 func TestAgents_ALimitThatTheRunGotPastIsNoLimit(t *testing.T) {
 	t.Parallel()
 
-	for name, output := range map[string]string{"success": "session=s1\nlimit=rate/five_hour\n", "cap": "session=s1\nlimit=rate/five_hour\nstop=turns\n"} {
-		f := newAgentFixture(output, agent.Result{Outcome: agent.OutcomeExited})
+	tests := []struct {
+		name, output string
+		want         agent.Outcome
+	}{
+		{"success", "session=s1\nlimit=rate/five_hour\n", agent.OutcomeExited},
+		{"cap", "session=s1\nlimit=rate/five_hour\nstop=turns\n", agent.OutcomeTurnCap},
+	}
 
-		got, err := f.agents.Run(t.Context(), request())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		require.NoError(t, err, name)
-		assert.Equal(t, map[string]agent.Outcome{"success": agent.OutcomeExited, "cap": agent.OutcomeTurnCap}[name], got.Outcome, name)
-		assert.Nil(t, got.Limit, name)
+			f := newAgentFixture(tc.output, agent.Result{Outcome: agent.OutcomeExited})
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.Outcome)
+			assert.Nil(t, got.Limit)
+		})
 	}
 }
 
 func TestAgents_ALimitOnARunThatDidNotExitKeepsItsOutcome(t *testing.T) {
 	t.Parallel()
 
-	for _, result := range []agent.Result{{Outcome: agent.OutcomeTimedOut, ExitCode: -1}, {Outcome: agent.OutcomeCancelled, ExitCode: -1}} {
-		f := newAgentFixture("session=s1\nlimit=rate/five_hour\nfailed=success\n", result)
+	tests := []struct {
+		name   string
+		result agent.Result
+	}{
+		{"timed_out", agent.Result{Outcome: agent.OutcomeTimedOut, ExitCode: -1}},
+		{"canceled", agent.Result{Outcome: agent.OutcomeCancelled, ExitCode: -1}},
+	}
 
-		got, err := f.agents.Run(t.Context(), request())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-		require.NoError(t, err)
-		assert.Equal(t, result, got)
+			f := newAgentFixture("session=s1\nlimit=rate/five_hour\nfailed=success\n", tc.result)
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.result, got)
+		})
 	}
 }
 

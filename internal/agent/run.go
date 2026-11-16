@@ -111,6 +111,13 @@ type Result struct {
 	Limit      *Limit
 }
 
+// AddNote returns the result with note joined after its Note by "; ". An empty note on either side adds no separator.
+func (r Result) AddNote(note string) Result {
+	r.Note = strings.Join(slices.DeleteFunc([]string{r.Note, note}, func(s string) bool { return s == "" }), "; ")
+
+	return r
+}
+
 // Timer is the part of time.Timer that the idle limit and the total limit use.
 type Timer interface {
 	Reset(d time.Duration) bool
@@ -284,9 +291,8 @@ func withSpend(result Result, counter *spendCounter) Result {
 	}
 
 	result.Outcome = OutcomeBudgetCap
-	result.Note = strings.Join(slices.DeleteFunc([]string{result.Note, note}, func(s string) bool { return s == "" }), "; ")
 
-	return result
+	return result.AddNote(note)
 }
 
 // argsOf returns the arguments of the profile, then the model, the session to resume, the caps and the arguments of the launch.
