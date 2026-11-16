@@ -81,9 +81,10 @@ func TestClient_ResumeOnThisBuildMovesARunStoredUnderTheSingleVersionOfTheSteps(
 	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+"+stepsVersion, testRun)
 	require.NoError(t, err)
 
+	buildWithModule(other, moduleAgent, 1)
 	expireLease(harness)
 
-	require.NoError(t, other.ResumeOnThisBuild(testItem), "the single version stands for every module at version 1, as this build has them")
+	require.NoError(t, other.ResumeOnThisBuild(testItem), "the single version stands for the agent module at version 1, and this build has the agent module at version 1")
 
 	row, rowErr := other.row(testRun)
 	require.NoError(t, rowErr)
@@ -115,10 +116,9 @@ func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionWhenAUsed
 	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+"+stepsVersion, testRun)
 	require.NoError(t, err)
 
-	buildWithModule(other, moduleAgent, 2)
 	expireLease(harness)
 
-	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), "agent module at version 1 and this build has version 2")
+	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), fmt.Sprintf("agent module at version 1 and this build has version %d", agentVersion))
 }
 
 func TestClient_ResumeOnThisBuildRefusesARunStoredUnderAMalformedOrRepeatingList(t *testing.T) {
