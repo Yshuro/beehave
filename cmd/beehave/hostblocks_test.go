@@ -36,6 +36,40 @@ func loadHostProject(t *testing.T, call string) (config.Project, config.Problems
 	return cfg.Projects["p"], problems
 }
 
+// loaderHost returns the host block of a project that sets only the keys that a host needs, as the config load fills it: every other key holds
+// its default. A fixture that needs a host block uses it, so no test runs a host that the loader never produces. Each call returns a new block.
+func loaderHost() *model.HostConfig {
+	loaded := loadedDefaultHost
+
+	return &loaded
+}
+
+// loadedDefaultHost is read once when the test binary starts, before a test changes the environment.
+var loadedDefaultHost = func() model.HostConfig {
+	dir, err := os.MkdirTemp("", "beehave-loader-host")
+	if err != nil {
+		panic(err)
+	}
+
+	defer os.RemoveAll(dir)
+
+	if err = os.MkdirAll(filepath.Join(dir, "projects"), 0o700); err != nil {
+		panic(err)
+	}
+
+	text := "project(" + hostProjectTail + `, host = host(provider = "ssh", disk_floor_gb = 50))` + "\n"
+	if err = os.WriteFile(filepath.Join(dir, "projects", "p.star"), []byte(text), 0o600); err != nil {
+		panic(err)
+	}
+
+	cfg, problems := config.LoadFolder(dir, nil, newAdapters(nil, nil, nil).registry())
+	if len(problems) > 0 {
+		panic(problems)
+	}
+
+	return *cfg.Projects["p"].Host
+}()
+
 // everyKey writes each key that a block declares as a call argument, with a value that the adapter of the block accepts.
 func everyKey(declared config.Block, values map[string]string) string {
 	var args []string
