@@ -8,8 +8,10 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -179,7 +181,7 @@ func addConfigFlag(command *cobra.Command, target *string) {
 const runLong = "Take one item through its workflow.\nName the project when the config holds more than one.\n\n" +
 	"The steps of the workflow file run in file order. Name the file with --workflow, or keep " + defaultWorkflowFile + " in the current folder. " +
 	"beehave checks the file first and refuses on any problem. If no file is named and the folder has none, beehave run refuses, unless the item has an open run.\n\n" +
-	"If an earlier run of the item is open, beehave run continues it with the file that the run pinned. Press Ctrl-C to stop the command: the run stays open, and beehave run continues it.\n" +
+	"If an earlier run of the item is open, beehave run continues it with the file that the run pinned. Press Ctrl-C to stop the command: the run stays open, and beehave run continues it. A second Ctrl-C during the stop exits at once with code 130.\n" +
 	"If the last run failed, beehave run refuses and names the step that failed. Run beehave resume, then beehave run.\n" +
 	"After a finished or a canceled run, beehave run starts a new run.\n\n" +
 	"If another engine holds the state folder, beehave run gives the item to that engine and waits for the result. " +
@@ -423,17 +425,45 @@ func (f flowCommands) runOnEngine(stdout, stderr io.Writer, cfg config.Config, o
 		return errors.Join(err, engine.Shutdown())
 	}
 
-	runErr := f.continueOrStart(stdout, engine, item, project, file)
+	return stopOnSecondInterrupt(engine, stderr, f.continueOrStart(stdout, engine, item, project, file))
+}
 
-	// The shutdown waits for a start that waits for the store. A second interrupt ends the command during that wait.
-	downErr := stopOnSecondInterrupt(engine, stderr)
+// stopOnSecondInterrupt shuts the engine down for beehave run and returns the result of the run, joined with the error of the shutdown.
+// The shutdown can wait for a start that waits for the store. Whatever ended the run (the result or the first interrupt), the command listens from here on:
+// the next signal exits at once, as beehave serve does.
+// An interrupted run exits with code 130 and stays open for the next launch. A run that ended keeps its own result, and the line says the run is not open.
+func stopOnSecondInterrupt(engine Runner, stderr io.Writer, runErr error) error {
+	downErr := stopListening(engine)
 
 	var exit *ExitError
-	if errors.As(downErr, &exit) {
+	if !errors.As(downErr, &exit) || exit.Code != exitSecondSignal {
+		return errors.Join(runErr, downErr)
+	}
+
+	if errors.Is(runErr, errInterrupted) {
+		sayStoppedAtOnce(stderr, "the run stays open: run beehave run again to continue it")
+
 		return downErr
 	}
 
-	return errors.Join(runErr, downErr)
+	sayStoppedAtOnce(stderr, "the run had ended before the stop")
+
+	return runErr
+}
+
+// stopListening shuts the engine down while it listens for a signal that ends the wait.
+func stopListening(engine Runner) error {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	defer signal.Stop(signals)
+
+	return stopEngine(engine, signals)
+}
+
+func sayStoppedAtOnce(stderr io.Writer, what string) {
+	// A failed write to stderr has no recovery.
+	_, _ = fmt.Fprintf(stderr, "%s: stopped at once; %s\n", commandName, what)
 }
 
 func (f flowCommands) continueOrStart(stdout io.Writer, engine Runner, item, project, file string) error {

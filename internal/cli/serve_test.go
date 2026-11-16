@@ -126,7 +126,7 @@ func TestServe_ASecondSignalDuringASlowShutdownExits130(t *testing.T) { //nolint
 	assert.Equal(t, 1, rig.runner.count(), "the second signal does not call Shutdown again")
 }
 
-func TestRun_ASecondInterruptDuringASlowShutdownExits130AndLeavesTheRunOpen(t *testing.T) { //nolint:paralleltest // a signal reaches every running command
+func TestRun_ASecondInterruptDuringASlowShutdownExits130AndSaysTheRunStaysOpen(t *testing.T) { //nolint:paralleltest // a signal reaches every running command
 	rig := newRig(t)
 	rig.runner.block = make(chan struct{})
 	rig.runner.started = make(chan struct{})
@@ -165,6 +165,59 @@ func TestRun_ASecondInterruptDuringASlowShutdownExits130AndLeavesTheRunOpen(t *t
 	}
 
 	assert.Equal(t, 1, rig.runner.count(), "the second interrupt does not call Shutdown again")
+}
+
+// runThenSlowStop runs beehave run on a fake engine whose run ends at once and whose Shutdown is held, then sends one interrupt.
+func runThenSlowStop(t *testing.T, rig *flowRig) serveResult {
+	t.Helper()
+
+	rig.runner.started = make(chan struct{})
+	rig.runner.slow = make(chan struct{})
+
+	t.Cleanup(func() { close(rig.runner.slow) })
+
+	done := make(chan serveResult, 1)
+
+	go func() {
+		code, stdout, stderr := rig.execute(t.Context(), "run", "12")
+		done <- serveResult{code, stdout, stderr}
+	}()
+
+	waitFor(t, rig.runner.started, "Shutdown")
+	signalSelf(t, syscall.SIGINT)
+
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(serveWait):
+		t.Fatal("an interrupt did not end beehave run")
+	}
+
+	return serveResult{}
+}
+
+func TestRun_AnInterruptDuringASlowStopAfterAStoppedResultKeepsExitOneAndDoesNotSayTheRunIsOpen(t *testing.T) { //nolint:paralleltest // a signal reaches every running command
+	rig := newRig(t)
+	rig.runner.stopped = &flow.Stopped{Step: "check", RC: 2, Output: "boom"}
+
+	got := runThenSlowStop(t, rig)
+
+	assert.Equal(t, 1, got.code, got.stderr)
+	assert.Contains(t, got.stderr, "stopped at once")
+	assert.NotContains(t, got.stderr, "stays open")
+	assert.Equal(t, 1, rig.runner.count())
+}
+
+func TestRun_AnInterruptDuringASlowStopAfterAFinishedRunKeepsTheRunError(t *testing.T) { //nolint:paralleltest // a signal reaches every running command
+	rig := newRig(t)
+	rig.runner.runErr = errFake
+
+	got := runThenSlowStop(t, rig)
+
+	assert.Equal(t, 1, got.code, got.stderr)
+	assert.Contains(t, got.stderr, errFake.Error())
+	assert.Contains(t, got.stderr, "stopped at once")
+	assert.NotContains(t, got.stderr, "stays open")
 }
 
 func TestServe_AFolderThatAnotherEngineOwnsIsRefusedWithTheLockText(t *testing.T) {

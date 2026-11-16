@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -14,7 +13,7 @@ import (
 	"github.com/tobocop2/beehave/internal/flow"
 )
 
-// exitSecondSignal is the exit code of beehave serve when a second signal ends a slow shutdown: 128 plus SIGINT.
+// exitSecondSignal is the exit code of beehave serve and beehave run when a second signal ends a slow shutdown: 128 plus SIGINT.
 const exitSecondSignal = 130
 
 // errServeBusy is the refusal of beehave serve when another engine holds the state folder.
@@ -92,25 +91,6 @@ func (f flowCommands) startEngine(cfg config.Config, opts flow.Options) (Runner,
 	}
 
 	return engine, nil
-}
-
-// stopOnSecondInterrupt shuts the engine down for beehave run. The first interrupt already ended the wait, so the command listens from here on:
-// the next signal exits at once with code 130, as beehave serve does, and leaves the run open for the next launch.
-func stopOnSecondInterrupt(engine Runner, stderr io.Writer) error {
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-
-	defer signal.Stop(signals)
-
-	err := stopEngine(engine, signals)
-
-	var exit *ExitError
-	if errors.As(err, &exit) {
-		// A failed write to stderr has no recovery.
-		_, _ = fmt.Fprintf(stderr, "%s: stopped at once; the run stays open: run beehave run again to continue it\n", commandName)
-	}
-
-	return err
 }
 
 // stopEngine shuts the engine down once. A signal that arrives before the shutdown ends makes the command exit at once with code 130.
