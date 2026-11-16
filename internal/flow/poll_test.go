@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -73,6 +74,32 @@ func (p fakePoll) Source(_ context.Context, project string) (PollSource, string,
 	}
 
 	return source, pollMe, nil
+}
+
+// swapPoll is a fakePoll that a test replaces under its own lock while the engine runs. The engine holds the swapPoll from before Launch, so the test never writes an engine field.
+type swapPoll struct {
+	mu   sync.Mutex
+	poll fakePoll
+}
+
+func (s *swapPoll) set(poll fakePoll) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.poll = poll
+}
+
+func (s *swapPoll) current() fakePoll {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.poll
+}
+
+func (s *swapPoll) Projects() []string { return s.current().Projects() }
+
+func (s *swapPoll) Source(ctx context.Context, project string) (PollSource, string, error) {
+	return s.current().Source(ctx, project)
 }
 
 func ownThreads(number int) []model.OwnPull {
@@ -265,7 +292,8 @@ func TestClient_PollReturnsTheNewestFinishedPoll(t *testing.T) {
 	t.Parallel()
 
 	harness := newHarness(t)
-	harness.poll = fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {own: ownThreads(5)}}}
+	poll := &swapPoll{poll: fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {own: ownThreads(5)}}}}
+	harness.poll = poll
 	engine := launchedWith(t, harness, func(*Deps) {})
 	client := harness.client(t, testVersion)
 
@@ -274,8 +302,7 @@ func TestClient_PollReturnsTheNewestFinishedPoll(t *testing.T) {
 	assert.False(t, found, "no poll has finished")
 
 	pollOnce(t, engine)
-	harness.poll = fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {ownErr: errFake}}}
-	engine.deps.Poll = harness.poll
+	poll.set(fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {ownErr: errFake}}})
 
 	later := dbos.ScheduledWorkflowInput{ScheduledTime: pollTick.Add(time.Hour)}
 	handle, err := dbos.RunWorkflow(engine.ctx, engine.poll, later)
