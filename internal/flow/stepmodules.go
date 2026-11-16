@@ -45,7 +45,8 @@ const landVersion = 3
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step.
 const forgeVersion = 2
 
-// gateVersion is the version of the gate module. Version 2 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>).
+// gateVersion is the version of the gate module. Version 2 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>),
+// and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
 const gateVersion = 2
 
 // stepModule is one module of the table: its version and the step kinds that it records.

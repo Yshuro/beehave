@@ -98,11 +98,9 @@ func TestLostJob_InsideTheLimitTheWaitRetriesTheStopAndStartsNoSecondJob(t *test
 	h, hosts, _ := lostHarness(t, 5*time.Minute)
 	engine := h.engine(t)
 
-	_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(lostGateBody)))
+	runInBackground2(engine, writeFlow(t, bodyFlow(lostGateBody)))
+	waitForTheLostJob(t, h, testItem)
 
-	require.ErrorContains(t, err, host.ErrLost.Error(), "until the owner wait lands, a wait that ends at the limit fails the gate with the lost error")
-	assert.Equal(t, 1, strings.Count(err.Error(), host.ErrLost.Error()), "the error names the lost link once")
-	assert.Contains(t, err.Error(), "no proof that job job-1 on host gpu-b can no longer run came within host.lost_job_wait: job job-1:")
 	assert.Equal(t, 5, hosts.proofReads(), "one read of the proof for each look: the clock moves a minute at each read, and the fifth look is at the limit")
 	assert.Equal(t, slices.Repeat([]string{"gpu-b/job-1"}, 5), hosts.proved, "each look stops the job on the host that it ran on")
 	assert.EqualValues(t, 1, h.gate.submits.Load(), "the wait submits no second job")
@@ -450,4 +448,208 @@ func TestLostJob_AStoreThatRefusesTheStartOfTheWaitEndsIt(t *testing.T) {
 	_, err = engine.holdLost(engine.ctx, ExclusiveInput{Project: testProject, Item: testItem}, LostJob{Job: "job-1", Host: "gpu-b"})
 
 	require.Error(t, err)
+}
+
+// waitForTheLostJob waits until the open run of item shows the lost gate job and its question, and returns its status.
+func waitForTheLostJob(t *testing.T, h *harness, item string) RunInfo {
+	t.Helper()
+
+	read := newStatusRead(h.client(t, testVersion))
+
+	var shown RunInfo
+
+	pollUntil(t, "the run of item "+item+" to wait for the owner on the lost gate job", read.last, func() (bool, error) {
+		for _, info := range read.next() {
+			if info.Item == item && info.Question != "" && info.LostJob != nil {
+				shown = info
+
+				return true, nil
+			}
+		}
+
+		return false, nil
+	})
+
+	return shown
+}
+
+// endedRuns lists the status of every run of the engine with the workflow name, so a test reads how many child runs a gate started and whether they ended.
+func endedRuns(t *testing.T, engine *Engine, name string) []dbos.WorkflowStatusType {
+	t.Helper()
+
+	rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(name))
+	require.NoError(t, err)
+
+	states := make([]dbos.WorkflowStatusType, len(rows))
+	for i, row := range rows {
+		states[i] = row.Status
+	}
+
+	return states
+}
+
+// lostChildFlow is a parent that spawns item 21 and gathers it with fail = "raise". The child runs its gate on the host gpu-b.
+const lostChildFlow = `def worker(item):
+    host_up(name = "start", host = "gpu-b")
+    gate(name = "check")
+
+def main(item):
+    gather(spawn(items = ["21"], entry = "worker"), fail = "raise")
+`
+
+func TestLostJob_NoProofAtTheLimitIsAnOwnerWaitAndNotAFailedStep(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, clock := lostHarness(t, 2*time.Minute)
+	since := clock.read()
+	engine := h.engine(t)
+
+	parent := runInBackground2(engine, writeFlow(t, lostChildFlow))
+	child := waitForTheLostJob(t, h, "21")
+
+	assert.Equal(t, runRunning, child.State, "the child run waits for the owner and reads running")
+	assert.Equal(t, &LostJobShown{Job: "job-1", Host: "gpu-b", Since: since, Limit: "2m0s"}, child.LostJob)
+	assert.Contains(t, child.Question, "job-1", "the question names the job")
+	assert.Contains(t, child.Question, "gpu-b", "the question names the host")
+	assert.Contains(t, child.Question, lostAdvice, "the question names the cancel command of the adapter")
+	assert.Contains(t, child.Question, "CONTINUE")
+	assert.Equal(t, 2, hosts.proofReads(), "the second look is at the limit")
+	assert.EqualValues(t, 1, h.gate.submits.Load())
+
+	assert.Equal(t, []dbos.WorkflowStatusType{dbos.WorkflowStatusSuccess}, endedRuns(t, engine, hostJobName), "the host job run has ended, so the host slot is free")
+	assert.Equal(t, []dbos.WorkflowStatusType{dbos.WorkflowStatusSuccess}, endedRuns(t, engine, exclusiveName), "the exclusive run has ended, so the project slot is free")
+
+	steps, err := dbos.GetWorkflowSteps(engine.ctx, child.ID)
+	require.NoError(t, err)
+
+	for _, step := range steps {
+		assert.NoError(t, step.Error, "no step of the child failed: %s", step.StepName)
+	}
+
+	assert.Equal(t, dbos.WorkflowStatusPending, childStatus(t, engine, "21"), "the parent round keeps the child: the raise of gather cancels no run that waits")
+	select {
+	case outcome := <-parent:
+		t.Fatalf("the parent ended while its child waits for the owner: %v", outcome.err)
+	default:
+	}
+}
+
+func TestLostJob_ContinueWithNoProofWaitsAgainAndStartsNoGateJob(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, _ := lostHarness(t, 2*time.Minute)
+	engine := h.engine(t)
+
+	runInBackground2(engine, writeFlow(t, bodyFlow(lostGateBody)))
+	waitForTheLostJob(t, h, testItem)
+
+	before := hosts.proofReads()
+	require.NoError(t, h.client(t, testVersion).Answer(testItem, "CONTINUE"))
+
+	eventually(t, func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.0") })
+
+	again := waitForTheLostJob(t, h, testItem)
+
+	assert.NotNil(t, again.LostJob, "the run still shows the lost job")
+	assert.Equal(t, before+1, hosts.proofReads(), "the answer reads the proof once")
+	assert.EqualValues(t, 1, h.gate.submits.Load(), "no gate job started")
+	assert.Equal(t, 1, h.gate.calls)
+	assert.Len(t, endedRuns(t, engine, exclusiveName), 1, "no second gate run")
+	assert.NotContains(t, stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.1", "the run waits for the next answer")
+}
+
+// goldenLostAskSteps are the steps of the item run of lostGateBody whose gate waited for the owner, and whose first answer came after the host came back.
+// The read of the proof after an answer is a sub-step of the gate call, recorded before the gate call itself.
+var goldenLostAskSteps = []string{"host_up:start#1", "gate:tip", "exclusive", "gate:check#1/lost-ask.0", "scope:check#1", "gate:check#1"}
+
+func TestLostJob_ContinueAfterTheHostCameBackReadsTheProofBeforeAnyRerun(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, _ := lostHarness(t, 2*time.Minute)
+	engine := h.engine(t)
+
+	done := runInBackground2(engine, writeFlow(t, bodyFlow(lostGateBody)))
+	waitForTheLostJob(t, h, testItem)
+
+	before := hosts.proofReads()
+
+	hosts.prove(model.LostProof{Kind: model.LostStopped})
+	require.NoError(t, h.client(t, testVersion).Answer(testItem, "CONTINUE"))
+
+	outcome := <-done
+
+	require.ErrorContains(t, outcome.err, `GATE passed=False steps=["unknown", "unknown"] proof=stopped host=gpu-b job=job-1 report=the gate job was lost on gpu-b and the proof is stopped`)
+	assert.Equal(t, before+1, hosts.proofReads(), "the answer reads the proof once")
+	assert.EqualValues(t, 1, h.gate.submits.Load(), "no gate job started on the head before the proof, and none after: the rerun is the workflow's")
+	assert.Equal(t, 1, h.gate.calls)
+	assert.Len(t, endedRuns(t, engine, exclusiveName), 1)
+
+	// The calls of the workflow have a colon in their names; the lifecycle steps and the records of the library have none.
+	steps := slices.DeleteFunc(stepNamesOf(t, engine, testRun), func(name string) bool { return !strings.Contains(name, ":") && name != exclusiveName })
+	assert.Equal(t, goldenLostAskSteps, steps, "the steps of the owner wait for a lost gate job changed: they belong to the gate module (stepmodules.go)")
+
+	shown, err := dbos.GetEvent[LostJobShown](engine.ctx, testRun, lostJobKey, time.Millisecond)
+	require.NoError(t, err)
+	assert.Zero(t, shown, "the proof clears the lost job from the status")
+}
+
+func TestLostJob_AProofReadThatFailsAfterAnAnswerFailsTheGate(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, _ := lostHarness(t, 2*time.Minute)
+	engine := h.engine(t)
+
+	done := runInBackground2(engine, writeFlow(t, bodyFlow(lostGateBody)))
+	waitForTheLostJob(t, h, testItem)
+
+	hosts.mu.Lock()
+	hosts.proofErr = errors.New("the job id is not a unit of this host")
+	hosts.mu.Unlock()
+	require.NoError(t, h.client(t, testVersion).Answer(testItem, "CONTINUE"))
+
+	outcome := <-done
+
+	require.ErrorContains(t, outcome.err, `gate "check" lost its job: read the proof that the lost job job-1 on host gpu-b can no longer run: the job id is not a unit of this host`)
+	assert.EqualValues(t, 1, h.gate.submits.Load())
+}
+
+func TestLostJob_ACancelWhileTheRunAsksTheOwnerEndsTheRunAndStartsNoGateJob(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, _ := lostHarness(t, 2*time.Minute)
+	engine := h.engine(t)
+
+	done := runInBackground2(engine, writeFlow(t, bodyFlow(lostGateBody)))
+	waitForTheLostJob(t, h, testItem)
+
+	before := hosts.proofReads()
+	require.NoError(t, h.client(t, testVersion).Cancel(testItem))
+
+	deadline := time.After(eventTimeout)
+
+	for ended := false; !ended; {
+		select {
+		case outcome := <-done:
+			require.Error(t, outcome.err, "the canceled run ends with an error")
+
+			ended = true
+		case <-deadline:
+			t.Fatal("the canceled run did not end")
+		default:
+			h.tick(t)
+		}
+	}
+
+	assert.Equal(t, before, hosts.proofReads(), "the cancel reads no proof in the item run")
+	assert.EqualValues(t, 1, h.gate.submits.Load())
+}
+
+func TestLostJob_AnAskThatCannotShowTheLostJobEndsTheGate(t *testing.T) {
+	t.Parallel()
+
+	engine := idleEngine(t, newHarness(t))
+
+	_, err := engine.askLost(engine.ctx, ExclusiveInput{Project: testProject, Item: testItem}, "gate:check#1", LostJob{Job: "job-1", Host: "gpu-b", Limit: true})
+
+	require.ErrorContains(t, err, "item 12 cannot show the lost gate job")
 }

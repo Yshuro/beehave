@@ -81,7 +81,7 @@ func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 func TestStepModules_TheGateModuleIsAtVersionTwo(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "gate2", "the gate step records a lost job, and the wait for its proof records gate:lost-start and gate:lost-look.<k>")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "gate2", "the gate step records a lost job, the wait for its proof records gate:lost-start and gate:lost-look.<k>, and the owner wait records <call>/lost-ask.<n>")
 }
 
 func TestParseVersions_TheSingleVersionOfTheStepsIsEveryModuleAtVersionOne(t *testing.T) {
