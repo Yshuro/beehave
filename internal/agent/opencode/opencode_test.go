@@ -84,6 +84,17 @@ func TestProfile_ResumeNamesTheSessionAndNeverContinuesTheLastOne(t *testing.T) 
 	assert.False(t, p.ResumeLast)
 }
 
+func TestReadUsage_IsUnknownWithTheReasonThatTheAgentReportsNone(t *testing.T) {
+	t.Parallel()
+
+	reading := opencode.New().ReadUsage(t.Context(), model.Runner{Name: "r", Agent: opencode.Name})
+
+	_, known := reading.Usage()
+
+	assert.False(t, known)
+	assert.Equal(t, "the opencode agent cannot report usage", reading.Reason())
+}
+
 func TestTranscriptPath_NamesOneFileForEachSessionThatNoFileHolds(t *testing.T) {
 	t.Parallel()
 
