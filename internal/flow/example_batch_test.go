@@ -24,7 +24,7 @@ type remoteBranches struct {
 	heads map[string]string
 	asked []string
 
-	// before runs at the start of each call, with no lock held. The round rig puts its barrier here: the preflight holds no queue slot.
+	// before runs at the start of each call, with no lock held. The round rig holds the turn of a member here: the preflight holds no queue slot.
 	before func(ctx context.Context, item string)
 }
 

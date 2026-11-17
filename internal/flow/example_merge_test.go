@@ -420,6 +420,8 @@ func TestExampleMerge_TheRoundLandsThroughTheBatchMergerAndTheGuardsOfTheForgeFa
 				assert.Contains(t, forge.said("1"), "while preparing")
 				assert.Empty(t, one.writes, "a deferred merge writes nothing")
 				assert.Empty(t, heldOf(rig.writer), "a deferred item is not held")
+				assert.Equal(t, []string{fmt.Sprintf("MergePR %d %s", testPull, rig.heads["3"])}, three.writes, "item 3 lands at its pin")
+				assert.Equal(t, "README\nthree.txt", rig.mainFiles(t), "item 3 lands and the deferral of item 1 does not reach it")
 			case tc.refusal != "":
 				assert.Contains(t, forge.said("1"), tc.refusal)
 				assert.Empty(t, one.writes, "a refused merge writes nothing")
