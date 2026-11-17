@@ -3,6 +3,7 @@ package config
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"time"
 
 	"go.starlark.net/starlark"
@@ -18,8 +19,9 @@ const (
 	defaultMaxRun     = "24h"
 	minMaxRun         = time.Second
 	defaultBankBudget = "20s"
-	// The default and the bounds of host.lost_job_wait. The lower bound is one poll of the wait.
-	defaultLostJobWait = "60m"
+	// DefaultLostJobWait is the default of host.lost_job_wait. The engine also waits this long for a project with no host block.
+	// The bounds follow it. The lower bound is one poll of the wait.
+	DefaultLostJobWait = 60 * time.Minute
 	minLostJobWait     = time.Minute
 	maxLostJobWait     = 24 * time.Hour
 	hostTableMessage   = "the `host` block %s. %s"
@@ -55,7 +57,7 @@ const idleUnset = -1 << 31
 // newHost returns the constructor of the host block. A key that the call leaves out keeps its default.
 func newHost(declared []Block) func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
 	return func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
-		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget, LostJobWait: defaultLostJobWait}
+		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget, LostJobWait: defaultLostJobWaitText()}
 		held := holders(declared)
 		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.LostJobWait, &raw.Slots, &raw.PrivateRemote}
 
@@ -217,10 +219,15 @@ func maxRun(at syntax.Position, text string) (time.Duration, error) {
 func lostJobWait(at syntax.Position, text string) (time.Duration, error) {
 	parsed, err := time.ParseDuration(text)
 	if err != nil || parsed < minLostJobWait || parsed > maxLostJobWait {
-		return 0, refuseAt(at, "`host.lost_job_wait` must be a duration from 1m to 24h, such as \"%s\"; got `%s`. Fix the value.", defaultLostJobWait, text)
+		return 0, refuseAt(at, "`host.lost_job_wait` must be a duration from 1m to 24h, such as \"%s\"; got `%s`. Fix the value.", defaultLostJobWaitText(), text)
 	}
 
 	return parsed, nil
+}
+
+// defaultLostJobWaitText is DefaultLostJobWait as a project file writes it, in minutes.
+func defaultLostJobWaitText() string {
+	return strconv.Itoa(int(DefaultLostJobWait/time.Minute)) + "m"
 }
 
 // fillCounts sets the keys of host that are whole numbers.

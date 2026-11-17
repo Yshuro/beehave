@@ -118,6 +118,11 @@ func (e2eFiles) Up(context.Context, string, string) (bool, string, error) { retu
 // Teardown stops no host.
 func (e2eFiles) Teardown(context.Context, string, string) error { return nil }
 
+// LostProof gives no proof: the project of the scripts has no host, so it has no host job.
+func (e2eFiles) LostProof(context.Context, string, string, string) (model.LostProof, error) {
+	return model.LostProof{}, nil
+}
+
 func (f e2eFiles) event(name, item string) error {
 	log, err := os.OpenFile(filepath.Join(f.dir, "events.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, e2eFileMode)
 	if err != nil {

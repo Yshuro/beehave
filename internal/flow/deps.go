@@ -165,7 +165,7 @@ type beats interface {
 // Poll replaces the interval at which the agents queue looks for work, at which a run looks for the result of a phase,
 // at which a phase looks again for the first trust of its run, and at which a run tries again the first renewal of a claim it did not take.
 // Release replaces the time that the git calls of one worktree release share.
-// Beat replaces the time that one claim renewal may take. OwnerWait replaces the time of one wait for the owner before the wait starts again.
+// Beat replaces the time that one claim renewal may take. Draft replaces the time that the return of a pull request to draft may take. OwnerWait replaces the time of one wait for the owner before the wait starts again.
 // Retain replaces the age at which Launch deletes a finished run. Now replaces the monotonic reading of the clock that measures the time since the last good claim renewal.
 // Wall replaces the wall reading of that clock: when it is nil, the wall reading is the one that Now returns.
 // Reading replaces the time that the now builtin returns, and the time from which a wait counts its deadline and its reminders. The lease age keeps using Wall.
@@ -175,12 +175,15 @@ type beats interface {
 // Settle replaces the time of the durable sleep between two reads of a batch member whose mergeable state is UNKNOWN.
 // Queued replaces the time of the durable sleep between two reads of a pull request whose merge the forge holds.
 // CapWait replaces the least time of the durable sleep that waits for a usage cap to reset.
+// LostPoll replaces the time of the durable sleep between two looks for the proof that a lost gate job can no longer run.
 type clock struct {
 	CapWait   time.Duration
+	LostPoll  time.Duration
 	Tick      <-chan time.Time
 	Poll      time.Duration
 	Release   time.Duration
 	Beat      time.Duration
+	Draft     time.Duration
 	OwnerWait time.Duration
 	Retain    time.Duration
 	Now       func() time.Time
@@ -329,6 +332,7 @@ type Deps struct {
 	// Poll serves the scheduled review poll. A nil Poll means the build cannot read the forges: the engine sets no poll schedule.
 	Poll pollReader
 	// Hosts serves host_up and host_teardown. A nil Hosts means the build cannot start or stop a host: both calls fail.
+	// Hosts also reads the proof that a lost gate job can no longer run. With a nil Hosts no proof comes, and the wait for it ends at host.lost_job_wait.
 	Hosts hostKeeper
 	// SandboxDefault says whether a project runs the agent steps that set no sandbox in the sandbox. A nil SandboxDefault means no project does.
 	SandboxDefault func(project string) bool

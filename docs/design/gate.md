@@ -58,7 +58,8 @@ A gate on a build host also runs its build job as a child run on the queue `host
 
 - The gate keeps its slot in the exclusive queue while the job waits, so a merge of the project still waits for the gate.
 - The queues cannot deadlock. A job queues nothing, so no job on the host queue waits for a slot of the exclusive queue.
-- A gate that a newer head cancels cancels its job. A cancel of the item cancels the build job too.
+- A cancel of a gate, by a newer head or with its item, cancels the build job too. DBOS cancels each level of runs before it lists the children of that level. A child start checks in its own transaction that its parent still has an owner, and the cancel clears that owner. So a job that starts during the cancel is listed and canceled, or its start is refused. Until a DBOS release has this order, `go.mod` pins a fork commit that has it. The wait of the gate never cancels the job by its id, so a stop that ends late cannot cancel a job that a resume reopened.
+- DBOS commits each level of a cancel in its own transaction. A cancel that fails after the gate level leaves the gate canceled and its job running. The gate of a later head lists a canceled old gate whose job is still queued or running, and cancels it again with its children. `beehave cancel` of the item does the same. A cancel of a canceled run lists the open runs under it first. If there are none, it says the run has nothing to cancel and exits non-zero. Otherwise it cancels them and names them on stderr.
 - The cap is 1. A cap above 1 is not built.
 
 The host of a gate is the cluster that `host_up` recorded, else the default `build_host` of the project. The engine reads it once, when the gate is queued, and keeps it in the input of the gate. So a replay uses the same host after the project file changes.
@@ -71,6 +72,8 @@ A project gate of a `gate` step is two recorded steps in the exclusive run:
 
 - `gate:job` reuses the pass of an earlier gate with the same key, or submits the host job and records its id.
 - `gate` waits for that job.
+
+When the wait of `gate` ends as `lost`, the steps `gate:lost-start` and `gate:lost-look.<k>`, with a durable sleep between two looks, wait for a proof that the job can no longer run. A proof gives a void gate with the field `host_loss`. See "The wait for a proof" in [hosts.md](hosts.md).
 
 The workflow library cannot record from inside a step, so the id needs a step of its own. After a crash between the two steps, the replay finds the id on record and the wait reads the same job: the host gets one job. A crash inside `gate:job`, after the host accepted the job and before the step is recorded, can still submit a second job.
 
