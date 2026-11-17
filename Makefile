@@ -7,35 +7,38 @@ GO_TEST_P ?=
 # GO_TEST_DRIVER_PKGS are the fast packages that use the driver directly. The second run in "test" runs them with the pointer checks
 # on for the driver, so a driver upgrade is still checked for pointer misuse on every gate.
 GO_TEST_DRIVER_PKGS := ./internal/store/local
-# "test" starts one go test run for each flow shard, one for the rest of the flow package and one for the other packages. Each run gets a
-# share of the cores (at least one) as GOMAXPROCS, which also sets the -p and -parallel defaults, so one gate uses about the core
-# count and does not oversubscribe the host. GO_TEST_PROCS overrides the share.
+# "test" starts one go test run for each flow shard and one for the other packages, and keeps at most one run for each core going at the same
+# time (GO_TEST_JOBS). A run that waits for a core has not started, so its time and its timeout do not count the wait. Each flow run gets
+# GO_TEST_PROCS cores as GOMAXPROCS, which also sets the -p and -parallel defaults. The run of the other packages takes about twice the CPU
+# of a flow run, so it gets two shares.
 GO_CORES := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu)
-# The run of the other packages and the shard in FLOW_HEAVY_SHARD take about twice the CPU of the others, so each counts as two shares.
-FLOW_HEAVY_SHARD := E
-GO_TEST_UNITS = $(shell echo $$(( $(words $(FLOW_SHARDS)) + 4 )))
-GO_TEST_PROCS ?= $(shell n=$$(( $(GO_CORES) / $(GO_TEST_UNITS) )); [ $$n -ge 1 ] || n=1; echo $$n)
+GO_TEST_JOBS ?= $(GO_CORES)
+GO_TEST_PROCS ?= 1
 GO_TEST_PROCS_HEAVY = $(shell echo $$(( 2 * $(GO_TEST_PROCS) )))
 ifneq ($(shell printf '%s' '$(GO_TEST_PROCS)' | grep -Ec '^[1-9][0-9]*$$'),1)
 $(error GO_TEST_PROCS must be a whole number of at least 1, not "$(GO_TEST_PROCS)")
 endif
-# The CPU work of a run does not change with its share, so a smaller share takes longer. The Go default timeout of 10 minutes is too short for
-# the run of the other packages at a share of 2 (a 2-core CI runner). Each run gets GO_TEST_TIMEOUT, which stays under the 30 minute limit of the CI test job.
+ifneq ($(shell printf '%s' '$(GO_TEST_JOBS)' | grep -Ec '^[1-9][0-9]*$$'),1)
+$(error GO_TEST_JOBS must be a whole number of at least 1, not "$(GO_TEST_JOBS)")
+endif
+# The CPU work of a run does not change with its share, so a smaller share takes longer. Each run gets GO_TEST_TIMEOUT, which stays under the
+# 30 minute limit of the CI test job. A run holds a few minutes of work, so it ends far below the timeout, whatever the speed of the host.
 GO_TEST_TIMEOUT ?= 18m
 GO_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0' -count=1 -timeout $(GO_TEST_TIMEOUT) $(if $(GO_TEST_P),-p $(GO_TEST_P))
-# The flow package has over 1000 tests, and under the race detector one run of it takes about 300 s on an idle host. A test binary has its own
-# 10 minute timeout, so "test" runs the package in shards, one go test run for each shard. A shard is a letter class for the first letter
-# after "Test" (a bracket range such as A-D). The last run takes every test that no shard names (a name that does not start with an
-# upper case letter, or an Example), through -skip, so no test is left out of every shard. Each shard writes its own coverage profile,
-# and "coverage" merges them with the profile of the other packages, so the gate still measures the whole package. "test" starts the
-# shards and the run of the other packages together, so the cores are shared (GO_TEST_P applies to each run), writes each output to its
-# own test-*.log file, prints the files in order, and fails if any run fails.
+# The flow package has about 1500 tests, and under the race detector the run of all of them takes about an hour on one core. "test" lists the tests
+# of the package (FLOW_LIST) and gives the test on line N of the list to shard N mod FLOW_SHARD_COUNT, so every listed test is in exactly one
+# shard and no test is left out of every shard. The tests of one family sit on neighbour lines, so each shard gets a mix of the cheap
+# and the costly tests, and a new test needs no change here. Each shard writes its own coverage profile, and "coverage" merges them
+# with the profile of the other packages, so the gate still measures the whole package. "test" writes each output to its own test-*.log file,
+# prints the files in order, and fails if any run fails.
 comma := ,
 space := $() $()
 FLOW_PKG := ./internal/flow
-FLOW_SHARDS := A-D E F-L M-Q
-FLOW_LETTERS := $(subst $(space),,$(FLOW_SHARDS))
-FLOW_PROFILES := $(subst $(space),,coverage.out$(foreach s,$(FLOW_SHARDS),$(comma)coverage-flow-$(s).out)$(comma)coverage-flow-rest.out)
+FLOW_LIST := test-flow-list.log
+FLOW_SHARD_COUNT := 12
+FLOW_SHARDS := $(shell seq 1 $(FLOW_SHARD_COUNT))
+FLOW_RUN_TARGETS := $(addprefix test-run-flow-,$(FLOW_SHARDS))
+FLOW_PROFILES := $(subst $(space),,coverage.out$(foreach s,$(FLOW_SHARDS),$(comma)coverage-flow-$(s).out))
 GOLANGCI_LINT_VERSION := v2.15.0
 GOTESTSUM_VERSION := v1.13.0
 GO_TEST_COVERAGE_VERSION := v2.20.1
@@ -118,19 +121,22 @@ vuln:  ## Fail on a known vulnerability the code can reach
 
 test:  ## Run the Go tests with the race detector and write coverage.out, the flow profiles and the JUnit reports in reports/
 	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml coverage.out coverage-flow-*.out test-*.log; \
-	logs=test-other.log; \
-	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-other.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage.out $$(go list ./... | grep -v '/internal/flow$$') > test-other.log 2>&1 & pids=$$!; \
-	for s in $(FLOW_SHARDS); do \
-		procs=$(GO_TEST_PROCS); [ "$$s" != "$(FLOW_HEAVY_SHARD)" ] || procs=$(GO_TEST_PROCS_HEAVY); \
-		GOMAXPROCS=$$procs $(GOTESTSUM)/junit-flow-$$s.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-$$s.out -run "^Test[$$s]" $(FLOW_PKG) > test-flow-$$s.log 2>&1 & pids="$$pids $$!"; \
-		logs="$$logs test-flow-$$s.log"; \
-	done; \
-	GOMAXPROCS=$(GO_TEST_PROCS) $(GOTESTSUM)/junit-flow-rest.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-rest.out -skip "^Test[$(FLOW_LETTERS)]" $(FLOW_PKG) > test-flow-rest.log 2>&1 & pids="$$pids $$!"; \
-	logs="$$logs test-flow-rest.log"; \
-	rc=0; for p in $$pids; do wait $$p || rc=1; done; \
-	for l in $$logs; do echo "== $$l"; cat $$l; done; \
+	go test $(GO_TEST_FLAGS) -list '.*' $(FLOW_PKG) | grep -E '^(Test|Example|Fuzz)' > $(FLOW_LIST); \
+	[ -s $(FLOW_LIST) ] || { echo "make test: go test listed no flow tests" >&2; exit 1; }; \
+	$(MAKE) --no-print-directory -k -j$(GO_TEST_JOBS) test-run-other $(FLOW_RUN_TARGETS); rc=$$?; \
+	for l in test-other.log $(foreach s,$(FLOW_SHARDS),test-flow-$(s).log); do echo "== $$l"; cat $$l; done; \
 	exit $$rc
 	go test -race -count=1 $(GO_TEST_DRIVER_PKGS)
+
+# One run of go test each: the other packages, and the flow tests that FLOW_LIST assigns to the shard. "test" starts them (the other packages first,
+# the longest run) and make keeps GO_TEST_JOBS of them going at the same time.
+.PHONY: test-run-other $(FLOW_RUN_TARGETS)
+test-run-other:
+	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-other.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage.out $$(go list ./... | grep -v '/internal/flow$$') > test-other.log 2>&1
+
+$(FLOW_RUN_TARGETS): test-run-flow-%:
+	names=$$(awk -v n=$(FLOW_SHARD_COUNT) -v i=$* 'NR % n == i % n { printf "%s%s", sep, $$0; sep = "|" }' $(FLOW_LIST)); \
+	GOMAXPROCS=$(GO_TEST_PROCS) $(GOTESTSUM)/junit-flow-$*.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-$*.out -run "^($$names)\$$" $(FLOW_PKG) > test-flow-$*.log 2>&1
 
 coverage:  ## Enforce the coverage gate on coverage.out and the flow profiles (run make test first)
 	go-test-coverage --config=.go-test-coverage.yml --profile=$(FLOW_PROFILES)
