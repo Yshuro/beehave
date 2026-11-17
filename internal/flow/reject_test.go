@@ -34,7 +34,7 @@ func TestExample_TheReviewIsReadOnlyAndTheFixIsNot(t *testing.T) {
 		return "approve"
 	}, func(int) string { return "[]" })
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 
@@ -74,7 +74,7 @@ func TestExample_AFailingGateRunsNoReviewSoARejectNeverFollowsAFixRound(t *testi
 	writer := newFakeWriter()
 	rig.h.writer = writer
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "sonnet", "opus"}, rig.models(), "plan, implement, one fix for the failed gate, then one review that rejects with no second fix")
@@ -90,12 +90,12 @@ func TestExample_ARejectVerdictEndsTheLoopWithNoFixAndHoldsTheItemWithTheReason(
 	writer := newFakeWriter()
 	rig.h.writer = writer
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models(), "plan, implement and one review; no fix round")
 	assert.Equal(t, []string{testProject + "|" + testItem + "|hold"}, writer.statuses)
 	require.Len(t, writer.notes, 1)
 	assert.Contains(t, writer.notes[0], "all done")
-	assert.Empty(t, result.Merge)
+	assert.False(t, childOf(t, result).Approved)
 }

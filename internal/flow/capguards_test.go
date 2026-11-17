@@ -84,6 +84,7 @@ func guardRig(t *testing.T, guard capGuard) (*agentRig, *cappedAt, string) {
 	if child != "" {
 		text := string(mustRead(t, file))
 		require.Equal(t, 1, strings.Count(text, "def main(item):"))
+		// The copy renames main to parent and adds a main that runs the child entry, so the run starts at the agent steps of one item.
 		text = strings.Replace(text, "def main(item):", "def parent(item):", 1) + "\ndef main(item):\n    " + child + "(item)\n"
 		require.NoError(t, os.WriteFile(file, []byte(text), 0o600))
 	}
@@ -165,7 +166,7 @@ func TestExample_ACappedPlanStopsTheItemWithARefuseBeforeTheImplement(t *testing
 
 	rig, file := capRig(t, func(int) string { return "approve" }, func(r AgentRequest) bool { return r.Model == "opus" }, agent.OutcomeTurnCap)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -178,7 +179,7 @@ func TestExample_ACappedReviewStopsTheItemWithARefuseBeforeAnyFix(t *testing.T) 
 
 	rig, file := capRig(t, func(int) string { return "changes" }, nthCall(3), agent.OutcomeBudgetCap)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -191,7 +192,7 @@ func TestExample_ACappedSettleStopsTheItemWithARefuse(t *testing.T) {
 
 	rig, file := capRig(t, func(int) string { return "changes" }, nthCall(14), agent.OutcomeTurnCap)
 	engine := rig.h.engine(t)
-	done := runInBackground2(engine, file)
+	done := pipelineInBackground(engine, file)
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
@@ -209,7 +210,8 @@ func TestReviewFix_ACappedReviewStopsTheLoopWithARefuseThatNamesTheCap(t *testin
 	rig, file := capRig(t, func(int) string { return "changes" }, func(AgentRequest) bool { return true }, agent.OutcomeTurnCap)
 	require.NoError(t, os.WriteFile(file, []byte(libraryLoop("")), 0o600))
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	loopEngine := rig.h.engine(t)
+	_, err := loopEngine.RunFile(testItem, testProject, file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")

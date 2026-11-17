@@ -56,6 +56,8 @@ type agentRig struct {
 	h    *harness
 	dir  string
 	head string
+	// project is the project facts of the run. The example rig fills it, and a test changes a field before the run starts.
+	project model.Project
 
 	mu     sync.Mutex
 	failed []error

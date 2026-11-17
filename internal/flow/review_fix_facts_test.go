@@ -32,14 +32,14 @@ func TestReviewFix_EveryAgentTheLoopStartsGetsTheFactsInItsInputs(t *testing.T) 
 
 		return "approve"
 	}, noFindings, sameMechanism, `{"decision":"keep","reason":"the retry is the smallest part"}`)
-	rig.h.facts = ownedBy("ann")
+	rig.project.People = map[string]string{"owner": "ann"}
 
 	prompts := filepath.Join(filepath.Dir(file), "prompts")
 	for name, probe := range map[string]string{"review.md": reviewProbe, "design.md": designProbe, "fix.md": fixProbe} {
 		require.NoError(t, os.WriteFile(filepath.Join(prompts, name), []byte(probe), 0o600))
 	}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 	require.NoError(t, err)
 
 	count := map[string]int{}

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
@@ -45,6 +46,20 @@ func TestStack_AnOpenChildBlocks(t *testing.T) {
 	assert.Equal(t, "REFUSE: #5 is the base of #7. A squash merge orphans them.", result.Lines[1])
 	assert.Equal(t, []string{"--state", "open", "--base", "feat", "--json", "number,baseRefName"}, w.listed)
 	assert.Empty(t, w.writes)
+}
+
+// A batch posts the Refusal of a refused member as its reason, so the refusal of an open child must hold the lines that say why and how to fix it.
+func TestStack_TheRefusalOfAnOpenChildHoldsTheLinesThatSayWhyAndTheFix(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld(t)
+	w.children = kids(t, "feat", 7)
+	result := w.run(request())
+
+	require.Len(t, result.Refusal, 5)
+	assert.Equal(t, "REFUSE: #5 is the base of #7. A squash merge orphans them.", result.Refusal[0])
+	assert.Contains(t, result.Refusal[4], "--allow-orphans")
+	assert.Equal(t, result.Refusal, result.Lines[len(result.Lines)-len(result.Refusal):], "the lines end with the refusal")
 }
 
 func TestStack_NoChildMeansNoChildStackRead(t *testing.T) {

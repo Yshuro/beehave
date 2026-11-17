@@ -1,5 +1,4 @@
 # The first mutation run fails and prints nothing. The fix lane gets one finding with the exit code, and the head gets no review before the fix.
-env REPO=o/r BASE=integration OWNER_LOGIN=owner OWNER_EMAIL=owner@example.com SOURCE_CHECKOUT=/own/checkout
 exec beehave run 7 --workflow flow/workflow.star
 stdout 'item 7 finished'
 

@@ -47,7 +47,7 @@ func TestLaneLayout_EveryReviewIsAFreshReadOnlySessionAndNoFixLaneResumesOne(t *
 	})
 	rig.h.writer = newFakeWriter()
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 	require.NoError(t, err)
 
 	reviews, fixes := 0, 0
@@ -84,14 +84,13 @@ func TestLaneLayout_ARiseInAMiddleRoundHoldsTheItemBeforeTheNextFixLane(t *testi
 		return "approve"
 	})
 	withCountSequence(rig, "1", "2", "0")
-	rig.h.opts.Env["MERGE"] = "true"
 	writer := newFakeWriter()
 	rig.h.writer = writer
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Empty(t, result.Merge, "a rise in round one blocks the merge, though the next review shows no rise")
+	assert.False(t, childOf(t, result).Approved, "a rise in round one is not offered for landing, though the next review shows no rise")
 	assert.Equal(t, 0, countFix(rig), "no fix lane starts after the review that showed the rise")
 	assert.Equal(t, []string{testProject + "|" + testItem + "|hold"}, writer.statuses)
 	require.Len(t, writer.notes, 1)

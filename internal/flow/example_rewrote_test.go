@@ -32,7 +32,7 @@ func TestExample_AnImplementThatRewroteHistoryStopsTheItemBeforeTheGate(t *testi
 
 	rig, file := amendRig(t, func(int) string { return "approve" }, func(r AgentRequest) bool { return r.Model == "sonnet" && r.Resume == "" })
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -45,7 +45,7 @@ func TestExample_AFixThatRewroteHistoryStopsTheItemBeforeTheNextGate(t *testing.
 
 	rig, file := amendRig(t, func(int) string { return "changes" }, func(r AgentRequest) bool { return r.Resume != "" })
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
