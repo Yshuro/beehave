@@ -57,7 +57,7 @@ func answerOutputs(answer string, answers map[string]string, timedOut bool) map[
 }
 
 func mergeOutputs(state, reason string) map[string]any {
-	return map[string]any{"state": state, reasonKey: reason}
+	return map[string]any{stateField: state, reasonKey: reason}
 }
 
 func createOutputs(id string, created bool) map[string]any {
@@ -77,6 +77,9 @@ func prCommentOutputs(number int) map[string]any { return map[string]any{numberF
 func openOutputs(r OpenResult) map[string]any {
 	return map[string]any{numberField: r.Number, "created": r.Created, "stack": r.Stack}
 }
+
+// prStateOutputs are the fields of pr_state: the state of the pull request, OPEN, CLOSED or MERGED.
+func prStateOutputs(state string) map[string]any { return map[string]any{stateField: state} }
 
 // boardOutputs are the fields of board_sync: the number of the pull request or issue, and the status that the read-back showed.
 func boardOutputs(number int, status string) map[string]any {

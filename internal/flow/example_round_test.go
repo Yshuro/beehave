@@ -51,7 +51,7 @@ func TestRound_TheRoundAsksTheToolForTheIntegrationPullRequestFromTheRoundBaseIn
 	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"remedy integration --base integration --into main --pr 9"}, commandsNamed(rig, "remedy"))
+	assert.Equal(t, []string{"remedy integration --base integration --into main --pr 9"}, commandsNamed(rig, "remedy integration"))
 }
 
 func TestRound_AnIntegrationLineWithNoPullRequestNumberStopsTheRun(t *testing.T) {

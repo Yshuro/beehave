@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -50,7 +50,7 @@ Four cases are not safe today, and a later change fixes each of them.
 
 | Builtin | A repeat after a crash | Why |
 | --- | --- | --- |
-| `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. |
+| `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. With `shared = True` the key is the `key` of the call alone. |
 | `item_comment` | Safe. | GitHub and beads read the comments first and find the key. The `local` tracker inserts the comment under its key and ignores a second insert of that key. |
 | `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
 | `item_assign` | Safe. | On GitHub the tracker reads the assignees first and sends no edit for a login that is on the issue. A test with a repeated call shows one edit. Beads reads the assignee and refuses a different login, but for the same login it sends the same update again, and it keeps one assignee. The local tracker refuses an assignee. |
@@ -153,13 +153,13 @@ The `item_` builtins change or read the tracker of the project.
 
 | Call | Returns |
 | --- | --- |
-| `item_create(title, key, body, parent, assignee, severity, operator, forbid_text, name)` | `id`, `created` |
+| `item_create(title, key, body, parent, assignee, severity, operator, forbid_text, shared, name)` | `id`, `created` |
 | `item_status(id, status, name)` | `id`, `status` |
 | `item_comment(id, text, key, forbid_text, name)` | `id` |
 | `item_assign(id, assignee)` | `id` |
 | `item_read(of, name)` | `found`, `id`, `fields`, `comments`, `parent` |
 
-The `key` is required, and the engine joins it to the run id.
+The `key` is required, and the engine joins it to the run id. `item_create` with `shared = True` is the one exception.
 
 #### `item_create`
 
@@ -167,6 +167,7 @@ The `key` is required, and the engine joins it to the run id.
 - `assignee` is optional. The default is no assignee.
 - `severity` is optional, one of `P0` to `P3`. The call refuses any other text before it writes.
 - `operator` is an optional bool.
+- `shared` is an optional bool. The default is false: the engine joins the `key` to the run id, so two runs never share an item. With `shared = True` the engine uses the `key` as it is, and it holds a file lock of the key in the state folder around the lookup and the create, so two runs of the project on this host that give the same key at the same time get one item. The lock does not reach another host: two hosts that share one tracker can still file two items for one key. Put in the key what makes the item unique in the project, such as the repository and a pull request number.
 
 | Tracker | `severity` | `operator` |
 | --- | --- | --- |
@@ -243,6 +244,16 @@ The `parent` argument:
 | The pull request of `parent` is open. | The new pull request is based on the branch of the parent and linked into its native stack with `gh stack link` (the pull requests go by address, on github.com). The first link of a stack passes `--base` with the base of the call. The call reads the base of the parent pull request before and after every link. If the base moved on a new stack, the call unstacks, checks that the stack is gone, sets the base back and links again with that base. A second move, a stack that stays after the unstack, or a move on a stack that already held other pull requests fails the step. The call then reads the stack id of both pull requests, and fails unless they show one non-empty id. `stack` holds the id. |
 | The pull request of `parent` merged. | The base stays as given, and the call links nothing. |
 | `parent` has no pull request. | An error. |
+
+#### `pr_state`
+
+`pr_state(pr, name)` reads the state of the pull request with the number `pr` and returns `state`: `OPEN`, `CLOSED` or `MERGED`.
+
+- The call reads that number. It looks no pull request up by the branch of the item, so a pull request of another author on any branch and any base reads the same.
+- A `pr` below 1 is refused before any read. So is a project with no repository.
+- The read is a recorded step, so a resumed run replays the first state.
+- A read that fails ends the step with an error. A project with no forge cannot show a state, which is an error too.
+- A build with no queue reader fails the call. A dry run does not fake the read: it reports the step as not run and ends there.
 
 #### Closing keywords in posted text
 
@@ -729,6 +740,8 @@ A project with another mutation tool sets another command. This repository uses 
 - The script gives the git of gremlins the settings `diff.noprefix=false` and `diff.mnemonicPrefix=false`, so a repository that sets `diff.noprefix` gets the same result.
 - A run that exceeds `MUTATION_TIMEOUT` fails with its own line and no end marker.
 - `MUTATION_TIMEOUT` accepts only a positive whole number of seconds. Any other value fails before the run starts.
+- With no `MUTATION_TIMEOUT`, the limit is 3600 seconds when the diff changes a non-test Go file in `internal/flow` or below it, and 1200 seconds otherwise. A flow run with 4 workers took 2478 seconds for 21 mutants.
+- The file `.gremlins.yaml` at the module root sets 4 gremlins workers for `make mutation`, `make mutation-pr` and a direct run. Gremlins starts one worker for each core by default, and each worker runs a test binary that runs tests in parallel. On a 16-core host that load made the mutants of `internal/flow` time out. To change the count, edit that file.
 
 `examples/remediation/CONFORMANCE.md` has one row for each rule of the method, with its home (`core`, `file`, `skill` or `drop`) and its status (`gap`, `expressed`, `proven` or `n/a`). A row moves to `proven` when a behavior test runs it. A test in the `workflow` package fails when:
 

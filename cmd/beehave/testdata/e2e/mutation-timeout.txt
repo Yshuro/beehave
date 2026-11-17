@@ -21,9 +21,11 @@ exec git -C repo add a.go
 exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m change
 
 # The limit is 1 second and gremlins sleeps for 30. The run is a tool error: exit code 1, no counts line and no end marker.
+# The limit starts before the stub starts. The first exec of a freshly written executable file can take over 1 second
+# (1.58 s measured on a Mac), so the limit can stop the stub before its first line. The script asserts nothing about
+# the stub's own output.
 env MUTATION_TIMEOUT=1
 exitcode 1 sh repo/scripts/mutation-pr.sh main
-stdout '^the stub gremlins started$'
 stdout '^mutation-pr: the run exceeded MUTATION_TIMEOUT=1s$'
 ! stdout '^mutation-pr: applied='
 ! stdout '^mutation-pr: end '
@@ -40,5 +42,4 @@ package a
 func F(x int) bool { return x > 0 }
 -- fake/gremlins --
 #!/bin/sh
-echo "the stub gremlins started"
 exec sleep 30
