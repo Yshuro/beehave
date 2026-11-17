@@ -161,7 +161,7 @@ mutation:
 	workers=$$(sh scripts/mutation-pr.sh --print-workers) || { echo "$$workers"; exit 2; }; gremlins unleash --workers "$$workers" $(or $(PKG),.)
 
 # Per-PR run: mutate only the Go lines that differ from BASE, the branch the pull request targets. BASE is required: make mutation-pr BASE=origin/integration/r1
-# Needs git, go, gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit, a positive whole number of seconds (default 1200).
+# Needs git, go, gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit, a positive whole number of seconds (default 3600 when the diff changes a Go file under internal/flow, otherwise 1200).
 # Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes. A diff whose changed lines hold no operator that gremlins mutates is "no candidate" and passes.
 mutation-pr:
 	sh scripts/mutation-pr.sh "$(BASE)"

@@ -1,0 +1,80 @@
+# scripts/mutation-pr.sh chooses the default whole-run limit: 3600 when the diff changes a Go file under internal/flow, otherwise 1200.
+# Only gremlins, timeout and getconf are stubs. The stub timeout writes its limit to limit.
+[!exec:jq] skip
+[!exec:git] skip
+env HOME=$WORK/home
+env GIT_CONFIG_GLOBAL=/dev/null
+env GIT_CONFIG_NOSYSTEM=1
+chmod 755 fake/gremlins
+chmod 755 fake/timeout
+chmod 755 fake/getconf
+env PATH=$WORK/fake:$PATH
+env FAKE_CORES=16
+
+exec git init -q -b main repo
+mkdir repo/internal/flow
+cp a.go repo/a.go
+cp f.go repo/internal/flow/f.go
+cp gomod repo/go.mod
+script mutation-pr.sh repo/scripts/mutation-pr.sh
+exec git -C repo add a.go internal go.mod scripts
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+
+# A change outside internal/flow keeps the limit of 1200.
+exec git -C repo checkout -q -b outside
+cp a2.go repo/a.go
+exec git -C repo add a.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m outside
+env GREMLINS_REPORT=$WORK/outside.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^1200$' limit
+
+# A change under internal/flow gets 3600.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b flow
+cp f2.go repo/internal/flow/f.go
+exec git -C repo add internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m flow
+env GREMLINS_REPORT=$WORK/flow.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^3600$' limit
+
+# An empty MUTATION_TIMEOUT takes the default, and a set one wins over it.
+env MUTATION_TIMEOUT=
+exec sh repo/scripts/mutation-pr.sh main
+grep '^3600$' limit
+env MUTATION_TIMEOUT=50
+exec sh repo/scripts/mutation-pr.sh main
+grep '^50$' limit
+
+-- gomod --
+module example.com/r
+
+go 1.27
+-- a.go --
+package a
+-- a2.go --
+package a
+
+func F(x int) bool { return x > 0 }
+-- f.go --
+package flow
+-- f2.go --
+package flow
+
+func F(x int) bool { return x > 0 }
+-- fake/gremlins --
+#!/bin/sh
+cp "$GREMLINS_REPORT" "$5"
+-- fake/timeout --
+#!/bin/sh
+echo "$3" > "$WORK/limit"
+shift 3
+exec "$@"
+-- fake/getconf --
+#!/bin/sh
+echo "$FAKE_CORES"
+-- outside.json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- flow.json --
+{"files":[{"file_name":"internal/flow/f.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}

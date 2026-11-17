@@ -4,7 +4,7 @@
 # Usage: scripts/mutation-pr.sh BASE
 #   BASE is the branch or commit that the pull request targets, for example origin/integration/r1.
 #   There is no default, because the base differs from one pull request to the next.
-#   MUTATION_TIMEOUT is the time limit for the gremlins run, a positive whole number of seconds. The default is 1200.
+#   MUTATION_TIMEOUT is the time limit for the gremlins run, a positive whole number of seconds. The default is 3600 when the diff changes a Go file under internal/flow, otherwise 1200.
 #   MUTATION_WORKERS is the number of gremlins workers, a positive whole number. The default is one for each four cores, at least one.
 #   "scripts/mutation-pr.sh --print-workers" prints that number and exits; make mutation uses it.
 #   A run that exceeds the limit fails. The script needs git, go, gremlins, jq and timeout (or gtimeout) on the path.
@@ -57,10 +57,11 @@ if [ $# -ne 1 ] || [ -z "$1" ]; then
 	exit 2
 fi
 base=$1
-limit=${MUTATION_TIMEOUT:-1200}
+limit=${MUTATION_TIMEOUT:-}
 # Only a positive whole number: 0 would remove the bound, and a word would fail inside timeout as a gremlins exit code.
+# An unset or empty value takes the default, which is chosen after the diff is read.
 case $limit in
-'' | *[!0-9]* | 0*)
+*[!0-9]* | 0*)
 	echo "mutation-pr: MUTATION_TIMEOUT is \"$limit\". Set it to a positive whole number of seconds, such as 1200."
 	exit 2
 	;;
@@ -82,6 +83,13 @@ if [ -z "$changed" ]; then
 	echo "mutation-pr: not applicable: no Go source change against $base"
 	echo "$none_lived"
 	exit 0
+fi
+
+# A run that mutates internal/flow takes about 2500 s with 4 workers (21 mutants, 2478 s measured), so its default
+# limit is 3600. Every other run keeps 1200.
+if [ -z "$limit" ]; then
+	limit=1200
+	case $changed in *internal/flow/*) limit=3600 ;; esac
 fi
 
 # gremlins names each mutant by its path relative to the folder that it starts on, and runs "git diff" in that
