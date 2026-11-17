@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fake loginctl: linger is on once enable-linger made the marker file.
+printf 'loginctl %s\n' "$*" >>"$FAKE_LOG"
+case $1 in
+enable-linger) : >"$FAKE_STATE/linger" ;;
+show-user) if [ -f "$FAKE_STATE/linger" ]; then echo Linger=yes; else echo Linger=no; fi ;;
+*)
+	echo "fake loginctl: unexpected $*" >&2
+	exit 1
+	;;
+esac

@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake realpath: run the GNU realpath in REAL_REALPATH, which the test finds (realpath on linux, grealpath on macOS).
+exec "$REAL_REALPATH" "$@"
