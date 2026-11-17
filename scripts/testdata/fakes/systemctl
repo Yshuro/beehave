@@ -7,6 +7,7 @@ enabled=${FAKE_WD_ENABLED:-enabled}
 case "$*" in
 '--user is-system-running') echo "${FAKE_MANAGER:-running}" ;;
 '--user daemon-reload') ;;
+'--user show-environment') "$(dirname "$0")/fake-unit-env" ;;
 'is-active '*)
 	echo "$active"
 	[ "$active" = active ]

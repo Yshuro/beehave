@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io/fs"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -35,8 +36,8 @@ var goInstalledTools = map[string]string{
 	"golangci-lint":    "golangci-lint has version 2.15.0 built with go1.27.4",
 	"ai-rulez":         "ai-rulez version 5.9.2",
 	"gotestsum":        "gotestsum version v1.13.0",
-	"gitleaks":         "8.30.1",
-	"gremlins":         "gremlins version 0.6.0 linux/amd64",
+	"gitleaks":         "version is set by build process",
+	"gremlins":         "gremlins version dev linux/amd64",
 	"go-test-coverage": "unused",
 	"govulncheck":      "Go: go1.27.4\nScanner: govulncheck@v1.9.0",
 	"deadcode":         "unused",
@@ -47,10 +48,25 @@ var goInstalledTools = map[string]string{
 
 // systemTools are the fakes on the default PATH of the user manager.
 var systemTools = map[string]string{
-	"uv":         "uv 0.13.6 (abc 2026-10-27)",
+	"uv":         "uv 0.13.6 (x86_64-unknown-linux-gnu)",
 	"shellcheck": "ShellCheck - shell script analysis tool\nversion: 0.10.0",
 	"bats":       "Bats 1.10.0",
 }
+
+// goModules are the module path and the version that the mod line of `go version -m` shows for a tool that go install built at its pin.
+var goModules = map[string]string{
+	"golangci-lint":    "github.com/golangci/golangci-lint/v2 v2.15.0",
+	"gotestsum":        "gotest.tools/gotestsum v1.13.0",
+	"gitleaks":         "github.com/zricethezav/gitleaks/v8 v8.30.1",
+	"gremlins":         "github.com/go-gremlins/gremlins v0.6.0",
+	"actionlint":       "github.com/rhysd/actionlint v1.7.12",
+	"go-test-coverage": "github.com/vladopajic/go-test-coverage/v2 v2.20.1",
+	"govulncheck":      "golang.org/x/vuln v1.9.0",
+	"deadcode":         "golang.org/x/tools v0.51.0",
+}
+
+// goInstalledPinned are the tools whose pin the script reads from the mod line.
+var goInstalledPinned = []string{"golangci-lint", "gotestsum", "gitleaks", "gremlins", "actionlint"}
 
 // provedTools are the tools that the script proves through a user unit.
 var provedTools = []string{
@@ -92,6 +108,7 @@ func newFakeHost(t *testing.T) *fakeHost {
 	h.write(filepath.Join(h.clone, "Makefile"), fakeMakefile, 0o644)
 	h.write(h.log, "", 0o644)
 	h.installFakes()
+	h.installUbuntuEnvironmentFiles()
 
 	jq, err := exec.LookPath("jq")
 	require.NoError(t, err, "the tests of the host setup need jq")
@@ -180,6 +197,14 @@ func (h *fakeHost) installFakes() {
 	h.write(filepath.Join(h.sysroot, "usr/local/go/bin/go"), fakeGo(pinnedGo), 0o755)
 }
 
+// installUbuntuEnvironmentFiles writes the two environment.d files of a stock Ubuntu 24.04: the link to /etc/environment, which sets
+// an absolute quoted PATH, and the file of snapd, which appends to PATH. Both sort after a file with a number prefix below 990.
+func (h *fakeHost) installUbuntuEnvironmentFiles() {
+	h.t.Helper()
+	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/99-environment.conf"), "PATH=\""+h.bin+":/usr/bin:/bin\"\n", 0o644)
+	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/990-snapd.conf"), "PATH=$PATH:/snap/bin\n", 0o644)
+}
+
 // tool writes a fake tool that prints its version text.
 func (h *fakeHost) tool(path, text string) {
 	h.t.Helper()
@@ -264,13 +289,32 @@ func (h *fakeHost) record() string {
 }
 
 func (h *fakeHost) envFile() string {
-	return filepath.Join(h.home, ".config/environment.d/60-beehave.conf")
+	return filepath.Join(h.home, ".config/environment.d/zz-beehave.conf")
 }
 
-// fakeGo is a go command of a version. With `version -m` it prints the module line of the named binary.
+// setModule makes the fake go print another module and version, split by a space, on the mod line of a tool.
+func (h *fakeHost) setModule(tool, module string) {
+	h.t.Helper()
+	h.write(filepath.Join(h.state, "mod-"+tool), module+"\n", 0o644)
+}
+
+// fakeGo is a go command of a version. With `version -m` it prints what go prints for a binary: the Go version, the path line,
+// the mod line with real tabs and the module of the tool, and a dep line. A file mod-<tool> in FAKE_STATE changes the module and version.
 // With `env GOPATH` it prints FAKE_GOPATH, or ~/go when that is not set.
 func fakeGo(version string) string {
-	return "#!/bin/sh\nif [ \"$1 $2\" = 'version -m' ]; then printf '%s\\n\\tmod example.com/tool v0.1.0 h1:x=\\n' \"$3\"; exit 0; fi\n" +
+	var cases strings.Builder
+
+	for _, name := range slices.Sorted(maps.Keys(goModules)) {
+		cases.WriteString("\t" + name + ") module='" + goModules[name] + "' ;;\n")
+	}
+
+	return "#!/bin/sh\nif [ \"$1 $2\" = 'version -m' ]; then\n" +
+		"\t[ -f \"$3\" ] || { echo \"$3: no such file\" >&2; exit 1; }\n" +
+		"\tname=${3##*/}\n\tmodule='example.com/tool v0.1.0'\n\tcase $name in\n" + cases.String() + "\tesac\n" +
+		"\t[ ! -f \"$FAKE_STATE/mod-$name\" ] || module=$(cat \"$FAKE_STATE/mod-$name\")\n" +
+		"\tset -- \"$3\" $module\n" +
+		"\tprintf '%s: " + version + "\\n\\tpath\\t%s/cmd\\n\\tmod\\t%s\\t%s\\th1:x=\\n\\tdep\\texample.com/dep\\tv1.0.0\\th1:y=\\n' \"$1\" \"$2\" \"$2\" \"$3\"\n" +
+		"\texit 0\nfi\n" +
 		"if [ \"$1 $2\" = 'env GOPATH' ]; then echo \"${FAKE_GOPATH:-$HOME/go}\"; exit 0; fi\n" +
 		"echo 'go version " + version + " linux/amd64'\n"
 }
@@ -867,8 +911,10 @@ func TestHostSetup_ProvesEachToolThroughAUserUnit(t *testing.T) {
 			assert.Contains(t, record, "\ntool "+name+" ", name)
 		}
 
-		assert.Contains(t, record, "tool deadcode \tmod example.com/tool v0.1.0 h1:x=\n")
-		assert.Contains(t, record, "tool govulncheck \tmod example.com/tool v0.1.0 h1:x=\n", "the govulncheck line names govulncheck, not Go")
+		for name, module := range goModules {
+			assert.Contains(t, record, "\ntool "+name+" "+module+"\n", "the record holds the module and the version of "+name)
+		}
+
 		assert.Contains(t, record, "tool shellcheck version: 0.10.0\n")
 		assert.Contains(t, out, record, "the script prints the record")
 	})
@@ -907,8 +953,11 @@ func TestHostSetup_FailsWhenAToolIsNotAtItsPin(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct{ name, tool, text, message string }{
-		{name: "an_old_gotestsum", tool: "gotestsum", text: "gotestsum version v1.12.0", message: "gotestsum is not at its pin 1.13.0"},
-		{name: "a_longer_version", tool: "gremlins", text: "gremlins version 0.6.01", message: "gremlins is not at its pin 0.6.0"},
+		{name: "an_old_gotestsum", tool: "gotestsum", text: "gotest.tools/gotestsum v1.12.0", message: "gotestsum is not at its pin 1.13.0"},
+		{name: "a_longer_version", tool: "gremlins", text: "github.com/go-gremlins/gremlins v0.6.01", message: "gremlins is not at its pin 0.6.0"},
+		{name: "a_pseudo_version", tool: "gremlins", text: "github.com/go-gremlins/gremlins v0.6.0-0.20260101000000-abcdef123456", message: "gremlins is not at its pin 0.6.0"},
+		{name: "a_build_from_a_checkout", tool: "gremlins", text: "github.com/go-gremlins/gremlins (devel)", message: "gremlins is not at its pin 0.6.0"},
+		{name: "an_old_actionlint", tool: "actionlint", text: "github.com/rhysd/actionlint v1.7.11", message: "actionlint is not at its pin 1.7.12"},
 	}
 
 	for _, tc := range cases {
@@ -916,7 +965,7 @@ func TestHostSetup_FailsWhenAToolIsNotAtItsPin(t *testing.T) {
 			t.Parallel()
 
 			h := newFakeHost(t)
-			h.tool(filepath.Join(h.home, "go/bin", tc.tool), tc.text)
+			h.setModule(tc.tool, tc.text)
 
 			out, err := h.setup()
 
@@ -938,6 +987,7 @@ func TestHostSetup_PutsTheToolFoldersOnThePathOfTheUserManager(t *testing.T) {
 
 	require.NoError(t, err, out)
 	assert.Equal(t, "PATH="+h.sysroot+"/usr/local/go/bin:"+h.home+"/go/bin:${PATH}\nBEEHAVE_BD_132="+h.home+"/go/bin/bd\n", h.read(h.envFile()))
+	assert.Contains(t, h.unitEnvironment(), "PATH="+h.sysroot+"/usr/local/go/bin:"+h.home+"/go/bin:"+h.bin+":/usr/bin:/bin:/snap/bin\n")
 
 	log := h.read(h.log)
 	assert.Contains(t, log, "systemctl --user daemon-reload\n")
@@ -1033,4 +1083,76 @@ func TestHostSetup_AKernelWithoutLandlockIsAWarning(t *testing.T) {
 			assert.Contains(t, h.record(), "\n"+tc.line+"\n")
 		})
 	}
+}
+
+// unitEnvironment is the environment that the fake user manager builds now, one NAME=value line each.
+func (h *fakeHost) unitEnvironment() string {
+	h.t.Helper()
+
+	out, err := h.sh(nil, filepath.Join(h.bin, "fake-unit-env"))
+	require.NoError(h.t, err, out)
+
+	return out
+}
+
+func TestHostSetup_TheFakeUserManagerReadsTheEnvironmentFilesInNameOrder(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	for _, name := range []string{"99-environment.conf", "990-snapd.conf"} {
+		require.NoError(t, h.root.Remove(h.rel(filepath.Join(h.sysroot, "usr/lib/environment.d", name))))
+	}
+
+	h.write(filepath.Join(h.sysroot, "etc/environment.d/20-a.conf"), "A=1\nPATH=/one\n", 0o644)
+	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/30-b.conf"), "PATH=\"/two:${PATH}\"\n", 0o644)
+	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/40-c.conf"), "C=system\n", 0o644)
+	h.write(filepath.Join(h.home, ".config/environment.d/40-c.conf"), "C=home\n", 0o644)
+	h.write(filepath.Join(h.home, ".config/environment.d/50-d.conf"), "PATH=$PATH:/dollar\n", 0o644)
+
+	assert.Equal(t, "A=1\nC=home\nPATH=/two:/one:/dollar\n", h.unitEnvironment(),
+		"files apply in name order across folders, a home file hides the system file of its name, and both forms of $PATH expand")
+}
+
+func TestHostSetup_ThePathSurvivesTheSystemEnvironmentFiles(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.setup()
+
+	require.NoError(t, err, out)
+	assert.Equal(t, done, lastLine(out))
+	assert.Contains(t, h.unitEnvironment(), "PATH="+h.sysroot+"/usr/local/go/bin:"+h.home+"/go/bin:"+h.bin+":/usr/bin:/bin:/snap/bin\n",
+		"the Go folders come first, and the files of the system still apply")
+	assert.Contains(t, h.unitEnvironment(), "BEEHAVE_BD_132="+h.home+"/go/bin/bd\n")
+}
+
+func TestHostSetup_FailsWhenALaterFileReplacesThePath(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:/usr/bin:/bin\n", 0o644)
+
+	out, err := h.setup()
+
+	require.Error(t, err)
+	assert.Contains(t, out, "the PATH of the user manager does not start with "+h.sysroot+"/usr/local/go/bin:"+h.home+"/go/bin")
+	assert.Contains(t, out, "sorts after zz-beehave.conf")
+	assert.NotContains(t, out, done)
+	assert.NotContains(t, h.read(h.log), "make setup", "the check comes before the installs of the project")
+}
+
+func TestHostSetup_ReadsThePinOfAGoInstalledToolFromItsModuleLine(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.setup()
+
+	require.NoError(t, err, out)
+	assert.Equal(t, done, lastLine(out))
+
+	for _, name := range goInstalledPinned {
+		assert.Contains(t, h.record(), "\ntool "+name+" "+goModules[name]+"\n", name)
+	}
+
+	assert.Contains(t, h.record(), "\ntool gitleaks github.com/zricethezav/gitleaks/v8 v8.30.1\n", "its own version text says only: version is set by build process")
 }

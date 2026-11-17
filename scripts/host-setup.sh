@@ -21,7 +21,7 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 sysroot=${HOST_SETUP_SYSROOT:-}
 go_root=$sysroot/usr/local/go
 lsm_file=$sysroot/sys/kernel/security/lsm
-env_file=$HOME/.config/environment.d/60-beehave.conf
+env_file=$HOME/.config/environment.d/zz-beehave.conf
 work_root=
 watchdog=
 
@@ -156,19 +156,30 @@ go_bin() {
 }
 
 # set_unit_path writes the PATH of the user manager, so a job finds the tools. A daemon-reload keeps the running units.
+# systemd reads the environment.d files in file name order and the last PATH line wins. The name zz- sorts after every file
+# that has a number prefix, so this file is the last one on any distribution, unless a file with a letter prefix after zz sets PATH.
 set_unit_path() {
 	content="PATH=$go_root/bin:$gobin:\${PATH}
 BEEHAVE_BD_132=$gobin/bd"
 	if [ -f "$env_file" ] && [ "$(cat "$env_file")" = "$content" ]; then
 		say "$env_file is up to date"
-		return 0
+	else
+		mkdir -p "$(dirname "$env_file")"
+		printf '%s\n' "$content" >"$env_file.tmp"
+		mv "$env_file.tmp" "$env_file"
+		systemctl --user daemon-reload
+		say "wrote $env_file"
 	fi
+	check_unit_path
+}
 
-	mkdir -p "$(dirname "$env_file")"
-	printf '%s\n' "$content" >"$env_file.tmp"
-	mv "$env_file.tmp" "$env_file"
-	systemctl --user daemon-reload
-	say "wrote $env_file"
+# check_unit_path fails unless the PATH of the user manager starts with the Go folders, so every job unit finds the tools.
+check_unit_path() {
+	unit_path=$(systemctl --user show-environment | sed -n 's/^PATH=//p')
+	case $unit_path in
+	"$go_root/bin:$gobin:"*) ;;
+	*) fail "the PATH of the user manager does not start with $go_root/bin:$gobin. An environment.d file that sorts after $(basename "$env_file") sets PATH. Find it with grep -l '^PATH=' in /etc/environment.d and /usr/lib/environment.d, and remove its PATH line or rename it" ;;
+	esac
 }
 
 # make_work_root makes a missing work root as the login user. It reads the folder again first, and it leaves an existing one as it is.
@@ -211,10 +222,14 @@ go_pin() {
 	printf '%s\n' "${line#toolchain go}"
 }
 
-# module_version <tool>: the command that prints the module line of a Go binary, for a tool whose first version line is not its own version.
-module_version() { printf '%s\n' "go version -m \"\$(command -v $1)\" | grep -m 1 -E '^[[:space:]]+mod[[:space:]]'"; }
+# module_version <tool>: the command that prints "<module> <version>" from the mod line of `go version -m`, for a tool that go install builds.
+# The Go linker writes that line, so it names the pin of such a tool. The tool's own version text says "dev" or nothing.
+module_version() {
+	printf '%s\n' "go version -m \"\$(command -v $1)\" | awk -F '\\t' '\$2 == \"mod\" { print \$3, \$4; found = 1; exit } END { exit !found }'"
+}
 
-# tools prints one line per tool, split by tabs: the name, the command that prints its version, and the pin ("-" for none).
+# tools prints one line per tool, split by tabs: the name, how its version is read (text: the first line of the command, mod: the mod line
+# of the command), the command that prints its version, and the pin ("-" for none).
 tools() {
 	go_v=$(go_pin)
 	lint_v=$(make_pin GOLANGCI_LINT_VERSION)
@@ -224,23 +239,23 @@ tools() {
 	gremlins_v=$(make_pin GREMLINS_VERSION)
 	uv_v=$(script_pin uv_version)
 	actionlint_v=$(script_pin actionlint_version)
-	printf '%s\t%s\t%s\n' \
-		go 'go version' "$go_v" \
-		golangci-lint 'golangci-lint version' "$lint_v" \
-		ai-rulez 'ai-rulez --version' "$rulez_v" \
-		gotestsum 'gotestsum --version' "$gotestsum_v" \
-		gitleaks 'gitleaks version' "$gitleaks_v" \
-		gremlins 'gremlins --version' "$gremlins_v" \
-		go-test-coverage "$(module_version go-test-coverage)" - \
-		govulncheck "$(module_version govulncheck)" - \
-		deadcode "$(module_version deadcode)" - \
-		dolt 'dolt version' - \
-		bd 'bd --version' - \
-		jq 'jq --version' - \
-		uv 'uv --version' "$uv_v" \
-		shellcheck 'shellcheck --version | grep -m 1 "^version:"' - \
-		actionlint 'actionlint --version' "$actionlint_v" \
-		bats 'bats --version' -
+	printf '%s\t%s\t%s\t%s\n' \
+		go text 'go version' "$go_v" \
+		golangci-lint mod "$(module_version golangci-lint)" "v$lint_v" \
+		ai-rulez text 'ai-rulez --version' "$rulez_v" \
+		gotestsum mod "$(module_version gotestsum)" "v$gotestsum_v" \
+		gitleaks mod "$(module_version gitleaks)" "v$gitleaks_v" \
+		gremlins mod "$(module_version gremlins)" "v$gremlins_v" \
+		go-test-coverage mod "$(module_version go-test-coverage)" - \
+		govulncheck mod "$(module_version govulncheck)" - \
+		deadcode mod "$(module_version deadcode)" - \
+		dolt text 'dolt version' - \
+		bd text 'bd --version' - \
+		jq text 'jq --version' - \
+		uv text 'uv --version' "$uv_v" \
+		shellcheck text 'shellcheck --version | grep -m 1 "^version:"' - \
+		actionlint mod "$(module_version actionlint)" "v$actionlint_v" \
+		bats text 'bats --version' -
 }
 
 # in_unit <command>: run a command as a transient user unit, the way the ssh adapter runs a job, so it gets the PATH of the user manager.
@@ -251,12 +266,21 @@ in_unit() {
 		sh -c "eval \"\$(printf %s $encoded | base64 -d)\"" </dev/null
 }
 
-# prove_tool <name> <command> <pin>: fail unless the tool runs in a user unit, at its pin when it has one. Print its record line.
+# at_pin <kind> <first line> <pin>: succeed when the version that the first line shows is the pin. A mod line is "<module> <version>", and its
+# version must equal the pin exactly, so a pseudo-version or (devel) is not the pin. A text line must hold the pin as a whole number.
+at_pin() {
+	case $1 in
+	mod) [ "${2##* }" = "$3" ] ;;
+	*) printf '%s\n' "$2" | grep -Eo '[0-9]+(\.[0-9]+)+' | grep -qxF "$3" ;;
+	esac
+}
+
+# prove_tool <name> <kind> <command> <pin>: fail unless the tool runs in a user unit, at its pin when it has one. Print its record line.
 prove_tool() {
-	out=$(in_unit "$2" 2>&1) || fail "$1 does not run in a user unit: $(printf '%s\n' "$out" | head -n 1)"
+	out=$(in_unit "$3" 2>&1) || fail "$1 does not run in a user unit: $(printf '%s\n' "$out" | head -n 1)"
 	first=$(printf '%s\n' "$out" | head -n 1)
-	if [ "$3" != - ] && ! printf '%s\n' "$first" | grep -Eo '[0-9]+(\.[0-9]+)+' | grep -qxF "$3"; then
-		fail "$1 is not at its pin $3: a user unit found \"$first\". Run this again after the pin is installed"
+	if [ "$4" != - ] && ! at_pin "$2" "$first" "$4"; then
+		fail "$1 is not at its pin ${4#v}: a user unit found \"$first\". Run this again after the pin is installed"
 	fi
 	printf 'tool %s %s\n' "$1" "$first"
 }
@@ -264,8 +288,8 @@ prove_tool() {
 prove_tools() {
 	pins=$(tools)
 	tab=$(printf '\t')
-	printf '%s\n' "$pins" | while IFS=$tab read -r name check pin; do
-		prove_tool "$name" "$check" "$pin"
+	printf '%s\n' "$pins" | while IFS=$tab read -r name kind check pin; do
+		prove_tool "$name" "$kind" "$check" "$pin"
 	done
 }
 
