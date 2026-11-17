@@ -550,17 +550,30 @@ func (r *roundRig) answerOnce(t *testing.T, client *Client, owner *answering) {
 		return
 	}
 
-	if owner.open {
+	if owner.open || !recordsItsReceive(client, infos[at].ID) {
 		return
 	}
 
-	r.deadlines = append(r.deadlines, infos[at].Deadline)
+	// The deadline is read after the record check: the status read above can come before the record.
+	view, err := client.Steps(infos[at].ID)
+	if err != nil {
+		return
+	}
+
+	r.deadlines = append(r.deadlines, view.Deadline)
 	r.questions = append(r.questions, infos[at].Question)
 
 	require.NoError(t, client.AnswerAs(testItem, shipOwner, r.answerFor(owner.given)))
 
 	owner.given++
 	owner.open = true
+}
+
+// recordsItsReceive reports whether the open run has recorded the deadline of its receive. A wait shows its question before that record, and the status of a run reads its deadline from that record.
+func recordsItsReceive(client *Client, id string) bool {
+	records, err := client.records(id)
+
+	return err == nil && len(records) > 0 && records[len(records)-1].StepName == sleepStep
 }
 
 // answerFor is the answer to the nth wait of the round: the nth of answers, then answer for the first wait, and STOP for the rest.
