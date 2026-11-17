@@ -3,7 +3,6 @@ package opencode
 import (
 	"cmp"
 	"encoding/json"
-	"math"
 	"strings"
 
 	"github.com/tobocop2/beehave/internal/agent"
@@ -91,14 +90,11 @@ func (e *errBody) UnmarshalJSON(raw []byte) error {
 
 // text returns the name and the message of the error, or "unknown" when it has neither.
 func (e errBody) text() string {
-	switch {
-	case e.Name != "" && e.Message != "":
+	if e.Name != "" && e.Message != "" {
 		return e.Name + ": " + e.Message
-	case e.Name != "":
-		return e.Name
 	}
 
-	return cmp.Or(e.Message, "unknown")
+	return cmp.Or(e.Name, e.Message, "unknown")
 }
 
 // Line reads the session id of any line and the text of a text line. The caller keeps the last text, which is the answer of the run.
@@ -187,9 +183,7 @@ func stepSeen(p part) agent.Seen {
 	if p.Cost != nil {
 		seen.Priced = true
 
-		if *p.Cost > 0 && !math.IsInf(*p.Cost, 0) {
-			seen.Spent = *p.Cost
-		}
+		seen.Spent = max(*p.Cost, 0)
 	}
 
 	if t := p.Tokens; t != nil {

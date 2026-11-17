@@ -185,6 +185,23 @@ func TestCalls_AStepFinishWithNoCostFieldIsNotPriced(t *testing.T) {
 	assert.True(t, seen.Result)
 }
 
+func TestCalls_AStepFinishCountsTheCachedAndTheReasoningTokensInInputAndOutput(t *testing.T) {
+	t.Parallel()
+
+	seen := opencode.New().Calls(`{"type":"step_finish","sessionID":"s","part":{"reason":"stop","tokens":{"input":100,"output":20,"reasoning":3,"cache":{"read":7,"write":5}}}}`)
+
+	assert.Equal(t, agent.Tokens{Input: 112, CachedInput: 7, Output: 23, Reasoning: 3}, seen.Usage)
+}
+
+func TestCalls_AZeroCostIsPricedAndSpendsNothing(t *testing.T) {
+	t.Parallel()
+
+	seen := opencode.New().Calls(`{"type":"step_finish","sessionID":"s","part":{"reason":"stop","cost":0}}`)
+
+	assert.True(t, seen.Priced)
+	assert.InDelta(t, 0, seen.Spent, 0)
+}
+
 func TestCalls_ANegativeOrNonNumberCostAddsNothing(t *testing.T) {
 	t.Parallel()
 

@@ -24,8 +24,7 @@ import (
 const pinnedVersion = "1.19.5"
 
 // stallNote names the likely cause of a run that printed nothing until its limit. With --format json, OpenCode prints no error for a model over its usage quota and retries.
-const stallNote = "OpenCode prints nothing and retries when the model is over its usage quota, which is the likely cause if the run printed no line. " +
-	"Check the quota of the model, or use a model with a key."
+const stallNote = "OpenCode prints nothing and retries when the model is over its usage quota, which is the likely cause if the run printed no line. Check the quota of the model, or use a model with a key."
 
 // Adapter is the OpenCode CLI.
 type Adapter struct{}
