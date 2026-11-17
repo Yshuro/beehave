@@ -1,0 +1,11 @@
+#!/bin/sh
+# Fake uname: a linux amd64 host, with the machine and the kernel release from FAKE_ARCH and FAKE_KERNEL.
+case $1 in
+-s) echo Linux ;;
+-m) echo "${FAKE_ARCH:-x86_64}" ;;
+-r) echo "${FAKE_KERNEL:-6.8.0-1015-gcp}" ;;
+*)
+	echo "fake uname: unexpected $*" >&2
+	exit 1
+	;;
+esac
