@@ -167,9 +167,10 @@ func TestExampleLoop_AStopBeforeTheDesignStepStartsNoDesignAgent(t *testing.T) {
 func TestExampleLoop_AStopDuringTheRulingOfTheOwnerStartsNoSettleAgent(t *testing.T) {
 	t.Parallel()
 
-	// Calls: the intake; candidate 1 with three scoped reviews, two fixes and the full review (six calls); candidates 2 to 6 with three fixes,
-	// three scoped reviews and the full review each (35 calls); then the settle agent at call 43 after the ruling.
-	rig, file, _ := stopLoopRig(t, 43, map[string]any{"state": "MERGED"}, false)
+	// One fix round gives two candidates. Calls: the intake; candidate 1 with three scoped reviews, two fixes and the full review (six calls);
+	// candidate 2 with three fixes, three scoped reviews and the full review (seven calls); then the settle agent at call 15 after the ruling.
+	rig, file, _ := stopLoopRig(t, 15, map[string]any{"state": "MERGED"}, false)
+	rig.setRound("fix_rounds", oneFixRound)
 	engine := rig.h.engine(t)
 	done := pipelineInBackground(engine, file)
 
@@ -178,7 +179,7 @@ func TestExampleLoop_AStopDuringTheRulingOfTheOwnerStartsNoSettleAgent(t *testin
 	outcome := <-done
 
 	require.NoError(t, outcome.err, "a stop is a result and not an error")
-	assert.Equal(t, append([]string{"opus", "sonnet"}, capModels(6)...), rig.models(), "the settle agent never starts")
+	assert.Equal(t, append([]string{"opus", "sonnet"}, capModels(2)...), rig.models(), "the settle agent never starts")
 	require.NotNil(t, outcome.result.Stopped)
 	assert.Equal(t, "preflight:before-settle", outcome.result.Stopped.Step)
 	assert.Equal(t, preflight.Merged.Code(), outcome.result.Stopped.RC)

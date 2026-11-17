@@ -190,9 +190,10 @@ func TestExample_ACappedReviewStopsTheItemWithARefuseBeforeAnyFix(t *testing.T) 
 func TestExample_ACappedSettleStopsTheItemWithARefuse(t *testing.T) {
 	t.Parallel()
 
-	// The settle is the call after the plan, the implement and every agent of the six candidates.
-	settle := 2 + len(capModels(6)) + 1
+	// The settle is the call after the plan, the implement and every agent of the two candidates of one fix round.
+	settle := 2 + len(capModels(2)) + 1
 	rig, file := capRig(t, func(int) string { return "changes" }, nthCall(settle), agent.OutcomeTurnCap)
+	rig.setRound("fix_rounds", oneFixRound)
 	engine := rig.h.engine(t)
 	done := pipelineInBackground(engine, file)
 

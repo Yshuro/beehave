@@ -47,6 +47,10 @@ func exampleProject() model.Project {
 }
 
 // setRound sets the round setting `key` of the project of the rig before the run starts. A nil value removes the key.
+// oneFixRound is the smallest cap of the round: two candidates. A test that only needs the ruling of the owner after the cap sets it,
+// so a review that always asks for changes reaches the owner after 13 agent calls of the loop (capModels(2)) and not after 41.
+var oneFixRound = json.Number("1")
+
 func (rig *agentRig) setRound(key string, value any) {
 	setRoundOf(&rig.project, key, value)
 }

@@ -24,6 +24,7 @@ func parkedRigSeeded(t *testing.T, parked string, seed map[string]string) (*agen
 	t.Helper()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
+	rig.setRound("fix_rounds", oneFixRound)
 	writer := newFakeWriter()
 	maps.Copy(writer.keys, seed)
 	rig.h.writer = writer
