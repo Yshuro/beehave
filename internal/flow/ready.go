@@ -1,10 +1,12 @@
 package flow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 
@@ -95,7 +97,7 @@ func (e *Engine) holdHead(ctx context.Context, project, item string, read review
 		return nil
 	}
 
-	if draftErr := e.deps.Watch.SetDraft(ctx, project, read.Number, true); draftErr != nil {
+	if draftErr := e.backToDraft(ctx, project, read.Number); draftErr != nil {
 		return errors.Join(fmt.Errorf("put pull request %d back to draft: %w", read.Number, draftErr), err)
 	}
 
@@ -104,6 +106,18 @@ func (e *Engine) holdHead(ctx context.Context, project, item string, read review
 	}
 
 	return fmt.Errorf("%w: pull request %d: it moved to %q while it was marked ready", errNotReady, read.Number, now.Head)
+}
+
+// draftTimeout bounds the call that puts a pull request back to draft.
+const draftTimeout = 30 * time.Second
+
+// backToDraft puts a pull request back to draft on a context that a cancel of ctx does not end, within a limit of its own.
+// A cancel is the usual reason that the pull request must go back, so the call cannot run on the context of the step.
+func (e *Engine) backToDraft(ctx context.Context, project string, pr int) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cmp.Or(e.deps.Clock.Draft, draftTimeout))
+	defer cancel()
+
+	return e.deps.Watch.SetDraft(ctx, project, pr, true)
 }
 
 // readyStep runs markReady as the recorded step of the lifecycle. A replay reads the recorded head, so the merge pins the same head after a restart.

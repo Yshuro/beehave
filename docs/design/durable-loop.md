@@ -546,7 +546,7 @@ Before the ready step marks a pull request ready, it reads the forge. The read i
 
 The ready step refuses with the pull request and each reason. The refusal lists the reasons in this order, so its text differs from the text of the earlier flow check. A failed read refuses the step too, because an empty fact is not a clean one.
 
-The ready step reads the standing, calls ready, then reads the head again. The ready call cannot name a head. If the head moved or cannot be read, the step sets the pull request back to draft and refuses.
+The ready step reads the standing, calls ready, then reads the head again. The ready call cannot name a head. If the head moved or cannot be read, the step sets the pull request back to draft and refuses. A cancel of the run does not stop that call: it runs on a context that the cancel does not end, with a limit of 30 seconds. If the call fails, its failure is part of the error of the step.
 
 After the ready step marks the pull request ready, the item runs the watch step (see [Ready watch](#ready-watch)).
 
