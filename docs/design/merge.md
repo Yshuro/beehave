@@ -389,6 +389,8 @@ The forge does each merge, so no checkout is written, and the round branch is ne
 
 `remedy sync land --pr <number> --head <sha> --base-tip <sha>` merges the pull request with a merge commit pinned to `--head`. It lands only when the base is still at `--base-tip`. A moved base is `state=stale` and a moved head is `state=head-moved`. Both are exit code 2 and write nothing. A landing prints `state=landed`.
 
+GitHub does not merge a draft: `gh pr merge` on one exits 1 with `GraphQL: Pull Request is still a draft (mergePullRequest)` (measured on a scratch repository with gh 2.101.0). The sync opens its pull request as a draft, so no person can merge a sync head before the gate and the review. The landing marks the draft ready only after the base and head checks pass, then merges it pinned to `--head`. A merge that fails puts the pull request back to draft.
+
 #### The sync step of the round
 
 The round of `examples/remediation/workflow.star` runs the sync at the start of each pass, before `queue-audit-<n>` and before any spawn. The engine has no builtin for it: the sync is command steps, one agent step and a gate of the workflow.

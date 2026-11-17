@@ -54,6 +54,8 @@ func (*syncWorld) CreatePR(context.Context, model.NewPull) (int, error) { return
 
 func (*syncWorld) MergePR(context.Context, int, string) error { return nil }
 
+func (*syncWorld) SetDraft(context.Context, int, bool) error { return nil }
+
 func (w *syncWorld) CommitsAhead(context.Context, string, string) (int, error) {
 	return w.ahead, w.down
 }

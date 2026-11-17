@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -40,14 +41,14 @@ type world struct {
 
 func newWorld() *world {
 	open, name := "OPEN", syncName
-	baseName := base
+	baseName, draft := base, true
 
 	return &world{
 		tips:  map[string]string{base: baseTip, trunk: trunkTip},
 		ahead: map[string]int{base + "..." + trunk: 1},
 		fail:  map[string]error{},
 		calls: map[string]int{},
-		view:  model.PullRequest{State: &open, BaseRefName: &baseName, HeadRefName: &name},
+		view:  model.PullRequest{State: &open, BaseRefName: &baseName, HeadRefName: &name, IsDraft: &draft},
 	}
 }
 
@@ -102,12 +103,28 @@ func (w *world) CreatePR(_ context.Context, req model.NewPull) (int, error) {
 	return 7, nil
 }
 
+// MergePR refuses a draft, as GitHub does.
 func (w *world) MergePR(_ context.Context, pr int, sha string) error {
 	if err := w.failIf("MergePR", ""); err != nil {
 		return err
 	}
 
+	if *w.view.IsDraft {
+		return forge.Refuse("GraphQL: Pull Request is still a draft (mergePullRequest)")
+	}
+
 	w.writes = append(w.writes, fmt.Sprintf("land %d %s", pr, sha))
+
+	return nil
+}
+
+func (w *world) SetDraft(_ context.Context, pr int, draft bool) error {
+	if err := w.failIf("SetDraft", strconv.FormatBool(draft)); err != nil {
+		return err
+	}
+
+	*w.view.IsDraft = draft
+	w.writes = append(w.writes, fmt.Sprintf("draft %d %t", pr, draft))
 
 	return nil
 }
@@ -301,7 +318,59 @@ func TestLand_MergesThePinnedHeadWhenTheBaseTipIsTheRecordedOne(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, "state=landed branch="+syncName+" head="+mergedTip+" base_tip="+baseTip+" pr=7", result.Line())
+	assert.Equal(t, []string{"draft 7 false", "land 7 " + mergedTip}, w.writes, "the draft of the sync is marked ready, then merged")
+}
+
+func TestLand_APullRequestThatIsReadyAlreadyMergesWithNoReadyCall(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	*w.view.IsDraft = false
+
+	_, err := land(t, w, mergedTip, baseTip)
+
+	require.NoError(t, err)
 	assert.Equal(t, []string{"land 7 " + mergedTip}, w.writes)
+}
+
+func TestLand_AMergeThatFailsPutsTheDraftBack(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.fail["MergePR"] = errDown
+
+	_, err := land(t, w, mergedTip, baseTip)
+
+	require.ErrorIs(t, err, errDown)
+	assert.Equal(t, []string{"draft 7 false", "draft 7 true"}, w.writes)
+	assert.True(t, *w.view.IsDraft, "no person can merge the head that did not land")
+}
+
+func TestLand_AFailedReadyOrAFailedReturnToDraftIsAnError(t *testing.T) {
+	t.Parallel()
+
+	errBack := errors.New("back")
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.fail["SetDraft:false"] = errDown
+
+	_, err := land(t, w, mergedTip, baseTip)
+
+	require.ErrorIs(t, err, errDown)
+	assert.Empty(t, w.writes, "no merge after a failed ready")
+
+	w = newWorld()
+	w.tips[syncName] = mergedTip
+	w.fail["MergePR"] = errDown
+	w.fail["SetDraft:true"] = errBack
+
+	_, err = land(t, w, mergedTip, baseTip)
+
+	require.ErrorIs(t, err, errDown)
+	require.ErrorIs(t, err, errBack)
 }
 
 func TestLand_AMovedBaseIsStaleAndWritesNothing(t *testing.T) {

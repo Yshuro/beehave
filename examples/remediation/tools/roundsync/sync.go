@@ -43,6 +43,7 @@ type Forge interface {
 	CreateBranch(ctx context.Context, branch, sha string) error
 	CreatePR(ctx context.Context, req model.NewPull) (int, error)
 	MergePR(ctx context.Context, pr int, sha string) error
+	SetDraft(ctx context.Context, pr int, draft bool) error
 	CommitsAhead(ctx context.Context, base, head string) (int, error)
 	MergeBranch(ctx context.Context, base, head string) (string, error)
 }
@@ -237,10 +238,11 @@ func (s *syncer) pull(branch string) (int, error) {
 // Land merges the pull request of a sync with a merge commit, pinned to the head that the gate ran on.
 // It lands only when the round base is still at the tip that the sync recorded, so the base tree after the merge equals the gated tree.
 // A moved base is the state Stale and a moved head is the state HeadMoved. Neither writes.
+// The sync opens a draft, which the forge does not merge, so the landing marks it ready just before the merge, and back to draft when the merge fails.
 func Land(ctx context.Context, forge Forge, req LandRequest) (Result, error) {
 	s := &syncer{ctx: ctx, forge: forge}
 
-	pull, err := forge.PRView(ctx, req.PR, "state", "baseRefName", "headRefName")
+	pull, err := forge.PRView(ctx, req.PR, "state", "baseRefName", "headRefName", "isDraft")
 	if err != nil {
 		return Result{}, err
 	}
@@ -250,7 +252,7 @@ func Land(ctx context.Context, forge Forge, req LandRequest) (Result, error) {
 		return Result{}, err
 	}
 
-	return s.land(req, base, head)
+	return s.land(req, base, head, pull.IsDraft != nil && *pull.IsDraft)
 }
 
 // openNames reads the base and head branch names of an open pull request.
@@ -275,7 +277,7 @@ func (s *syncer) tips(first, second string) (firstTip, secondTip string, err err
 	return firstTip, secondTip, nil
 }
 
-func (s *syncer) land(req LandRequest, base, head string) (Result, error) {
+func (s *syncer) land(req LandRequest, base, head string, draft bool) (Result, error) {
 	baseTip, headTip, err := s.tips(base, head)
 	if err != nil {
 		return Result{}, err
@@ -290,8 +292,26 @@ func (s *syncer) land(req LandRequest, base, head string) (Result, error) {
 		result.State = HeadMoved
 	default:
 		result.State = Landed
-		err = s.forge.MergePR(s.ctx, req.PR, req.Head)
+		err = s.merge(req, draft)
 	}
 
 	return result, err
+}
+
+// merge marks a draft ready and merges it pinned to the gated head. A failed merge puts the draft back, so no person can merge a head that the round did not land.
+func (s *syncer) merge(req LandRequest, draft bool) error {
+	if !draft {
+		return s.forge.MergePR(s.ctx, req.PR, req.Head)
+	}
+
+	if err := s.forge.SetDraft(s.ctx, req.PR, false); err != nil {
+		return err
+	}
+
+	err := s.forge.MergePR(s.ctx, req.PR, req.Head)
+	if err != nil {
+		return errors.Join(err, s.forge.SetDraft(s.ctx, req.PR, true))
+	}
+
+	return nil
 }
