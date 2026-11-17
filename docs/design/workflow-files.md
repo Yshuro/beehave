@@ -167,7 +167,7 @@ The `key` is required, and the engine joins it to the run id. `item_create` with
 - `assignee` is optional. The default is no assignee.
 - `severity` is optional, one of `P0` to `P3`. The call refuses any other text before it writes.
 - `operator` is an optional bool.
-- `shared` is an optional bool. The default is false: the engine joins the `key` to the run id, so two runs never share an item. With `shared = True` the engine uses the `key` as it is, so every run of the project that gives the same key gets the one item. Put in the key what makes the item unique in the project, such as the repository and a pull request number.
+- `shared` is an optional bool. The default is false: the engine joins the `key` to the run id, so two runs never share an item. With `shared = True` the engine uses the `key` as it is, and it holds a file lock of the key in the state folder around the lookup and the create, so two runs of the project on this host that give the same key at the same time get one item. The lock does not reach another host: two hosts that share one tracker can still file two items for one key. Put in the key what makes the item unique in the project, such as the repository and a pull request number.
 
 | Tracker | `severity` | `operator` |
 | --- | --- | --- |

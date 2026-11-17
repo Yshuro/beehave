@@ -478,7 +478,8 @@ def foreign_followup(recorded, project):
     `project` is the value of facts().
     The step reads the state of that number. It does not look the pull request up again, so a branch that is not the item id and a base that is not vars.round.base change nothing.
     A review with no open findings files nothing, and so does a pull request that is still open or closed without a merge.
-    The key holds the repository and the number and is shared by every run, so a second run for the same pull request files no second issue."""
+    The key holds the repository and the number and is shared by every run, so a second run on this host for the same pull request files no second issue.
+    Two hosts that share one tracker can still file two issues for one pull request."""
     findings = recorded["findings"]
     if len(findings) == 0:
         return ""

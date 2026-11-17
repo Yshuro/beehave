@@ -3,6 +3,7 @@ package flow
 import (
 	"encoding/json"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -61,8 +62,55 @@ func runFollowup(t *testing.T, rig *agentRig, file, recorded string) (ItemResult
 }
 
 // recordedValue is the value that a foreign review of the pull request 41 records, with the findings `findings` (a JSON list).
-func recordedValue(findings string) string {
-	return `{"item":"` + testItem + `","head":"","approved":false,"reason":"foreign","pr":41,"findings":` + findings + `}`
+func recordedValue(findings string) string { return recordedOf(foreignPull, findings) }
+
+// recordedOf is the value that a foreign review of the pull request pr records, with the findings `findings`.
+func recordedOf(pr int, findings string) string {
+	return `{"item":"` + testItem + `","head":"","approved":false,"reason":"foreign","pr":` + strconv.Itoa(pr) + `,"findings":` + findings + `}`
+}
+
+// createdKeys is the key of each item that the writer filed, in order.
+func createdKeys(w *fakeWriter) []string {
+	keys := make([]string, 0, len(w.created))
+	for _, line := range w.created {
+		keys = append(keys, strings.Split(line, "|")[1])
+	}
+
+	return keys
+}
+
+func TestExampleForeign_TwoPullRequestsOfOneRepositoryFileTwoIssues(t *testing.T) {
+	t.Parallel()
+
+	const other = 412
+
+	rig, fakes, file := foreignRig(t, "MERGED")
+	fakes.queue.states[other] = "MERGED"
+	engine := rig.h.engine(t)
+
+	for _, pr := range []int{foreignPull, other} {
+		rig.h.items.fields = map[string]string{"recorded": recordedOf(pr, foreignFindings)}
+		_, err := engine.runEntry(testItem, testProject, file, "followup")
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, []string{"foreign:o/r:41", "foreign:o/r:412"}, createdKeys(fakes.writer), "the number is in the key, so 412 does not find the issue of 41")
+}
+
+func TestExampleForeign_OnePullRequestNumberInTwoRepositoriesFilesTwoIssues(t *testing.T) {
+	t.Parallel()
+
+	rig, fakes, file := foreignRig(t, "MERGED")
+	rig.h.items.fields = map[string]string{"recorded": recordedValue(foreignFindings)}
+	engine := rig.h.engine(t)
+
+	for _, repo := range []string{"o/r", "o2/r"} {
+		rig.project.Repo = repo
+		_, err := engine.runEntry(testItem, testProject, file, "followup")
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, []string{"foreign:o/r:41", "foreign:o2/r:41"}, createdKeys(fakes.writer), "the repository is in the key")
 }
 
 func TestExampleForeign_TheFollowUpReadsTheRecordedPullRequestAndFilesOneIssue(t *testing.T) {
