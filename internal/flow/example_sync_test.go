@@ -222,6 +222,21 @@ func TestRoundSync_AMovedTrunkLandsThroughTheSyncPullRequestWhoseGateRunsOnTheMe
 	assert.Empty(t, recorder.roundBases()[0], "the gate of the sync head runs the gate command only, with no base")
 }
 
+func TestRoundSync_ASyncedLineLandsWhateverTheOrderOfItsFieldsAndKeepsAnEqualSignInAValue(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	script := &syncScript{}
+	withSync(t, rig, script)
+	script.lines = []string{"base_tip=" + script.tip + " head=" + script.head + " note pr=7 branch=sync/a=b state=synced", "state=current"}
+
+	_, err, _ := runSync(t, rig, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"git fetch origin sync/a=b"}, commandsNamed(rig, "git fetch origin"))
+	assert.Equal(t, []string{"remedy sync land --pr 7 --head " + script.head + " --base-tip " + script.tip}, syncLands(rig))
+}
+
 func TestRoundSync_AConflictThatTheAgentDoesNotResolveStopsTheRoundInRoundWaitWithTheReason(t *testing.T) {
 	t.Parallel()
 
