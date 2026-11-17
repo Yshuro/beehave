@@ -201,11 +201,15 @@ func (c *Client) reopenHere(item string, last run) error {
 
 	restamp := dbos.WithRewindApplicationVersion(c.version)
 
-	err = c.reopenCanceledPhases(last.Status.ID, restamp)
-	if err == nil {
-		err = c.reopen(last.Status.ID, restamp)
-	}
+	// probe.lock keeps a cancel of the tree out while the reopen reads it (see docs/design/durable-loop.md).
+	err = c.underProbe(func() error {
+		err := c.reopenCanceledPhases(last.Status.ID, restamp)
+		if err == nil {
+			err = c.reopen(last.Status.ID, restamp)
+		}
 
+		return err
+	})
 	if err != nil {
 		return errors.Join(err, c.dropClaim(project, item, last.Status.ID, owner))
 	}

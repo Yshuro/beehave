@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -251,19 +250,101 @@ func TestExclusiveHost_ReportsABuildJobThatTheStoreRefuses(t *testing.T) {
 	require.ErrorContains(t, err, "queue the build job of item 12 on host box")
 }
 
-func TestExclusiveHost_SaysSoWhenItCannotStopTheBuildJobOfAGate(t *testing.T) {
+// The cancel of an old gate cancels its build job in the same call, before any tick of the engine, so no later write by id can reach a reopened job.
+// DBOS commits each level of the cancel on its own, so the test waits for the job to show the cancel and does not read it once.
+func TestExclusiveHost_ANewHeadCancelsTheBuildJobOfTheOldGateWithTheGate(t *testing.T) {
 	t.Parallel()
 
-	engine, err := NewEngine(t.Context(), newHarness(t).opts, Deps{})
+	gated := newSupersedeGate("")
+	h, engine := supersedeEngine(t, gated, "A")
+
+	old := queueHostGate(engine, testProject, testItem, "A", "box")
+
+	eventually(t, startedCount(gated, 1))
+	setHead(h, "B")
+
+	current := queueHostGate(engine, testProject, testItem, "B", "box")
+
+	var oldGate string
+
+	eventually(t, func() bool {
+		rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterStatus(dbos.WorkflowStatusCancelled))
+		if err == nil && len(rows) == 1 {
+			oldGate = rows[0].ID
+		}
+
+		return oldGate != ""
+	})
+
+	// The gate of the new head starts its own job once the old gate is canceled, so the read names the parent.
+	require.Eventually(t, func() bool {
+		jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName), dbos.WithFilterParentWorkflowID(oldGate))
+
+		return err == nil && len(jobs) == 1 && jobs[0].Status == dbos.WorkflowStatusCancelled
+	}, eventTimeout, pollEvery, "the cancel of the old gate reached its build job without a tick")
+
+	require.ErrorIs(t, endsAfterTicks(t, h, old).err, errSuperseded)
+	close(gated.release)
+	require.NoError(t, (<-current).err)
+}
+
+// jobWaiter is a run that waits for one build job as a gate does, and stops its wait when stop closes. Only the wait stops: the store marks no cancel.
+type jobWaiter struct {
+	engine *Engine
+	stop   <-chan struct{}
+}
+
+func (w jobWaiter) wait(ctx dbos.Context, in ExclusiveInput) (string, error) {
+	run, cancel := dbos.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-w.stop:
+			cancel()
+		case <-run.Done():
+		}
+	}()
+
+	var out ExclusiveOutput
+
+	return "", w.engine.runJob(run, in, w.engine.hostQueue, &out)
+}
+
+// A wait that stops writes nothing to its build job. Only a cancel of the gate in the store reaches the job, so the stop of a wait that ends after a resume
+// reopened the job cannot cancel the job again and fail the replay of the gate.
+func TestExclusiveHost_AWaitThatStopsLeavesTheBuildJobToTheCancelOfTheGate(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Done})
+	gated := newHostGate()
+	deps := h.deps()
+	deps.Gate = gated
+
+	engine, err := NewEngine(t.Context(), h.opts, deps)
 	require.NoError(t, err)
-	require.NoError(t, engine.Shutdown())
 
-	var logged bytes.Buffer
+	stop := make(chan struct{})
+	waiter := jobWaiter{engine: engine, stop: stop}
+	dbos.RegisterWorkflow(engine.ctx, waiter.wait, dbos.WithWorkflowName("test-wait-job"))
+	require.NoError(t, engine.Launch())
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
-	engine.logger = newLogger(&logged)
-	engine.stopJob(t.Context(), ExclusiveInput{Item: "12"}, "job-1")
+	in := ExclusiveInput{Kind: kindGate, Project: testProject, Item: testItem, HostKey: hostKeyPrefix + "box", Request: CommandRequest{Project: testProject, Item: testItem, BuildHost: "box"}}
 
-	assert.Contains(t, logged.String(), "cannot stop the build job of the gate")
+	handle, err := dbos.RunWorkflow(engine.ctx, waiter.wait, in)
+	require.NoError(t, err)
+
+	<-gated.started
+	close(stop)
+
+	_, err = handle.GetResult(dbos.WithHandleTimeout(eventTimeout))
+	require.ErrorIs(t, err, context.Canceled)
+
+	jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName))
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, dbos.WorkflowStatusPending, jobs[0].Status, "the wait that stopped left the job running")
 }
 
 func TestExclusiveHost_AReopenReportsABuildJobThatIsGone(t *testing.T) {

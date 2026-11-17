@@ -537,9 +537,13 @@ type harness struct {
 	ticks chan time.Time
 	sleep time.Duration
 	// wall replaces the wall clock of the engine when a test sets it.
-	wall    func() time.Time
+	wall func() time.Time
+	// reading replaces the reading of the clock that the now builtin and the wait for a lost job read, when a test sets it.
+	reading func() time.Time
 	capWait time.Duration
-	opts    Options
+	// lostPoll is the sleep between two looks for the proof of a lost gate job. It is a millisecond unless a test sets it.
+	lostPoll time.Duration
+	opts     Options
 }
 
 // defaultFlow is the workflow file of a harness that a test does not replace: one agent step.
@@ -603,7 +607,7 @@ func (h *harness) deps() Deps {
 	deps := Deps{
 		Agents: h.agents, Gate: h.gate, Logins: h.logins, Lifecycle: h.life, Forge: h.forge, Watch: h.watch, Trees: h.trees, Beats: h.beats, Commands: h.commands, Items: h.items, Writer: h.writer, Reader: h.reader,
 		Kept:  []error{errFake},
-		Clock: clock{Tick: h.ticks, Poll: storePoll, Watch: cmp.Or(h.sleep, time.Millisecond), Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, CapWait: cmp.Or(h.capWait, time.Millisecond)},
+		Clock: clock{Tick: h.ticks, Poll: storePoll, Watch: cmp.Or(h.sleep, time.Millisecond), Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, Reading: h.reading, CapWait: cmp.Or(h.capWait, time.Millisecond), LostPoll: cmp.Or(h.lostPoll, time.Millisecond)},
 	}
 	if h.merge != nil {
 		deps.Merge = h.merge

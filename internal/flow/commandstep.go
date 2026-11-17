@@ -11,6 +11,7 @@ import (
 
 	"github.com/tobocop2/beehave/internal/agent"
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
+	"github.com/tobocop2/beehave/internal/host"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -271,13 +272,22 @@ func (e *Engine) requiredOf(job GateJob, project string) []string {
 
 // finishProjectGate waits for the host job of the project gate and judges it. The key it returns is empty unless the gate passed on every step
 // and read the tree it judged: only such a pass may stand in for a later gate. The key to compare with is the one that the first step read and recorded.
-func (e *Engine) finishProjectGate(ctx context.Context, request CommandRequest, start gateStart) (map[string]any, string, error) {
+// A wait that ended as lost while the run still runs gives the lost job and no outputs. A wait that a cancel stopped stays an error.
+func (e *Engine) finishProjectGate(ctx context.Context, in ExclusiveInput, start gateStart) (gateFinish, string, error) {
+	request := in.Request
+
 	gated, err := e.deps.Gate.Run(ctx, request.Project, request.Item, request.BuildHost, start.Job)
-	if err != nil {
-		return nil, "", err
+	if errors.Is(err, host.ErrLost) && ctx.Err() == nil {
+		return gateFinish{Lost: lostJobOf(in, start, err)}, "", nil
 	}
 
-	return gateOutputs(gated.Passed, gated.Head, gated.Tree, gated.Report, gated.Steps, start.Required, gated.Checks), recordedKey(gated, start.Key), nil
+	if err != nil {
+		return gateFinish{}, "", err
+	}
+
+	outputs := gateOutputs(gated.Passed, gated.Head, gated.Tree, gated.Report, gated.Steps, start.Required, gated.Checks)
+
+	return gateFinish{Outputs: outputs}, recordedKey(gated, start.Key), nil
 }
 
 // gateKey reads the key of the project gate. A key that cannot be read is an empty key: the gate then runs and reports the same problem.

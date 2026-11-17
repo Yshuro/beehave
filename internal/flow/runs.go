@@ -52,11 +52,16 @@ func (r run) terminal() bool {
 	switch r.Status.Status {
 	case dbos.WorkflowStatusSuccess, dbos.WorkflowStatusError, dbos.WorkflowStatusCancelled, dbos.WorkflowStatusMaxRecoveryAttemptsExceeded:
 		return true
-	case dbos.WorkflowStatusPending, dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusDelayed:
+	case dbos.WorkflowStatusPending, dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusDelayed, dbos.WorkflowStatusSuspended:
 		// The run is still open.
 	}
 
 	return false
+}
+
+// cancelable reports whether a cancel reaches the run: an open run, or a canceled one, whose children a cancel that stopped between two levels of the tree left open.
+func (r run) cancelable() bool {
+	return !r.terminal() || r.Status.Status == dbos.WorkflowStatusCancelled
 }
 
 // failed reports whether the attempt ended with an error. Only beehave resume continues it.
