@@ -85,6 +85,10 @@ env GREMLINS_REPORT=$WORK/nomutant.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: the gremlins report holds no mutant$'
 ! stdout 'no candidate'
+stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'
+stdout '(?s)^mutation-pr: applied=0 .*^mutation-pr: the gremlins report holds no mutant$'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 env GREMLINS_REPORT=$WORK/notcovered.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'

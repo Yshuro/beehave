@@ -29,8 +29,10 @@ func (r *recorder) Errorf(format string, args ...any) {
 // fakeAdapter is a correct adapter. Each field of a flawed one switches on one wrong behavior.
 type fakeAdapter struct {
 	profile agent.Profile
-	// invent makes Calls report a call, a limit and a denial on every line.
+	// invent makes Calls report a call and a limit on every line.
 	invent bool
+	// denies makes Calls report a denial, and nothing else, on every line.
+	denies bool
 	// reads makes Calls read dollars from a line "spent <n>".
 	reads bool
 	// files is the Files of the launch of the guard and of the sandbox.
@@ -67,7 +69,11 @@ func (a fakeAdapter) Calls(line string) agent.Seen {
 	}
 
 	if a.invent {
-		return agent.Seen{Shell: []agent.Call{{Text: "ls"}}, Skills: []string{"s"}, Limit: &agent.Limit{Kind: agent.LimitRate}, Denied: "paused"}
+		return agent.Seen{Shell: []agent.Call{{Text: "ls"}}, Skills: []string{"s"}, Limit: &agent.Limit{Kind: agent.LimitRate}}
+	}
+
+	if a.denies {
+		return agent.Seen{Denied: "paused"}
 	}
 
 	return agent.Seen{}
@@ -456,6 +462,20 @@ func TestCheckTranscript(t *testing.T) {
 			assert.Contains(t, r.failures[0], tc.want)
 		})
 	}
+}
+
+func TestCheckCalls_ADenialAloneIsAFailure(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.denies = true
+
+	var r recorder
+
+	agenttest.CheckCalls(&r, a)
+
+	require.Len(t, r.failures, 1)
+	assert.Contains(t, r.failures[0], "Limit:<nil> Denied:paused")
 }
 
 func TestTheSuiteReportsAFakeCLIThatCannotBeWritten(t *testing.T) {
