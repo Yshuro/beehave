@@ -80,14 +80,7 @@ func versionNeeds(spec Spec, p Profile) []versionNeed {
 
 // rangeText names the versions of the CLI that the adapter supports, such as "1.19.5 up to but not including 2.0.0".
 func rangeText(p Profile) string {
-	switch {
-	case p.SupportedFrom != "" && p.SupportedBefore != "":
-		return p.SupportedFrom + " up to but not including " + p.SupportedBefore
-	case p.SupportedFrom != "":
-		return p.SupportedFrom + " or later"
-	}
-
-	return "versions before " + p.SupportedBefore
+	return p.SupportedFrom + " up to but not including " + p.SupportedBefore
 }
 
 // versionProblem runs the CLI with --version and says why the run cannot start, or returns "" when the version is in the supported range of the profile and
@@ -95,7 +88,7 @@ func rangeText(p Profile) string {
 // CLI of a line that the adapter has no recording of can print a shape that the adapter reads wrong, so an old, new or unreadable version stops the run.
 func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, env []string, version versionOf) string {
 	needs := versionNeeds(spec, p)
-	ranged := p.SupportedFrom != "" || p.SupportedBefore != ""
+	ranged := p.SupportedFrom != ""
 
 	if len(needs) == 0 && !ranged {
 		return ""
@@ -106,19 +99,13 @@ func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, en
 		return unreadable(p, err, needs, ranged)
 	}
 
-	if ranged {
-		if problem := rangeProblem(p, out); problem != "" {
-			return problem
-		}
-	}
+	problems := []string{rangeProblem(p, out)}
 
 	for _, need := range needs {
-		if problem := versionText(p, out, need); problem != "" {
-			return problem
-		}
+		problems = append(problems, versionText(p, out, need))
 	}
 
-	return ""
+	return cmp.Or(problems...)
 }
 
 // unreadable says why a run does not start when the version of the CLI cannot be read.
@@ -132,16 +119,18 @@ func unreadable(p Profile, err error, needs []versionNeed, ranged bool) string {
 
 // rangeProblem says why the version that the CLI printed is outside the supported range of the profile, or returns "" when it is inside.
 func rangeProblem(p Profile, out string) string {
+	if p.SupportedFrom == "" {
+		return ""
+	}
+
 	found := versionNumber.FindStringSubmatch(out)
 	if found == nil {
 		return fmt.Sprintf("the version of %s is not readable from %q, so the step is not started. Install a version in the range that beehave supports: %s.", p.Binary, out, rangeText(p))
 	}
 
-	from, before := versionNumber.FindStringSubmatch(p.SupportedFrom), versionNumber.FindStringSubmatch(p.SupportedBefore)
-	tooOld := from != nil && semver.Compare(semverOf(found), semverOf(from)) < 0
-	tooNew := before != nil && semver.Compare(semverOf(found), semverOf(before)) >= 0
+	got := semverOf(found)
 
-	if tooOld || tooNew {
+	if semver.Compare(got, "v"+p.SupportedFrom) < 0 || semver.Compare(got, "v"+p.SupportedBefore) >= 0 {
 		return fmt.Sprintf("%s is at version %s.%s.%s, which beehave does not support. It supports %s, so the step is not started. Install a version in that range.",
 			p.Binary, found[1], found[2], found[3], rangeText(p))
 	}

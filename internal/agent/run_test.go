@@ -533,7 +533,7 @@ func TestRunner_DoesNotStart(t *testing.T) { //nolint:paralleltest // t.Setenv c
 		assert.Contains(t, got.Note, `agent "pi" cannot be started yet`)
 	})
 
-	t.Run("opencode_is_not_supported_yet", func(t *testing.T) { //nolint:paralleltest // the parent test sets PATH
+	t.Run("opencode_with_no_adapter_in_the_spec_does_not_start", func(t *testing.T) { //nolint:paralleltest // the parent test sets PATH
 		f := newFixture(t, "opencode", opencode.Name, "")
 
 		got := agent.Runner{}.Run(context.Background(), f.spec)

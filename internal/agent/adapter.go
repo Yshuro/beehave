@@ -41,7 +41,8 @@ type Profile struct {
 	Sandbox    bool
 	MinVersion string
 	// SupportedFrom and SupportedBefore bound the versions of the CLI that the adapter has a recording of: a run on an older version, on SupportedBefore or on a
-	// later one does not start, whatever the spec sets, and neither does a run whose version cannot be read. An empty value sets no bound on that side.
+	// later one does not start, whatever the spec sets, and neither does a run whose version cannot be read. Both are full versions such as "1.19.5", or both are
+	// empty and the profile sets no range.
 	// A CLI older than SupportedFrom can fail to load the hook of Guard, and then it runs every shell command with no check and exits with code 0.
 	SupportedFrom   string
 	SupportedBefore string
