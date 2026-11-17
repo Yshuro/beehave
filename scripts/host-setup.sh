@@ -178,7 +178,7 @@ check_unit_path() {
 	unit_path=$(systemctl --user show-environment | sed -n 's/^PATH=//p')
 	case $unit_path in
 	"$go_root/bin:$gobin:"*) ;;
-	*) fail "the PATH of the user manager does not start with $go_root/bin:$gobin. An environment.d file that sorts after $(basename "$env_file") sets PATH. Find it with grep -l '^PATH=' in /etc/environment.d and /usr/lib/environment.d, and remove its PATH line or rename it" ;;
+	*) fail "the PATH of the user manager does not start with $go_root/bin:$gobin. An environment.d file that sorts after $(basename "$env_file") sets PATH. Find it with grep -l '^PATH=' in ~/.config/environment.d, /etc/environment.d, /run/environment.d, /usr/local/lib/environment.d and /usr/lib/environment.d, and remove its PATH line or rename it" ;;
 	esac
 }
 
@@ -222,10 +222,15 @@ go_pin() {
 	printf '%s\n' "${line#toolchain go}"
 }
 
-# module_version <tool>: the command that prints "<module> <version>" from the mod line of `go version -m`, for a tool that go install builds.
+# module_version <tool> <form>: the command that prints the mod line of `go version -m`, for a tool that go install builds.
+# The form pair prints "<module> <version>" and the form line prints the whole line. A binary with no mod line prints "no mod line" and fails.
 # The Go linker writes that line, so it names the pin of such a tool. The tool's own version text says "dev" or nothing.
 module_version() {
-	printf '%s\n' "go version -m \"\$(command -v $1)\" | awk -F '\\t' '\$2 == \"mod\" { print \$3, \$4; found = 1; exit } END { exit !found }'"
+	case $2 in
+	pair) shown='$3, $4' ;;
+	*) shown='$0' ;;
+	esac
+	printf '%s\n' "go version -m \"\$(command -v $1)\" | awk -F '\\t' '\$2 == \"mod\" { print $shown; found = 1; exit } END { if (!found) { print \"no mod line\"; exit 1 } }'"
 }
 
 # tools prints one line per tool, split by tabs: the name, how its version is read (text: the first line of the command, mod: the mod line
@@ -241,20 +246,20 @@ tools() {
 	actionlint_v=$(script_pin actionlint_version)
 	printf '%s\t%s\t%s\t%s\n' \
 		go text 'go version' "$go_v" \
-		golangci-lint mod "$(module_version golangci-lint)" "v$lint_v" \
+		golangci-lint mod "$(module_version golangci-lint pair)" "v$lint_v" \
 		ai-rulez text 'ai-rulez --version' "$rulez_v" \
-		gotestsum mod "$(module_version gotestsum)" "v$gotestsum_v" \
-		gitleaks mod "$(module_version gitleaks)" "v$gitleaks_v" \
-		gremlins mod "$(module_version gremlins)" "v$gremlins_v" \
-		go-test-coverage mod "$(module_version go-test-coverage)" - \
-		govulncheck mod "$(module_version govulncheck)" - \
-		deadcode mod "$(module_version deadcode)" - \
+		gotestsum mod "$(module_version gotestsum pair)" "v$gotestsum_v" \
+		gitleaks mod "$(module_version gitleaks pair)" "v$gitleaks_v" \
+		gremlins mod "$(module_version gremlins pair)" "v$gremlins_v" \
+		go-test-coverage mod "$(module_version go-test-coverage line)" - \
+		govulncheck mod "$(module_version govulncheck line)" - \
+		deadcode mod "$(module_version deadcode line)" - \
 		dolt text 'dolt version' - \
 		bd text 'bd --version' - \
 		jq text 'jq --version' - \
 		uv text 'uv --version' "$uv_v" \
 		shellcheck text 'shellcheck --version | grep -m 1 "^version:"' - \
-		actionlint mod "$(module_version actionlint)" "v$actionlint_v" \
+		actionlint mod "$(module_version actionlint pair)" "v$actionlint_v" \
 		bats text 'bats --version' -
 }
 

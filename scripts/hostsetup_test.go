@@ -292,7 +292,7 @@ func (h *fakeHost) envFile() string {
 	return filepath.Join(h.home, ".config/environment.d/zz-beehave.conf")
 }
 
-// setModule makes the fake go print another module and version, split by a space, on the mod line of a tool.
+// setModule makes the fake go print another module and version, split by a space, on the mod line of a tool. The text "-" prints no mod line.
 func (h *fakeHost) setModule(tool, module string) {
 	h.t.Helper()
 	h.write(filepath.Join(h.state, "mod-"+tool), module+"\n", 0o644)
@@ -312,6 +312,7 @@ func fakeGo(version string) string {
 		"\t[ -f \"$3\" ] || { echo \"$3: no such file\" >&2; exit 1; }\n" +
 		"\tname=${3##*/}\n\tmodule='example.com/tool v0.1.0'\n\tcase $name in\n" + cases.String() + "\tesac\n" +
 		"\t[ ! -f \"$FAKE_STATE/mod-$name\" ] || module=$(cat \"$FAKE_STATE/mod-$name\")\n" +
+		"\tif [ \"$module\" = - ]; then printf '%s: " + version + "\\n' \"$3\"; exit 0; fi\n" +
 		"\tset -- \"$3\" $module\n" +
 		"\tprintf '%s: " + version + "\\n\\tpath\\t%s/cmd\\n\\tmod\\t%s\\t%s\\th1:x=\\n\\tdep\\texample.com/dep\\tv1.0.0\\th1:y=\\n' \"$1\" \"$2\" \"$2\" \"$3\"\n" +
 		"\texit 0\nfi\n" +
@@ -911,8 +912,13 @@ func TestHostSetup_ProvesEachToolThroughAUserUnit(t *testing.T) {
 			assert.Contains(t, record, "\ntool "+name+" ", name)
 		}
 
-		for name, module := range goModules {
-			assert.Contains(t, record, "\ntool "+name+" "+module+"\n", "the record holds the module and the version of "+name)
+		for _, name := range goInstalledPinned {
+			assert.Contains(t, record, "\ntool "+name+" "+goModules[name]+"\n", "the record holds the module and the version of "+name)
+		}
+
+		for _, name := range []string{"go-test-coverage", "govulncheck", "deadcode"} {
+			module, version, _ := strings.Cut(goModules[name], " ")
+			assert.Contains(t, record, "\ntool "+name+" \tmod\t"+module+"\t"+version+"\th1:x=\n", "the record holds the whole mod line of "+name)
 		}
 
 		assert.Contains(t, record, "tool shellcheck version: 0.10.0\n")
@@ -972,6 +978,25 @@ func TestHostSetup_FailsWhenAToolIsNotAtItsPin(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, out, tc.message)
 			assert.Contains(t, out, tc.text, "the failure names the version found")
+			assert.NotContains(t, out, done)
+		})
+	}
+}
+
+func TestHostSetup_FailsWhenABinaryHasNoModuleLine(t *testing.T) {
+	t.Parallel()
+
+	for _, tool := range []string{"gremlins", "deadcode"} {
+		t.Run(tool, func(t *testing.T) {
+			t.Parallel()
+
+			h := newFakeHost(t)
+			h.setModule(tool, "-")
+
+			out, err := h.setup()
+
+			require.Error(t, err)
+			assert.Contains(t, out, tool+" does not run in a user unit: no mod line")
 			assert.NotContains(t, out, done)
 		})
 	}
@@ -1139,6 +1164,37 @@ func TestHostSetup_FailsWhenALaterFileReplacesThePath(t *testing.T) {
 	assert.Contains(t, out, "sorts after zz-beehave.conf")
 	assert.NotContains(t, out, done)
 	assert.NotContains(t, h.read(h.log), "make setup", "the check comes before the installs of the project")
+}
+
+func TestHostSetup_FailsWhenALaterFilePrependsToThePath(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:${PATH}\n", 0o644)
+
+	out, err := h.setup()
+
+	require.Error(t, err)
+	assert.Contains(t, out, "the PATH of the user manager does not start with "+h.sysroot+"/usr/local/go/bin:"+h.home+"/go/bin")
+	assert.NotContains(t, out, done)
+}
+
+func TestHostSetup_ChecksThePathAgainOnASecondRun(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.setup()
+	require.NoError(t, err, out)
+	require.Equal(t, done, lastLine(out))
+
+	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:/usr/bin:/bin\n", 0o644)
+
+	out, err = h.setup()
+
+	require.Error(t, err)
+	assert.Contains(t, out, h.envFile()+" is up to date", "the file is not written again")
+	assert.Contains(t, out, "the PATH of the user manager does not start with "+h.sysroot+"/usr/local/go/bin:"+h.home+"/go/bin")
+	assert.NotContains(t, out, done)
 }
 
 func TestHostSetup_ReadsThePinOfAGoInstalledToolFromItsModuleLine(t *testing.T) {
