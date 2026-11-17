@@ -558,6 +558,33 @@ func TestLostJob_ContinueWithNoProofWaitsAgainAndStartsNoGateJob(t *testing.T) {
 	assert.NotContains(t, stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.1", "the run waits for the next answer")
 }
 
+func TestLostJob_EachAnswerReadsTheProofInTheNextNumberedStep(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, _ := lostHarness(t, 2*time.Minute)
+	engine := h.engine(t)
+
+	runInBackground2(engine, writeFlow(t, bodyFlow(lostGateBody)))
+	waitForTheLostJob(t, h, testItem)
+
+	before := hosts.proofReads()
+	client := h.client(t, testVersion)
+
+	require.NoError(t, client.Answer(testItem, "CONTINUE"))
+	eventually(t, func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.0") })
+
+	require.NoError(t, client.Answer(testItem, "CONTINUE"))
+	eventually(t, func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.1") })
+
+	steps := stepNamesOf(t, engine, testRun)
+
+	assert.Contains(t, steps, "gate:check#1/lost-ask.0")
+	assert.Contains(t, steps, "gate:check#1/lost-ask.1", "the second answer reads the proof in the next numbered step")
+	assert.NotContains(t, steps, "gate:check#1/lost-ask.-1")
+	assert.Equal(t, before+2, hosts.proofReads(), "each answer reads the proof once, in a step of its own")
+	assert.EqualValues(t, 1, h.gate.submits.Load(), "no gate job started")
+}
+
 // goldenLostAskSteps are the steps of the item run of lostGateBody whose gate waited for the owner, and whose first answer came after the host came back.
 // The read of the proof after an answer is a sub-step of the gate call, recorded before the gate call itself.
 var goldenLostAskSteps = []string{"host_up:start#1", "gate:tip", "exclusive", "gate:check#1/lost-ask.0", "scope:check#1", "gate:check#1"}
