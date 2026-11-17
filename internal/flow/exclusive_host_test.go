@@ -251,6 +251,7 @@ func TestExclusiveHost_ReportsABuildJobThatTheStoreRefuses(t *testing.T) {
 }
 
 // The cancel of an old gate cancels its build job in the same call, before any tick of the engine, so no later write by id can reach a reopened job.
+// DBOS commits each level of the cancel on its own, so the test waits for the job to show the cancel and does not read it once.
 func TestExclusiveHost_ANewHeadCancelsTheBuildJobOfTheOldGateWithTheGate(t *testing.T) {
 	t.Parallel()
 
@@ -270,10 +271,11 @@ func TestExclusiveHost_ANewHeadCancelsTheBuildJobOfTheOldGateWithTheGate(t *test
 		return err == nil && len(rows) == 1
 	})
 
-	jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName))
-	require.NoError(t, err)
-	require.Len(t, jobs, 1, "only the old gate queued a build job")
-	assert.Equal(t, dbos.WorkflowStatusCancelled, jobs[0].Status, "the cancel of the old gate reached its build job without a tick")
+	require.Eventually(t, func() bool {
+		jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName))
+
+		return err == nil && len(jobs) == 1 && jobs[0].Status == dbos.WorkflowStatusCancelled
+	}, eventTimeout, pollEvery, "the cancel of the old gate reached the only build job without a tick")
 
 	require.ErrorIs(t, endsAfterTicks(t, h, old).err, errSuperseded)
 	close(gated.release)
