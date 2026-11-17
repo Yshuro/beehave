@@ -16,7 +16,8 @@ import (
 
 const (
 	engineLockName = "engine.lock"
-	// probeLockName names the lock that serializes every check of the engine lock and the start of an engine. A process holds it for microseconds, except giveBackUnowned, which holds it for a release.
+	// probeLockName names the lock that serializes every check of the engine lock and the start of an engine, and a cancel and a resume of a client.
+	// A process holds it for microseconds, except a cancel, which holds it for the cancel and its release, and a resume, which holds it for the reopen.
 	probeLockName = "probe.lock"
 	// engineVersionName is the file where the live engine writes its version. It is not the lock file: atomicfile.Write renames a new file over the old one, and a rename over a file that holds a lock would give a second process a new file to lock.
 	engineVersionName = "engine.version"
@@ -54,7 +55,7 @@ func lockFile(dir, name string) *flock.Flock {
 }
 
 // engineState reports whether an engine holds the state folder, and what that engine wrote about itself.
-// It holds probe.lock for the whole check, and an engine holds probe.lock while it takes the engine lock and writes its files. So a held engine lock is an engine that has written its files, or a release of giveBackUnowned, which holds probe.lock too and so never meets a check.
+// It holds probe.lock for the whole check, and an engine holds probe.lock while it takes the engine lock and writes its files. So a held engine lock is an engine that has written its files, or the release of a cancel, which holds probe.lock too and so never meets a check.
 // A check that finds the engine lock free removes the files that a stopped engine left, and returns nothing from them.
 // The version and the info are empty while an engine shuts down: it removes the files before it frees the lock.
 func engineState(dir string) (running bool, live liveEngine, err error) {

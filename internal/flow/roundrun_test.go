@@ -218,6 +218,22 @@ func TestRoundRun_CancelRunRefusesARunOfAnotherBuildAndARunThatHasEnded(t *testi
 	<-done
 }
 
+// A finished run is refused, and the refusal names its state.
+func TestRoundRun_CancelRunRefusesARunThatFinished(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	engine := harness.engine(t)
+	client := harness.client(t, testVersion)
+
+	_, err := engine.Run(testItem, testProject)
+	require.NoError(t, err)
+
+	err = client.CancelRun("item-12-r1")
+	require.ErrorIs(t, err, errWrongState)
+	require.ErrorContains(t, err, "item-12-r1 is done and has nothing to cancel")
+}
+
 func TestRoundRun_CancelRunReportsAStoreThatIsGone(t *testing.T) {
 	t.Parallel()
 

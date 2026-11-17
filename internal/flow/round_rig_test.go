@@ -276,6 +276,8 @@ type roundRig struct {
 	answers []string // the answers to the waits in order, which win over answer
 	// deadlines is the deadline of each wait that run answered, as the status showed it, in order.
 	deadlines []time.Time
+	// questions is the text of each wait that run answered, in order.
+	questions []string
 	// forge, when set, is the merger of the run in place of the land merger of the batch rig: the real merge over a forge fake.
 	forge merger
 }
@@ -495,6 +497,14 @@ func (r *roundRig) run(t *testing.T) (ItemResult, error) {
 
 	engine := r.engine(t)
 	r.last = engine
+
+	return r.runOn(t, engine)
+}
+
+// runOn is run on an engine that the test built.
+func (r *roundRig) runOn(t *testing.T, engine *Engine) (ItemResult, error) {
+	t.Helper()
+
 	done := make(chan runOutcome, 1)
 
 	go func() {
@@ -540,16 +550,30 @@ func (r *roundRig) answerOnce(t *testing.T, client *Client, owner *answering) {
 		return
 	}
 
-	if owner.open {
+	if owner.open || !recordsItsReceive(client, infos[at].ID) {
 		return
 	}
 
-	r.deadlines = append(r.deadlines, infos[at].Deadline)
+	// The deadline is read after the record check: the status read above can come before the record.
+	view, err := client.Steps(infos[at].ID)
+	if err != nil {
+		return
+	}
+
+	r.deadlines = append(r.deadlines, view.Deadline)
+	r.questions = append(r.questions, infos[at].Question)
 
 	require.NoError(t, client.AnswerAs(testItem, shipOwner, r.answerFor(owner.given)))
 
 	owner.given++
 	owner.open = true
+}
+
+// recordsItsReceive reports whether the open run has recorded the deadline of its receive. A wait shows its question before that record, and the status of a run reads its deadline from that record.
+func recordsItsReceive(client *Client, id string) bool {
+	records, err := client.records(id)
+
+	return err == nil && len(records) > 0 && records[len(records)-1].StepName == sleepStep
 }
 
 // answerFor is the answer to the nth wait of the round: the nth of answers, then answer for the first wait, and STOP for the rest.

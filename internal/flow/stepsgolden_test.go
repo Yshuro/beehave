@@ -48,7 +48,7 @@ var goldenShapes = map[string][]string{
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
 		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,source,stacked_rules,token_rules,tracker,traps,vars",
-		"gate: checks,head,new_tests,passed,report,required,steps,tree",
+		"gate: checks,head,host_loss,new_tests,passed,report,required,steps,tree",
 		"gather: results",
 		"host_teardown: down,reason",
 		"host_up: host,started",
@@ -61,6 +61,7 @@ var goldenShapes = map[string][]string{
 		"pr_assign: issues,number",
 		"pr_comment: number",
 		"pr_open: created,number,stack",
+		"pr_state: state",
 		"preflight: author,code,foreign,head,ok,pr,reason,stop",
 		"queue: free,rows",
 		"spawn: runs",
@@ -84,7 +85,7 @@ var goldenKinds = map[string][]string{
 	"star30": {
 		"agent", "before_review", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
 		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "merge", "now",
-		"pr_assign", "pr_comment", "pr_open", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
+		"pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
 	},
 }
 

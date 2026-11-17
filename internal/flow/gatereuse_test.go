@@ -38,6 +38,24 @@ func TestGateReuse_ASecondGateOnTheSameKeyReusesThePassAndRunsNoGate(t *testing.
 	assert.Contains(t, h.commands.ran()[0], "tree-1")
 }
 
+func TestGateReuse_AReusedPassHasAnEmptyHostLossWhateverTheEarlierGateRecorded(t *testing.T) {
+	t.Parallel()
+
+	// A pass that a build before the host loss recorded holds no host_loss, and passOf still finds it (TestPassOf_AnotherProjectWithTheSameKeyIsNotAPass).
+	// The reuse reads only the steps of that pass and builds the result again, so the field is the empty record of this build.
+	const body = "a = gate(name = \"first\")\nb = gate(name = \"second\")\ncommand(run = [\"show\", b.report, \"loss=%s:%d\" % (type(b.host_loss), len(b.host_loss))])\n"
+
+	h := reuseHarness(t, []GateResult{{Passed: true, Head: gatedHead, Tree: "tree-1", Steps: stepsPass}}, []GateKey{gateKey("k", gatedHead), gateKey("k", rewrittenHead)})
+
+	_, err := walkText(t, h, bodyFlow(body))
+
+	require.NoError(t, err)
+	assert.Equal(t, 1, h.gate.calls, "the second gate reused the pass")
+	require.Len(t, h.commands.ran(), 1)
+	assert.Contains(t, h.commands.ran()[0], "reused the gate pass of run ")
+	assert.Contains(t, h.commands.ran()[0], "loss=dict:0")
+}
+
 func TestGateReuse_AnotherKeyRunsTheGate(t *testing.T) {
 	t.Parallel()
 

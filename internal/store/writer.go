@@ -86,7 +86,9 @@ func HasMarker(text, key string) bool {
 // writes one item. SetStatus is idempotent: the same status twice leaves one state. Assign sets the one assignee of an item, and the same assignee twice leaves one state.
 // A tracker that keeps no assignee refuses Create with an assignee and refuses Assign. Comment adds a comment once for each item and key.
 // An adapter records the key in the item body or in the comment text, as the line Marker(key), and looks it up before it writes.
-// A key and a call are for one writer: callers pass the run id inside the key, so two runs never share a key.
+// The lookup and the write are separate calls, so two writers of one key at the same time can file two items. Callers pass the run id inside the key, so two runs
+// do not share a key; a caller that shares a key between runs holds LockKey of the key around Create. The lock covers the writers that share one state folder on
+// one host: two hosts that share one tracker can still file two items for one key.
 type Writer interface {
 	Create(ctx context.Context, key string, item NewItem) (id string, created bool, err error)
 	SetStatus(ctx context.Context, id string, status Status) error

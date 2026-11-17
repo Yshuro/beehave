@@ -137,7 +137,7 @@ func TestRun_APushAfterReadyThatCannotBeDraftedNamesBothFailures(t *testing.T) {
 	_, err := engine.Run(testItem, testProject)
 
 	require.ErrorIs(t, err, errFake)
-	require.ErrorContains(t, err, "put pull request 7 back to draft")
+	require.ErrorContains(t, err, "cannot make pull request 7 a draft again")
 }
 
 func TestRun_AFailedReadOfTheHeadAfterReadyPutsThePullRequestBackToDraft(t *testing.T) {

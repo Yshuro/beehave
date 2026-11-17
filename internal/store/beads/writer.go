@@ -24,6 +24,7 @@ type bdComment struct {
 // Create files an item for the key and returns its id. It writes the line `beehave-key: <key>` at the end of the description and, before it writes,
 // lists all items whose description holds that line, so a repeated key returns the first item. bd create --silent prints the new id and nothing else.
 // A parent is set with --parent. The lookup matches the whole line, so the key r:1 does not match r:10.
+// The list and the create are separate calls, so two writers of one key at the same time need the key lock of the caller (see store.Writer).
 func (s *Store) Create(ctx context.Context, key string, item store.NewItem) (string, bool, error) {
 	found, err := s.keyed(ctx, key)
 	if err != nil || found != "" {

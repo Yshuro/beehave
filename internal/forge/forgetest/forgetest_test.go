@@ -311,6 +311,67 @@ func TestCheckForgeFails_AcceptsAForgeThatErrorsEverywhereAndFailsOneThatDoesNot
 	assert.Contains(t, r.failures, "Overlap: want an error from a failed command, got none")
 }
 
+// memSyncer serves the Syncer rules. wrong changes the answers; down fails every call.
+type memSyncer struct {
+	wrong bool
+	down  bool
+}
+
+func (m memSyncer) CommitsAhead(context.Context, string, string) (int, error) {
+	if m.down {
+		return 0, errDown
+	}
+
+	if m.wrong {
+		return 0, nil
+	}
+
+	return forgetest.SyncAhead, nil
+}
+
+func (m memSyncer) MergeBranch(context.Context, string, string) (string, error) {
+	if m.down {
+		return "", errDown
+	}
+
+	if m.wrong {
+		return "", nil
+	}
+
+	return forgetest.SyncMerge, nil
+}
+
+func TestCheckSyncer_AcceptsRightAnswersAndFailsWrongOnes(t *testing.T) {
+	t.Parallel()
+
+	r := &recorder{}
+	forgetest.CheckSyncer(r, memSyncer{})
+	assert.Empty(t, r.failures)
+
+	r = &recorder{}
+	forgetest.CheckSyncer(r, memSyncer{wrong: true})
+	assert.Contains(t, r.failures, "commits ahead: got 0, want 3")
+	assert.Contains(t, r.failures, `merge commit: got , want 89abcdef0123456789abcdef0123456789abcdef`)
+
+	r = &recorder{}
+	forgetest.CheckSyncer(r, memSyncer{down: true})
+	assert.Contains(t, r.failures, "CommitsAhead: unexpected error: down")
+	assert.Contains(t, r.failures, "MergeBranch: unexpected error: down")
+}
+
+func TestCheckSyncerFails_AcceptsASyncerThatErrorsEverywhereAndFailsOneThatDoesNot(t *testing.T) {
+	t.Parallel()
+
+	r := &recorder{}
+	forgetest.CheckSyncerFails(r, memSyncer{down: true})
+	assert.Empty(t, r.failures)
+
+	r = &recorder{}
+	forgetest.CheckSyncerFails(r, memSyncer{})
+	assert.Contains(t, r.failures, "CommitsAhead: want an error from a failed command, got none")
+	assert.Contains(t, r.failures, "MergeBranch: want an error from a failed command, got none")
+}
+
 func TestTestForge_RunsBothSuitesOnAFactory(t *testing.T) {
 	t.Parallel()
 

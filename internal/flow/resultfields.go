@@ -24,6 +24,7 @@ func writeOutputs(stdout, stderr string, rc int, key string, skipped bool) map[s
 // gateOutputs records the fields of a GateResult. A gate with no step records an empty list, never a null.
 // required holds the names that the gate list of the project had when the gate ran. A merge reads them from this record, never from the config of the day.
 // checks is what the log of a candidate job gave. new_tests is the list of its new test names, and a gate with no checks records an empty list and a zero record.
+// host_loss is an empty dict here. Only a gate whose host job was lost and proved unable to run fills it.
 func gateOutputs(passed bool, head, tree, report string, steps []GateStep, required []string, checks *GateChecks) map[string]any {
 	recorded := GateChecks{}
 	if checks != nil {
@@ -34,7 +35,7 @@ func gateOutputs(passed bool, head, tree, report string, steps []GateStep, requi
 
 	return map[string]any{
 		"passed": passed, "head": head, treeName: tree, "report": report, "steps": append([]GateStep{}, steps...), "required": append([]string{}, required...),
-		"checks": recorded, "new_tests": recorded.NewTests,
+		"checks": recorded, "new_tests": recorded.NewTests, hostLossKey: map[string]any{},
 	}
 }
 
@@ -57,7 +58,7 @@ func answerOutputs(answer string, answers map[string]string, timedOut bool) map[
 }
 
 func mergeOutputs(state, reason string) map[string]any {
-	return map[string]any{"state": state, reasonKey: reason}
+	return map[string]any{stateField: state, reasonKey: reason}
 }
 
 func createOutputs(id string, created bool) map[string]any {
@@ -77,6 +78,9 @@ func prCommentOutputs(number int) map[string]any { return map[string]any{numberF
 func openOutputs(r OpenResult) map[string]any {
 	return map[string]any{numberField: r.Number, "created": r.Created, "stack": r.Stack}
 }
+
+// prStateOutputs are the fields of pr_state: the state of the pull request, OPEN, CLOSED or MERGED.
+func prStateOutputs(state string) map[string]any { return map[string]any{stateField: state} }
 
 // boardOutputs are the fields of board_sync: the number of the pull request or issue, and the status that the read-back showed.
 func boardOutputs(number int, status string) map[string]any {
