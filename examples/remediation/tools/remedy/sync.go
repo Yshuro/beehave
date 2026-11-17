@@ -12,7 +12,7 @@ import (
 const (
 	syncCheckUsage = "sync --base <branch> [--trunk <branch>]"
 	syncLandUsage  = "sync land --pr <number> --head <sha> --base-tip <sha>"
-	syncUsage      = "usage: remedy " + syncCheckUsage + "\n       remedy " + syncLandUsage + "\n"
+	syncUsage      = "usage: remedy sync --base <branch> [--trunk <branch>]\n       remedy sync land --pr <number> --head <sha> --base-tip <sha>\n"
 	landWord       = "land"
 )
 

@@ -41,6 +41,16 @@ func TestCommitsAhead_ReadsTheCompareEndpointOfHeadAgainstBase(t *testing.T) {
 	assert.Equal(t, [][]string{{"api", "repos/" + repo + "/compare/sync/x...main", "--jq", ".ahead_by"}}, run.Calls)
 }
 
+func TestCommitsAhead_ZeroIsACountAndNotARefusal(t *testing.T) {
+	t.Parallel()
+
+	f, _ := fixed(t, "0\n")
+
+	got, err := f.CommitsAhead(context.Background(), "sync/x", "main")
+	require.NoError(t, err, "a base that holds the head answers 0")
+	assert.Equal(t, 0, got)
+}
+
 func TestCommitsAhead_AnAnswerThatIsNotACountIsARefusalNeverZero(t *testing.T) {
 	t.Parallel()
 

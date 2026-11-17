@@ -283,19 +283,19 @@ func (s *syncer) land(req LandRequest, base, head string, draft bool) (Result, e
 		return Result{}, err
 	}
 
-	result := Result{PR: req.PR, Head: headTip, BaseTip: baseTip, Branch: head}
-
-	switch {
-	case baseTip != req.BaseTip:
-		result.State = Stale
-	case headTip != req.Head:
-		result.State = HeadMoved
-	default:
-		result.State = Landed
-		err = s.merge(req, draft)
+	result := Result{PR: req.PR, Head: headTip, BaseTip: baseTip, Branch: head, State: Stale}
+	if baseTip != req.BaseTip {
+		return result, nil
 	}
 
-	return result, err
+	result.State = HeadMoved
+	if headTip != req.Head {
+		return result, nil
+	}
+
+	result.State = Landed
+
+	return result, s.merge(req, draft)
 }
 
 // merge marks a draft ready and merges it pinned to the gated head. A failed merge puts the draft back, so no person can merge a head that the round did not land.
