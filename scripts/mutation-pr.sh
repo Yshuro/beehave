@@ -5,6 +5,8 @@
 #   BASE is the branch or commit that the pull request targets, for example origin/integration/r1.
 #   There is no default, because the base differs from one pull request to the next.
 #   MUTATION_TIMEOUT is the time limit for the gremlins run, a positive whole number of seconds. The default is 1200.
+#   MUTATION_WORKERS is the number of gremlins workers, a positive whole number. The default is one for each four cores, at least one.
+#   "scripts/mutation-pr.sh --print-workers" prints that number and exits; make mutation uses it.
 #   A run that exceeds the limit fails. The script needs git, go, gremlins, jq and timeout (or gtimeout) on the path.
 #   The "not applicable" result needs git only.
 #
@@ -29,6 +31,26 @@
 # skip are exactly the mutants on the changed lines of the diff, built the way gremlins builds them. An empty report,
 # or one that does not match, fails.
 set -eu
+
+# The worker count of gremlins: one worker for each four cores, at least one. Gremlins starts one worker for each core
+# by default, and each worker runs a test binary that runs its own tests in parallel, so the default overloads the host.
+workers=${MUTATION_WORKERS:-}
+case $workers in
+*[!0-9]* | 0*)
+	echo "mutation-pr: MUTATION_WORKERS is \"$workers\". Set it to a positive whole number of workers, such as 4."
+	exit 2
+	;;
+esac
+default_workers() {
+	cores=$(getconf _NPROCESSORS_ONLN)
+	workers=$((cores / 4))
+	[ "$workers" -ge 1 ] || workers=1
+}
+if [ $# -eq 1 ] && [ "$1" = --print-workers ]; then
+	[ -n "$workers" ] || default_workers
+	echo "$workers"
+	exit 0
+fi
 
 if [ $# -ne 1 ] || [ -z "$1" ]; then
 	echo "usage: scripts/mutation-pr.sh BASE   (BASE is the branch the pull request targets, for example origin/integration/r1)" >&2
@@ -91,8 +113,9 @@ export "GIT_CONFIG_KEY_$git_config_count=diff.noprefix" "GIT_CONFIG_VALUE_$git_c
 export "GIT_CONFIG_KEY_$((git_config_count + 1))=diff.mnemonicPrefix" "GIT_CONFIG_VALUE_$((git_config_count + 1))=false"
 export GIT_CONFIG_COUNT=$((git_config_count + 2))
 
+[ -n "$workers" ] || default_workers
 status=0
-"$limiter" -k 30 "$limit" gremlins unleash --diff "$base" --output "$report" . || status=$?
+"$limiter" -k 30 "$limit" gremlins unleash --diff "$base" --output "$report" --workers "$workers" . || status=$?
 if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
 	echo "mutation-pr: the run exceeded MUTATION_TIMEOUT=${limit}s"
 	exit 1
