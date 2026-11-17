@@ -56,6 +56,15 @@ env MUTATION_WORKERS=many
 exitcode 2 sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: MUTATION_WORKERS is "many"\.'
 ! stdout '^the stub gremlins started$'
+env MUTATION_WORKERS=08
+exitcode 2 sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: MUTATION_WORKERS is "08"\.'
+env MUTATION_WORKERS=-2
+exitcode 2 sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: MUTATION_WORKERS is "-2"\.'
+env MUTATION_WORKERS=4x
+exitcode 2 sh repo/scripts/mutation-pr.sh --print-workers
+stdout '^mutation-pr: MUTATION_WORKERS is "4x"\.'
 
 -- gomod --
 module example.com/r
