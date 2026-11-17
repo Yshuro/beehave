@@ -18,6 +18,32 @@ var (
 	quotedScope = regexp.MustCompile(`'([^']+)'`)
 )
 
+// workflowRefusal is the text of the refusal that GitHub gives when the token cannot change workflow files.
+const workflowRefusal = "create or update workflow"
+
+// refused returns the refusal of a failed write. It keeps the first line of what gh printed as the detail, and marks a workflow permission refusal.
+func refused(done model.CommandResult, format string, args ...any) *forge.Error {
+	refusal := forge.Refuse(format, args...)
+	refusal.Detail = firstLine(done.Stderr)
+
+	if strings.Contains(done.Stderr, workflowRefusal) {
+		refusal.Err = forge.ErrWorkflowPermission
+	}
+
+	return refusal
+}
+
+// firstLine returns the first non-blank line of the text, trimmed.
+func firstLine(text string) string {
+	for line := range strings.Lines(text) {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+
+	return ""
+}
+
 // MergePR merges a pull request with a merge commit, and only if its head is still sha.
 // A pin that is not a full 40-character commit id is refused before gh runs, because gh merges unpinned when the pin is empty.
 func (f *Forge) MergePR(ctx context.Context, pr int, sha string) error {
@@ -27,7 +53,7 @@ func (f *Forge) MergePR(ctx context.Context, pr int, sha string) error {
 
 	done := f.run.Run(ctx, []string{argPR, argMerge, strconv.Itoa(pr), argRepo, f.repo, "--merge", "--match-head-commit", sha})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot merge pull request %d", pr)
+		return refused(done, "cannot merge pull request %d", pr)
 	}
 
 	return nil
@@ -43,7 +69,7 @@ func (f *Forge) AutoMergePR(ctx context.Context, pr int, sha string) error {
 
 	done := f.run.Run(ctx, []string{argPR, argMerge, strconv.Itoa(pr), argRepo, f.repo, "--merge", "--auto", "--match-head-commit", sha})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot queue the merge of pull request %d", pr)
+		return refused(done, "cannot queue the merge of pull request %d", pr)
 	}
 
 	return nil
@@ -55,7 +81,7 @@ func (f *Forge) AutoMergePR(ctx context.Context, pr int, sha string) error {
 func (f *Forge) DisableAutoMergePR(ctx context.Context, pr int) error {
 	done := f.run.Run(ctx, []string{argPR, argMerge, strconv.Itoa(pr), argRepo, f.repo, "--disable-auto"})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot turn off the queued merge of pull request %d", pr)
+		return refused(done, "cannot turn off the queued merge of pull request %d", pr)
 	}
 
 	return nil
@@ -103,9 +129,9 @@ func scopeNames(list string) []string {
 
 // CreateBranch makes a branch at the commit. An existing branch is an error from the forge.
 func (f *Forge) CreateBranch(ctx context.Context, branch, sha string) error {
-	done := f.run.Run(ctx, []string{argAPI, "-X", "POST", "repos/" + f.repo + "/git/refs", "-f", "ref=refs/heads/" + branch, "-f", "sha=" + sha})
+	done := f.run.Run(ctx, []string{argAPI, "-X", argPost, "repos/" + f.repo + "/git/refs", "-f", "ref=refs/heads/" + branch, "-f", "sha=" + sha})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot create the branch %s", branch)
+		return refused(done, "cannot create the branch %s", branch)
 	}
 
 	return nil
@@ -115,7 +141,7 @@ func (f *Forge) CreateBranch(ctx context.Context, branch, sha string) error {
 func (f *Forge) SetBase(ctx context.Context, pr int, base string) error {
 	done := f.run.Run(ctx, []string{argPR, "edit", strconv.Itoa(pr), argRepo, f.repo, "--base", base})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot set the base of pull request %d to %s", pr, base)
+		return refused(done, "cannot set the base of pull request %d to %s", pr, base)
 	}
 
 	return nil
@@ -124,9 +150,9 @@ func (f *Forge) SetBase(ctx context.Context, pr int, base string) error {
 // AddAssignee assigns a pull request or an issue to a login. The call adds and never replaces: "Users already assigned to an issue are not replaced."
 // https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue
 func (f *Forge) AddAssignee(ctx context.Context, number int, login string) error {
-	done := f.run.Run(ctx, []string{argAPI, "-X", "POST", "repos/" + f.repo + "/issues/" + strconv.Itoa(number) + "/assignees", "-f", "assignees[]=" + login})
+	done := f.run.Run(ctx, []string{argAPI, "-X", argPost, "repos/" + f.repo + "/issues/" + strconv.Itoa(number) + "/assignees", "-f", "assignees[]=" + login})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot assign #%d to %s", number, login)
+		return refused(done, "cannot assign #%d to %s", number, login)
 	}
 
 	return nil
@@ -168,7 +194,7 @@ func (f *Forge) SetBody(ctx context.Context, pr int, body string) error {
 
 	done := f.run.Run(ctx, []string{argPR, "edit", strconv.Itoa(pr), argRepo, f.repo, argBody, body})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot set the body of pull request %d", pr)
+		return refused(done, "cannot set the body of pull request %d", pr)
 	}
 
 	return nil

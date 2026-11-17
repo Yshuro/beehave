@@ -29,6 +29,15 @@ type Opener interface {
 	Unstack(ctx context.Context, pr int) error
 }
 
+// Syncer is the optional side of a forge that brings one branch into another with no checkout. A forge that lacks it cannot sync a branch.
+// CommitsAhead returns the number of commits that head has and base lacks. A failed read is an error, never zero.
+// MergeBranch merges head into base on the forge and returns the sha of the new merge commit. An empty sha means base already holds head, and nothing changed.
+// A merge that conflicts changes nothing and is an error with the cause ErrMergeConflict.
+type Syncer interface {
+	CommitsAhead(ctx context.Context, base, head string) (int, error)
+	MergeBranch(ctx context.Context, base, head string) (string, error)
+}
+
 // AssigneeReads is the optional side of a forge that reads who holds an issue. A forge that lacks it cannot serve the assignee watch of preflight.
 // IssueAssignees returns the logins that hold the issue. An empty repo is the repository of the forge, and any other repo is read on that repository. A failed read is an error, never an empty list.
 type AssigneeReads interface {
