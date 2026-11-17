@@ -45,6 +45,8 @@ type world struct {
 	reads         []string
 	cancelOnMerge context.CancelFunc
 	hangDraft     bool
+	// deadlines holds the deadline of the context of each call that makes a draft, or the zero time when it has none.
+	deadlines []time.Time
 }
 
 func newWorld() *world {
@@ -136,6 +138,11 @@ func (w *world) MergePR(ctx context.Context, pr int, sha string) error {
 
 // SetDraft fails on a canceled context, as a gh call does. With hangDraft set, a call that makes a draft waits for the end of its context, or fails with errHung after 5 seconds.
 func (w *world) SetDraft(ctx context.Context, pr int, draft bool) error {
+	if draft {
+		deadline, _ := ctx.Deadline()
+		w.deadlines = append(w.deadlines, deadline)
+	}
+
 	if w.hangDraft && draft {
 		select {
 		case <-ctx.Done():
@@ -451,6 +458,23 @@ func TestLand_TheReturnToDraftMayTake30Seconds(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, 30*time.Second, roundsync.DraftLimit)
+}
+
+func TestLand_TheReturnToDraftOfLandEndsAtTheDraftLimit(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.fail["MergePR"] = errDown
+
+	before := time.Now()
+	_, err := land(t, w, mergedTip, baseTip)
+	after := time.Now()
+
+	require.ErrorIs(t, err, errDown)
+	require.Len(t, w.deadlines, 1)
+	assert.False(t, w.deadlines[0].Before(before.Add(roundsync.DraftLimit)), "the deadline is at least the draft limit after the call")
+	assert.False(t, w.deadlines[0].After(after.Add(roundsync.DraftLimit)), "the deadline is at most the draft limit after the call")
 }
 
 func TestLand_AReturnToDraftThatHangsEndsAtItsLimit(t *testing.T) {

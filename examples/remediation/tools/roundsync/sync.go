@@ -107,7 +107,6 @@ func Branch(base, trunkTip string) string {
 
 // syncer holds the state of one call. limit is the most time that the return to draft of a landing may take.
 type syncer struct {
-	ctx   context.Context
 	forge Forge
 	req   Request
 	limit time.Duration
@@ -117,7 +116,7 @@ type syncer struct {
 // A trunk with nothing new writes nothing. A conflict leaves the sync branch at the round base tip and opens no pull request.
 // An open sync pull request that is ready is made a draft first, before any merge into the sync branch, so a ready mark that a stopped landing left never carries a new head.
 func Check(ctx context.Context, forge Forge, req Request) (Result, error) {
-	s := &syncer{ctx: ctx, forge: forge, req: req}
+	s := &syncer{forge: forge, req: req}
 
 	ahead, err := forge.CommitsAhead(ctx, req.Base, req.Trunk)
 	if err != nil {
@@ -128,43 +127,43 @@ func Check(ctx context.Context, forge Forge, req Request) (Result, error) {
 		return Result{State: Current}, nil
 	}
 
-	return s.sync()
+	return s.sync(ctx)
 }
 
-func (s *syncer) sync() (Result, error) {
-	baseTip, trunkTip, err := s.tips(s.req.Base, s.req.Trunk)
+func (s *syncer) sync(ctx context.Context) (Result, error) {
+	baseTip, trunkTip, err := s.tips(ctx, s.req.Base, s.req.Trunk)
 	if err != nil {
 		return Result{}, err
 	}
 
 	branch := Branch(s.req.Base, trunkTip)
-	if err := s.ensureBranch(branch, baseTip); err != nil {
+	if err := s.ensureBranch(ctx, branch, baseTip); err != nil {
 		return Result{}, err
 	}
 
-	number, err := s.draftPull(branch)
+	number, err := s.draftPull(ctx, branch)
 	if err != nil {
 		return Result{}, err
 	}
 
-	if stop, done, err := s.mergeAll(branch, baseTip); done || err != nil {
+	if stop, done, err := s.mergeAll(ctx, branch, baseTip); done || err != nil {
 		return stop, err
 	}
 
-	return s.open(branch, baseTip, number)
+	return s.open(ctx, branch, baseTip, number)
 }
 
 // draftPull finds the open pull request of the sync branch, or 0 when there is none, and makes it a draft when it is ready.
 // A pull request that the gh answer does not mark as a draft counts as ready.
-func (s *syncer) draftPull(branch string) (int, error) {
-	rows, err := s.forge.PRList(s.ctx, listLimit, "--state", "open", "--head", branch, "--base", s.req.Base, "--json", "number,isDraft")
+func (s *syncer) draftPull(ctx context.Context, branch string) (int, error) {
+	rows, err := s.forge.PRList(ctx, listLimit, "--state", "open", "--head", branch, "--base", s.req.Base, "--json", "number,isDraft")
 	if err != nil || len(rows) == 0 {
 		return 0, err
 	}
 
 	pull := rows[0]
 	if pull.IsDraft == nil || !*pull.IsDraft {
-		if err := s.forge.SetDraft(s.ctx, pull.Number, true); err != nil {
+		if err := s.forge.SetDraft(ctx, pull.Number, true); err != nil {
 			return 0, err
 		}
 	}
@@ -173,8 +172,8 @@ func (s *syncer) draftPull(branch string) (int, error) {
 }
 
 // tip is the tip of a branch. A branch that is missing is an error.
-func (s *syncer) tip(branch string) (string, error) {
-	sha, found, err := s.forge.BranchRef(s.ctx, branch)
+func (s *syncer) tip(ctx context.Context, branch string) (string, error) {
+	sha, found, err := s.forge.BranchRef(ctx, branch)
 	if err != nil {
 		return "", err
 	}
@@ -187,21 +186,21 @@ func (s *syncer) tip(branch string) (string, error) {
 }
 
 // ensureBranch cuts the sync branch at the round base tip when it does not exist. A repeat call finds it.
-func (s *syncer) ensureBranch(branch, baseTip string) error {
-	_, found, err := s.forge.BranchRef(s.ctx, branch)
+func (s *syncer) ensureBranch(ctx context.Context, branch, baseTip string) error {
+	_, found, err := s.forge.BranchRef(ctx, branch)
 	if err != nil || found {
 		return err
 	}
 
-	return s.forge.CreateBranch(s.ctx, branch, baseTip)
+	return s.forge.CreateBranch(ctx, branch, baseTip)
 }
 
 // mergeAll brings the trunk and then the round base into the sync branch. A source that the branch already holds is not merged again.
 // The round base goes in so the head that the gate runs on holds every commit of the base that the landing keeps.
 // done is true when the call ends here, with the result to show.
-func (s *syncer) mergeAll(branch, baseTip string) (result Result, done bool, err error) {
+func (s *syncer) mergeAll(ctx context.Context, branch, baseTip string) (result Result, done bool, err error) {
 	for _, source := range []string{s.req.Trunk, s.req.Base} {
-		ahead, err := s.forge.CommitsAhead(s.ctx, branch, source)
+		ahead, err := s.forge.CommitsAhead(ctx, branch, source)
 		if err != nil {
 			return Result{}, false, err
 		}
@@ -210,7 +209,7 @@ func (s *syncer) mergeAll(branch, baseTip string) (result Result, done bool, err
 			continue
 		}
 
-		if _, err := s.forge.MergeBranch(s.ctx, branch, source); err != nil {
+		if _, err := s.forge.MergeBranch(ctx, branch, source); err != nil {
 			return s.refusal(err, branch, source, baseTip)
 		}
 	}
@@ -231,9 +230,9 @@ func (s *syncer) refusal(cause error, branch, source, baseTip string) (Result, b
 }
 
 // open opens the pull request of the sync branch as a draft when number is 0, and shows the head that the gate must run on.
-func (s *syncer) open(branch, baseTip string, number int) (Result, error) {
+func (s *syncer) open(ctx context.Context, branch, baseTip string, number int) (Result, error) {
 	if number == 0 {
-		created, err := s.create(branch)
+		created, err := s.create(ctx, branch)
 		if err != nil {
 			return Result{}, err
 		}
@@ -241,7 +240,7 @@ func (s *syncer) open(branch, baseTip string, number int) (Result, error) {
 		number = created
 	}
 
-	head, err := s.tip(branch)
+	head, err := s.tip(ctx, branch)
 	if err != nil {
 		return Result{}, err
 	}
@@ -249,8 +248,8 @@ func (s *syncer) open(branch, baseTip string, number int) (Result, error) {
 	return Result{State: Synced, Branch: branch, PR: number, Head: head, BaseTip: baseTip}, nil
 }
 
-func (s *syncer) create(branch string) (int, error) {
-	return s.forge.CreatePR(s.ctx, model.NewPull{
+func (s *syncer) create(ctx context.Context, branch string) (int, error) {
+	return s.forge.CreatePR(ctx, model.NewPull{
 		Head:  branch,
 		Base:  s.req.Base,
 		Title: fmt.Sprintf("Merge %s into %s", s.req.Trunk, s.req.Base),
@@ -269,7 +268,7 @@ func Land(ctx context.Context, forge Forge, req LandRequest) (Result, error) {
 
 // landWithin is Land with limit as the most time that the return to draft may take.
 func landWithin(ctx context.Context, forge Forge, req LandRequest, limit time.Duration) (Result, error) {
-	s := &syncer{ctx: ctx, forge: forge, limit: limit}
+	s := &syncer{forge: forge, limit: limit}
 
 	pull, err := forge.PRView(ctx, req.PR, "state", "baseRefName", "headRefName", "isDraft")
 	if err != nil {
@@ -281,7 +280,7 @@ func landWithin(ctx context.Context, forge Forge, req LandRequest, limit time.Du
 		return Result{}, err
 	}
 
-	return s.land(req, base, head, pull.IsDraft != nil && *pull.IsDraft)
+	return s.land(ctx, req, base, head, pull.IsDraft != nil && *pull.IsDraft)
 }
 
 // openNames reads the base and head branch names of an open pull request.
@@ -294,20 +293,20 @@ func (s *syncer) openNames(pull model.PullRequest, number int) (base, head strin
 }
 
 // tips reads the tips of two branches.
-func (s *syncer) tips(first, second string) (firstTip, secondTip string, err error) {
-	if firstTip, err = s.tip(first); err != nil {
+func (s *syncer) tips(ctx context.Context, first, second string) (firstTip, secondTip string, err error) {
+	if firstTip, err = s.tip(ctx, first); err != nil {
 		return "", "", err
 	}
 
-	if secondTip, err = s.tip(second); err != nil {
+	if secondTip, err = s.tip(ctx, second); err != nil {
 		return "", "", err
 	}
 
 	return firstTip, secondTip, nil
 }
 
-func (s *syncer) land(req LandRequest, base, head string, draft bool) (Result, error) {
-	baseTip, headTip, err := s.tips(base, head)
+func (s *syncer) land(ctx context.Context, req LandRequest, base, head string, draft bool) (Result, error) {
+	baseTip, headTip, err := s.tips(ctx, base, head)
 	if err != nil {
 		return Result{}, err
 	}
@@ -324,23 +323,23 @@ func (s *syncer) land(req LandRequest, base, head string, draft bool) (Result, e
 
 	result.State = Landed
 
-	return result, s.merge(req, draft)
+	return result, s.merge(ctx, req, draft)
 }
 
 // merge marks a draft ready and merges it pinned to the gated head. A merge that fails or is canceled makes the pull request a draft again.
-func (s *syncer) merge(req LandRequest, draft bool) error {
+func (s *syncer) merge(ctx context.Context, req LandRequest, draft bool) error {
 	if draft {
-		if err := s.forge.SetDraft(s.ctx, req.PR, false); err != nil {
+		if err := s.forge.SetDraft(ctx, req.PR, false); err != nil {
 			return err
 		}
 	}
 
-	err := s.forge.MergePR(s.ctx, req.PR, req.Head)
+	err := s.forge.MergePR(ctx, req.PR, req.Head)
 	if err == nil {
 		return nil
 	}
 
-	return errors.Join(err, backToDraft(s.ctx, s.forge, req.PR, s.limit))
+	return errors.Join(err, backToDraft(ctx, s.forge, req.PR, s.limit))
 }
 
 // backToDraft makes a pull request a draft on a context that a cancel of ctx does not end, within limit.
