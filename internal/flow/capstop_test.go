@@ -148,17 +148,7 @@ func TestCapStop_ARunOutsideAWorkflowCannotSumItsTree(t *testing.T) {
 func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 	t.Parallel()
 
-	rig := newAgentRig(t)
-	opts := rig.h.opts
-	state, err := openStore(opts)
-	require.NoError(t, err)
-
-	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
-	require.NoError(t, err)
-
-	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
-	require.NoError(t, engine.open(t.Context(), opts, state))
-	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+	engine := newAgentRig(t).h.opened(t)
 
 	// The run is a real workflow, so its own id reads fine. The reads of the engine fail at the first read of the climb.
 	sum := func(ctx dbos.Context, in ItemInput) (string, error) {
@@ -187,17 +177,7 @@ func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 func TestCapStop_ACapCheckWhoseTreeReadFailsReturnsTheErrorAndNoStop(t *testing.T) {
 	t.Parallel()
 
-	rig := newAgentRig(t)
-	opts := rig.h.opts
-	state, err := openStore(opts)
-	require.NoError(t, err)
-
-	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
-	require.NoError(t, err)
-
-	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
-	require.NoError(t, engine.open(t.Context(), opts, state))
-	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+	engine := newAgentRig(t).h.opened(t)
 
 	// The run is a real workflow, so its own id reads fine. The tree cap is set and the first read of the climb fails.
 	check := func(ctx dbos.Context, in ItemInput) (string, error) {
@@ -281,16 +261,7 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 	rig.h.opts.MaxRunBudget = 5
 	// The wait is an hour, so only the end of the context of the run can end it.
 	rig.h.capWait = time.Hour
-	opts := rig.h.opts
-	state, err := openStore(opts)
-	require.NoError(t, err)
-
-	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
-	require.NoError(t, err)
-
-	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
-	require.NoError(t, engine.open(t.Context(), opts, state))
-	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+	engine := rig.h.opened(t)
 
 	// The step runs on a context of its own that the test ends once the run is inside the sleep, not on a timer.
 	ends := make(chan context.CancelFunc, 1)

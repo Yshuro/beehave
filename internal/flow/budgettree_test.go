@@ -117,16 +117,7 @@ func deepTree(t *testing.T, rig *agentRig) *Engine {
 func deepTreeOf(t *testing.T, rig *agentRig, outputsOf func(item string) map[string]any) *Engine {
 	t.Helper()
 
-	opts := rig.h.opts
-	state, err := openStore(opts)
-	require.NoError(t, err)
-
-	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
-	require.NoError(t, err)
-
-	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
-	require.NoError(t, engine.open(t.Context(), opts, state))
-	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+	engine := rig.h.opened(t)
 
 	below := map[string]string{"1": "2", "2": "3"}
 

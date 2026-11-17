@@ -708,6 +708,25 @@ func (h *harness) engineWith(t *testing.T, change func(*Engine)) *Engine {
 	return engine
 }
 
+// opened builds and opens an engine over the harness without launching it, so that the test registers its own workflows and then launches. The cleanup shuts it down.
+// engine and engineWith differ: they launch the engine with the workflows of the flow.
+func (h *harness) opened(t *testing.T) *Engine {
+	t.Helper()
+
+	opts := h.opts
+	state, err := openStore(opts)
+	require.NoError(t, err)
+
+	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
+	require.NoError(t, err)
+
+	engine := newEngine(opts, h.deps(), state, held, moduleRegistry(t))
+	require.NoError(t, engine.open(t.Context(), opts, state))
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	return engine
+}
+
 // client opens a client over the harness state folder with the given build version.
 func (h *harness) client(t *testing.T, version string) *Client {
 	t.Helper()
