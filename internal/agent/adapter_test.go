@@ -18,6 +18,17 @@ func TestLaunch_IsEmptyOnlyWhenItAddsNothing(t *testing.T) {
 	assert.False(t, agent.Launch{Loaded: "loaded"}.Empty())
 }
 
+func TestNoUsage_IsAnUnknownReadingThatNamesTheAgent(t *testing.T) {
+	t.Parallel()
+
+	got := agent.NoUsage("robot")
+
+	_, known := got.Usage()
+
+	assert.False(t, known)
+	assert.Equal(t, "the robot agent cannot report usage", got.Reason())
+}
+
 func TestLimit_NameNamesTheKindAndTheWindowOnlyWhenTheCLIGivesOne(t *testing.T) {
 	t.Parallel()
 

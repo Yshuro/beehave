@@ -103,6 +103,31 @@ func TestTestAdapter_PassesACorrectAdapter(t *testing.T) {
 	agenttest.TestAdapter(t, func() agent.Adapter { return good() })
 }
 
+func TestTestAdapter_PassesAnAdapterWithASupportedVersionRange(t *testing.T) {
+	t.Parallel()
+
+	// The fake CLI prints no version, so the suite must answer the version check with the first supported version, or no run would start.
+	agenttest.TestAdapter(t, func() agent.Adapter {
+		a := good()
+		a.profile.SupportedFrom, a.profile.SupportedBefore = "3.0.0", "4.0.0"
+
+		return a
+	})
+}
+
+func TestCheckRun_AnAdapterWhoseRangeTheSuiteVersionMissesDoesNotRun(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.profile.SupportedFrom, a.profile.SupportedBefore = "3.0.0", "3.0.0"
+
+	var r recorder
+
+	agenttest.CheckRun(&r, a, t.TempDir())
+
+	require.NotEmpty(t, r.failures, "a range that holds no version stops every run")
+}
+
 func TestCheckProfile(t *testing.T) {
 	t.Parallel()
 
