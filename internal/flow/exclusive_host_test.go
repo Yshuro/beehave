@@ -250,7 +250,7 @@ func TestExclusiveHost_ReportsABuildJobThatTheStoreRefuses(t *testing.T) {
 	require.ErrorContains(t, err, "queue the build job of item 12 on host box")
 }
 
-// The cancel of an old gate cancels its build job in the same write, before any tick of the engine, so no later write by id can reach a reopened job.
+// The cancel of an old gate cancels its build job in the same call, before any tick of the engine, so no later write by id can reach a reopened job.
 func TestExclusiveHost_ANewHeadCancelsTheBuildJobOfTheOldGateWithTheGate(t *testing.T) {
 	t.Parallel()
 

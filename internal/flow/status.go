@@ -356,7 +356,7 @@ func resultOf(row dbos.WorkflowStatus) (ItemResult, error) {
 
 func stateOf(status dbos.WorkflowStatusType) RunState {
 	switch status {
-	case dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusDelayed:
+	case dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusDelayed, dbos.WorkflowStatusSuspended:
 		return runQueued
 	case dbos.WorkflowStatusSuccess:
 		return runDone

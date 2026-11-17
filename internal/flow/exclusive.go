@@ -300,8 +300,8 @@ func (e *Engine) hostJob(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, 
 }
 
 // onHost runs the call of a gate as a job on the host queue, under the HostKey of the gate, and waits for it. The job is a child run of the gate,
-// so every cancel of the gate reaches it in the same write: WithCancelChildren of DBOS cancels every descendant, grandchildren included, a queued job before it
-// starts and a running one at the next tick. The wait itself never cancels the job: a cancel by id from a wait that stopped could land after a resume
+// so every cancel of the gate reaches it: WithCancelChildren of DBOS cancels each level before it lists the children of that level, so a job that starts
+// during the cancel is listed and canceled, or refused by the owner check of its start. A queued job never starts, and a running one stops at the next tick. The wait itself never cancels the job: a cancel by id from a wait that stopped could land after a resume
 // reopened the job, and fail the replay of the gate. A stop of the engine leaves the job for the next start.
 func (e *Engine) onHost(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) error {
 	return e.runJob(ctx, in, e.hostQueue, out)
@@ -445,7 +445,7 @@ func (e *Engine) stopOlderGates(run dbos.Context, in ExclusiveInput) error {
 // stopSuperseded cancels each gate of the same pull request that is queued or runs for another head than the tip of in, and returns their ids.
 // It reads the head again, because the read at queue time can be old: a gate cancels only while its tip is the head the forge reports now, so it never cancels
 // the gate of the head. The queue then starts the gate of the new head at once: a queued gate never starts, and a running gate stops at the next tick of this engine.
-// The cancel reaches the build job of each old gate in the same write, so the host frees its slot too. A cancel that fails is logged: the old gate then runs to its end.
+// The cancel reaches the build job of each old gate, a job that starts during the cancel included, so the host frees its slot too. A cancel that fails is logged: the old gate then runs to its end.
 func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string {
 	standing, read := e.gateStanding(ctx, in)
 	if !read || standing.Head != in.Tip {
