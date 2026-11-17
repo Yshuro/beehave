@@ -51,7 +51,7 @@ func tapWithPrices(t *testing.T) *sessionTap {
 	prices, err := agent.ParsePrices([]byte(`{"models":{"m":{"input":1,"output":10}}}`))
 	require.NoError(t, err)
 
-	return newSessionTap(usageAdapter{}, prices)
+	return newSessionTap(usageAdapter{}, prices, nil)
 }
 
 func TestSessionTap_EstimatesTheCostFromTheSumOfTheTokensWhenTheCLIReportsNoCost(t *testing.T) {

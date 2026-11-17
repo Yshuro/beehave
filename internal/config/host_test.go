@@ -63,6 +63,15 @@ func TestLoadFolder_HostTableDefaultsAndKeys(t *testing.T) {
 	require.Equal(t, `{cloud="gcp" instance_type="n2-standard-8" region="us-central1"}`, project.Host.Block.String())
 }
 
+func TestLoadFolder_AHostRunLimitOfExactlyOneSecondLoads(t *testing.T) {
+	t.Parallel()
+
+	project, problems := loadProjectText(t, call(clusterProject+", host = "+hostCall(`, max_run = "1s"`)))
+
+	require.Empty(t, problems)
+	require.Equal(t, time.Second, project.Host.MaxRun)
+}
+
 func TestLoadFolder_ALocalProjectHasNoHostTable(t *testing.T) {
 	t.Parallel()
 
@@ -105,8 +114,10 @@ func TestLoadFolder_HostTableRefusals(t *testing.T) {
 		{"zero_stale", call(clusterProject + ", host = " + hostCall(", stale_minutes = 0")), "`host.stale_minutes` must be above zero"},
 		{"negative_stale", call(clusterProject + ", host = " + hostCall(", stale_minutes = -5")), "`host.stale_minutes` must be above zero"},
 		{"negative_disk_wait", call(clusterProject + ", host = " + hostCall(", disk_wait_minutes = -1")), "`host.disk_wait_minutes` must be zero or above and at most 1048576; got -1"},
-		{"bad_max_run", call(clusterProject + ", host = " + hostCall(`, max_run = "soon"`)), "`host.max_run` must be a duration above zero"},
-		{"zero_max_run", call(clusterProject + ", host = " + hostCall(`, max_run = "0s"`)), "`host.max_run` must be a duration above zero"},
+		{"bad_max_run", call(clusterProject + ", host = " + hostCall(`, max_run = "soon"`)), "`host.max_run` must be a duration of at least 1s, such as \"24h\"; got `soon`"},
+		{"zero_max_run", call(clusterProject + ", host = " + hostCall(`, max_run = "0s"`)), "`host.max_run` must be a duration of at least 1s, such as \"24h\"; got `0s`"},
+		{"negative_max_run", call(clusterProject + ", host = " + hostCall(`, max_run = "-5m"`)), "`host.max_run` must be a duration of at least 1s"},
+		{"sub_second_max_run", call(clusterProject + ", host = " + hostCall(`, max_run = "500ms"`)), "`host.max_run` must be a duration of at least 1s, such as \"24h\"; got `500ms`"},
 		{"bad_bank_budget", call(clusterProject + ", host = " + hostCall(`, bank_budget = "soon"`)), "`host.bank_budget` must be a duration above zero, such as \"20s\""},
 		{"zero_bank_budget", call(clusterProject + ", host = " + hostCall(`, bank_budget = "0s"`)), "`host.bank_budget` must be a duration above zero"},
 		{"path_private_remote", call(clusterProject + ", host = " + hostCall(`, private_remote = "/srv/repo.git"`)), "`host.private_remote` must name a machine"},

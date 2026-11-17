@@ -40,7 +40,7 @@ func (c *clusterNames) asked() []string {
 // twoHostProject declares the clusters gpu (the default) and gpu-b.
 func twoHostProject() map[string]config.Project {
 	return map[string]config.Project{"p": {Project: model.Project{
-		Name: "p", Gate: "make check", BuildHost: "gpu", BuildHosts: []string{"gpu", "gpu-b"}, Host: &model.HostConfig{},
+		Name: "p", Gate: "make check", BuildHost: "gpu", BuildHosts: []string{"gpu", "gpu-b"}, Host: loaderHost(),
 	}}}
 }
 
@@ -99,7 +99,7 @@ func TestProjectGate_AResumedRunWhoseRecordedHostLeftTheProjectFileIsRefusedAndS
 
 	hosted := &fakeHost{state: model.JobSucceeded}
 	asked := &clusterNames{}
-	projects := map[string]config.Project{"p": {Project: model.Project{Name: "p", Gate: "make check", BuildHost: "gpu", Host: &model.HostConfig{}}}}
+	projects := map[string]config.Project{"p": {Project: model.Project{Name: "p", Gate: "make check", BuildHost: "gpu", Host: loaderHost()}}}
 	gate := projectGate{
 		projects: projects,
 		programs: programs{

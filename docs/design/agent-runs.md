@@ -57,13 +57,38 @@ Not verified here: that a real Claude Code still runs the hook for a call that `
 
 ### How the adapter reads the calls
 
-The adapter reads the calls from the stream-json lines on stdout, which the runner already reads. It does not read the session file on disk. The session path stays in the result as a reference, and no code reads it.
+The adapter reads the calls from the stream-json lines on stdout, which the runner already reads. It does not read the session file on disk. The session path stays in the result as a reference. The only check on the file is whether it exists, before a lost step resumes its session (see "The saved session" in durable-loop.md).
+
+The tap gives each new session id to the request at the line that holds it, so the engine saves the id while the run goes on.
 
 - A Skill call counts in a `tool_use` block of an assistant line.
 - A Bash call counts at any depth of a line.
 - A call of a sub-agent counts too. Claude Code forwards the `tool_use` blocks of sub-agents in the stream; they carry `parent_tool_use_id`.
 
 The shape is the one of the Claude Code headless page (https://code.claude.com/docs/en/headless). The shell rules live in `check/shell` (see [Shell rules and the job check](#shell-rules-and-the-job-check)).
+
+### How the adapter reads a provider limit
+
+A rate limit or a spend limit of the provider ends a run with the outcome `limited`, not as a failed run. The adapter reads the limit from the stream, as the CLI reports it:
+
+- A `rate_limit_event` line with `rate_limit_info.status` set to `rejected` is a limit. The status `allowed` or `allowed_warning` is no limit.
+- A rejected status with `isUsingOverage` set to true is no limit. Paid overage serves the request, and the CLI keeps working.
+- The limit is a spend limit only when paid overage was available and is now refused: `overageStatus` is `rejected` and `overageDisabledReason` is `out_of_credits` or `org_level_disabled_until` (a spend cap). Any other reason, such as `overage_not_provisioned`, or no reason, means the account had no paid overage to refuse, so the limit is a rate limit with the plan reset time.
+- `rateLimitType` names the window. `resetsAt` is the reset time in Unix seconds. A spend limit resets at the earlier of `resetsAt` and `overageResetsAt`, because either reset lets work start again.
+- An assistant line with `error` set to `rate_limit` is a rate limit with no reset time.
+
+The runner keeps the first limit of the run. The run is limited only if the run did not go on to a result line with no error: a success or a cap after the limit means the CLI took more work. A limited run keeps its session, its message and its violations, whatever the exit code. Its note names the limit and the reset time. A run that timed out or was canceled keeps that outcome.
+
+#### A refusal that no wait cures
+
+Some refusals do not end at a reset time. The adapter reports such a line as a denial with a reason, not as a limit. The adapter tests the pause before the credits, as the CLI does.
+
+- A pause of the organization: `dailyCapPaused` is true on a rejected `rate_limit_event`, or in `api_error_params.rate_limit_info` of an assistant `rate_limit` line (the CLI writes that line with `api_error` set to `usage_limit_reached`). A pause carries the `overageDisabledReason` of a spend cap, so the flag is what tells the two apart. The CLI tells the user to contact support.
+- Usage credits are required: a rejected `rate_limit_event` has `errorCode` set to `credits_required` and `rateLimitType` missing or set to `overage`. This is the test of the CLI. The same holds for an assistant `rate_limit` line whose `api_error` is `long_context_credits_required` or `model_requires_usage_credits`. A wait buys no credits.
+
+The runner keeps the first denial of the run. A denied run fails, even when an earlier line reported a limit, and it waits for no reset. The reason is a note of the result, after the note of the runner. A run that exited with code 0 fails with an error that names the reason. As for a limit, a denial counts only if the run did not go on to a result line with no error, and a run that timed out or was canceled keeps that outcome.
+
+The engine still fails a limited agent step. The wait for the reset is a later change.
 
 ### The setting forbid_commands
 

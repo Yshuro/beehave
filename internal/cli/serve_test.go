@@ -4,6 +4,7 @@ package cli_test
 
 import (
 	"os"
+	"os/signal"
 	"syscall"
 	"testing"
 	"time"
@@ -123,6 +124,100 @@ func TestServe_ASecondSignalDuringASlowShutdownExits130(t *testing.T) { //nolint
 	}
 
 	assert.Equal(t, 1, rig.runner.count(), "the second signal does not call Shutdown again")
+}
+
+func TestRun_ASecondInterruptDuringASlowShutdownExits130AndSaysTheRunStaysOpen(t *testing.T) { //nolint:paralleltest // a signal reaches every running command
+	rig := newRig(t)
+	rig.runner.block = make(chan struct{})
+	rig.runner.started = make(chan struct{})
+	rig.runner.slow = make(chan struct{})
+
+	t.Cleanup(func() { close(rig.runner.slow) })
+
+	// main gives the command the context that the first signal cancels.
+	ctx, stop := signal.NotifyContext(t.Context(), os.Interrupt)
+	defer stop()
+
+	done := make(chan serveResult, 1)
+
+	go func() {
+		code, stdout, stderr := rig.execute(ctx, "run", "12")
+		done <- serveResult{code, stdout, stderr}
+	}()
+
+	signalSelf(t, syscall.SIGINT)
+	waitFor(t, rig.runner.started, "Shutdown")
+
+	select {
+	case got := <-done:
+		t.Fatalf("run ended while Shutdown was still waiting for the store: %+v", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	signalSelf(t, syscall.SIGINT)
+
+	select {
+	case got := <-done:
+		assert.Equal(t, 130, got.code, got.stderr)
+		assert.Contains(t, got.stderr, "the run stays open")
+	case <-time.After(serveWait):
+		t.Fatal("a second interrupt did not end beehave run")
+	}
+
+	assert.Equal(t, 1, rig.runner.count(), "the second interrupt does not call Shutdown again")
+}
+
+// runThenSlowStop runs beehave run on a fake engine whose run ends at once and whose Shutdown is held, then sends one interrupt.
+func runThenSlowStop(t *testing.T, rig *flowRig) serveResult {
+	t.Helper()
+
+	rig.runner.started = make(chan struct{})
+	rig.runner.slow = make(chan struct{})
+
+	t.Cleanup(func() { close(rig.runner.slow) })
+
+	done := make(chan serveResult, 1)
+
+	go func() {
+		code, stdout, stderr := rig.execute(t.Context(), "run", "12")
+		done <- serveResult{code, stdout, stderr}
+	}()
+
+	waitFor(t, rig.runner.started, "Shutdown")
+	signalSelf(t, syscall.SIGINT)
+
+	select {
+	case got := <-done:
+		return got
+	case <-time.After(serveWait):
+		t.Fatal("an interrupt did not end beehave run")
+	}
+
+	return serveResult{}
+}
+
+func TestRun_AnInterruptDuringASlowStopAfterAStoppedResultKeepsExitOneAndDoesNotSayTheRunIsOpen(t *testing.T) { //nolint:paralleltest // a signal reaches every running command
+	rig := newRig(t)
+	rig.runner.stopped = &flow.Stopped{Step: "check", RC: 2, Output: "boom"}
+
+	got := runThenSlowStop(t, rig)
+
+	assert.Equal(t, 1, got.code, got.stderr)
+	assert.Contains(t, got.stderr, "stopped at once")
+	assert.NotContains(t, got.stderr, "stays open")
+	assert.Equal(t, 1, rig.runner.count())
+}
+
+func TestRun_AnInterruptDuringASlowStopAfterAFinishedRunKeepsTheRunError(t *testing.T) { //nolint:paralleltest // a signal reaches every running command
+	rig := newRig(t)
+	rig.runner.runErr = errFake
+
+	got := runThenSlowStop(t, rig)
+
+	assert.Equal(t, 1, got.code, got.stderr)
+	assert.Contains(t, got.stderr, errFake.Error())
+	assert.Contains(t, got.stderr, "stopped at once")
+	assert.NotContains(t, got.stderr, "stays open")
 }
 
 func TestServe_AFolderThatAnotherEngineOwnsIsRefusedWithTheLockText(t *testing.T) {

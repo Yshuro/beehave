@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/model"
@@ -638,8 +637,9 @@ func plainWord(word string) bool {
 // a clone of the repository at cloneURL, a detached checkout of head, a check that the checkout is head, and then the gate command.
 // A trap on exit, hang-up, interrupt and terminate writes the marker line and then deletes the folder by its literal path, so the result
 // is written first and the folder goes whether the gate passes, fails or is stopped. The exit status of the gate is kept.
-// When the host has a run limit (`host.max_run`), the gate command runs under `timeout` with that limit, so a hung step ends the job
-// with exit status 124 and the trap still writes the marker and deletes the clone.
+// When the project has a host block, the gate command runs under `timeout` with the run limit of the host (`host.max_run`), so a hung step
+// ends the job with exit status 124 and the trap still writes the marker and deletes the clone. The config load refuses a limit that the wrap
+// cannot write.
 // A clone or checkout that fails, as it does for a commit that is not pushed, ends the command with a failure before the gate runs.
 func hostCommand(project model.Project, pins []Pin, cloneURL, head, clone, base string) string {
 	words := cloneWords(cloneURL, head, clone)
@@ -757,12 +757,14 @@ func globWord(glob string) string {
 var literalRun = regexp.MustCompile(`[^*?\[\]]+`)
 
 // limited puts command under `timeout` with the run limit of the host, when the project has a host block.
+// The config load refuses a run limit under one second, so a host block always holds a limit that the wrap can write. The wrap writes whole
+// seconds and rounds a part of a second up, so the limit is never shorter than the host asks.
 func limited(project model.Project, command string) string {
-	if project.Host == nil || project.Host.MaxRun < time.Second {
+	if project.Host == nil {
 		return command
 	}
 
-	return "timeout " + strconv.FormatInt(int64(project.Host.MaxRun/time.Second), 10) + " " + command
+	return "timeout " + strconv.FormatInt(project.Host.RunLimitSeconds(), 10) + " " + command
 }
 
 // verdict maps the final state of a host job to a result. Only a job that succeeded passes, and only one that failed is a failed gate.

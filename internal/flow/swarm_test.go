@@ -721,7 +721,7 @@ func failedAgentSwarm(t *testing.T, h *harness) *Engine {
 
 	engine := h.engine(t)
 	_, err := engine.Run(testItem, testProject)
-	require.Error(t, err)
+	require.ErrorContains(t, err, errFake.Error(), "the run fails in the agent step of its child, after the phase is queued")
 
 	return engine
 }
@@ -758,7 +758,7 @@ func TestSpawnGather_AResumeThatCannotReopenTheFailedChildGivesItsFreshClaimBack
 		}
 	}
 
-	require.NotEmpty(t, phases)
+	require.NotEmpty(t, phases, "steps: %+v", steps)
 	require.NoError(t, dbos.DeleteWorkflows(engine.ctx, phases))
 
 	require.ErrorIs(t, client.Resume(testItem), errNoRow)
@@ -835,8 +835,7 @@ func TestSpawnGather_SpawnReportsAChildTheQueueCannotStart(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	engine := h.engine(t)
-	engine.itemQueue = nil
+	engine := h.engineWith(t, func(e *Engine) { e.itemQueue = nil })
 
 	_, err := engine.RunFile(testItem, testProject, writeFlow(t, swarmFile("")))
 

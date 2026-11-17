@@ -58,9 +58,12 @@ type fakeAgents struct {
 	pid      int
 	result   func(AgentRequest) agent.Result
 	err      error
+	// named is the session id that the agent names before it counts as in flight, when it is set.
+	named string
 }
 
 // Run holds each agent in flight until the test closes gate, when gate is set. It reports pid as the process of the agent, when pid is set.
+// It names the session named before it counts as in flight, so a test that sees the agent in flight sees the saved session.
 // Like the command of the real runner, it starts nothing under a context that is done, and it kills the group of its process when the context ends.
 func (a *fakeAgents) Run(ctx context.Context, request AgentRequest) (agent.Result, error) {
 	if err := ctx.Err(); err != nil {
@@ -77,6 +80,10 @@ func (a *fakeAgents) Run(ctx context.Context, request AgentRequest) (agent.Resul
 	}
 
 	a.mu.Lock()
+	if a.named != "" {
+		request.Named(a.named)
+	}
+
 	a.requests = append(a.requests, request)
 	a.inFlight++
 	a.perLogin[request.Login]++
@@ -683,9 +690,38 @@ func (h *harness) fresh(t *testing.T) {
 func (h *harness) engine(t *testing.T) *Engine {
 	t.Helper()
 
+	return h.engineWith(t, func(*Engine) {})
+}
+
+// engineWith is engine with a change that runs on the built engine before Launch. Nothing reads the engine before Launch, so a field the change sets has no reader to race with.
+func (h *harness) engineWith(t *testing.T, change func(*Engine)) *Engine {
+	t.Helper()
+
 	engine, err := NewEngine(t.Context(), h.opts, h.deps())
 	require.NoError(t, err)
+
+	change(engine)
+
 	require.NoError(t, engine.Launch())
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	return engine
+}
+
+// opened builds and opens an engine over the harness without launching it, so that the test registers its own workflows and then launches. The cleanup shuts it down.
+// engine and engineWith differ: they launch the engine with the workflows of the flow.
+func (h *harness) opened(t *testing.T) *Engine {
+	t.Helper()
+
+	opts := h.opts
+	state, err := openStore(opts)
+	require.NoError(t, err)
+
+	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
+	require.NoError(t, err)
+
+	engine := newEngine(opts, h.deps(), state, held, moduleRegistry(t))
+	require.NoError(t, engine.open(t.Context(), opts, state))
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
 	return engine

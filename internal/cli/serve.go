@@ -13,7 +13,7 @@ import (
 	"github.com/tobocop2/beehave/internal/flow"
 )
 
-// exitSecondSignal is the exit code of beehave serve when a second signal ends a slow shutdown: 128 plus SIGINT.
+// exitSecondSignal is the exit code of beehave serve and beehave run when a second signal ends a slow shutdown: 128 plus SIGINT.
 const exitSecondSignal = 130
 
 // errServeBusy is the refusal of beehave serve when another engine holds the state folder.

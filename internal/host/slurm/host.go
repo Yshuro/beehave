@@ -41,7 +41,7 @@ func NewHost(target string, config model.HostConfig, ssh proc.Runner, opts ...Op
 		return nil, err
 	}
 
-	opts = append([]Option{func(s *settings) { s.limit = config.MaxRun }}, opts...)
+	opts = append([]Option{WithLimit(config.MaxRun)}, opts...)
 
 	return &Host{Queue: New(l, config, noSlot{}, opts...), link: l}, nil
 }

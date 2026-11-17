@@ -62,8 +62,10 @@ type StepLine struct {
 	Stop string `json:"stop,omitempty"`
 	// CapStop is set while the step waits for the owner to raise a cap.
 	CapStop *CapStop `json:"cap_stop,omitempty"`
-	Verdict string   `json:"verdict,omitempty"`
-	Head    string   `json:"head,omitempty"`
+	// LimitWait is set while the step waits for a provider limit to reset.
+	LimitWait *LimitWait `json:"limit_wait,omitempty"`
+	Verdict   string     `json:"verdict,omitempty"`
+	Head      string     `json:"head,omitempty"`
 	// Rewrote is set when the commit the agent started on is not in the history of its head: the agent amended, squashed or reset.
 	Rewrote bool       `json:"rewrote,omitempty"`
 	Passed  *bool      `json:"passed,omitempty"`
@@ -279,7 +281,8 @@ func (l *StepLine) decode(record dbos.StepInfo) bool {
 	return true
 }
 
-// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, or the cost record of a failed run. Any other sub-step decodes nothing.
+// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a look at the caps, the cost record of a failed run,
+// or the limit record of a run that a provider limit stopped. The look that follows a limit ends its wait. Any other sub-step decodes nothing.
 func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {
 	case strings.HasPrefix(sub, "read"):
@@ -288,15 +291,33 @@ func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 
 		return decodeThen(output, func(read recorded[agentRead]) { l.fromAgentRead(read.Outputs) })
 	case strings.HasPrefix(sub, "budget"):
+		l.LimitWait = nil
+
 		return decodeThen(output, func(check capCheck) { l.CapStop = check.Stop })
 	case strings.HasPrefix(sub, "spent"):
 		spend := recordedSpend(output)
 		l.Spend = l.Plus(spend)
 
 		return !spend.Unreadable
+	case strings.HasPrefix(sub, "limit"):
+		return l.fromLimit(output)
 	}
 
 	return true
+}
+
+// fromLimit takes the wait and the cost of a limited run from its limit record. A record that does not decode marks the cost of the line unknown and unreadable,
+// as a cost record that cannot be read does, so the caps never count it as 0.
+func (l *StepLine) fromLimit(output any) bool {
+	read := decodeThen(output, func(record limitRecord) {
+		l.Spend = l.Plus(record.Spend)
+		l.LimitWait = &record.LimitWait
+	})
+	if !read {
+		l.Spend = l.Plus(agent.Spend{Unknown: true, Unreadable: true})
+	}
+
+	return read
 }
 
 // builtinOf is the builtin that a step name belongs to: `command` for `command:lint#2`.

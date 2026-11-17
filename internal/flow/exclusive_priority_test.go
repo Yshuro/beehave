@@ -82,7 +82,7 @@ func TestExclusivePriority_TheWarningNamesOnlyAFailedReadOfAForge(t *testing.T) 
 
 			harness := newHarness(t)
 			harness.forge.err = test.readErr
-			engine := harness.engine(t)
+			engine := idleEngine(t, harness)
 
 			var out bytes.Buffer
 

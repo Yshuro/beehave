@@ -544,6 +544,29 @@ func TestRunner_DoesNotStart(t *testing.T) { //nolint:paralleltest // t.Setenv c
 	})
 }
 
+func TestResult_AddNoteJoinsTheNoteAfterTheNoteOfTheResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, note, added, want string
+	}{
+		{"both_notes", "write the output: disk full", "a cap", "write the output: disk full; a cap"},
+		{"no_note_yet", "", "a cap", "a cap"},
+		{"no_added_note", "write the output: disk full", "", "write the output: disk full"},
+		{"no_notes", "", "", ""},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := agent.Result{Outcome: agent.OutcomeExited, Note: tc.note}.AddNote(tc.added)
+
+			assert.Equal(t, agent.Result{Outcome: agent.OutcomeExited, Note: tc.want}, got)
+		})
+	}
+}
+
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 

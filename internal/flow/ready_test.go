@@ -1,11 +1,13 @@
 package flow
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/review"
 )
@@ -92,6 +94,21 @@ func TestRun_APushBetweenTheReadAndReadyPutsThePullRequestBackToDraftAndRefuses(
 
 	_, drafts := harness.watch.seen()
 	assert.Equal(t, []int{testPull}, drafts, "the unreviewed head is not left ready")
+}
+
+func TestReady_ACrashAfterTheReadyCallPinsTheSameHead(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Done})
+	deps := h.deps()
+	deps.Forge = &crashForge{forge: h.forge, crash: newCrash(t, h), on: "ready"}
+
+	result := crashAndResume(t, h, deps, shipCall("merge = True, "))
+
+	readyCalls := slices.DeleteFunc(h.life.seen(), func(step string) bool { return step != "ready:"+testItem })
+	assert.Len(t, readyCalls, 2, "the cut-off ready step ran its call again")
+	assert.Equal(t, []string{testProject + " " + testItem + " " + gatedHead}, h.merge.asked, "the merge ran once, at the head that the second ready step pinned")
+	assert.Equal(t, "merged", result.Merge)
 }
 
 func TestRun_AFailedReadyCallFailsTheStepAndReadsNoHead(t *testing.T) {

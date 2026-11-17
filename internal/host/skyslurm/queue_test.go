@@ -38,7 +38,7 @@ func hostConfig() model.HostConfig {
 // newHost builds the SkyPilot host over the real Slurm queue, as cmd/beehave does.
 func newHost(cluster string, cfg model.HostConfig, sky, ssh proc.Runner, opts ...slurm.Option) (*skypilot.Host, error) {
 	queue := func(l *link.Link, config model.HostConfig, slot skypilot.Slot) skypilot.Queue {
-		return slurm.New(l, config, slot, opts...)
+		return slurm.New(l, config, slot, append([]slurm.Option{slurm.WithLimit(config.MaxRun)}, opts...)...)
 	}
 
 	return skypilot.New(cluster, cfg, sky, ssh, queue)

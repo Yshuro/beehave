@@ -115,8 +115,8 @@ func TestReopen_ReportsACanceledItemWhoseCanceledPhaseIsGone(t *testing.T) {
 	engine := harness.engine(t)
 	client := harness.client(t, testVersion)
 
-	_, err := engine.Run(testItem, testProject)
-	require.Error(t, err)
+	_, runErr := engine.Run(testItem, testProject)
+	require.ErrorContains(t, runErr, errFake.Error(), "the run fails in its agent step, after the phase is queued")
 
 	steps, err := dbos.GetWorkflowSteps(client.flow, "item-12-r1")
 	require.NoError(t, err)
@@ -129,7 +129,7 @@ func TestReopen_ReportsACanceledItemWhoseCanceledPhaseIsGone(t *testing.T) {
 		}
 	}
 
-	require.NotEmpty(t, children)
+	require.NotEmpty(t, children, "run error: %v; steps: %+v", runErr, steps)
 	require.NoError(t, dbos.DeleteWorkflows(client.flow, children))
 
 	require.ErrorIs(t, client.reopenCanceledPhases("item-12-r1"), errNoRow)
@@ -156,8 +156,8 @@ func TestResume_AFailedRunWhoseFailedPhaseIsGoneReportsIt(t *testing.T) {
 	engine := harness.engine(t)
 	client := harness.client(t, testVersion)
 
-	_, err := engine.Run(testItem, testProject)
-	require.Error(t, err)
+	_, runErr := engine.Run(testItem, testProject)
+	require.ErrorContains(t, runErr, errFake.Error(), "the run fails in its agent step, after the phase is queued")
 
 	steps, err := dbos.GetWorkflowSteps(client.flow, "item-12-r1")
 	require.NoError(t, err)
@@ -170,7 +170,7 @@ func TestResume_AFailedRunWhoseFailedPhaseIsGoneReportsIt(t *testing.T) {
 		}
 	}
 
-	require.NotEmpty(t, children)
+	require.NotEmpty(t, children, "run error: %v; steps: %+v", runErr, steps)
 	require.NoError(t, dbos.DeleteWorkflows(client.flow, children))
 
 	require.ErrorIs(t, client.Resume(testItem), errNoRow)

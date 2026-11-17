@@ -43,7 +43,7 @@ A fix lane is a fix, a rework or a relay.
 
 ### The state folder
 
-The state folder is a flag. Every `remedy ledger` verb and `remedy scope` take `--state <folder>`. `remedy admit` takes the same flag. The ledger file is `lane-ledger.db` in that folder.
+The state folder is a flag. Every `remedy ledger` verb and `remedy scope` take `--state <folder>`. `remedy admit` takes the same flag. The ledger file is `lane-ledger.db` in that folder. A writer waits in turn on an operating system lock on `lane-ledger.lock` in the same folder, with no time limit, and a reader never takes that lock.
 
 The tool does not guess the folder from the working folder, and it reads no environment variable for it. The workflow passes the folder that it keeps for the run.
 
@@ -99,6 +99,8 @@ The first `agent` step that names no `runner` picks the login, as a recorded ste
 |---|---|
 | `NoneQualifiesError` with a reset time | Sleeps with the durable sleep of DBOS until that time, then picks again as a new recorded step. A reset time in the past waits one minute. |
 | `NoneQualifiesError` with no reset time | Fails with the same text as before. `beehave resume` picks again. |
+
+A provider limit that stops a run after the pick is not a new pick. The step waits for the reset that the agent reported and runs again with the same login. See "Provider limits" in `durable-loop.md`.
 
 `beehave run --over-cap` changes only the case where no runner has room. Then the step takes the runner with the lowest use, from `SelectOverCap`, and its record holds `over_cap` true. A runner under the caps is taken as usual. A runner with unknown usage is never taken.
 

@@ -26,6 +26,31 @@ func lostRun(t *testing.T, ran time.Duration) *harness {
 	return harness
 }
 
+// awaitSavedSession waits until the phase holds the session id that the fake agent names, when it names one. The saver writes the id
+// on a goroutine of its own, so a loss right after the agent named the id could come before the write.
+func awaitSavedSession(t *testing.T, engine *Engine, harness *harness) {
+	t.Helper()
+
+	harness.agents.mu.Lock()
+	named := harness.agents.named
+	harness.agents.mu.Unlock()
+
+	if named == "" {
+		return
+	}
+
+	eventually(t, func() bool {
+		phases, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(phaseName))
+		if err != nil || len(phases) != 1 {
+			return false
+		}
+
+		session, err := dbos.GetEvent[string](engine.ctx, phases[0].ID, sessionEvent, 0)
+
+		return err == nil && session == named
+	})
+}
+
 // loseAgent starts an engine on the harness, waits until its agent is in flight, stops the engine while the agent runs,
 // and makes the claim store report a last renewal of the claim lease ran after that start. A zero ran makes it report no renewal.
 func loseAgent(t *testing.T, harness *harness, ran time.Duration) {
@@ -39,6 +64,7 @@ func loseAgent(t *testing.T, harness *harness, ran time.Duration) {
 
 	_ = runInBackground(engine, testItem)
 	eventually(t, func() bool { return harness.agents.running() == 1 })
+	awaitSavedSession(t, engine, harness)
 
 	// The start mark is recorded before the agent starts, so a time after the agent started is after the mark.
 	renewed := time.Time{}
@@ -169,12 +195,12 @@ func TestClient_TheLostStepIsListedWithItsRecordAsTheOutput(t *testing.T) {
 func TestLostNote_NamesTheMinutesAndSaysUnderOneMinuteForAShortRun(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(90 * time.Second)}.note(), "after 1 minute.")
-	assert.Contains(t, LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(5 * time.Second)}.note(), "after less than a minute.")
+	assert.Contains(t, LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(90 * time.Second)}.note(false), "after 1 minute.")
+	assert.Contains(t, LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(5 * time.Second)}.note(false), "after less than a minute.")
 	assert.Equal(t, time.Duration(0), LostStep{Started: time.Unix(100, 0), Lost: time.Unix(0, 0)}.Ran(), "a loss before the start counts as no time")
 	assert.Equal(t, time.Duration(0), LostStep{Started: time.Unix(100, 0)}.Ran(), "a loss with no time counts as no time")
 	assert.False(t, LostStep{Started: time.Unix(100, 0)}.Known())
-	assert.Contains(t, LostStep{Started: time.Unix(100, 0)}.note(), "ran before for an unknown time and was lost.")
+	assert.Contains(t, LostStep{Started: time.Unix(100, 0)}.note(false), "ran before for an unknown time and was lost.")
 }
 
 func TestPhase_TheLossTimeIsTheLastRenewalOfTheClaimLeaseInTheStore(t *testing.T) {

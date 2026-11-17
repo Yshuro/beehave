@@ -113,6 +113,7 @@ It composes the Slurm adapter: SkyPilot creates and deletes the cluster, and the
 - `Status` reads `sky status -o json`, then `sinfo` and `df` through the Slurm adapter.
 - The Slurm adapter calls the SkyPilot slot: `Hold` after the job is queued, `Release` once the work is banked.
 - The `skypilot` provider keeps its own slot and its own run limit (the `timeout` in the slot command).
+- The Slurm queue of the `skypilot` provider sends `--time` with `host.max_run`, rounded up to whole minutes, as the `slurm` provider does. This ends the whole gate job at the run limit.
 - Every parser refuses an answer it does not recognise.
 
 ### Teardown

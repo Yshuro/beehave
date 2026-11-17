@@ -57,6 +57,17 @@ type HostConfig struct {
 	Block *Block
 }
 
+// RunLimitSeconds is MaxRun in whole seconds, rounded up, so the limit that a host or a wrap writes is never shorter than MaxRun.
+// It divides first and adds one for a rest, so it cannot overflow for any MaxRun.
+func (h HostConfig) RunLimitSeconds() int64 {
+	seconds := int64(h.MaxRun / time.Second)
+	if h.MaxRun%time.Second > 0 {
+		seconds++
+	}
+
+	return seconds
+}
+
 // The host key policies of the ssh link. Neither one accepts a host key that changed.
 const (
 	KnownHostsStrict    = "strict"
