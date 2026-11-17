@@ -201,9 +201,17 @@ func (l *Ledger) connect(access access) (*sql.DB, error) {
 	return sql.Open("sqlite", store.SQLiteDSN(l.path, l.busyMs, query))
 }
 
-// touch makes the file at mode 0600 if it is missing, so SQLite does not make it with a wider mode.
+// touch makes the file at mode 0600 if it is missing, so SQLite does not make it with a wider mode (SQLite has no setting for the mode of a file it makes).
+// It opens no descriptor of a file that exists. SQLite documents the hazard (howtocorrupt.html, 2.2): "the close() system call will cancel all POSIX advisory locks
+// on the same file for all threads and all file descriptors in the process." O_EXCL makes the kernel refuse an existing file before it opens one.
+// The one descriptor that remains is of a file made a moment ago, which no connection of this process can hold a lock on: Add holds the lock file, so no other writer opens it,
+// and a reader skips a file that is missing or has no bytes.
 func (l *Ledger) touch() error {
-	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY, fileMode)
+	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}

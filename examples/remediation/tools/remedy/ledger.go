@@ -25,18 +25,52 @@ const (
 	laneArgs = 3
 )
 
-// ledgerArgs is the count of arguments that a verb takes before its flags. A verb that is not known gives false.
-func ledgerArgs(verb string) (int, bool) {
-	switch verb {
-	case verbAdd:
-		return laneArgs, true
-	case "count", "rounds", "prior":
-		return pairArgs, true
-	case "closes":
-		return keyArgs, true
-	}
+// ledgerVerb is one verb of the ledger command: its name, the count of arguments it takes before its flags, and its read.
+// The read of add is nil, because add writes.
+type ledgerVerb struct {
+	name string
+	args int
+	read func(book Book, pos []string) ([]string, error)
+}
 
-	return 0, false
+// findLedgerVerb gives the verb of a name, and false for a name the command does not know. The parser takes a verb from here, so no verb can reach the run without its own read.
+func findLedgerVerb(name string) (ledgerVerb, bool) {
+	switch name {
+	case verbAdd:
+		return ledgerVerb{name: verbAdd, args: laneArgs}, true
+	case "count":
+		return ledgerVerb{name: "count", args: pairArgs, read: readCount}, true
+	case "rounds":
+		return ledgerVerb{name: "rounds", args: pairArgs, read: readRounds}, true
+	case "prior":
+		return ledgerVerb{name: "prior", args: pairArgs, read: readPrior}, true
+	case "closes":
+		return ledgerVerb{name: "closes", args: keyArgs, read: readCloses}, true
+	default:
+		return ledgerVerb{}, false
+	}
+}
+
+func readCount(book Book, pos []string) ([]string, error) {
+	count, err := book.Count(pos[0], pos[1])
+
+	return []string{strconv.Itoa(count)}, err
+}
+
+func readRounds(book Book, pos []string) ([]string, error) {
+	rounds, err := book.Rounds(pos[0], pos[1])
+
+	return []string{fmt.Sprintf("%d open=%t", rounds.Count, rounds.Open)}, err
+}
+
+func readPrior(book Book, pos []string) ([]string, error) {
+	prior, err := book.Prior(pos[0], pos[1])
+
+	return []string{strconv.Itoa(prior)}, err
+}
+
+func readCloses(book Book, pos []string) ([]string, error) {
+	return book.Closes(pos[0])
 }
 
 // ledgerFlags are the values of the flags of the ledger verbs. Only add reads the flags after --state.
@@ -61,30 +95,34 @@ func (f *ledgerFlags) declare(flags *flag.FlagSet, add bool) {
 }
 
 // parseLedger reads the verb, its arguments and the flags. It shows the usage and gives false for a bad argument.
-func parseLedger(args []string, errOut io.Writer) (string, []string, ledgerFlags, bool) {
+func parseLedger(args []string, errOut io.Writer) (ledgerVerb, []string, ledgerFlags, bool) {
 	if len(args) == 0 {
-		return "", nil, ledgerFlags{}, ledgerUsage(errOut)
+		return ledgerVerb{}, nil, ledgerFlags{}, ledgerUsage(errOut)
 	}
 
-	verb := args[0]
+	verb, known := findLedgerVerb(args[0])
+	if !known {
+		say(errOut, "remedy ledger: '%s' is not a ledger verb.\n", args[0])
 
-	count, known := ledgerArgs(verb)
-	if !known || len(args) < 1+count {
-		return "", nil, ledgerFlags{}, ledgerUsage(errOut)
+		return ledgerVerb{}, nil, ledgerFlags{}, ledgerUsage(errOut)
 	}
 
-	given, ok := readLedgerFlags(verb, args[1+count:], errOut)
+	if len(args) <= verb.args {
+		return ledgerVerb{}, nil, ledgerFlags{}, ledgerUsage(errOut)
+	}
 
-	return verb, args[1 : 1+count], given, ok
+	given, ok := readLedgerFlags(verb, args[1+verb.args:], errOut)
+
+	return verb, args[1 : 1+verb.args], given, ok
 }
 
 // readLedgerFlags reads the flags that follow the arguments of a verb. It gives false when a flag is bad or the state folder is missing.
-func readLedgerFlags(verb string, args []string, errOut io.Writer) (ledgerFlags, bool) {
+func readLedgerFlags(verb ledgerVerb, args []string, errOut io.Writer) (ledgerFlags, bool) {
 	var given ledgerFlags
 
-	flags := flag.NewFlagSet("remedy ledger "+verb, flag.ContinueOnError)
+	flags := flag.NewFlagSet("remedy ledger "+verb.name, flag.ContinueOnError)
 	flags.SetOutput(errOut)
-	given.declare(flags, verb == verbAdd)
+	given.declare(flags, verb.name == verbAdd)
 
 	if flags.Parse(args) != nil {
 		return given, false
@@ -119,7 +157,7 @@ func ledgerCommand(ctx context.Context, deps Deps, s streams, args []string) int
 	}
 
 	if err != nil {
-		say(s.err, "remedy ledger %s: %v\n", verb, err)
+		say(s.err, "remedy ledger %s: %v\n", verb.name, err)
 
 		return ExitRefused
 	}
@@ -127,12 +165,12 @@ func ledgerCommand(ctx context.Context, deps Deps, s streams, args []string) int
 	return ExitPass
 }
 
-// ledgerRun runs one verb on the ledger of the state folder and gives the lines to print. The verb is one that parseLedger checked.
+// ledgerRun runs one verb on the ledger of the state folder and gives the lines to print. The verb is one that parseLedger took from findLedgerVerb.
 // Only add returns its lines straight, with its error. Every other verb is a read and goes through ledgerRead.
-func ledgerRun(ctx context.Context, deps Deps, verb string, pos []string, given ledgerFlags) ([]string, error) {
+func ledgerRun(ctx context.Context, deps Deps, verb ledgerVerb, pos []string, given ledgerFlags) ([]string, error) {
 	book := deps.Book(given.state)
 
-	if verb == verbAdd {
+	if verb.read == nil {
 		return ledgerAdd(ctx, deps, book, pos, given)
 	}
 
@@ -141,33 +179,13 @@ func ledgerRun(ctx context.Context, deps Deps, verb string, pos []string, given 
 
 // ledgerRead runs a read verb and gives no line when the read failed, so a failed read prints no value.
 // A read verb that is new gets this rule because it can be reached only through here.
-func ledgerRead(book Book, verb string, pos []string) ([]string, error) {
-	lines, err := readLines(book, verb, pos)
+func ledgerRead(book Book, verb ledgerVerb, pos []string) ([]string, error) {
+	lines, err := verb.read(book, pos)
 	if err != nil {
 		return nil, err
 	}
 
 	return lines, nil
-}
-
-// readLines gives the lines of a read verb. It may give lines with an error; ledgerRead drops them.
-func readLines(book Book, verb string, pos []string) ([]string, error) {
-	switch verb {
-	case "count":
-		count, err := book.Count(pos[0], pos[1])
-
-		return []string{strconv.Itoa(count)}, err
-	case "rounds":
-		rounds, err := book.Rounds(pos[0], pos[1])
-
-		return []string{fmt.Sprintf("%d open=%t", rounds.Count, rounds.Open)}, err
-	case "prior":
-		prior, err := book.Prior(pos[0], pos[1])
-
-		return []string{strconv.Itoa(prior)}, err
-	}
-
-	return book.Closes(pos[0])
 }
 
 // ledgerAdd records one lane and gives the issues that the first review of the key recorded.
