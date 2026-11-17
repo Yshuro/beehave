@@ -168,7 +168,7 @@ func syncEngine(t *testing.T, rig *roundRig) (*Engine, *syncGate) {
 }
 
 // runSync runs the round to its first wait, as run does, on the engine of syncEngine. red makes the gate of the round red.
-func runSync(t *testing.T, rig *roundRig, red bool) (ItemResult, error, *syncGate) {
+func runSync(t *testing.T, rig *roundRig, red bool) (ItemResult, *syncGate, error) {
 	t.Helper()
 
 	engine, recorder := syncEngine(t, rig)
@@ -177,7 +177,7 @@ func runSync(t *testing.T, rig *roundRig, red bool) (ItemResult, error, *syncGat
 
 	result, err := rig.runOn(t, engine)
 
-	return result, err, recorder
+	return result, recorder, err
 }
 
 // at returns the place of the first step whose name starts with the prefix, or -1.
@@ -205,7 +205,7 @@ func TestRoundSync_AMovedTrunkLandsThroughTheSyncPullRequestWhoseGateRunsOnTheMe
 	script := &syncScript{lines: []string{"synced", "state=current"}}
 	withSync(t, rig, script)
 
-	_, err, recorder := runSync(t, rig, false)
+	_, recorder, err := runSync(t, rig, false)
 	require.NoError(t, err)
 
 	names := stepNames(t, rig.last)
@@ -230,7 +230,7 @@ func TestRoundSync_ASyncedLineLandsWhateverTheOrderOfItsFieldsAndKeepsAnEqualSig
 	withSync(t, rig, script)
 	script.lines = []string{"base_tip=" + script.tip + " head=" + script.head + " note pr=7 branch=sync/a=b state=synced", "state=current"}
 
-	_, err, _ := runSync(t, rig, false)
+	_, _, err := runSync(t, rig, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"git fetch origin sync/a=b"}, commandsNamed(rig, "git fetch origin"))
@@ -285,7 +285,7 @@ func TestRoundSync_ATrunkMergeThatAddsNoTestLandsItsSyncBecauseTheSyncGateRunsNo
 	script := &syncScript{lines: []string{"synced", "state=current"}}
 	withSync(t, rig, script)
 
-	_, err, recorder := runSync(t, rig, false)
+	_, recorder, err := runSync(t, rig, false)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{""}, recorder.roundBases(), "one gate of the round, with no base: the gate command only, no new-tests check")
@@ -301,7 +301,7 @@ func TestRoundSync_ARefusedSyncWaitsWithTheReasonAndAfterTheOwnerLandsItTheRound
 	rig.answers = []string{"CONTINUE", "STOP"}
 	withSync(t, rig, &syncScript{lines: []string{"state=refused reason=sync-refused", "state=current"}})
 
-	result, err, _ := runSync(t, rig, false)
+	result, _, err := runSync(t, rig, false)
 
 	require.NoError(t, err)
 	assert.Nil(t, result.Stopped, "a refusal is no failed step")
@@ -322,7 +322,7 @@ func TestRoundSync_ARedGateOnTheSyncHeadStopsTheRoundWithTheReasonAndLandsNothin
 	rig := newRoundRig(t, "")
 	withSync(t, rig, &syncScript{lines: []string{"synced"}})
 
-	_, err, _ := runSync(t, rig, true)
+	_, _, err := runSync(t, rig, true)
 
 	require.NoError(t, err)
 	require.Len(t, rig.questions, 1)
@@ -340,7 +340,7 @@ func TestRoundSync_AReviewThatDoesNotApproveTheSyncStopsTheRoundWithTheReasonAnd
 	rig := newRoundRig(t, "")
 	withSync(t, rig, &syncScript{lines: []string{"synced"}, review: "changes"})
 
-	_, err, _ := runSync(t, rig, false)
+	_, _, err := runSync(t, rig, false)
 
 	require.NoError(t, err)
 	require.Len(t, rig.questions, 1)
@@ -360,7 +360,7 @@ func TestRoundSync_ALandingOnAMovedBaseGoesOnAndTheNextPassSyncsAgain(t *testing
 			rig.answers = []string{"CONTINUE", "STOP"}
 			withSync(t, rig, &syncScript{lines: []string{"synced"}, land: CommandOutput{RC: 2, Stdout: "state=" + state + "\n"}})
 
-			result, err, _ := runSync(t, rig, false)
+			result, _, err := runSync(t, rig, false)
 
 			require.NoError(t, err)
 			assert.Nil(t, result.Stopped)
@@ -396,7 +396,7 @@ func TestRoundSync_ALineOrAnExitCodeTheRoundDoesNotKnowStopsTheRun(t *testing.T)
 			rig := newRoundRig(t, "")
 			withSync(t, rig, script)
 
-			_, err, _ := runSync(t, rig, false)
+			_, _, err := runSync(t, rig, false)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), want)
