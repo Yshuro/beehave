@@ -37,9 +37,8 @@ type turn struct {
 	open chan struct{}
 }
 
-// endOrder decides in which pass of the round each member ends. A member waits at its read before the review until its turn opens. A round ends one member in each pass
-// when each member has a later turn than the one before, so the round lands the members in list order, one batch for each member, at any speed of the machine.
-// A pass starts only after the gather of the pass before returned, and a run that has ended stays ended, so the outcome does not depend on timing.
+// endOrder decides in which pass of the round each member ends. The first member never waits. Each later member waits at its read before the review until the round reads the queue of the pass after the member before it.
+// So one member ends in each pass and the round lands the members in list order, one batch for each, at any speed of the machine: a pass starts only after the gather of the pass before returned.
 type endOrder struct {
 	stalled func(item string, what string)
 	ended   func(item string) bool // reports whether the child run of the item has ended
@@ -83,7 +82,6 @@ func (s *endOrder) hold(ctx context.Context, item string) {
 	mine := s.turns[item]
 	holds := s.reads[item] == readsBeforeReview
 	s.mu.Unlock()
-
 	if mine == nil || !holds {
 		return
 	}
