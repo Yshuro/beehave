@@ -3,6 +3,7 @@ package agent_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -84,6 +85,91 @@ func TestRunner_ALaunchWritesItsFilesInAPrivateFolderThatIsGoneAfterTheRun(t *te
 
 	_, err := os.Stat(dir)
 	assert.ErrorIs(t, err, os.ErrNotExist, "the run folder is removed when the run ends")
+}
+
+func TestRunner_ALaunchWhoseMarkerIsMissingAtTheEndOfTheRunIsFlagged(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	for marker, missing := range map[string]bool{"conf/hooks.json": false, "conf/never-written": true, "../outside": true, "": false} {
+		adapter := launchAdapter{Adapter: claude.New(nil), launch: func(runDir string) agent.Launch {
+			launch := stubLaunch(runDir)
+			launch.Loaded = marker
+
+			return launch
+		}}
+		f, _ := launchFixture(t, adapter)
+
+		got := agent.Runner{}.Run(context.Background(), f.spec)
+
+		require.Equal(t, agent.OutcomeExited, got.Outcome, got.Note)
+		assert.Equal(t, missing, got.GuardMissing, marker)
+	}
+}
+
+// ranged is an adapter whose profile supports the versions from 3.0.0 up to but not including 4.0.0, and needs a POSIX shell for a guard.
+type ranged struct{ agent.Adapter }
+
+func (a ranged) Profile() agent.Profile {
+	profile := a.Adapter.Profile()
+	profile.SupportedFrom = "3.0.0"
+	profile.SupportedBefore = "4.0.0"
+	profile.GuardPosixOnly = true
+
+	return profile
+}
+
+func TestRunner_ARunNeedsAVersionInTheSupportedRangeWithOrWithoutAGuard(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	versions := map[string]agent.Outcome{
+		"2.9.9": agent.OutcomeNotStarted, "3.0.0": agent.OutcomeExited, "3.0.1": agent.OutcomeExited,
+		"3.99.99": agent.OutcomeExited, "4.0.0": agent.OutcomeNotStarted, "4.0.1": agent.OutcomeNotStarted,
+	}
+
+	for _, guard := range []string{"", "beehave check command"} {
+		for version, outcome := range versions {
+			f := newFixture(t, "claude", claude.Name, "")
+			f.spec.Adapter, f.spec.Guard = ranged{f.spec.Adapter}, guard
+
+			got := agent.Runner{Version: seen("cli " + version)}.Run(context.Background(), f.spec)
+
+			assert.Equal(t, outcome, got.Outcome, version+" guard="+guard+": "+got.Note)
+
+			if outcome == agent.OutcomeNotStarted {
+				assert.Contains(t, got.Note, "It supports 3.0.0 up to but not including 4.0.0", version)
+			}
+		}
+	}
+}
+
+func TestRunner_ARunWithAnUnreadableVersionDoesNotStartWhenTheProfileHasARange(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	failing := func(context.Context, string, []string) (string, error) { return "", errors.New("no such file") }
+
+	for name, reader := range map[string]func(context.Context, string, []string) (string, error){"no number": seen("cli next"), "no output": failing} {
+		f := newFixture(t, "claude", claude.Name, "")
+		f.spec.Adapter = ranged{f.spec.Adapter}
+
+		got := agent.Runner{Version: reader}.Run(context.Background(), f.spec)
+
+		assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, name)
+		assert.Contains(t, got.Note, "3.0.0 up to but not including 4.0.0", name)
+	}
+}
+
+func TestRunner_ARunWithNoSupportedRangeAndNoSandboxNeverReadsTheVersion(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	f := newFixture(t, "claude", claude.Name, "")
+
+	reader := func(context.Context, string, []string) (string, error) { return "", errors.New("must not run") }
+
+	got := agent.Runner{Version: reader}.Run(context.Background(), f.spec)
+
+	assert.Equal(t, agent.OutcomeExited, got.Outcome, got.Note)
+}
+
+func TestRunner_AGuardedRunWhoseHookNeedsPOSIXDoesNotStartOnWindows(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	f := newFixture(t, "claude", claude.Name, "")
+	f.spec.Adapter, f.spec.Guard = ranged{f.spec.Adapter}, "beehave check command"
+
+	got := agent.Runner{OS: "windows", Version: seen("cli 3.0.0")}.Run(context.Background(), f.spec)
+
+	assert.Equal(t, agent.OutcomeNotStarted, got.Outcome)
+	assert.Contains(t, got.Note, "does not start on Windows")
 }
 
 func TestRunner_ALaunchEnvIsAddedButNeverReplacesTheLogin(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process

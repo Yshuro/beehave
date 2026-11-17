@@ -516,7 +516,7 @@ The record also holds `diff_stat`: the output of `git diff --stat --stat-count=5
 
 When the loss record holds a session, the agents layer decides once, before the start, whether the session can resume. It cannot resume when the CLI of the runner has no resume option, or when the transcript file of the session is missing (a moved worktree, a cleaned login folder, another login). A session that can resume starts with `--resume <id>` and a short prompt: the engine stopped after N minutes, continue the step, the brief and the output file are earlier in the session. The phase output records `resumed`. The saved session wins over the `resume` keyword of the call.
 
-A session that cannot resume, and a loss before the agent named a session, start the agent again with the prompt and the note. A start that the CLI refuses at run time fails the step as any failed run does.
+A session that cannot resume, and a loss before the agent named a session, start the agent again with the prompt and the note. OpenCode never resumes a lost run: it keeps no file for one session, so the check finds none. A start that the CLI refuses at run time fails the step as any failed run does.
 
 #### The note in the prompt
 

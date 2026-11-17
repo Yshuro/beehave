@@ -103,6 +103,33 @@ func TestTestAdapter_PassesACorrectAdapter(t *testing.T) {
 	agenttest.TestAdapter(t, func() agent.Adapter { return good() })
 }
 
+func TestTestAdapter_PassesAnAdapterWithASupportedVersionRange(t *testing.T) {
+	t.Parallel()
+
+	// The fake CLI prints no version, so the suite must answer the version check with the first supported version, or no run would start.
+	agenttest.TestAdapter(t, func() agent.Adapter {
+		a := good()
+		a.profile.SupportedFrom, a.profile.SupportedBefore = "3.0.0", "4.0.0"
+
+		return a
+	})
+}
+
+func TestCheckRun_AnAdapterWhoseRangeTheSuiteVersionMissesDoesNotRun(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.profile.SupportedFrom, a.profile.SupportedBefore = "3.0.0", "3.0.0"
+
+	var r recorder
+
+	agenttest.CheckRun(&r, a, t.TempDir())
+
+	require.NotEmpty(t, r.failures, "a range that holds no version stops every run")
+}
+
+const rangeFailure = "the profile sets one bound of the supported versions: set both SupportedFrom and SupportedBefore, or neither"
+
 func TestCheckProfile(t *testing.T) {
 	t.Parallel()
 
@@ -121,6 +148,21 @@ func TestCheckProfile(t *testing.T) {
 		{"a_correct_profile", good(), ""},
 		{"no_binary", flawed(func(p *agent.Profile) { p.Binary = "" }), "the profile has no binary"},
 		{"a_binary_that_is_a_path", flawed(func(p *agent.Profile) { p.Binary = "/usr/bin/fake" }), `the binary "/usr/bin/fake" is a path: the runner looks the name up on PATH`},
+		{"both_bounds_of_a_range", flawed(func(p *agent.Profile) { p.SupportedFrom, p.SupportedBefore = "1.0.0", "2.0.0" }), ""},
+		{"only_the_first_supported_version", flawed(func(p *agent.Profile) { p.SupportedFrom = "1.0.0" }), rangeFailure},
+		{"only_the_first_unsupported_version", flawed(func(p *agent.Profile) { p.SupportedBefore = "2.0.0" }), rangeFailure},
+		{"version_arguments_with_a_range", flawed(func(p *agent.Profile) {
+			p.SupportedFrom, p.SupportedBefore = "1.0.0", "3.0.0"
+			p.VersionArgs = []agent.VersionArgs{{From: "2.0.0", Args: []string{"--x"}}}
+		}), ""},
+		{
+			"version_arguments_with_no_range", flawed(func(p *agent.Profile) { p.VersionArgs = []agent.VersionArgs{{From: "2.0.0", Args: []string{"--x"}}} }),
+			"the profile sets VersionArgs or GuardBefore but no supported versions: the runner reads the version only for a profile with a range",
+		},
+		{
+			"a_guard_limit_with_no_range", flawed(func(p *agent.Profile) { p.GuardBefore = "2.0.0" }),
+			"the profile sets VersionArgs or GuardBefore but no supported versions: the runner reads the version only for a profile with a range",
+		},
 		{"no_login_variable", flawed(func(p *agent.Profile) { p.ConfigVars = nil }), "the profile has no login variable: the CLI would use the login of the caller"},
 	}
 

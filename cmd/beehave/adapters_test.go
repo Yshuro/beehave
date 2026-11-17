@@ -88,13 +88,15 @@ func TestAdapters_TheTableHasAConstructorForEveryNameAndNothingElse(t *testing.T
 	assert.Len(t, table.forges, 1)
 }
 
-func TestAdapters_AgentBuildsTheClaudeAdapterAndNothingForAnAgentWithoutOne(t *testing.T) {
+func TestAdapters_AgentBuildsTheAdapterOfEachAgentAndNothingForAnUnknownName(t *testing.T) {
 	t.Parallel()
 
 	table := newAdapters(beadstest.NewBd(t), nil, nil)
 
 	assert.Equal(t, claude.New(nil), table.agent(claude.Name))
-	assert.Nil(t, table.agent(opencode.Name))
+	assert.Equal(t, opencode.New(), table.agent(opencode.Name))
+	assert.Nil(t, table.agent(model.Agent("gpt")))
+	assert.Len(t, table.agents, 2)
 }
 
 func TestAdapters_BuildTheAdapterTheProjectNames(t *testing.T) {

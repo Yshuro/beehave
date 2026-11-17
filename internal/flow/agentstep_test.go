@@ -594,6 +594,27 @@ func TestAgentStep_ARequiredSkillThatTheRunDidNotCallFailsTheStepAndNamesIt(t *t
 	require.ErrorContains(t, err, "list of strings")
 }
 
+func TestAgentStep_TheRequiredSkillsOfTheStepGoToTheAgentRequest(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd", "review"}})
+
+	_, err := rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "x")
+
+	require.NoError(t, err)
+	require.Len(t, rig.h.agents.seen(), 1)
+	assert.Equal(t, []string{"tdd", "review"}, rig.h.agents.seen()[0].RequireSkills, "the agent step must hand the skills to the request, or a CLI with no skill reports starts")
+
+	rig = newAgentRig(t)
+	rig.reply("", exited)
+
+	_, err = rig.run(t, agentFlow(""), "x")
+
+	require.NoError(t, err)
+	assert.Empty(t, rig.h.agents.seen()[0].RequireSkills)
+}
+
 func TestAgentStep_AnAgentThatDoesNotExitCleanlyFailsTheStep(t *testing.T) {
 	t.Parallel()
 
