@@ -97,7 +97,7 @@ func (e *Engine) holdHead(ctx context.Context, project, item string, read review
 		return nil
 	}
 
-	if draftErr := e.backToDraft(ctx, project, read.Number); draftErr != nil {
+	if draftErr := e.backToDraft(ctx, project, item, read.Number); draftErr != nil {
 		return errors.Join(fmt.Errorf("put pull request %d back to draft: %w", read.Number, draftErr), err)
 	}
 
@@ -113,11 +113,25 @@ const draftTimeout = 30 * time.Second
 
 // backToDraft puts a pull request back to draft on a context that a cancel of ctx does not end, within a limit of its own.
 // A cancel is the usual reason that the pull request must go back, so the call cannot run on the context of the step.
-func (e *Engine) backToDraft(ctx context.Context, project string, pr int) error {
+// A pr of 0 reads the number of the pull request of the item first, inside the same limit.
+func (e *Engine) backToDraft(ctx context.Context, project, item string, pr int) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cmp.Or(e.deps.Clock.Draft, draftTimeout))
 	defer cancel()
 
-	return e.deps.Watch.SetDraft(ctx, project, pr, true)
+	if pr == 0 {
+		read, err := e.deps.Forge.Pull(ctx, project, item)
+		if err != nil {
+			return fmt.Errorf("cannot read the pull request of item %s to make it a draft again. If it is open and ready for review, run `gh pr ready --undo <number>`: %w", item, err)
+		}
+
+		pr = read.Number
+	}
+
+	if err := e.deps.Watch.SetDraft(ctx, project, pr, true); err != nil {
+		return fmt.Errorf("cannot make pull request %d a draft again. If it is open and ready for review, run `gh pr ready --undo %d`: %w", pr, pr, err)
+	}
+
+	return nil
 }
 
 // readyStep runs markReady as the recorded step of the lifecycle. A replay reads the recorded head, so the merge pins the same head after a restart.

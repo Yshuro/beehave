@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/review"
 )
 
@@ -33,31 +34,27 @@ func (f *cancelingForge) Pull(ctx context.Context, project, item string) (review
 	return f.fakeForge.Pull(ctx, project, item)
 }
 
-// drafting reaches the forge only on a live context, as a forge does. With hang set, a call that is live waits until its context ends.
+// drafting reaches the forge only on a live context, as a forge does. It records the deadline of each call that has one.
+// With hang set, a live call waits until its context ends.
 type drafting struct {
-	mu       sync.Mutex
-	calls    int
-	reached  []int
-	hang     bool
-	deadline time.Duration
+	mu        sync.Mutex
+	reached   []int
+	deadlines []time.Time
+	hang      bool
 }
 
 func (d *drafting) SetDraft(ctx context.Context, _ string, pr int, draft bool) error {
-	d.mu.Lock()
-	d.calls++
-	d.mu.Unlock()
+	if at, ok := ctx.Deadline(); ok {
+		d.mu.Lock()
+		d.deadlines = append(d.deadlines, at)
+		d.mu.Unlock()
+	}
 
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	if d.hang {
-		if at, ok := ctx.Deadline(); ok {
-			d.mu.Lock()
-			d.deadline = time.Until(at)
-			d.mu.Unlock()
-		}
-
 		<-ctx.Done()
 
 		return ctx.Err()
@@ -113,6 +110,92 @@ func TestReady_AReturnToDraftThatHangsEndsAtItsLimitAndIsPartOfTheError(t *testi
 	require.ErrorIs(t, err, context.Canceled, "the failed read stays in the error")
 	require.ErrorIs(t, err, context.DeadlineExceeded, "the hung return ends at its limit and is reported")
 	require.ErrorContains(t, err, "put pull request 7 back to draft")
-	assert.Positive(t, watch.deadline, "the return has a deadline")
-	assert.LessOrEqual(t, watch.deadline, 20*time.Millisecond)
+	require.ErrorContains(t, err, "gh pr ready --undo 7", "the error names the step to do by hand")
+}
+
+func TestReady_TheReturnToDraftEndsAtTheDefaultLimit(t *testing.T) {
+	t.Parallel()
+
+	engine, ctx, watch := cancelRig(t)
+
+	before := time.Now()
+	_, err := engine.markReady(ctx, testProject, testItem, gatedHead)
+	after := time.Now()
+
+	require.ErrorIs(t, err, context.Canceled)
+	require.Len(t, watch.deadlines, 1)
+
+	assert.Equal(t, 30*time.Second, draftTimeout, "the limit of the return to draft is 30 seconds")
+	assert.False(t, watch.deadlines[0].Before(before.Add(draftTimeout)), "the deadline is at least the limit after the call")
+	assert.False(t, watch.deadlines[0].After(after.Add(draftTimeout)), "the deadline is at most the limit after the call")
+}
+
+func TestMergeStep_AFailedMergePutsThePullRequestBackToDraft(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		result merge.Result
+		err    error
+	}{
+		"a_refused_merge":              {result: merge.Result{Stop: merge.Refused, Lines: []string{"checks are red"}}},
+		"a_merge_that_cannot_be_asked": {err: errFake},
+	}
+
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h := mergeHarness(t, tc.result)
+			h.merge.err = tc.err
+
+			_, err := walkText(t, h, shipFlow("merge = True, "))
+
+			require.Error(t, err)
+
+			_, drafts := h.watch.seen()
+			assert.Equal(t, []int{testPull}, drafts, "the pull request that was marked ready goes back to draft")
+		})
+	}
+}
+
+func TestMergeStep_AFailedMergeThatCannotReachTheDraftCallNamesBothFailuresAndTheStepByHand(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Refused, Lines: []string{"checks are red"}})
+	h.watch.draftErr = errFake
+
+	_, err := walkText(t, h, shipFlow("merge = True, "))
+
+	require.ErrorContains(t, err, errMergeRefused.Error())
+	require.ErrorIs(t, err, errFake)
+	require.ErrorContains(t, err, "gh pr ready --undo 7")
+}
+
+func TestMergeStep_AMergeThatWorksLeavesThePullRequestReady(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Done})
+
+	_, err := walkText(t, h, shipFlow("merge = True, "))
+
+	require.NoError(t, err)
+
+	_, drafts := h.watch.seen()
+	assert.Empty(t, drafts)
+}
+
+func TestMergeStep_AFailedMergeWhoseNumberCannotBeReadNamesBothFailuresAndTheStepByHand(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Refused, Lines: []string{"checks are red"}})
+	h.forge.failFrom = 5 // the fifth read of the forge is the one that the return to draft makes after the failed merge
+
+	_, err := walkText(t, h, shipFlow("merge = True, "))
+
+	require.ErrorContains(t, err, errMergeRefused.Error())
+	require.ErrorIs(t, err, errFake)
+	require.ErrorContains(t, err, "gh pr ready --undo <number>")
+
+	_, drafts := h.watch.seen()
+	assert.Empty(t, drafts, "no draft call is made with no number")
 }

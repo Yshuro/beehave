@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 
@@ -162,7 +163,11 @@ func (s *script) readyAndMerge(m mergeArgs) (string, error) {
 		return pinned, nil
 	}
 
-	return pinned, s.e.mergeReady(s.ctx, s.in.Project, s.in.Item, pinned, m.settings)
+	if err := s.e.mergeReady(s.ctx, s.in.Project, s.in.Item, pinned, m.settings); err != nil {
+		return pinned, errors.Join(err, s.e.backToDraft(s.ctx, s.in.Project, s.in.Item, 0))
+	}
+
+	return pinned, nil
 }
 
 // awaitOwner reads the pull request until the owner merges it or sends it back. When ownerMerges is true, the run first shows that it waits for the owner.
