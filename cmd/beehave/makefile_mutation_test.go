@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 // makefile returns the absolute path of the Makefile of the repository.
@@ -30,6 +31,49 @@ func TestMakefile_SetupInstallsGremlinsAtThePinnedVersion(t *testing.T) {
 	out, err := exec.CommandContext(t.Context(), "make", "-n", "-C", filepath.Dir(makefile(t)), "setup").CombinedOutput() //nolint:gosec // G204: the folder is the root of this repository
 	require.NoError(t, err, string(out))
 	assert.Contains(t, string(out), "go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0\n")
+}
+
+func TestMakefile_MutationLeavesTheWorkerCountToTheGremlinsConfig(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not on the path")
+	}
+
+	fake := t.TempDir()
+	args := filepath.Join(fake, "args")
+	require.NoError(t, os.WriteFile(filepath.Join(fake, "gremlins"), []byte("#!/bin/sh\necho \"$*\" > "+args+"\n"), 0o700)) //nolint:gosec // the fake must be executable
+
+	command := exec.CommandContext(t.Context(), "make", "-s", "-C", filepath.Dir(makefile(t)), "mutation", "PKG=./internal/cli") //nolint:gosec // G204: the arguments are constants of this test
+	command.Env = []string{"PATH=" + fake + ":/usr/bin:/bin:/usr/sbin:/sbin"}
+
+	out, err := command.CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	got, err := os.ReadFile(args) //nolint:gosec // G304: the path is in the temporary folder of this test
+	require.NoError(t, err)
+	assert.Equal(t, "unleash ./internal/cli\n", string(got), "the Makefile must leave the worker count to .gremlins.yaml")
+}
+
+func TestGremlinsConfig_SetsFourWorkers(t *testing.T) {
+	t.Parallel()
+
+	config, err := os.Open(filepath.Join("..", "..", ".gremlins.yaml"))
+	require.NoError(t, err)
+
+	defer func() { require.NoError(t, config.Close()) }()
+
+	// Gremlins drops the whole file with no message when it cannot read it, so a line that is not YAML or a repeated key must fail here.
+	var parsed struct {
+		Unleash struct {
+			Workers int `yaml:"workers"`
+		} `yaml:"unleash"`
+	}
+
+	decoder := yaml.NewDecoder(config)
+	decoder.KnownFields(true)
+	require.NoError(t, decoder.Decode(&parsed))
+	assert.Equal(t, 4, parsed.Unleash.Workers)
 }
 
 func TestMakefile_MutationRefusesAPackagePatternWithDots(t *testing.T) {
