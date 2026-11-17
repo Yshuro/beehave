@@ -104,7 +104,8 @@ func ledgerUsage(errOut io.Writer) bool {
 }
 
 // ledgerCommand reads or writes the lane ledger in the state folder that --state names. A read that fails and a row that the ledger refuses are exit code 2.
-// The lines that a verb gives are printed before its error, so a row that is written but not released still shows its issues.
+// Only add prints lines together with an error, because only add can write its row and still fail, so a row that is written but not released still shows its issues.
+// A read verb prints no line when it fails.
 func ledgerCommand(ctx context.Context, deps Deps, s streams, args []string) int {
 	verb, pos, given, ok := parseLedger(args, s.err)
 	if !ok {
@@ -126,34 +127,44 @@ func ledgerCommand(ctx context.Context, deps Deps, s streams, args []string) int
 	return ExitPass
 }
 
-// answer gives the line of a read that worked, and no line when the read failed, so a failed read prints no value.
-func answer(line string, err error) ([]string, error) {
+// ledgerRun runs one verb on the ledger of the state folder and gives the lines to print. The verb is one that parseLedger checked.
+// Only add returns its lines straight, with its error. Every other verb is a read and goes through ledgerRead.
+func ledgerRun(ctx context.Context, deps Deps, verb string, pos []string, given ledgerFlags) ([]string, error) {
+	book := deps.Book(given.state)
+
+	if verb == verbAdd {
+		return ledgerAdd(ctx, deps, book, pos, given)
+	}
+
+	return ledgerRead(book, verb, pos)
+}
+
+// ledgerRead runs a read verb and gives no line when the read failed, so a failed read prints no value.
+// A read verb that is new gets this rule because it can be reached only through here.
+func ledgerRead(book Book, verb string, pos []string) ([]string, error) {
+	lines, err := readLines(book, verb, pos)
 	if err != nil {
 		return nil, err
 	}
 
-	return []string{line}, nil
+	return lines, nil
 }
 
-// ledgerRun runs one verb on the ledger of the state folder and gives the lines to print. The verb is one that parseLedger checked.
-func ledgerRun(ctx context.Context, deps Deps, verb string, pos []string, given ledgerFlags) ([]string, error) {
-	book := deps.Book(given.state)
-
+// readLines gives the lines of a read verb. It may give lines with an error; ledgerRead drops them.
+func readLines(book Book, verb string, pos []string) ([]string, error) {
 	switch verb {
-	case verbAdd:
-		return ledgerAdd(ctx, deps, book, pos, given)
 	case "count":
 		count, err := book.Count(pos[0], pos[1])
 
-		return answer(strconv.Itoa(count), err)
+		return []string{strconv.Itoa(count)}, err
 	case "rounds":
 		rounds, err := book.Rounds(pos[0], pos[1])
 
-		return answer(fmt.Sprintf("%d open=%t", rounds.Count, rounds.Open), err)
+		return []string{fmt.Sprintf("%d open=%t", rounds.Count, rounds.Open)}, err
 	case "prior":
 		prior, err := book.Prior(pos[0], pos[1])
 
-		return answer(strconv.Itoa(prior), err)
+		return []string{strconv.Itoa(prior)}, err
 	}
 
 	return book.Closes(pos[0])
