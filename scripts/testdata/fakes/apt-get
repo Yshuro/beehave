@@ -1,0 +1,3 @@
+#!/bin/sh
+# Fake apt-get: log the call.
+printf 'apt-get %s\n' "$*" >>"$FAKE_LOG"
