@@ -25,10 +25,11 @@ var errNoWorktree = errors.New("the rig could not make the worktree of an item")
 // stallLimit is the longest a child waits for its turn or the round waits for a member to end. A turn that never comes is a mistake of the test.
 const stallLimit = 30 * time.Second
 
-// readsBeforeReview is the number of the read of the pull request that comes just before the review of a child: the intake is the first read.
-const readsBeforeReview = 2
+// readsBeforeReview is the number of the read of the pull request that comes just before the full review of a child: the intake is the first read,
+// and the read before the scoped review is the second.
+const readsBeforeReview = 3
 
-// readsToLanding is the number of reads of the pull request of a member by the end of its landing: the intake, the read before the review and the read of its own batch.
+// readsToLanding is the number of reads of the pull request of a member by the end of its landing: the intake, the reads before the scoped and the full review, and the read of its own batch.
 const readsToLanding = readsBeforeReview + 1
 
 // turn is the wait of one member. The member holds at its read before the review until the round makes its read number `read` of the queue, the first read of the pass of that number.
@@ -204,7 +205,7 @@ func (c *children) afterReview(inner func(AgentRequest) agent.Result) func(Agent
 	return func(request AgentRequest) agent.Result {
 		result := inner(request)
 
-		if strings.Contains(request.Prompt, reviewMarker) {
+		if strings.Contains(request.Prompt, fullReview) {
 			c.mu.Lock()
 			c.reviewed = append(c.reviewed, request.Item)
 			hooks := slices.Clone(c.reviewHooks[request.Item])
@@ -312,7 +313,7 @@ func (g itemGate) Run(ctx context.Context, project, item, host string, job GateJ
 	g.kids.gated = append(g.kids.gated, item)
 	g.kids.mu.Unlock()
 
-	return GateResult{Passed: true, Head: g.kids.head(item), Tree: exampleTree}, nil
+	return GateResult{Passed: true, Head: g.kids.head(item), Tree: exampleTree, Checks: cleanChecks()}, nil
 }
 
 // endTogether makes the children of the items end in one read of gather, in pass 2, and every other member end in pass 1. The round lands the two groups as two batches. Call it before the run.
@@ -412,6 +413,8 @@ func newRoundRigOf(t *testing.T, items string) *roundRig {
 		t.Errorf("the child of item %s waited for %s: the round never reached it", item, what)
 	}
 	kids := &children{heads: rig.heads, base: strings.TrimSpace(rig.repo.must(t, "rev-parse", "main")), turns: newEndOrder(members, stalled), reviewHooks: map[string][]func(){}}
+	// The checks before review of each child compare its head with the base origin/main.
+	rig.repo.must(t, "update-ref", "refs/remotes/origin/main", kids.base)
 	rig.h.logins = fakeLogins{login: testLogin, byItem: loginsOf(members)}
 	trees := &itemTrees{repo: rig.repo, kids: kids, root: t.TempDir(), dirs: map[string]string{}}
 	rig.h.trees = &fakeTrees{per: trees.tree}

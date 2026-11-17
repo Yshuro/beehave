@@ -85,6 +85,7 @@ func TestExampleLane_APapersLaneSettleThatChangesASourcePathFailsAndNamesIt(t *t
 	t.Parallel()
 
 	rig, file := laneRig(t, "papers", "papers/**", func(int) string { return "changes" }, settleMarker, "src/settled.go")
+	rig.setRound("fix_rounds", oneFixRound)
 	done := pipelineInBackground(rig.h.engine(t), file)
 
 	waitForTheOwner(t, rig.h)

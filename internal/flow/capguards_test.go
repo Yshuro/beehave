@@ -190,7 +190,10 @@ func TestExample_ACappedReviewStopsTheItemWithARefuseBeforeAnyFix(t *testing.T) 
 func TestExample_ACappedSettleStopsTheItemWithARefuse(t *testing.T) {
 	t.Parallel()
 
-	rig, file := capRig(t, func(int) string { return "changes" }, nthCall(14), agent.OutcomeTurnCap)
+	// The settle is the call after the plan, the implement and every agent of the two candidates of one fix round.
+	settle := 2 + len(capModels(2)) + 1
+	rig, file := capRig(t, func(int) string { return "changes" }, nthCall(settle), agent.OutcomeTurnCap)
+	rig.setRound("fix_rounds", oneFixRound)
 	engine := rig.h.engine(t)
 	done := pipelineInBackground(engine, file)
 
@@ -201,14 +204,14 @@ func TestExample_ACappedSettleStopsTheItemWithARefuse(t *testing.T) {
 	require.Error(t, outcome.err)
 	assert.Contains(t, outcome.err.Error(), "REFUSE")
 	assert.Contains(t, outcome.err.Error(), "the settle step stopped at the turns cap")
-	assert.Len(t, rig.models(), 14, "the settle is the last agent")
+	assert.Len(t, rig.models(), settle, "the settle is the last agent")
 }
 
 func TestReviewFix_ACappedReviewStopsTheLoopWithARefuseThatNamesTheCap(t *testing.T) {
 	t.Parallel()
 
 	rig, file := capRig(t, func(int) string { return "changes" }, func(AgentRequest) bool { return true }, agent.OutcomeTurnCap)
-	require.NoError(t, os.WriteFile(file, []byte(libraryLoop("")), 0o600))
+	require.NoError(t, os.WriteFile(file, []byte(libraryLoop(rig.head, "")), 0o600))
 
 	loopEngine := rig.h.engine(t)
 	_, err := loopEngine.RunFile(testItem, testProject, file)

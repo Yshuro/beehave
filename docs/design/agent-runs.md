@@ -194,7 +194,7 @@ The kind refuses each git command that changes a repository: add, commit, push, 
 
 `worktree add` and `worktree list` pass. A reviewer builds its own copy of the tree with `worktree add`, not with `apply`.
 
-`git-write` is for a read-only step. `review_fix.star` lists it for the `review` call, so a reviewer cannot fix, commit or push. It is opt-in, like the other kinds that a step lists. The default `--forbid` list of `beehave check command` holds every kind except `git-write`, so a bare hook does not refuse every commit.
+`git-write` is for a read-only step. `review_fix.star` lists it for each review call (the scoped reviews, the full review `candidate-review` and the design step), so a reviewer cannot fix, commit or push. It is opt-in, like the other kinds that a step lists. The default `--forbid` list of `beehave check command` holds every kind except `git-write`, so a bare hook does not refuse every commit.
 
 #### Check of the workflow
 

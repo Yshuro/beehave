@@ -312,7 +312,7 @@ func TestExampleBatch_EveryItemGetsTheStopsOfOneItemBeforeTheBatch(t *testing.T)
 	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Len(t, rig.remote.asked, 2*readsToLanding, "each member is read three times: at its intake, before its review and once more before its own batch")
+	assert.Len(t, rig.remote.asked, 2*readsToLanding, "each member is read four times: at its intake, before its scoped review, before its full review and once more before its own batch")
 
 	for _, item := range []string{"1", "3"} {
 		assert.Equal(t, readsToLanding, strings.Count(strings.Join(rig.remote.asked, " "), item), "item %s", item)
@@ -330,7 +330,7 @@ func TestExampleBatch_AMergeSettingThatIsOffLandsNothing(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, rig.merger.asked, "no member reaches the merge")
 	assert.Empty(t, rig.gate.ran(), "no gate runs")
-	assert.Len(t, rig.remote.asked, 4, "only the intake and the review loop of the two children read a branch; the batch reads none")
+	assert.Len(t, rig.remote.asked, 2*readsBeforeReview, "only the intake and the review loop of the two children read a branch; the batch reads none")
 	assert.Empty(t, heldOf(rig.writer))
 	assert.Equal(t, "README", rig.mainFiles(t))
 }
