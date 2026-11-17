@@ -1,0 +1,144 @@
+# scripts/mutation-pr.sh chooses the default whole-run limit: 3600 when the diff changes a non-test Go file in internal/flow or below it, otherwise 1200.
+# Only gremlins and timeout are stubs. The stub timeout writes its limit to limit.
+[!exec:jq] skip
+[!exec:git] skip
+env HOME=$WORK/home
+env GIT_CONFIG_GLOBAL=/dev/null
+env GIT_CONFIG_NOSYSTEM=1
+chmod 755 fake/gremlins
+chmod 755 fake/timeout
+env PATH=$WORK/fake:$PATH
+
+exec git init -q -b main repo
+mkdir repo/internal/flow
+mkdir repo/other/internal/flow
+mkdir repo/internal/flow/sub
+mkdir repo/internal/flowx
+cp f.go repo/internal/flow/sub/s.go
+cp f.go repo/internal/flowx/x.go
+cp a.go repo/a.go
+cp f.go repo/internal/flow/f.go
+cp f.go repo/internal/flow/f_test.go
+cp f.go repo/other/internal/flow/z.go
+cp gomod repo/go.mod
+script mutation-pr.sh repo/scripts/mutation-pr.sh
+exec git -C repo add a.go internal other go.mod scripts
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+
+# A change outside internal/flow keeps the limit of 1200.
+exec git -C repo checkout -q -b outside
+cp a2.go repo/a.go
+exec git -C repo add a.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m outside
+env GREMLINS_REPORT=$WORK/outside.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^1200$' limit
+
+# A change under internal/flow gets 3600.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b flow
+cp f2.go repo/internal/flow/f.go
+exec git -C repo add internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m flow
+env GREMLINS_REPORT=$WORK/flow.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^3600$' limit
+
+# A flow file that is not the first changed file counts too.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b both
+cp a2.go repo/a.go
+cp f2.go repo/internal/flow/f.go
+exec git -C repo add a.go internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m both
+env GREMLINS_REPORT=$WORK/both.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^3600$' limit
+
+# A path that only holds internal/flow further down keeps 1200.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b nested
+cp f2.go repo/other/internal/flow/z.go
+exec git -C repo add other
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m nested
+env GREMLINS_REPORT=$WORK/nested.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^1200$' limit
+
+# A file in a folder below internal/flow gets 3600.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b below
+cp f2.go repo/internal/flow/sub/s.go
+exec git -C repo add internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m below
+env GREMLINS_REPORT=$WORK/below.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^3600$' limit
+
+# A folder whose name only starts with flow keeps 1200.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b flowx
+cp f2.go repo/internal/flowx/x.go
+exec git -C repo add internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m flowx
+env GREMLINS_REPORT=$WORK/flowx.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^1200$' limit
+
+# A flow test file does not count: a diff with a flow test file and a file outside keeps 1200.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b flowtest
+cp a2.go repo/a.go
+cp f2.go repo/internal/flow/f_test.go
+exec git -C repo add a.go internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m flowtest
+env GREMLINS_REPORT=$WORK/outside.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^1200$' limit
+
+# An empty MUTATION_TIMEOUT takes the default, and a set one wins over it.
+exec git -C repo checkout -q flow
+env GREMLINS_REPORT=$WORK/flow.json
+env MUTATION_TIMEOUT=
+exec sh repo/scripts/mutation-pr.sh main
+grep '^3600$' limit
+env MUTATION_TIMEOUT=50
+exec sh repo/scripts/mutation-pr.sh main
+grep '^50$' limit
+
+-- gomod --
+module example.com/r
+
+go 1.27
+-- a.go --
+package a
+-- a2.go --
+package a
+
+func F(x int) bool { return x > 0 }
+-- f.go --
+package flow
+-- f2.go --
+package flow
+
+func F(x int) bool { return x > 0 }
+-- fake/gremlins --
+#!/bin/sh
+cp "$GREMLINS_REPORT" "$5"
+-- fake/timeout --
+#!/bin/sh
+echo "$3" > "$WORK/limit"
+shift 3
+exec "$@"
+-- outside.json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- flow.json --
+{"files":[{"file_name":"internal/flow/f.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- both.json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]},{"file_name":"internal/flow/f.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- below.json --
+{"files":[{"file_name":"internal/flow/sub/s.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- flowx.json --
+{"files":[{"file_name":"internal/flowx/x.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- nested.json --
+{"files":[{"file_name":"other/internal/flow/z.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
