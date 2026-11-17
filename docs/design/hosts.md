@@ -219,7 +219,7 @@ When the wait of a project gate ends as `lost`, the gate keeps its host slot and
 - Each look is one step, `gate:lost-look.<k>` from 0. A look calls `LostProof` once, then reads the clock.
 - A durable sleep of one minute comes between two looks, so a restart replays the earlier looks.
 - Each look reads `host.lost_job_wait` from the config of the engine that runs it. A project with no host block waits for the default.
-- A proof ends the wait as a void gate. `passed` is false, every step of the list is `unknown`, and the report says "the gate job was lost on <host> and the proof is <kind>". The field `host_loss` holds the job, the host, the head, the proof and the time of the look.
+- A proof ends the wait as a void gate. `passed` is false, every step of the list is `unknown`, and the report says "the gate job was lost on <host> and the proof is <kind>". The field `host_loss` holds the job, the host, the head, the proof and the time of the look. The item run records the loss as the step `<call>/host-loss`, and the field `host_losses` counts the losses of the item tree. See "The host loss fields" in [workflow-files.md](workflow-files.md).
 - A look with no proof at or after the limit ends the wait, and the host slot and the exclusive slot are free. See "The owner wait for a lost job" below.
 - A look whose read of the proof fails fails the gate with that error.
 - If the run is canceled during the wait, the engine calls `LostProof` once more under a context that the cancel does not reach. A call with no proof is logged, because the job can still run. The wait never cancels the job: a cancel waits for the job and banks its work.

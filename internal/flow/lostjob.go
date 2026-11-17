@@ -24,6 +24,10 @@ const (
 	gateLostLookName = "gate:lost-look"
 	// hostLossKey is the field of a gate result that holds the record of a lost job.
 	hostLossKey = "host_loss"
+	// hostLossesKey is the field of a gate result, and of the status of a run, that counts the host losses of the item tree.
+	hostLossesKey = "host_losses"
+	// hostLossName is the sub-step of a gate call in which the item run records a lost job that has a proof: <call>/host-loss.
+	hostLossName = "host-loss"
 	// noHostReader is the note of a proof that a build with no host keeper cannot read.
 	noHostReader = "this build cannot read the host"
 	// lostJobKey is the event in which an open run shows the lost gate job that it asks the owner about.
@@ -96,14 +100,73 @@ func (e *Engine) endLost(ctx dbos.Context, in ExclusiveInput, lost LostJob, out 
 	return voidOutputs(held), nil
 }
 
+// hostLoss is the record of the step <call>/host-loss: the loss, and the count of the host losses of the item tree, this one included.
+// This step is the record of the loss; the gate result carries a copy.
+type hostLoss struct {
+	Loss   any `json:"host_loss"`
+	Losses int `json:"host_losses"`
+}
+
 // lostOutputs is the outputs of a gate call from what its exclusive run returned. A run whose wait for the proof reached the limit gives the outputs of askLost,
-// which asks the owner. It runs in the item run, because only the item run receives an answer.
+// which asks the owner. A lost job with a proof is then recorded in the item run (recordLoss). It runs in the item run, because only the item run receives an answer.
 func (e *Engine) lostOutputs(ctx dbos.Context, in ExclusiveInput, call string, ran ExclusiveOutput) (map[string]any, error) {
-	if ran.Lost == nil || !ran.Lost.Limit {
+	if ran.Lost == nil {
 		return ran.Outputs, nil
 	}
 
-	return e.askLost(ctx, in, call, *ran.Lost)
+	outputs := ran.Outputs
+
+	if ran.Lost.Limit {
+		var err error
+		if outputs, err = e.askLost(ctx, in, call, *ran.Lost); err != nil {
+			return nil, err
+		}
+	}
+
+	return e.recordLoss(ctx, in.Item, call, outputs)
+}
+
+// recordLoss writes the lost job of a gate call, which has a proof, as the step <call>/host-loss of the item run, and puts the record and the count
+// in the outputs of the gate. The count walks the item tree inside the step, so a replay reads the recorded count and walks nothing.
+func (e *Engine) recordLoss(ctx dbos.Context, item, call string, outputs map[string]any) (map[string]any, error) {
+	record, err := runStep(e, ctx, call+"/"+hostLossName, func(context.Context) (hostLoss, error) {
+		earlier, err := e.treeHostLosses(ctx, item)
+
+		return hostLoss{Loss: outputs[hostLossKey], Losses: earlier + 1}, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("record the lost job of the gate: %w", err)
+	}
+
+	outputs[hostLossKey], outputs[hostLossesKey] = record.Loss, record.Losses
+
+	return outputs, nil
+}
+
+// treeHostLosses counts the host losses that the item runs of the tree of the run of ctx recorded: their steps <call>/host-loss.
+func (e *Engine) treeHostLosses(ctx dbos.Context, item string) (int, error) {
+	root, err := e.treeRoot(ctx, item)
+	if err != nil {
+		return 0, err
+	}
+
+	return hostLossesBelow(e.ctx, root)
+}
+
+// hostLossesBelow counts the steps <call>/host-loss of a run and of every item run below it. The count needs the names of the steps only,
+// so the walk does not load their outputs.
+func hostLossesBelow(ctx dbos.Client, id string) (int, error) {
+	count := 0
+
+	err := walkTree(ctx, id, dbos.WithStepsLoadOutput(false), func(records []dbos.StepInfo) {
+		for _, record := range records {
+			if _, sub, split := strings.Cut(record.StepName, "/"); split && sub == hostLossName {
+				count++
+			}
+		}
+	})
+
+	return count, err
 }
 
 // askLost asks the owner about a lost gate job and reads the proof once after each answer, in the step <call>/lost-ask.<n>. The read is a new call

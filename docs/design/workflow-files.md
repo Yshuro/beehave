@@ -435,6 +435,16 @@ A gate gives these steps:
 
 A gate that runs a program gives the step `command` only.
 
+#### The host loss fields
+
+A `gate` result has two fields for a host job that was lost. See "The wait for a proof" in [hosts.md](hosts.md).
+
+- `host_loss` holds `kind`, `job`, `host`, `head_or_commit`, `proof`, `note` and `at` when the gate lost its job and a proof came. It is an empty dict when the gate lost nothing.
+- `host_losses` is the number of host losses in the item tree of the run, this one included. It is 0 when the gate lost nothing, and the engine then reads no other run.
+- The item run records each loss as the step `<call>/host-loss`, with the loss and the count. The step counts the `/host-loss` steps of every item run of the tree from its root, so a replay reads the recorded count. If two runs of the tree record a loss at the same time, each count can leave out the other loss. The status reads the count again and holds both.
+- `beehave status <run id> --json` shows `host_losses` for the tree of the run, and leaves it out at 0.
+- The engine sets no limit on the count. A workflow reads `host_losses` and decides when to ask the owner.
+
 #### The pinned head
 
 The step pins the merge to the head of the pull request, not to `head`, when a rewrite left that head with the same tree as the reviewed `head`: the review stands for it. A head with another tree is refused.
