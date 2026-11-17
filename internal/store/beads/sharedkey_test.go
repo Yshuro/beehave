@@ -23,7 +23,7 @@ func twoBdWriters(t *testing.T) (*writeBd, [2]store.Writer) {
 	t.Helper()
 
 	fake := newWriteBd()
-	gate := storetest.NewCreateGate(fake, 0, bdLookups)
+	gate := storetest.NewCreateGate(fake, 0, bdLookups, storetest.CreateWait)
 
 	var writers [2]store.Writer
 

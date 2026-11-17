@@ -11,26 +11,27 @@ import (
 	"github.com/tobocop2/beehave/internal/store"
 )
 
-// createWait is the longest time CreateGate holds a create. Under the key lock the second writer looks the key up only after the first one filed, so the first create waits this long and then runs.
+// CreateWait is the wait that the tracker tests give CreateGate. Under the key lock the second writer looks the key up only after the first one filed, so the first create waits this long and then runs.
 // With no lock it is the time the second writer has to reach its lookups, so a slow host does not let the first create run early.
-const createWait = time.Second
+const CreateWait = time.Second
 
-// CreateGate is a runner over the fake tool of a tracker. It runs one call at a time, and it holds each create until `lookups` lookups ended or createWait passed.
+// CreateGate is a runner over the fake tool of a tracker. It runs one call at a time, and it holds each create until `lookups` lookups ended or `wait` passed.
 // Without a lock, two writers of one key then both look the key up before either files: the schedule that files two items.
 // verb is the position of the subcommand in the arguments: 1 for gh issue create, 0 for bd create.
 type CreateGate struct {
 	inner   proc.Runner
 	verb    int
 	lookups int
+	wait    time.Duration
 
 	mu   sync.Mutex
 	seen int
 	open chan struct{}
 }
 
-// NewCreateGate returns a gate over inner that waits for `lookups` lookups (calls of the subcommand list) before a create.
-func NewCreateGate(inner proc.Runner, verb, lookups int) *CreateGate {
-	return &CreateGate{inner: inner, verb: verb, lookups: lookups, open: make(chan struct{})}
+// NewCreateGate returns a gate over inner that holds a create for at most `wait` until `lookups` lookups (calls of the subcommand list) ended.
+func NewCreateGate(inner proc.Runner, verb, lookups int, wait time.Duration) *CreateGate {
+	return &CreateGate{inner: inner, verb: verb, lookups: lookups, wait: wait, open: make(chan struct{})}
 }
 
 // Run runs one call of the fake tool.
@@ -38,7 +39,7 @@ func (g *CreateGate) Run(ctx context.Context, args []string) model.CommandResult
 	if g.is(args, "create") {
 		select {
 		case <-g.open:
-		case <-time.After(createWait):
+		case <-time.After(g.wait):
 		}
 	}
 

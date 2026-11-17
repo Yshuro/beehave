@@ -22,7 +22,7 @@ func twoGhWriters(t *testing.T) (*fakeGh, [2]store.Writer) {
 	t.Helper()
 
 	fake := newFakeGh()
-	gate := storetest.NewCreateGate(fake, 1, ghLookups)
+	gate := storetest.NewCreateGate(fake, 1, ghLookups, storetest.CreateWait)
 
 	var writers [2]store.Writer
 
