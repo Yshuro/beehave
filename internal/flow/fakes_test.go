@@ -155,6 +155,8 @@ type fakeGate struct {
 	hosts []string
 	// bases are the base branches that Submit was given, in order.
 	bases []string
+	// checks is the check record that Run gives a passed result with none, or nil for no record.
+	checks *GateChecks
 }
 
 // gatedOn lists the build hosts that the calls of the gate were given, in order.
@@ -236,7 +238,9 @@ func (g *fakeGate) Run(ctx context.Context, project, item, host string, job Gate
 	if g.via != nil {
 		g.calls++
 
-		return g.via.Run(ctx, project, item, host, job)
+		result, err := g.via.Run(ctx, project, item, host, job)
+
+		return g.withChecks(result), err
 	}
 
 	index := min(g.calls, len(g.results)-1)
@@ -247,7 +251,17 @@ func (g *fakeGate) Run(ctx context.Context, project, item, host string, job Gate
 		result.Steps = commandStep(result.Passed)
 	}
 
-	return result, g.err
+	return g.withChecks(result), g.err
+}
+
+// withChecks gives a passed result with no check record the record of the gate.
+func (g *fakeGate) withChecks(result GateResult) GateResult {
+	if g.checks != nil && result.Passed && result.Checks == nil {
+		checks := *g.checks
+		result.Checks = &checks
+	}
+
+	return result
 }
 
 // commandStep is the one step that a real gate gives from the exit code of its command.

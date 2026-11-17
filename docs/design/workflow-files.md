@@ -700,7 +700,7 @@ One workflow written in this form, with five prompt files. The method lives in t
 
 1. A plan.
 2. An implement step.
-3. A review and fix loop of up to five fix rounds (six passes, so the sixth reviews the fifth fix). After each green gate, the loop runs the mutation step before the review.
+3. A review and fix loop of up to `fix_rounds + 1` candidates. Before each candidate, up to three scoped fixes and scoped reviews run with no gate. Each candidate gets the gate on the base, the checks before review, the mutation step and one full review, in that order.
 4. A wait for the owner.
 5. A settle step.
 6. A merge step.
@@ -710,7 +710,7 @@ One workflow written in this form, with five prompt files. The method lives in t
 The engine has no mutation builtin. The project owns the tool and the workflow runs it as a host command.
 
 - The project file sets `vars.mutation_command`: a list of words, such as `["sh", "scripts/mutation-pr.sh"]`. A run with no such key, or a value that is not a list of words, is refused before the first agent starts. The message names the key.
-- After each green gate, `check_mutation` runs the command with `host` and `slots = "mutation"`. It adds one word at the end: the base ref, `origin/` and the base of the round (`vars.round.base`). The command mutates only the lines that differ from that ref.
+- After the gate and the checks before review of each candidate pass, `check_mutation` runs the command with `host` and `slots = "mutation"`. It adds one word at the end: the base ref, `origin/` and the base of the round (`vars.round.base`). The command mutates only the lines that differ from that ref.
 - The `host` block of the project lists the class: `slots = {"mutation": 1}`.
 - The command exits with code 0 when the head is clean, and with another code when the run fails. A run that applied no mutant is a failed run, and the command says so.
 - A failed run prints one finding per line on its standard output, as `finding: path:line: text`, for example `finding: internal/cli/check.go:112: a mutant lived: CONDITIONALS_NEGATION`. The output of a failed host job is the end of its log, so it can hold other lines of the tool, such as the `KILLED <TYPE> at file:line:col` lines of gremlins. Only a line that starts with the literal prefix `finding: ` is a finding, and the finding is the text after the prefix. A failed run with no such line gives each non-blank line, the last 20 at most.

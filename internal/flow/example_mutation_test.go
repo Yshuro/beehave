@@ -137,7 +137,7 @@ func TestReviewFix_ALivedMutantOnAChangedLineIsAFinding(t *testing.T) {
 	assert.NotContains(t, fixes[0], "a:b: c", "a line of the shape a:b: c with no prefix is no finding")
 	assert.NotContains(t, fixes[0], "x.go:9: not prefixed", "a line of the shape path:line: text with no prefix is no finding")
 	assert.NotContains(t, fixes[0], "zzz-midline", "a line that holds the prefix in the middle is no finding: the prefix must start the line")
-	assert.Equal(t, []string{"opus", "sonnet", "sonnet", "opus"}, rig.models(), "the plan, the implement step, a fix, then the one review of the fixed head: no review judges a head with a lived mutant")
+	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "opus"}, rig.models(), "the plan, the implement step, its scoped review, a fix, the scoped review of the fix, then the one full review of the fixed head: no full review judges a head with a lived mutant")
 }
 
 func TestReviewFix_AMutationRunThatFailsSendsTheLaneBack(t *testing.T) {
@@ -242,7 +242,7 @@ func TestReviewFix_ACleanMutationRunLetsTheReviewJudgeTheHead(t *testing.T) {
 	assert.True(t, childOf(t, result).Approved, "the review approves the head")
 	assert.Len(t, mutationRuns(rig), 1)
 	assert.Empty(t, fixPrompts(rig))
-	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models(), "the plan, the implement step and one review")
+	assert.Equal(t, []string{"opus", "sonnet", "opus", "opus"}, rig.models(), "the plan, the implement step, the scoped review and one full review")
 }
 
 func TestBuiltins_NoneIsNamedMutation(t *testing.T) {

@@ -61,15 +61,22 @@ func TestExample_TheReviewIsReadOnlyAndTheFixIsNot(t *testing.T) {
 		assert.NotContains(t, request.Forbid, model.FindingGitWrite, "the fixer commits and pushes")
 	}
 
-	assert.Equal(t, 2, reviews)
+	assert.Equal(t, 3, reviews, "two scoped reviews and the full review")
 	assert.Equal(t, 3, others, "plan, implement and one fix")
-	assert.Equal(t, 4, guarded, "implement, two reviews and one fix hold the protected checkout; the plan does not")
+	assert.Equal(t, 5, guarded, "implement, three reviews and one fix hold the protected checkout; the plan does not")
 }
 
-func TestExample_AFailingGateRunsNoReviewSoARejectNeverFollowsAFixRound(t *testing.T) {
+func TestExample_AFailingGateRunsNoFullReviewAndARejectAfterItsFixEndsTheLoop(t *testing.T) {
 	t.Parallel()
 
-	rig, file := exampleRigWithFindings(t, func(int) string { return "reject" }, func(int) string { return "[]" })
+	// The scoped review of the implement approves, so the candidate reaches the gate. Every later review rejects.
+	rig, file := exampleRigWithFindings(t, func(review int) string {
+		if review == 1 {
+			return "approve"
+		}
+
+		return "reject"
+	}, func(int) string { return "[]" })
 	rig.h.gate.results = []GateResult{{Passed: false, Head: rig.head, Report: "lint: unused variable x"}, {Passed: true, Head: rig.head, Tree: exampleTree}}
 	writer := newFakeWriter()
 	rig.h.writer = writer
@@ -77,7 +84,8 @@ func TestExample_AFailingGateRunsNoReviewSoARejectNeverFollowsAFixRound(t *testi
 	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"opus", "sonnet", "sonnet", "opus"}, rig.models(), "plan, implement, one fix for the failed gate, then one review that rejects with no second fix")
+	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus"}, rig.models(), "plan, implement, the scoped review, one fix for the failed gate, then a scoped review that rejects with no second fix")
+	assert.Equal(t, 1, rig.h.gate.calls, "the red gate gets no full review, and the reject ends the loop before a second gate")
 	assert.Equal(t, []string{testProject + "|" + testItem + "|hold"}, writer.statuses)
 }
 
@@ -93,7 +101,9 @@ func TestExample_ARejectVerdictEndsTheLoopWithNoFixAndHoldsTheItemWithTheReason(
 	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models(), "plan, implement and one review; no fix round")
+	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models(), "plan, implement and the scoped review; no fix round")
+	assert.Zero(t, rig.h.gate.calls, "a reject of the scoped review ends the loop before the first gate")
+	assert.Equal(t, rig.head, childOf(t, result).Head, "the held item reports the head that the review judged")
 	assert.Equal(t, []string{testProject + "|" + testItem + "|hold"}, writer.statuses)
 	require.Len(t, writer.notes, 1)
 	assert.Contains(t, writer.notes[0], "all done")

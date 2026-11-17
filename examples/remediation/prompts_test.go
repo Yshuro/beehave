@@ -228,6 +228,7 @@ func mergeRules() []rule {
 func laneLayoutRules() []rule {
 	return []rule{
 		{"lane_layout", "A fix lane is not a proof lane and not a review lane", workLanes()},
+		{"lane_layout", "Run the scoped tests, not the full gate. Before you push, run the red test of each finding and the tests of the packages that your diff reaches", []string{fix}},
 		{"lane_layout", "One reviewer judges one pull request", []string{review}},
 		{"lane_layout", "A rise in the regression count blocks the lane", workAndReview()},
 		{"lane_layout", "Patch rounds are bounded for each pull request", workLanes()},
@@ -285,7 +286,7 @@ func TestPrompts_HoldEveryRuleOfTheBriefText(t *testing.T) {
 	}
 
 	// One phrase for each mapped or added row of the proof table that has a phrase of its own: a dropped phrase fails here.
-	assert.Equal(t, 142, counted)
+	assert.Equal(t, 143, counted)
 	assert.Positive(t, held)
 }
 

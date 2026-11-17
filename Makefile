@@ -11,10 +11,14 @@ GO_TEST_DRIVER_PKGS := ./internal/store/local
 # share of the cores (at least one) as GOMAXPROCS, which also sets the -p and -parallel defaults, so one gate uses about the core
 # count and does not oversubscribe the host. GO_TEST_PROCS overrides the share.
 GO_CORES := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu)
-# The run of the other packages and the shard in FLOW_HEAVY_SHARD take about twice the CPU of the others, so each counts as two shares.
+# The shard in FLOW_HEAVY_SHARD holds the example tests, which take about four times the CPU of another shard. It runs as two runs:
+# FLOW_HEAVY_SHARD1 takes the tests that FLOW_HEAVY_HALF names, about half of the shard, and FLOW_HEAVY_SHARD2 takes the rest of the shard.
+# The run of the other packages and each half of the heavy shard take about twice the CPU of the others, so each counts as two shares.
+# The share is rounded to the nearest whole number, so a host with 16 cores gives 2 to each share and does not drop to 1.
 FLOW_HEAVY_SHARD := E
-GO_TEST_UNITS = $(shell echo $$(( $(words $(FLOW_SHARDS)) + 4 )))
-GO_TEST_PROCS ?= $(shell n=$$(( $(GO_CORES) / $(GO_TEST_UNITS) )); [ $$n -ge 1 ] || n=1; echo $$n)
+FLOW_HEAVY_HALF := Example(_|Batch)
+GO_TEST_UNITS = $(shell echo $$(( $(words $(FLOW_SHARDS)) + 6 )))
+GO_TEST_PROCS ?= $(shell n=$$(( ($(GO_CORES) + $(GO_TEST_UNITS) / 2) / $(GO_TEST_UNITS) )); [ $$n -ge 1 ] || n=1; echo $$n)
 GO_TEST_PROCS_HEAVY = $(shell echo $$(( 2 * $(GO_TEST_PROCS) )))
 ifneq ($(shell printf '%s' '$(GO_TEST_PROCS)' | grep -Ec '^[1-9][0-9]*$$'),1)
 $(error GO_TEST_PROCS must be a whole number of at least 1, not "$(GO_TEST_PROCS)")
@@ -26,7 +30,7 @@ GO_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0' -count=1 -timeou
 # The flow package has over 1000 tests, and under the race detector one run of it takes about 300 s on an idle host. A test binary has its own
 # 10 minute timeout, so "test" runs the package in shards, one go test run for each shard. A shard is a letter class for the first letter
 # after "Test" (a bracket range such as A-D). The last run takes every test that no shard names (a name that does not start with an
-# upper case letter, or an Example), through -skip, so no test is left out of every shard. Each shard writes its own coverage profile,
+# upper case letter, or an Example), through -skip, so no test is left out of every shard. The heavy shard runs as two runs (FLOW_HEAVY_SHARD). Each run writes its own coverage profile,
 # and "coverage" merges them with the profile of the other packages, so the gate still measures the whole package. "test" starts the
 # shards and the run of the other packages together, so the cores are shared (GO_TEST_P applies to each run), writes each output to its
 # own test-*.log file, prints the files in order, and fails if any run fails.
@@ -35,7 +39,9 @@ space := $() $()
 FLOW_PKG := ./internal/flow
 FLOW_SHARDS := A-D E F-L M-Q
 FLOW_LETTERS := $(subst $(space),,$(FLOW_SHARDS))
-FLOW_PROFILES := $(subst $(space),,coverage.out$(foreach s,$(FLOW_SHARDS),$(comma)coverage-flow-$(s).out)$(comma)coverage-flow-rest.out)
+FLOW_LIGHT_SHARDS := $(filter-out $(FLOW_HEAVY_SHARD),$(FLOW_SHARDS))
+FLOW_RUNS := $(FLOW_LIGHT_SHARDS) $(FLOW_HEAVY_SHARD)1 $(FLOW_HEAVY_SHARD)2
+FLOW_PROFILES := $(subst $(space),,coverage.out$(foreach s,$(FLOW_RUNS),$(comma)coverage-flow-$(s).out)$(comma)coverage-flow-rest.out)
 GOLANGCI_LINT_VERSION := v2.15.0
 GOTESTSUM_VERSION := v1.13.0
 GO_TEST_COVERAGE_VERSION := v2.20.1
@@ -120,11 +126,14 @@ test:  ## Run the Go tests with the race detector and write coverage.out, the fl
 	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml coverage.out coverage-flow-*.out test-*.log; \
 	logs=test-other.log; \
 	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-other.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage.out $$(go list ./... | grep -v '/internal/flow$$') > test-other.log 2>&1 & pids=$$!; \
-	for s in $(FLOW_SHARDS); do \
-		procs=$(GO_TEST_PROCS); [ "$$s" != "$(FLOW_HEAVY_SHARD)" ] || procs=$(GO_TEST_PROCS_HEAVY); \
-		GOMAXPROCS=$$procs $(GOTESTSUM)/junit-flow-$$s.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-$$s.out -run "^Test[$$s]" $(FLOW_PKG) > test-flow-$$s.log 2>&1 & pids="$$pids $$!"; \
+	for s in $(FLOW_LIGHT_SHARDS); do \
+		GOMAXPROCS=$(GO_TEST_PROCS) $(GOTESTSUM)/junit-flow-$$s.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-$$s.out -run "^Test[$$s]" $(FLOW_PKG) > test-flow-$$s.log 2>&1 & pids="$$pids $$!"; \
 		logs="$$logs test-flow-$$s.log"; \
 	done; \
+	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-flow-$(FLOW_HEAVY_SHARD)1.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-$(FLOW_HEAVY_SHARD)1.out -run '^Test$(FLOW_HEAVY_HALF)' $(FLOW_PKG) > test-flow-$(FLOW_HEAVY_SHARD)1.log 2>&1 & pids="$$pids $$!"; \
+	logs="$$logs test-flow-$(FLOW_HEAVY_SHARD)1.log"; \
+	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-flow-$(FLOW_HEAVY_SHARD)2.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-$(FLOW_HEAVY_SHARD)2.out -run '^Test[$(FLOW_HEAVY_SHARD)]' -skip '^Test$(FLOW_HEAVY_HALF)' $(FLOW_PKG) > test-flow-$(FLOW_HEAVY_SHARD)2.log 2>&1 & pids="$$pids $$!"; \
+	logs="$$logs test-flow-$(FLOW_HEAVY_SHARD)2.log"; \
 	GOMAXPROCS=$(GO_TEST_PROCS) $(GOTESTSUM)/junit-flow-rest.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-rest.out -skip "^Test[$(FLOW_LETTERS)]" $(FLOW_PKG) > test-flow-rest.log 2>&1 & pids="$$pids $$!"; \
 	logs="$$logs test-flow-rest.log"; \
 	rc=0; for p in $$pids; do wait $$p || rc=1; done; \

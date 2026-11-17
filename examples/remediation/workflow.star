@@ -1,7 +1,7 @@
 # The remediation workflow: plan, implement, then review and fix until the gate passes and the review approves.
 # Every method value is in this file, in the review loop it loads, or in a prompt next to it. Go holds none of it.
 
-load("@beehave//review_fix.star", "review_fix")
+load("@beehave//review_fix.star", "candidates_spent", "review_fix")
 
 # A pull request is stale after this many hours with no push, comment, review or answer from the author. The same values are the idle threshold and the grace period that the take-over passes to the tool as flags.
 IDLE_HOURS = "1"
@@ -228,7 +228,7 @@ def regressions(value):
     return int(number) if number.isdigit() else None
 
 def regression_rise(start, end):
-    """Returns the reason to hold the item, and an empty text when the regression count did not rise from the output `regressions` of the plan (`start`) to the one of the review that is checked (`end`). The loop checks after each review.
+    """Returns the reason to hold the item, and an empty text when the regression count did not rise from the output `regressions` of the plan (`start`) to the one of the full review that is checked (`end`). The loop checks after each full review.
     Both counts are the regressions open at the head of the report, so they compare like with like: a defect that an earlier round found and a later round fixed is in neither.
     A count that is unknown in either output holds the item: the prompts ask both lanes for a whole number."""
     before = regressions(start)
@@ -646,9 +646,10 @@ def pipeline(item):
 
     scope = lane_scope(round_settings)
 
-    # The cap is for the pull request, not for one run: the fix lanes that earlier runs of this item started count against it. The engine keeps the record of each run, so the count survives a restart.
-    spent = earlier_calls(call = "fix", name = "fix-lanes-spent").count
-    rounds = max(round_settings["fix_rounds"] - spent, 0) + 1
+    # The cap is for the pull request, not for one run: the candidates that earlier runs of this item started count against it. A candidate counts when its first agent starts.
+    # The engine keeps the record of each run, so the count survives a restart. The first candidate reviews the implementer, so fix_rounds fix rounds need one candidate more.
+    # After the cap, a run gets no candidate: no review and no fix lane start, and the owner rules on the open findings.
+    rounds = max(round_settings["fix_rounds"] + 1 - candidates_spent(), 0)
 
     # The mutation command is read before any agent starts, so a project with no vars.mutation_command is refused here.
     mutation = mutation_command(project)
@@ -703,41 +704,42 @@ def pipeline(item):
     # With one, the card of the item moves to the started column now and to the merged column after the merge, and each call reads the card back.
     _move_card(project, "started")
 
-    # Five fix rounds need six passes: the sixth reviews the fifth fix.
-    # The reviewer starts fresh in each round and judges the commit the gate ran on.
-    # Rounds 1 to 3 resume the implementer on a cheaper model. Rounds 4 and 5 start fresh, one tier up.
-    # This method has no follow-ups: a review that leaves any finding open gets the verdict "changes", and the loop runs a fix round.
-    # Before each review, design and fix agent, the loop reads the pull request again, with the head the gate ran on (the head of the worktree), the base, the hold label and the own logins.
+    # Five fix rounds need six candidates: the sixth checks the fifth fix. A candidate gets the gate on the base, the checks before review, the mutation run and a full review once.
+    # Between candidates, scoped fixes and scoped reviews run with no gate. Each reviewer starts fresh and judges the commit it is pinned to.
+    # The fixes after candidate k are fix round k. Rounds 1 to 3 resume the implementer on a cheaper model; rounds 4 and 5 start fresh, one tier up.
+    # This method has no follow-ups: a review that leaves any finding open gets the verdict "changes", and the loop runs a fix.
+    # Before each review, design and fix agent, the loop reads the pull request again, with the head of the worktree, the base, the hold label and the own logins.
     # A stop in the loop ends the run as the stop at the intake does: no more agents start, and the result holds the step, the exit code and the reason.
     guard = {"base": base, "hold": "hold", "own": {"logins": [round_settings["owner"]]}}
-    # The loop calls rise_after_review after each review, so a rise ends the loop before the next fix lane starts.
+    # The loop calls rise_after_review after each full review, so a rise ends the loop before the next fix lane starts. A scoped review writes no count.
     def rise_after_review(review):
         return regression_rise(plan.regressions, review.regressions)
 
-    # The mutation run follows each green gate and comes before the review: a lived mutant is a finding for the fix lane, and the review never judges a head that has one.
+    # The mutation run follows the checks before review of each candidate and comes before the full review: a lived mutant is a finding for the fix lane, and the review never judges a head that has one.
     def mutants(gate):
         return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, gate_check = mutants)
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, checks = [mutants])
 
     if loop.stopped:
         return item_value(item, "", False, "stopped")
 
     # A reject verdict ends the loop with no fix round. The item gets the text of the review as the reason and the hold status.
+    # A scoped review can reject before the first gate, so an item that the loop holds reports loop.head, the commit that the loop judged last.
     if loop.rejected:
         item_comment(name = "rejected", id = item.id, key = "rejected", text = loop.review.text, forbid_text = ATTRIBUTION)
         item_status(name = "hold-rejected", id = item.id, status = "hold")
-        return item_value(item, loop.gate.head, False, "rejected")
+        return item_value(item, loop.head, False, "rejected")
 
-    # A rise of the regression count, from the report of the plan to the report of any review, holds the item with the reason. So does a count that is unknown in either report.
+    # A rise of the regression count, from the report of the plan to the report of any full review, holds the item with the reason. So does a count that is unknown in either report.
     # The loop stops at the review that shows the rise: a held item gets no more fix lane, no owner ruling and no settle step. Nothing merges.
     # The last gate of an exhausted loop can be red. Then there is no review and no count; the item goes on to the ruling of the owner, and nothing merges after the settle step.
     if loop.held != "":
         item_comment(name = "regression-rise", id = item.id, key = "regression-rise", text = loop.held, forbid_text = ATTRIBUTION)
         item_status(name = "hold-regression-rise", id = item.id, status = "hold")
-        return item_value(item, loop.gate.head, False, "regression-rise")
+        return item_value(item, loop.head, False, "regression-rise")
 
-    # After two fix rounds on one mechanism, a design step decides whether the mechanism should exist. A replace or a delete ends the loop:
+    # After two fixes on one mechanism, a design step decides whether the mechanism should exist. A replace or a delete ends the loop:
     # the item gets the decision and the reason as the comment and the hold status, and a person rules on it.
     if loop.design != None:
         item_comment(
@@ -748,7 +750,7 @@ def pipeline(item):
             forbid_text = ATTRIBUTION,
         )
         item_status(name = "hold-design", id = item.id, status = "hold")
-        return item_value(item, loop.gate.head, False, "design")
+        return item_value(item, loop.head, False, "design")
 
     # After the last round, no fix lane starts. A person rules on each open finding, and the settle step applies the ruling once: it is the only edit after the last round, no review follows it, and nothing merges.
     if loop.exhausted:
@@ -757,9 +759,10 @@ def pipeline(item):
             name = "adjudicate",
         )
 
-        # The ruling can take days. The settle agent is a dispatch like the others, so the pull request is read again first, with the head the last gate ran on.
-        if not preflight(name = "before-settle", id = item.id, head = loop.gate.head, **guard).ok:
-            return item_value(item, loop.gate.head, False, "stopped")
+        # The ruling can take days. The settle agent is a dispatch like the others, so the pull request is read again first, with the head that the loop judged last.
+        # A run that got no candidate has no gate: its head is the head of the implementer.
+        if not preflight(name = "before-settle", id = item.id, head = loop.head, **guard).ok:
+            return item_value(item, loop.head, False, "stopped")
 
         settle = agent(
             name = "settle",
@@ -776,7 +779,7 @@ def pipeline(item):
         # Each finding that the owner parked stays open after the last round: it gets its own issue, so it is not lost with the pull request.
         file_parked(settle.parked)
 
-        return item_value(item, loop.gate.head, False, "settled")
+        return item_value(item, loop.head, False, "settled")
 
     # The child never merges. It returns the head that the gate ran on and the verdict of the review, and the round lands every approved head of a pass in one batch (land).
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.

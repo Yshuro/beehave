@@ -1,10 +1,10 @@
-# The first review approves and the gate passes, but the implementer left a forbidden command.
-# A hit in the latest lane run forces a fix round: the fix gets the hit as its findings, and the second review approves.
+# The implementer left a forbidden command. A hit in the latest lane run forces a fix: the scoped fix gets the hit as its findings
+# before any review. The scoped review of the clean fix approves, the gate passes, and the full review approves.
 exec beehave run 7 --workflow flow/workflow.star
 stdout 'item 7 finished'
 
 exec beehave status
-stdout '^item-7-r1\tdone\tgate pass at [0-9a-f]+\tfix 1 of 5\treview 2 of 6'
+stdout '^item-7-r1\tdone\tgate pass at [0-9a-f]+\tfix 1 of 18\treview 2 of 24'
 
 grep -count=1 '^plan ' calls.log
 grep -count=1 '^implement ' calls.log
@@ -12,8 +12,8 @@ grep -count=2 '^review ' calls.log
 grep -count=1 '^fix 1 ' calls.log
 ! grep '^fix 2 ' calls.log
 
-# The fake implementer stages everything. The example forbids it. The first review sees the hit, the fix takes it as findings, the clean fix leaves nothing for the second review.
-grep -count=1 '^bulk-staging: git add -A$' seen.log
+# The fake implementer stages everything. The example forbids it. The fix takes the hit as findings, and the clean fix leaves nothing for either review.
+! exists seen.log
 grep -count=1 '^fix: bulk-staging: git add -A$' found.log
 ! grep '^settle ' calls.log
 

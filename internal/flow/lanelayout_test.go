@@ -67,7 +67,20 @@ func countFix(rig *agentRig) int {
 	return fixes
 }
 
-func TestLaneLayout_APatchRoundsCapOfTwoStartsTwoFixLanesAndThenAsksTheOwner(t *testing.T) {
+// countCandidates is the number of candidates that reached the full review: each candidate gets one review of the whole pull request.
+func countCandidates(rig *agentRig) int {
+	candidates := 0
+
+	for _, request := range rig.h.agents.requests {
+		if strings.Contains(request.Prompt, fullReview) {
+			candidates++
+		}
+	}
+
+	return candidates
+}
+
+func TestLaneLayout_APatchRoundsCapOfTwoGivesThreeCandidatesAndThenAsksTheOwner(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
@@ -78,11 +91,12 @@ func TestLaneLayout_APatchRoundsCapOfTwoStartsTwoFixLanesAndThenAsksTheOwner(t *
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, (<-done).err)
 
-	assert.Equal(t, 2, countFix(rig), "two fix lanes for the pull request, then the owner rules")
-	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "sonnet"}, rig.models(), "plan, implement, review and fix twice, the third review, and the settle step")
+	assert.Equal(t, 3, countCandidates(rig), "two fix rounds need three candidates: the third checks the second fix round, then the owner rules")
+	assert.Equal(t, 3, rig.h.gate.calls, "one gate for each candidate")
+	assert.Equal(t, slices.Concat([]string{"opus", "sonnet"}, capModels(3), []string{"sonnet"}), rig.models(), "plan, implement, three candidates, and the settle step")
 }
 
-func TestLaneLayout_TheDefaultCapIsFiveFixLanes(t *testing.T) {
+func TestLaneLayout_TheDefaultCapIsSixCandidates(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
@@ -92,7 +106,7 @@ func TestLaneLayout_TheDefaultCapIsFiveFixLanes(t *testing.T) {
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, (<-done).err)
 
-	assert.Equal(t, 5, countFix(rig))
+	assert.Equal(t, 6, countCandidates(rig), "five fix rounds and the candidate that checks the last one")
 }
 
 func TestLaneLayout_ARiseInTheRegressionCountHoldsTheItemAndMergesNothing(t *testing.T) {
@@ -210,7 +224,8 @@ func TestLaneLayout_ARiseAtTheCapHoldsTheItemBeforeTheOwnerIsAskedAndNoSettleLan
 
 	for _, review := range []string{"1", "unknown"} {
 		rig, file := exampleRig(t, func(int) string { return "changes" })
-		withCountSequence(rig, "0", "0", review)
+		// Reviews 1 to 7 are the three scoped reviews and the full review of candidate 1 and the scoped reviews of candidate 2. Review 8 is the full review of candidate 2, the last.
+		withCountSequence(rig, "0", append(slices.Repeat([]string{"0"}, 7), review)...)
 		rig.setRound("fix_rounds", json.Number("1"))
 		writer := newFakeWriter()
 		rig.h.writer = writer
@@ -219,8 +234,8 @@ func TestLaneLayout_ARiseAtTheCapHoldsTheItemBeforeTheOwnerIsAskedAndNoSettleLan
 
 		require.NoError(t, err, review)
 		assert.Equal(t, []string{testProject + "|" + testItem + "|hold"}, writer.statuses, review)
-		assert.Equal(t, 1, countFix(rig), review)
-		assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus"}, rig.models(), "plan, implement, review, one fix, the last review, and no settle lane for %q", review)
+		assert.Equal(t, 5, countFix(rig), review)
+		assert.Equal(t, append([]string{"opus", "sonnet"}, capModels(2)...), rig.models(), "plan, implement, the two candidates, and no settle lane for %q", review)
 	}
 }
 
@@ -291,17 +306,18 @@ func TestLaneLayout_AResumeKeepsTheCapOfTheFirstStartWhenTheFixRoundsChange(t *t
 	rounds := map[string]bool{}
 
 	for _, request := range rig.h.agents.requests {
-		for _, round := range []string{"1", "2", "3"} {
+		for _, round := range []string{"1", "2", "3", "4", "5"} {
 			if strings.Contains(request.Prompt, "This is round "+round+".") {
 				rounds[round] = true
 			}
 		}
 	}
 
-	assert.Equal(t, map[string]bool{"1": true, "2": true, "3": true}, rounds, "the cap of 3 holds after the resume, though vars.round.fix_rounds is 1 now")
+	// The fixes after candidate k are fix round k. Fix rounds 3 give four candidates, and the fixes inside candidate 1 are round 1 too.
+	assert.Equal(t, map[string]bool{"1": true, "2": true, "3": true}, rounds, "the cap of 3 fix rounds holds after the resume, though vars.round.fix_rounds is 1 now")
 }
 
-func TestLaneLayout_TheLanesOfTheItemAreOneReviewForEachGateThatPassedAndFixLanesBetween(t *testing.T) {
+func TestLaneLayout_TheLanesOfTheItemAreScopedReviewsAfterFixesAndOneFullReviewForEachGateThatPassed(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(review int) string {
@@ -324,5 +340,7 @@ func TestLaneLayout_TheLanesOfTheItemAreOneReviewForEachGateThatPassedAndFixLane
 		kinds = append(kinds, lane.Kind)
 	}
 
-	assert.Equal(t, []string{"fix", "fix", "review", "rework", "review"}, kinds, "never two reviews in a row for one pull request: a fix lane, the gate as proof, then one review")
+	assert.Equal(t, []string{"fix", "fix", "review", "rework", "review", "review"}, kinds,
+		"a scoped review after the implement and after each fix, then the gate as proof, then one full review of the candidate")
+	assert.Equal(t, 1, rig.h.gate.calls, "the scoped loop runs no gate")
 }

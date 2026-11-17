@@ -257,6 +257,8 @@ thing not to redo; and these lines:
 
 {{ .item.body }}
 
+The scope of this review: {{ .scope }}. A review of the diff of the last fix judges that diff and the findings it answers. A review of the diff of the implementer or of the whole pull request judges every commit since the base.
+
 The commands that the workflow forbids in the latest run of the implementer or the fixer, one for each line, or nothing when there were none:
 {{ .violations }}
 Report each one as a finding.
