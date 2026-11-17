@@ -202,14 +202,22 @@ func TestCalls_AZeroCostIsPricedAndSpendsNothing(t *testing.T) {
 	assert.InDelta(t, 0, seen.Spent, 0)
 }
 
-func TestCalls_ANegativeOrNonNumberCostAddsNothing(t *testing.T) {
+func TestCalls_ANegativeCostAddsNothing(t *testing.T) {
 	t.Parallel()
 
-	for _, cost := range []string{"-1", `"lots"`} {
-		seen := opencode.New().Calls(`{"type":"step_finish","sessionID":"s","part":{"reason":"stop","cost":` + cost + `}}`)
+	seen := opencode.New().Calls(`{"type":"step_finish","sessionID":"s","part":{"reason":"stop","cost":-1}}`)
 
-		assert.InDelta(t, 0, seen.Spent, 0, cost)
-	}
+	assert.InDelta(t, 0, seen.Spent, 0)
+	assert.False(t, seen.Invalid)
+}
+
+func TestCalls_AStringCostMakesTheWholeLineInvalid(t *testing.T) {
+	t.Parallel()
+
+	seen := opencode.New().Calls(`{"type":"step_finish","sessionID":"s","part":{"reason":"stop","cost":"lots"}}`)
+
+	assert.True(t, seen.Invalid)
+	assert.InDelta(t, 0, seen.Spent, 0)
 }
 
 func TestLine_AnyOtherLineHoldsNoText(t *testing.T) {

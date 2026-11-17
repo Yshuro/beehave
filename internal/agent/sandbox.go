@@ -67,7 +67,7 @@ func guardProblem(spec Spec, p Profile, goos string) string {
 // the step author turns the reason off.
 type versionNeed struct{ least, subject, stop, off string }
 
-// versionNeeds lists what the spec needs from the version of the CLI. A sandbox needs MinVersion. A guard needs GuardMinVersion, when the profile names one.
+// versionNeeds lists what the spec needs from the version of the CLI. A sandbox needs MinVersion.
 func versionNeeds(spec Spec, p Profile) []versionNeed {
 	var needs []versionNeed
 
@@ -75,30 +75,75 @@ func versionNeeds(spec Spec, p Profile) []versionNeed {
 		needs = append(needs, versionNeed{p.MinVersion, "the sandbox", "the sandbox is not started", "set sandbox = None on the step to run it with no sandbox"})
 	}
 
-	if spec.Guard != "" && p.GuardMinVersion != "" {
-		needs = append(needs, versionNeed{p.GuardMinVersion, "the command guard", "the step is not started", "remove forbid_commands from the step to run it with no check of its commands"})
-	}
-
 	return needs
 }
 
-// versionProblem runs the CLI with --version and says why the run cannot start, or returns "" when the version is new enough for the sandbox and the guard.
-// A CLI that ignores a sandbox setting or a hook it does not know runs with no sandbox or no guard and exits with code 0, so an old or unreadable version stops the run.
+// rangeText names the versions of the CLI that the adapter supports, such as "1.19.5 up to but not including 2.0.0".
+func rangeText(p Profile) string {
+	switch {
+	case p.SupportedFrom != "" && p.SupportedBefore != "":
+		return p.SupportedFrom + " up to but not including " + p.SupportedBefore
+	case p.SupportedFrom != "":
+		return p.SupportedFrom + " or later"
+	}
+
+	return "versions before " + p.SupportedBefore
+}
+
+// versionProblem runs the CLI with --version and says why the run cannot start, or returns "" when the version is in the supported range of the profile and
+// new enough for the sandbox. A CLI that ignores a sandbox setting or a hook it does not know runs with no sandbox or no guard and exits with code 0, and a
+// CLI of a line that the adapter has no recording of can print a shape that the adapter reads wrong, so an old, new or unreadable version stops the run.
 func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, env []string, version versionOf) string {
 	needs := versionNeeds(spec, p)
-	if len(needs) == 0 {
+	ranged := p.SupportedFrom != "" || p.SupportedBefore != ""
+
+	if len(needs) == 0 && !ranged {
 		return ""
 	}
 
 	out, err := version(ctx, binary, env)
 	if err != nil {
-		return fmt.Sprintf("cannot read the version of %s (%v), so %s. To go on, %s.", p.Binary, err, needs[0].stop, needs[0].off)
+		return unreadable(p, err, needs, ranged)
+	}
+
+	if ranged {
+		if problem := rangeProblem(p, out); problem != "" {
+			return problem
+		}
 	}
 
 	for _, need := range needs {
 		if problem := versionText(p, out, need); problem != "" {
 			return problem
 		}
+	}
+
+	return ""
+}
+
+// unreadable says why a run does not start when the version of the CLI cannot be read.
+func unreadable(p Profile, err error, needs []versionNeed, ranged bool) string {
+	if ranged {
+		return fmt.Sprintf("cannot read the version of %s (%v), so the step is not started. Install a version in the range that beehave supports: %s.", p.Binary, err, rangeText(p))
+	}
+
+	return fmt.Sprintf("cannot read the version of %s (%v), so %s. To go on, %s.", p.Binary, err, needs[0].stop, needs[0].off)
+}
+
+// rangeProblem says why the version that the CLI printed is outside the supported range of the profile, or returns "" when it is inside.
+func rangeProblem(p Profile, out string) string {
+	found := versionNumber.FindStringSubmatch(out)
+	if found == nil {
+		return fmt.Sprintf("the version of %s is not readable from %q, so the step is not started. Install a version in the range that beehave supports: %s.", p.Binary, out, rangeText(p))
+	}
+
+	from, before := versionNumber.FindStringSubmatch(p.SupportedFrom), versionNumber.FindStringSubmatch(p.SupportedBefore)
+	tooOld := from != nil && semver.Compare(semverOf(found), semverOf(from)) < 0
+	tooNew := before != nil && semver.Compare(semverOf(found), semverOf(before)) >= 0
+
+	if tooOld || tooNew {
+		return fmt.Sprintf("%s is at version %s.%s.%s, which beehave does not support. It supports %s, so the step is not started. Install a version in that range.",
+			p.Binary, found[1], found[2], found[3], rangeText(p))
 	}
 
 	return ""

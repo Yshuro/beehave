@@ -40,9 +40,11 @@ type Profile struct {
 	// MinVersion is the oldest version of the CLI that knows every setting of that mapping; an older CLI ignores a setting it does not know.
 	Sandbox    bool
 	MinVersion string
-	// GuardMinVersion is the oldest version of the CLI whose hook of Guard is known to load. A CLI that does not load the hook runs every shell command
-	// with no check and exits with code 0, so a run with a guard on an older or unreadable version does not start. Empty means no check.
-	GuardMinVersion string
+	// SupportedFrom and SupportedBefore bound the versions of the CLI that the adapter has a recording of: a run on an older version, on SupportedBefore or on a
+	// later one does not start, whatever the spec sets, and neither does a run whose version cannot be read. An empty value sets no bound on that side.
+	// A CLI older than SupportedFrom can fail to load the hook of Guard, and then it runs every shell command with no check and exits with code 0.
+	SupportedFrom   string
+	SupportedBefore string
 	// GuardPosixOnly is true when the hook of Guard needs a POSIX shell, so a run with a guard does not start on Windows.
 	GuardPosixOnly bool
 	// NoSkillCalls is true when the CLI reports no skill calls on its output, so a step that requires skills cannot be proved and does not start.
@@ -51,6 +53,11 @@ type Profile struct {
 	// limit ended, for a CLI that prints nothing and retries when it cannot work (for example a model over its quota). It names the likely cause.
 	DefaultTimeout time.Duration
 	StallNote      string
+}
+
+// NoUsage returns the reading of an agent that cannot report usage. The pool never picks a runner with such a reading.
+func NoUsage(name model.Agent) model.Reading {
+	return model.Unknown("the " + string(name) + " agent cannot report usage")
 }
 
 // Stop names the cap that ended a run.
@@ -181,6 +188,7 @@ type Adapter interface {
 	// Seen.Spent. The runner reads Seen.Spent once for each line; no other reader does, so a dedupe of the dollars by message id is allowed.
 	Calls(line string) Seen
 	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Before a start that follows
-	// a lost run, the agents resume the session of that run only when the file exists, and they do not read it.
+	// a lost run, the agents resume the session of that run only when the file exists, and they do not read it. A CLI that keeps no file for one session
+	// (OpenCode keeps every session in one database) returns a distinct path inside configDir that no file holds, and a lost run of it never resumes.
 	TranscriptPath(configDir, dir, session string) string
 }

@@ -190,8 +190,8 @@ The result is a branch named `fix-login` in your repository. If the run stops, r
 
 beehave is under construction, and the workflow API changes without notice.
 
-- **Works today:** the engine, the CLI, the examples, the merge guards, the sandbox on Linux and macOS, and Claude Code as the agent.
-- **Next:** OpenCode, pi, Codex and Hermes as agents, and `beehave serve`, a resident engine that runs schedules.
+- **Works today:** the engine, the CLI, the examples, the merge guards, the sandbox on Linux and macOS, and Claude Code and OpenCode as agents.
+- **Next:** pi, Codex and Hermes as agents, and `beehave serve`, a resident engine that runs schedules.
 - **Windows** comes last.
 
 ## Learn more

@@ -104,35 +104,56 @@ func TestRunner_ALaunchWhoseMarkerIsMissingAtTheEndOfTheRunIsFlagged(t *testing.
 	}
 }
 
-// guardVersioned is an adapter whose profile needs a minimum version for a guard.
-type guardVersioned struct{ agent.Adapter }
+// ranged is an adapter whose profile supports the versions from 3.0.0 up to but not including 4.0.0, and needs a POSIX shell for a guard.
+type ranged struct{ agent.Adapter }
 
-func (a guardVersioned) Profile() agent.Profile {
+func (a ranged) Profile() agent.Profile {
 	profile := a.Adapter.Profile()
-	profile.GuardMinVersion = "3.0.0"
+	profile.SupportedFrom = "3.0.0"
+	profile.SupportedBefore = "4.0.0"
 	profile.GuardPosixOnly = true
 
 	return profile
 }
 
-func TestRunner_AGuardedRunNeedsTheGuardMinimumVersion(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
-	for version, outcome := range map[string]agent.Outcome{"2.9.9": agent.OutcomeNotStarted, "3.0.0": agent.OutcomeExited, "3.0.1": agent.OutcomeExited} {
-		f := newFixture(t, "claude", claude.Name, "")
-		f.spec.Adapter, f.spec.Guard = guardVersioned{f.spec.Adapter}, "beehave check command"
+func TestRunner_ARunNeedsAVersionInTheSupportedRangeWithOrWithoutAGuard(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	versions := map[string]agent.Outcome{
+		"2.9.9": agent.OutcomeNotStarted, "3.0.0": agent.OutcomeExited, "3.0.1": agent.OutcomeExited,
+		"3.99.99": agent.OutcomeExited, "4.0.0": agent.OutcomeNotStarted, "4.0.1": agent.OutcomeNotStarted,
+	}
 
-		got := agent.Runner{Version: seen("cli " + version)}.Run(context.Background(), f.spec)
+	for _, guard := range []string{"", "beehave check command"} {
+		for version, outcome := range versions {
+			f := newFixture(t, "claude", claude.Name, "")
+			f.spec.Adapter, f.spec.Guard = ranged{f.spec.Adapter}, guard
 
-		assert.Equal(t, outcome, got.Outcome, version+": "+got.Note)
+			got := agent.Runner{Version: seen("cli " + version)}.Run(context.Background(), f.spec)
 
-		if outcome == agent.OutcomeNotStarted {
-			assert.Contains(t, got.Note, "the command guard needs 3.0.0 or later")
+			assert.Equal(t, outcome, got.Outcome, version+" guard="+guard+": "+got.Note)
+
+			if outcome == agent.OutcomeNotStarted {
+				assert.Contains(t, got.Note, "It supports 3.0.0 up to but not including 4.0.0", version)
+			}
 		}
 	}
 }
 
-func TestRunner_ARunWithNoGuardNeverReadsTheGuardVersion(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+func TestRunner_ARunWithAnUnreadableVersionDoesNotStartWhenTheProfileHasARange(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	failing := func(context.Context, string, []string) (string, error) { return "", errors.New("no such file") }
+
+	for name, reader := range map[string]func(context.Context, string, []string) (string, error){"no number": seen("cli next"), "no output": failing} {
+		f := newFixture(t, "claude", claude.Name, "")
+		f.spec.Adapter = ranged{f.spec.Adapter}
+
+		got := agent.Runner{Version: reader}.Run(context.Background(), f.spec)
+
+		assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, name)
+		assert.Contains(t, got.Note, "3.0.0 up to but not including 4.0.0", name)
+	}
+}
+
+func TestRunner_ARunWithNoSupportedRangeAndNoSandboxNeverReadsTheVersion(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	f := newFixture(t, "claude", claude.Name, "")
-	f.spec.Adapter = guardVersioned{f.spec.Adapter}
 
 	reader := func(context.Context, string, []string) (string, error) { return "", errors.New("must not run") }
 
@@ -143,7 +164,7 @@ func TestRunner_ARunWithNoGuardNeverReadsTheGuardVersion(t *testing.T) { //nolin
 
 func TestRunner_AGuardedRunWhoseHookNeedsPOSIXDoesNotStartOnWindows(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	f := newFixture(t, "claude", claude.Name, "")
-	f.spec.Adapter, f.spec.Guard = guardVersioned{f.spec.Adapter}, "beehave check command"
+	f.spec.Adapter, f.spec.Guard = ranged{f.spec.Adapter}, "beehave check command"
 
 	got := agent.Runner{OS: "windows", Version: seen("cli 3.0.0")}.Run(context.Background(), f.spec)
 

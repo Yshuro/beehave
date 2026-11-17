@@ -1,16 +1,5 @@
 // Package opencode is the agent adapter for the OpenCode CLI.
-//
-// Limits that a step author must know:
-//   - OpenCode shows a tool call on its output when the call ends, not when it starts, so the turn cap counts a shell call one call late.
-//   - OpenCode has no sandbox. The profile has none, so a step with a sandbox does not start; set sandbox = None on the step.
-//   - OpenCode reports no skill calls, so a step with require_skills does not start.
-//   - The session lives in the login folder of the runner. A resume works on the runner that made the session only.
-//     A start after a lost run begins again with a note, because OpenCode has no file for one session that beehave can check before it resumes.
-//   - If the guard plugin does not load, OpenCode runs the shell commands with no check and exits with code 0. A step with forbid_commands does not start on a version
-//     older than the pinned one, and a run whose plugin left no marker file ends with a violation line.
-//   - The guard needs a POSIX shell, so a step with forbid_commands does not start on Windows.
-//   - A run that sets no timeout ends after one hour. A model over its free quota prints nothing and retries until it is killed; the note of the timed-out run names that cause.
-//   - A cost cap is checked on the dollars of finished steps, so a run can pass the cap by the cost of one step.
+// The limits that a step author must know are in docs/design/agent-runs.md.
 package opencode
 
 import (
@@ -20,8 +9,11 @@ import (
 	"github.com/tobocop2/beehave/internal/agent"
 )
 
-// pinnedVersion is the OpenCode version that the recorded output in testdata comes from, and the oldest version whose plugin interface is known to load the guard.
+// pinnedVersion is the OpenCode version that the recorded output in testdata comes from, and the oldest version that the adapter supports.
 const pinnedVersion = "1.19.5"
+
+// firstUnsupported is the first OpenCode version that the adapter refuses: the 2.x line prints other shapes and has no recording in testdata.
+const firstUnsupported = "2.0.0"
 
 // stallNote names the likely cause of a run that printed nothing until its limit. With --format json, OpenCode prints no error for a model over its usage quota and retries.
 const stallNote = "OpenCode prints nothing and retries when the model is over its usage quota, which is the likely cause if the run printed no line. Check the quota of the model, or use a model with a key."
@@ -48,8 +40,8 @@ func (Adapter) Profile() agent.Profile {
 		Resume:      func(id string) []string { return []string{"--session", id} },
 		StreamsCost: true,
 
-		MinVersion:      pinnedVersion,
-		GuardMinVersion: pinnedVersion,
+		SupportedFrom:   pinnedVersion,
+		SupportedBefore: firstUnsupported,
 		GuardPosixOnly:  true,
 		NoSkillCalls:    true,
 		DefaultTimeout:  time.Hour,

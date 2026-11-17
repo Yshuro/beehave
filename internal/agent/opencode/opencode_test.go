@@ -106,9 +106,14 @@ func TestTranscriptPath_NamesOneFileForEachSessionThatNoFileHolds(t *testing.T) 
 	assert.NoFileExists(t, adapter.TranscriptPath(dir, "/work", "ses_1"))
 }
 
+// answersVersion is the script lines of a fake opencode that prints version for --version and exits.
+func answersVersion(version string) string {
+	return "if [ \"$1\" = \"--version\" ]; then echo " + version + "; exit 0; fi\n"
+}
+
 // fakeEcho prints the arguments and then replays a fixture.
 func fakeEcho(fixture string) string {
-	return "#!/bin/sh\necho \"args=$*\" >&2\ncat > /dev/null\ncat '" + fixture + "'\n"
+	return "#!/bin/sh\n" + answersVersion("1.19.5") + "echo \"args=$*\" >&2\ncat > /dev/null\ncat '" + fixture + "'\n"
 }
 
 func run(t *testing.T, change func(*agent.Spec)) (agent.Result, string) {
@@ -159,7 +164,7 @@ func TestRun_AStreamedCostAboveTheCapEndsTheRunAsABudgetCap(t *testing.T) {
 
 // guarded writes a fake opencode that answers --version, replays a fixture, and writes the marker of the guard plugin when load is true.
 func guarded(fixture, version string, load bool) string {
-	script := "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo " + version + "; exit 0; fi\ncat > /dev/null\n"
+	script := "#!/bin/sh\n" + answersVersion(version) + "cat > /dev/null\n"
 	if load {
 		script += "echo loaded > \"$OPENCODE_CONFIG_DIR/beehave-guard-loaded\"\n"
 	}
@@ -220,14 +225,44 @@ func TestRun_ARunWithNoGuardIsNeverFlagged(t *testing.T) {
 	assert.False(t, result.GuardMissing)
 }
 
-func TestRun_AGuardedRunOnAnOlderVersionDoesNotStart(t *testing.T) {
+func TestRun_ARunNeedsAnOpenCodeVersionFrom1_19_5UpToBut2_0_0OnEveryPath(t *testing.T) {
 	t.Parallel()
 
-	result := guardedRun(t, guarded(absolute(t, "testdata/ok.jsonl"), "1.19.4", true), func(*agent.Spec) {})
+	versions := []struct {
+		version string
+		starts  bool
+	}{
+		{"1.19.4", false}, {"1.19.5", true}, {"1.19.6", true}, {"1.99.99", true}, {"2.0.0", false}, {"2.2.5", false}, {"3.0.0", false},
+	}
+
+	for _, guard := range []string{"", "beehave check command"} {
+		for _, tc := range versions {
+			t.Run(tc.version+" guard="+guard, func(t *testing.T) {
+				t.Parallel()
+
+				result := guardedRun(t, guarded(absolute(t, "testdata/ok.jsonl"), tc.version, true), func(s *agent.Spec) { s.Guard = guard })
+
+				if tc.starts {
+					assert.Equal(t, agent.OutcomeExited, result.Outcome, result.Note)
+
+					return
+				}
+
+				assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
+				assert.Contains(t, result.Note, "opencode is at version "+tc.version)
+				assert.Contains(t, result.Note, "It supports 1.19.5 up to but not including 2.0.0")
+			})
+		}
+	}
+}
+
+func TestRun_ARunWhoseVersionCannotBeReadDoesNotStart(t *testing.T) {
+	t.Parallel()
+
+	result := guardedRun(t, guarded(absolute(t, "testdata/ok.jsonl"), "next", true), func(s *agent.Spec) { s.Guard = "" })
 
 	assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
-	assert.Contains(t, result.Note, "opencode is at version 1.19.4 and the command guard needs 1.19.5 or later")
-	assert.Contains(t, result.Note, "forbid_commands")
+	assert.Contains(t, result.Note, "1.19.5 up to but not including 2.0.0")
 }
 
 func TestRun_AGuardedRunOnWindowsDoesNotStart(t *testing.T) {
@@ -248,11 +283,11 @@ func TestRun_ARunThatSetsNoTimeoutEndsAtTheProfileLimitAndNamesTheLikelyCause(t 
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, exectest.Write(filepath.Join(dir, "opencode"), "#!/bin/sh\ncat > /dev/null\nsleep 30\n"))
+	require.NoError(t, exectest.Write(filepath.Join(dir, "opencode"), "#!/bin/sh\n"+answersVersion("1.19.5")+"cat > /dev/null\nsleep 30\n"))
 
 	var limit time.Duration
 
-	result := agent.Runner{AfterFunc: func(d time.Duration, fire func()) agent.Timer {
+	result := agent.Runner{Version: func(context.Context, string, []string) (string, error) { return "1.19.5", nil }, AfterFunc: func(d time.Duration, fire func()) agent.Timer {
 		limit = d
 
 		return time.AfterFunc(20*time.Millisecond, fire)
@@ -271,8 +306,8 @@ func TestProfile_PinsTheRecordedVersionAndRefusesWhatItCannotProve(t *testing.T)
 
 	p := opencode.New().Profile()
 
-	assert.Equal(t, "1.19.5", p.MinVersion)
-	assert.Equal(t, "1.19.5", p.GuardMinVersion)
+	assert.Equal(t, "1.19.5", p.SupportedFrom)
+	assert.Equal(t, "2.0.0", p.SupportedBefore)
 	assert.True(t, p.GuardPosixOnly)
 	assert.True(t, p.NoSkillCalls)
 	assert.Equal(t, time.Hour, p.DefaultTimeout)

@@ -93,20 +93,22 @@ func TestGuard_TheGuardCommandStaysOneJavaScriptString(t *testing.T) {
 	}
 }
 
-// decisions are the lines of the plugin that each make one decision of the guard. The plugin runs inside OpenCode and no test starts Node, so a test reads these
-// lines as text: each must be in the plugin exactly once, and the lines of the verdict must keep this order.
+// decisions are the lines of the plugin that each make one decision of the guard. TestGuard_ThePluginRunOnNode runs the plugin where Node is installed; this
+// table reads the same lines as text, so a host without Node checks them too. Each must be in the plugin exactly once, and the lines of the verdict must keep this order.
 // verdict is true for a line of the verdict function, whose order matters: a pass before a refusal would let the call through.
 var decisions = []struct {
 	name, line string
 	verdict    bool
 }{
 	{"the plugin writes its marker", `writeFileSync(LOADED, "loaded\n")`, false},
+	{"the verdict runs the guard command", `const run = spawnSync(GUARD, { shell: true, input: event, encoding: "utf8", timeout: 30000 })`, true},
 	{"a check that did not run refuses", `if (run.error) return "the check of the command did not run"`, true},
 	{"exit code 2 refuses with the text of the check", `if (run.status === 2) return (run.stderr || "").trim() || "the command is not allowed"`, true},
 	{"any other exit code refuses", `if (run.status !== 0) return "the check of the command failed"`, true},
 	{"only exit code 0 lets the call through", `return ""`, true},
 	{"a throw refuses, and never with an empty text", `return String(err && err.message ? err.message : err) || "the check of the command threw"`, true},
 	{"only the bash tool is checked", `if (input.tool !== "bash") return`, false},
+	{"the hook asks the verdict about the command of the call", `const why = verdict(directory, output && output.args ? output.args.command : undefined)`, false},
 	{"a refusal throws", `if (why !== "") throw new Error("beehave refused: " + why)`, false},
 }
 
@@ -168,6 +170,8 @@ func TestGuard_AMutantOfThePluginBreaksADecision(t *testing.T) {
 		{"a throw passes", `return String(err && err.message ? err.message : err) || "the check of the command threw"`, `return ""`},
 		{"a throw with an empty text passes", ` || "the check of the command threw"`, ``},
 		{"every tool is skipped", `if (input.tool !== "bash") return`, `if (input.tool !== "bash" || true) return`},
+		{"the hook skips the verdict", `const why = verdict(directory, output && output.args ? output.args.command : undefined)`, `const why = ""`},
+		{"the verdict never runs the guard command", `const run = spawnSync(GUARD, { shell: true, input: event, encoding: "utf8", timeout: 30000 })`, `const run = { status: 0 }`},
 		{"a refusal does not throw", `if (why !== "") throw new Error("beehave refused: " + why)`, `if (why !== "") return`},
 		{"the marker is not written", `  writeFileSync(LOADED, "loaded\n")` + "\n", ""},
 		{"exit code 2 passes", `if (run.status === 2) return (run.stderr || "").trim() || "the command is not allowed"`, `if (run.status === 2) return ""`},

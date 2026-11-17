@@ -74,7 +74,7 @@ type forgeAdapter struct {
 }
 
 // agentAdapter is the registration of an agent: its constructor and its doctor fix texts. The usage read is a method of the adapter that build returns.
-// An agent with no constructor has no adapter yet: its runners are valid in the config and do not start.
+// An agent with no constructor has no adapter: its runners are valid in the config and do not start.
 // reportsUsage is true when the CLI reports the plan limits of a login, so the doctor checks them for a runner of the agent.
 type agentAdapter struct {
 	registration
@@ -416,7 +416,7 @@ func (a adapters) host(project model.Project) (host.Host, error) { //nolint:iret
 	return host.WithDiskWait(built, project.Host.DiskFloorGB, wait, a.diskPoll), nil
 }
 
-// agent builds the adapter of the agent. It returns nil for an agent that has no adapter yet, and a run with no adapter does not start.
+// agent builds the adapter of the agent. It returns nil for an agent that has no adapter, and a run with no adapter does not start.
 func (a adapters) agent(name model.Agent) agent.Adapter { //nolint:ireturn // the table builds whichever adapter the runner names
 	entry, found := a.agents[name]
 	if !found || entry.build == nil {
@@ -485,7 +485,7 @@ func readUsage(entries map[model.Agent]agentAdapter) pool.Reader {
 	return func(ctx context.Context, runner model.Runner) model.Reading {
 		entry, found := entries[runner.Agent]
 		if !found || entry.build == nil {
-			return model.Unknown(fmt.Sprintf("the %s agent cannot report usage", runner.Agent))
+			return agent.NoUsage(runner.Agent)
 		}
 
 		return entry.build().ReadUsage(ctx, runner)

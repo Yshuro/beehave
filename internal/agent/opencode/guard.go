@@ -20,11 +20,11 @@ const (
 //go:embed guardplugin.js
 var pluginTemplate string
 
-// Guard returns the launch that makes OpenCode run command before each bash call of one run: a plugin in the config folder of the run, which OpenCODE_CONFIG_DIR names.
+// Guard returns the launch that makes OpenCode run command before each bash call of one run: a plugin in the config folder of the run, which OPENCODE_CONFIG_DIR names.
 // The plugin refuses the call when the command exits with code 2, and on any other failure of the command.
 // The launch also closes the run: the project config, the Claude Code files and the external skills are off, no update or download runs,
 // and XDG_CONFIG_HOME names an empty folder so that no global plugin of the owner loads. OPENCODE_PURE stays unset, because it may switch off the plugin.
-// The plugin loads through the plugin interface of the version that the profile pins (GuardMinVersion), and the runner refuses an older version.
+// The plugin loads through the plugin interface of the versions that the profile supports, and the runner refuses any other version.
 // The plugin writes a marker file when it loads (Launch.Loaded); the runner sets Result.GuardMissing when the marker is missing at the end of the run.
 func (Adapter) Guard(command, runDir string) agent.Launch {
 	return launch(command, runDir)

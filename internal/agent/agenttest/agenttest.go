@@ -183,7 +183,9 @@ func runFake(adapter agent.Adapter, dir string, out io.Writer, change ...func(*a
 		set(&spec)
 	}
 
-	return agent.Runner{}.Run(context.Background(), spec)
+	version := func(context.Context, string, []string) (string, error) { return adapter.Profile().SupportedFrom, nil }
+
+	return agent.Runner{Version: version}.Run(context.Background(), spec)
 }
 
 // CheckNoEdits starts the fake CLI with NoEdits set, and checks that it got the arguments of the profile followed by NoEditArgs, with no EditArgs, and every

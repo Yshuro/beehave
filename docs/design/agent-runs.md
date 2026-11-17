@@ -14,6 +14,23 @@ An `agent` step starts one AI coding CLI through an adapter, feeds it the prompt
 - `cmd/beehave` holds the table that maps an agent name to the constructor of its adapter. It puts the adapter in the `Spec` of each run. A run with no adapter does not start.
 - `agent/agenttest` is the conformance suite. It starts a fake CLI and checks the profile, the arguments and the call reader of an adapter. Every new adapter calls it from its tests.
 
+### The OpenCode adapter and its limits
+
+The adapter starts `opencode run --format json` and reads its event stream. The prompt goes on stdin; no message argument follows `run`. The adapter never passes `--auto`, so a file tool that reaches outside the work folder stays refused.
+
+A step author must know these limits:
+
+- **Supported versions.** The adapter supports OpenCode from 1.19.5 up to but not including 2.0.0, the line that the recorded output in the tests comes from. The runner reads `opencode --version` before every run. A version outside the range, or one that it cannot read, stops the step before it starts, and the note names the range. The 2.x line prints other shapes.
+- **No sandbox.** A step with a sandbox does not start. Set `sandbox = None` on the step.
+- **No skill proof.** OpenCode reports no skill calls, so a step with `require_skills` does not start.
+- **A lost run starts again.** OpenCode keeps all sessions in one database and has no file for one session. The transcript path in the step output names a path that no file holds. The check before a resume finds no file, so a lost OpenCode step starts again from its note and never resumes.
+- **Subagent sessions are not counted.** The calls and the cost of a subagent session of OpenCode do not reach the output stream of the parent run, so the turn cap and the cost cap do not count them. This is from a read of the source of OpenCode 1.19.5.
+- **The turn cap is one call late.** OpenCode shows a tool call on its output when the call ends, so the runner counts a shell call after it ran.
+- **The cost cap is checked on finished steps.** A run can pass the cap by the cost of one step.
+- **The guard needs a POSIX shell.** A step with `forbid_commands` does not start on Windows. If the plugin does not load, OpenCode runs every shell command with no check. The plugin writes a marker file when it loads, and a run that ends with no marker gets a violation line.
+- **A run with no timeout ends after one hour.** A model over its usage quota prints nothing and retries. The note of the timed-out run names that cause.
+- **The pool never picks OpenCode.** OpenCode has no usage report, so the pool reads an unknown usage for it and skips it, and the doctor makes no login check for it. A step runs on OpenCode only when it names the runner with `runner = "<name>"`.
+
 ### The process of the CLI
 
 The prompt goes on stdin, so it never shows in a process list.
