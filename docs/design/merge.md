@@ -372,6 +372,58 @@ A bad argument is a refusal. The tool finds the repository from the `origin` rem
 
 A dry run takes the same path and prints `WOULD:` lines, and it makes no write call. The trunk is `main` when `--trunk` is not given. The number of the new round is the text after the last dash of the new branch.
 
+### `remedy sync`
+
+`remedy sync --base <branch> [--trunk <branch>]` runs `roundsync`. It prints one line, `state=<state>` followed by the fields that the state has, and the workflow branches on `state`.
+
+| State | Meaning |
+|---|---|
+| `current` | The round base holds the trunk tip. Nothing is written. |
+| `synced` | The branch `sync/<base>/<first 8 characters of the trunk tip>` holds a merge commit of the base tip and the trunk tip, and a draft pull request into the base is open. The line gives `branch`, `pr`, `head` and `base_tip`. |
+| `conflict` | A merge into the sync branch conflicts, and that merge writes nothing. The line gives `source`, the branch whose merge conflicted: the trunk, or the round base when the base moved after the branch was cut. An agent merges `source` on the sync branch and pushes. The next call merges what is left and opens the pull request, or names the next conflict. |
+| `refused` | The forge refuses the merge for the workflow permission. The line has `reason=sync-refused`. |
+
+GitHub's merges endpoint (`POST /repos/{owner}/{repo}/merges`) makes a merge commit with two parents, the base tip first, also when the base tip is an ancestor of the head: it never fast-forwards. It answers 201 with the commit, 204 with no body when the base holds the head, and 409 `Merge conflict` with nothing written. The tool reads a 409 as a conflict. It reads a refusal as `sync-refused` only when the forge's message holds `create or update workflow`, the text of GitHub's refused push of a workflow file. The merges endpoint's text for that refusal is not measured, and GitHub lists the endpoint under the contents permission only. Any refusal with another text is exit code 2, so an unknown text stops the round loudly and is never a silent pass.
+
+The forge does each merge, so no checkout is written, and the round branch is never rebased. A repeat call finds the branch, the merge and the pull request. A base that moved after the branch was cut is merged into the branch, so the gated head holds every commit that the landing keeps. Any other failure of the forge is exit code 2.
+
+`remedy sync land --pr <number> --head <sha> --base-tip <sha>` merges the pull request with a merge commit pinned to `--head`. It lands only when the base is still at `--base-tip`. A moved base is `state=stale` and a moved head is `state=head-moved`. Both are exit code 2 and write nothing. A landing prints `state=landed`.
+
+GitHub does not merge a draft: `gh pr merge` on one exits 1 with `GraphQL: Pull Request is still a draft (mergePullRequest)` (measured on a scratch repository with gh 2.101.0). The sync opens its pull request as a draft. The landing marks the draft ready only after the base and head checks pass, then merges it pinned to `--head`.
+
+When the merge fails, or the tool gets SIGINT during the merge, the landing makes the pull request a draft again. That call runs on a context that the SIGINT does not end, with its own limit of 30 seconds. If that call fails, its failure is part of the error of the landing. A sync that finds the open pull request of its sync branch ready makes it a draft before any merge into that branch. If the draft call fails, the sync stops before the merge.
+
+A kill of the landing, or a SIGINT during the ready call, can leave the sync pull request ready on a head that passed its gate and review. The stop of a round and a step timeout kill the group of the tool with SIGKILL, which no process can catch. No error line says that the pull request is still ready. It stays ready until a `remedy sync` on the same sync branch makes it a draft. A sync for a newer trunk tip cuts a new sync branch and does not read the old pull request. A person who merges the ready pull request merges that gated head. A person who marks the pull request ready by hand can also merge it.
+
+#### The sync step of the round
+
+The round of `examples/remediation/workflow.star` runs the sync at the start of each pass, before `queue-audit-<n>` and before any spawn. The engine has no builtin for it: the sync is command steps, one agent step and a gate of the workflow.
+
+| Step | What it does |
+|---|---|
+| `sync-<n>` | Runs `remedy sync --base <round base> --trunk <base_branch>`. Exit code 2 stops the round with the line of the tool. |
+| `sync-resolve-<n>` | Runs only on `conflict`. One agent step (`prompts/sync.md`) merges `source` into the sync branch, resolves, commits the merge commit and pushes. |
+| `sync-again-<n>` | Runs `remedy sync` again after the agent. A second `conflict` ends the pass. |
+| `sync-fetch-<n>`, `sync-checkout-<n>` | Put the folder of the round at the head of a `synced` line, so the gate and the review read that head. |
+| `sync-gate-<n>` | The gate with no base: the gate command only, with no new-tests check and no mutation step. |
+| `sync-review-<n>` | A read-only review (`prompts/sync_review.md`) pinned to the gated head. It writes the verdict `approve` or `changes`. |
+| `sync-land-<n>` | Runs `remedy sync land` pinned to the gated head and the base tip of the line. `stale` and `head-moved` land nothing, and the next pass syncs again. |
+
+A line with no `state` reads as `current`: the tool prints a state on every exit 0, and a dry run prints nothing. Any other exit code but 0 and 2, a state that the round does not know, or a line that lacks a field that its state needs, stops the run.
+
+Four results hold the round. Each has a reason:
+
+| Reason | Cause |
+|---|---|
+| `sync-conflict` | The agent did not resolve the conflict. |
+| `sync-refused` | The forge refused the merge for the workflow permission. |
+| `sync-red` | The gate did not pass on the sync head. |
+| `sync-review` | The review did not approve the sync pull request. Its findings are in the reply of the step `sync-review-<n>`. |
+
+A landing that ends `stale` or `head-moved` holds nothing: the same pass goes on to `queue-audit-<n>` on the round base as it is, with the folder of the round still at the sync head, and the next pass syncs again.
+
+A held round starts no sync and no item in a later pass. It gathers and lands the child runs that are open, so it never returns while one is open. A step that stops the run, such as an exit code 2 of `sync-<n>` in a later pass, ends the round with its open runs. With none open, it waits in `round-wait` with a question that names the reason and what the owner does. CONTINUE starts a pass that checks the trunk again. STOP or the timeout returns `{"state": "waiting", "base": ..., "pr": ..., "reason": <reason>}`; the reason is an empty text when no sync held the round.
+
 ### `remedy audit`
 
 `remedy audit authored <span>` and `remedy audit present <tip> <base>` run `audit`. The audit reads the merges of a range through git, with `-z` path lists.

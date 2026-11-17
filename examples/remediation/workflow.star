@@ -1,7 +1,7 @@
 # The remediation workflow: plan, implement, then review and fix until the gate passes and the review approves.
 # Every method value is in this file, in the review loop it loads, or in a prompt next to it. Go holds none of it.
 
-load("@beehave//review_fix.star", "candidates_spent", "review_fix")
+load("@beehave//review_fix.star", "candidates_spent", "capped", "review_fix")
 
 # A pull request is stale after this many hours with no push, comment, review or answer from the author. The same values are the idle threshold and the grace period that the take-over passes to the tool as flags.
 IDLE_HOURS = "1"
@@ -438,7 +438,7 @@ def land(approved, project, round_settings, n):
 
 def take_over(item, pr, author, project, round_settings):
     """Takes over the pull request `pr` of somebody else, in this order: the review, the notice, the grace period, the take.
-    No entry calls it yet: the foreign path of the pipeline (M2 PR 9) does. `author` is the author of the pull request, from the queue row.
+    No entry calls it yet: the engine refuses every foreign pull request until the sandbox default lands. `author` is the author of the pull request, from the queue row.
     1. A review agent posts the findings as a changes-requested review. The notice is refused until the review is on the pull request.
     2. The tool posts the notice that asks the author for an answer, and refuses when the pull request is not stale (IDLE_HOURS) or is ours.
     3. The grace period (GRACE_HOURS) is a clock rule: the author has that long to answer KEEP or RELEASE. KEEP stops the item. RELEASE or no answer when the time is over goes on to the take.
@@ -471,6 +471,33 @@ def take_over(item, pr, author, project, round_settings):
 
     command(name = "take-claim", run = base + ["--take"], stop_on_rc = [2])
 
+def foreign_followup(recorded, project):
+    """Files one follow-up issue for the findings that a foreign review left open, once the reviewed pull request merged, and returns its id. It returns "" when it files nothing.
+    No entry calls it yet: the engine refuses every foreign pull request until the sandbox default lands (#438), and that change wires it in.
+    `recorded` is the value of the foreign review run: `pr` is the number that the intake preflight gave, and `findings` the open findings of the review, each with a `class` and a `text`.
+    `project` is the value of facts().
+    The step reads the state of that number. It does not look the pull request up again, so a branch that is not the item id and a base that is not vars.round.base change nothing.
+    A review with no open findings files nothing, and so does a pull request that is still open or closed without a merge.
+    The key holds the repository and the number and is shared by every run, so a second run on this host for the same pull request files no second issue.
+    Two hosts that share one tracker can still file two issues for one pull request."""
+    findings = recorded["findings"]
+    if len(findings) == 0:
+        return ""
+
+    pr = recorded["pr"]
+    if pr_state(name = "foreign-state", pr = pr).state != "MERGED":
+        return ""
+
+    lines = ["- %s: %s" % (finding["class"], finding["text"]) for finding in findings]
+    return item_create(
+        name = "foreign-followup",
+        key = "foreign:%s:%d" % (project.repo, pr),
+        shared = True,
+        title = "Open review findings of the merged pull request #%d" % pr,
+        body = "Pull request #%d merged with these review findings open:\n\n%s\n" % (pr, "\n".join(lines)),
+        forbid_text = ATTRIBUTION,
+    ).id
+
 def record_merge(id, head, base):
     """Closes the issue of the item `id` that a batch merged into the round branch `base`, with the evidence: a comment, then the status closed. The tracker builtins do both,
     so the close does not depend on an agent, on the gh tool or on an integration pull request that exists (vars.round.integration_pr may be 0).
@@ -484,6 +511,128 @@ def record_merge(id, head, base):
     )
     item_status(name = "closed-" + id, id = id, status = "closed")
 
+def line_fields(text):
+    """Returns the `name=value` words of the line of a tool as a dict. A word with no `=` is left out."""
+    fields = {}
+    for word in text.split():
+        pair = word.split("=", 1)
+        if len(pair) == 2:
+            fields[pair[0]] = pair[1]
+
+    return fields
+
+# The fields that each state of a line of `remedy sync` must carry. The round acts on these states only.
+# A line with no state reads as current: the tool prints a state on every exit 0, and a dry run prints nothing.
+SYNC_FIELDS = {
+    "current": [],
+    "synced": ["branch", "pr", "head", "base_tip"],
+    "conflict": ["branch", "source"],
+    "refused": [],
+}
+
+# The states of `remedy sync land` after which the pass goes on. A moved base or a moved head lands nothing, and the next pass syncs again.
+SYNC_LAND_STATES = ["landed", "stale", "head-moved"]
+
+# Each reason that ends a pass before its queue audit, with what the owner does before the answer CONTINUE.
+SYNC_REASONS = {
+    "sync-conflict": "The agent did not resolve the conflict on the sync branch. Merge the branch that the sync step names into the sync branch, resolve and push.",
+    "sync-refused": "The forge refused the merge for the workflow permission. Merge the trunk into the round branch by hand.",
+    "sync-red": "The gate failed on the head of the sync branch. Read the gate of the sync pull request.",
+    "sync-review": "The review did not approve the sync pull request. Its findings are in the reply of the step sync-review of the last pass: beehave status with the run id of the round lists the steps.",
+}
+
+def sync_check(name, run):
+    """Runs one check of `remedy sync` as the command step `name` and returns the fields of its line, with the state set.
+    Exit code 2 (a forge failure or a bad argument) stops the round with the line of the tool. Any other exit code but 0, a state the round does not know, or a field that its state needs and lacks, stops the run."""
+    out = command(name = name, run = run, stop_on_rc = [2])
+    if out.rc != 0:
+        fail("REFUSE: the check %s ended with the exit code %d and the line %r. Check the remedy tool of the round, then run the round again." % (name, out.rc, out.stdout))
+
+    fields = line_fields(out.stdout)
+    state = fields.get("state", "current")
+    if state not in SYNC_FIELDS:
+        fail("REFUSE: the line of %s has the state %r, which the round does not know. Check the remedy tool of the round, then run the round again." % (name, state))
+
+    missing = [key for key in SYNC_FIELDS[state] if fields.get(key, "") == ""]
+    if missing:
+        fail("REFUSE: the %s line of %s has no %s. The fields are %r. Check the remedy tool of the round, then run the round again." % (state, name, ", ".join(missing), fields))
+
+    fields["state"] = state
+    return fields
+
+def sync_land(item, project, round_settings, line, n):
+    """Puts the folder of the round at the head of a synced line, runs the gate command on it, reviews the sync pull request and lands it pinned to that head.
+    The gate has no base, so it runs the gate command only: no new-tests check and no mutation step. Returns sync-red or sync-review when the pass must end, else an empty text."""
+    head = line["head"]
+    for step, run in [("sync-fetch-%d" % n, ["git", "fetch", "origin", line["branch"]]), ("sync-checkout-%d" % n, ["git", "checkout", "--detach", head])]:
+        if command(name = step, run = run).rc != 0:
+            fail("REFUSE: the step %s could not put the folder of the round at the head %s of %s. Check the folder of the round, then run beehave resume %s." % (step, head, line["branch"], item.id))
+
+    if not gate(name = "sync-gate-%d" % n, head = head).passed:
+        return "sync-red"
+
+    review = agent(
+        name = "sync-review-%d" % n,
+        prompt = "prompts/sync_review.md",
+        model = "opus",
+        kind = "review",
+        edits = False,
+        pin = head,
+        outputs = ["verdict"],
+        output_tries = 2,
+        forbid_commands = FORBID + ["git-write"],
+        protect_paths = protected(round_settings),
+        sandbox = sandbox(network = ["github.com", "api.github.com"]),
+        inputs = {"pr": line["pr"], "branch": line["branch"], "head": head, "base": round_settings["base"], "facts": project},
+    )
+    capped(review, "sync-review", item)
+    if review.verdict != "approve":
+        return "sync-review"
+
+    landed = line_fields(command(name = "sync-land-%d" % n, run = ["remedy", "sync", "land", "--pr", line["pr"], "--head", head, "--base-tip", line["base_tip"]]).stdout)
+    if landed.get("state", "") not in SYNC_LAND_STATES:
+        fail("REFUSE: the landing of the sync pull request %s gave the fields %r. Read the pull request, then run beehave resume %s." % (line["pr"], landed, item.id))
+
+    return ""
+
+def sync_trunk(item, project, round_settings, n):
+    """Merges a moved trunk into the round branch at the start of pass `n`, before its queue audit. Returns a reason of SYNC_REASONS that ends the pass, or an empty text.
+    A conflict gets one agent step, sync-resolve-<n>, on the sync branch, and then one more check. The tool merges the forge side and writes no checkout."""
+    run = ["remedy", "sync", "--base", round_settings["base"], "--trunk", project.base_branch]
+    line = sync_check("sync-%d" % n, run)
+
+    if line["state"] == "conflict":
+        resolve = agent(
+            name = "sync-resolve-%d" % n,
+            prompt = "prompts/sync.md",
+            model = "opus",
+            forbid_commands = FORBID,
+            protect_paths = protected(round_settings),
+            sandbox = sandbox(network = ["github.com", "api.github.com"]),
+            inputs = {"branch": line["branch"], "source": line["source"], "base": round_settings["base"], "facts": project},
+        )
+        capped(resolve, "sync-resolve", item)
+        line = sync_check("sync-again-%d" % n, run)
+
+    state = line["state"]
+    if state == "conflict":
+        return "sync-conflict"
+
+    if state == "refused":
+        return "sync-refused"
+
+    if state == "synced":
+        return sync_land(item, project, round_settings, line, n)
+
+    return ""
+
+def round_question(pr, reason):
+    """The question of round-wait: the integration pull request `pr`, and the reason of a sync that ended the pass when there is one."""
+    if reason == "":
+        return "The round has no item it can move. Read the integration pull request %d and answer." % pr
+
+    return "The round did not merge the trunk into the round branch: %s. %s Then answer CONTINUE to check the trunk again." % (reason, SYNC_REASONS[reason])
+
 def round_integration(project, round_settings):
     """Finds or creates the integration pull request from the round branch into the trunk, and returns its number and state.
     The tool `remedy integration` uses vars.round.integration_pr when it is not 0, and prints `pr=<n> state=<state>`. The tool counts the rows of the table itself, with the count rules of `remedy recount`."""
@@ -492,11 +641,7 @@ def round_integration(project, round_settings):
         run = ["remedy", "integration", "--base", round_settings["base"], "--into", project.base_branch, "--pr", str(round_settings["integration_pr"])],
         stop_on_rc = [2],
     )
-    fields = {}
-    for word in out.stdout.split():
-        pair = word.split("=", 1)
-        if len(pair) == 2:
-            fields[pair[0]] = pair[1]
+    fields = line_fields(out.stdout)
 
     if not fields.get("pr", "").isdigit():
         fail("REFUSE: the line of round-integration has no `pr=<n>` figure. The line is %r" % out.stdout)
@@ -546,9 +691,10 @@ def ready_items(q, round_settings):
 
 def round(item):
     """The round: one entry for the whole round, with one child run (the entry pipeline) for each item. `item` is the round itself, an id that no tracker row uses.
-    A pass is queue-audit-<n>, round-queue-<n>, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open.
-    It stops when no ready row can move and no child run is open: then it runs round-integration and waits for the owner in round-wait. CONTINUE starts another pass.
-    A STOP or the timeout returns the state waiting. When the integration pull request is merged and vars.round.next_base is set, the round cuts the next round."""
+    A pass is sync-<n> (sync_trunk), queue-audit-<n>, round-queue-<n>, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
+    A sync that ends with a reason holds the round: the later passes start no sync and no item, and only gather the open runs. With none open, the round waits in round-wait with the reason.
+    It stops when no ready row can move and no child run is open: then it runs round-integration and waits for the owner in round-wait. CONTINUE starts another pass, which checks the trunk again.
+    A STOP or the timeout returns the state waiting with the reason, an empty text when no sync held the round. When the integration pull request is merged and vars.round.next_base is set, the round cuts the next round."""
     project = facts()
     round_settings = settings(project)
 
@@ -558,13 +704,18 @@ def round(item):
 
     runs = []
     approved = []
+    held = ""
 
     for n in range(1, MAX_PASSES + 1):
-        queue_audit(item, project, round_settings, n)
-        q = queue(name = "round-queue-%d" % n, hold = "hold", label = round_settings["label"])
-        take = ready_items(q, round_settings)
-        if len(take) > 0:
-            runs = runs + spawn(items = take, entry = "pipeline", name = "round-spawn-%d" % n).runs
+        if held == "":
+            held = sync_trunk(item, project, round_settings, n)
+
+        if held == "":
+            queue_audit(item, project, round_settings, n)
+            q = queue(name = "round-queue-%d" % n, hold = "hold", label = round_settings["label"])
+            take = ready_items(q, round_settings)
+            if len(take) > 0:
+                runs = runs + spawn(items = take, entry = "pipeline", name = "round-spawn-%d" % n).runs
 
         if len(runs) > 0:
             ended = gather(runs, until = "any", name = "round-gather-%d" % n).results
@@ -583,20 +734,22 @@ def round(item):
         # No ready row can move and no child run of this round is open.
         integration = round_integration(project, round_settings)
         answer = wait(
-            "The round has no item it can move. Read the integration pull request %d and answer." % integration.pr,
+            round_question(integration.pr, held),
             name = "round-wait",
             timeout = "%dh" % round_settings["wait_hours"],
             to = [round_settings["owner"]],
             choices = ["CONTINUE", "STOP"],
         )
         if answer.timed_out or answer.answer == "STOP":
-            return {"state": "waiting", "base": round_settings["base"], "pr": integration.pr}
+            return {"state": "waiting", "base": round_settings["base"], "pr": integration.pr, "reason": held}
+
+        held = ""
 
         if integration.merged and round_settings["next_base"] != "":
             next_round(project, round_settings, integration.pr)
             return {"state": "cut", "base": round_settings["next_base"]}
 
-    return {"state": "waiting", "base": round_settings["base"], "pr": 0}
+    return {"state": "waiting", "base": round_settings["base"], "pr": 0, "reason": held}
 
 def main(item):
     round(item)

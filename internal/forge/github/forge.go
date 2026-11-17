@@ -15,6 +15,7 @@ import (
 
 const (
 	argAPI         = "api"
+	argPost        = "POST"
 	argPR          = "pr"
 	argMerge       = "merge"
 	argView        = "view"

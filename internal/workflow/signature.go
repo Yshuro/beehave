@@ -375,10 +375,11 @@ func swarmSignatures() map[string][]Param {
 	}
 }
 
-// readSignatures holds the builtins that read the tracker or the item folder.
+// readSignatures holds the builtins that read the tracker, the forge or the item folder.
 func readSignatures() map[string][]Param {
 	return map[string][]Param{
 		itemReadName:     {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
+		prStateName:      {req("pr", KindInt), opt(nameKeyword, KindText)},
 		beforeReviewName: {filled("base"), filled("head"), ruled("allow", KindList, allowRule), opt("integration", KindBool), opt(nameKeyword, KindText)},
 	}
 }
@@ -391,7 +392,7 @@ func itemSignatures() map[string][]Param {
 		itemAssignName:  {filled("id"), filled("assignee"), label},
 		itemCommentName: {filled("id"), filled("text"), filled("key"), forbidText(), label},
 		itemCreateName: {
-			filled("title"), filled("key"), opt("body", KindText), opt("parent", KindText), opt("assignee", KindText), opt("severity", KindText), opt("operator", KindBool), forbidText(), label,
+			filled("title"), filled("key"), opt("body", KindText), opt("parent", KindText), opt("assignee", KindText), opt("severity", KindText), opt("operator", KindBool), forbidText(), opt("shared", KindBool), label,
 		},
 		itemStatusName: {filled("id"), {Name: statusField, Kind: KindText, Required: true, Values: StatusValues()}, label},
 		boardSyncName:  {req("board", KindInt), filled(statusField), opt("owner", KindText), opt("issue", KindInt), label},
