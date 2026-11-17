@@ -1,5 +1,5 @@
-# scripts/mutation-pr.sh sets the worker count of gremlins: MUTATION_WORKERS, or one worker for each four cores.
-# Only gremlins, timeout and getconf are stubs. The stub gremlins writes its arguments to args.
+# scripts/mutation-pr.sh leaves the worker count to the .gremlins.yaml at the module root, so it passes no --workers.
+# Only gremlins and timeout are stubs. The stub gremlins writes its arguments to args.
 [!exec:jq] skip
 [!exec:git] skip
 env HOME=$WORK/home
@@ -7,7 +7,6 @@ env GIT_CONFIG_GLOBAL=/dev/null
 env GIT_CONFIG_NOSYSTEM=1
 chmod 755 fake/gremlins
 chmod 755 fake/timeout
-chmod 755 fake/getconf
 env PATH=$WORK/fake:$PATH
 
 exec git init -q -b main repo
@@ -21,50 +20,12 @@ cp a2.go repo/a.go
 exec git -C repo add a.go
 exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m change
 
-# MUTATION_WORKERS wins over the core count, and the other arguments of the run stay.
+# The run starts gremlins on the diff, and the arguments hold no --workers: the config file sets the count.
 env GREMLINS_REPORT=$WORK/clean.json
-env FAKE_CORES=16
-env MUTATION_WORKERS=3
 exec sh repo/scripts/mutation-pr.sh main
-grep ' --workers 3 \.$' args
-grep ' --diff main ' args
 grep '^unleash ' args
-
-# With no MUTATION_WORKERS, the run starts one worker for each four cores.
-env MUTATION_WORKERS=
-exec sh repo/scripts/mutation-pr.sh main
-grep ' --workers 4 \.$' args
-
-# A host with fewer than four cores still gets one worker.
-env FAKE_CORES=3
-exec sh repo/scripts/mutation-pr.sh main
-grep ' --workers 1 \.$' args
-
-# The print mode gives the number that make mutation passes to gremlins.
-env FAKE_CORES=32
-exec sh repo/scripts/mutation-pr.sh --print-workers
-stdout '^8$'
-env MUTATION_WORKERS=2
-exec sh repo/scripts/mutation-pr.sh --print-workers
-stdout '^2$'
-
-# A worker count that is not a positive whole number stops the run before gremlins starts.
-env MUTATION_WORKERS=0
-exitcode 2 sh repo/scripts/mutation-pr.sh main
-stdout '^mutation-pr: MUTATION_WORKERS is "0"\. Set it to a positive whole number of workers, such as 4\.$'
-env MUTATION_WORKERS=many
-exitcode 2 sh repo/scripts/mutation-pr.sh main
-stdout '^mutation-pr: MUTATION_WORKERS is "many"\.'
-! stdout '^the stub gremlins started$'
-env MUTATION_WORKERS=08
-exitcode 2 sh repo/scripts/mutation-pr.sh main
-stdout '^mutation-pr: MUTATION_WORKERS is "08"\.'
-env MUTATION_WORKERS=-2
-exitcode 2 sh repo/scripts/mutation-pr.sh main
-stdout '^mutation-pr: MUTATION_WORKERS is "-2"\.'
-env MUTATION_WORKERS=4x
-exitcode 2 sh repo/scripts/mutation-pr.sh --print-workers
-stdout '^mutation-pr: MUTATION_WORKERS is "4x"\.'
+grep ' --diff main ' args
+! grep '[-][-]workers' args
 
 -- gomod --
 module example.com/r
@@ -85,8 +46,5 @@ cp "$GREMLINS_REPORT" "$5"
 #!/bin/sh
 shift 3
 exec "$@"
--- fake/getconf --
-#!/bin/sh
-echo "$FAKE_CORES"
 -- clean.json --
 {"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}

@@ -729,8 +729,8 @@ A project with another mutation tool sets another command. This repository uses 
 - The script gives the git of gremlins the settings `diff.noprefix=false` and `diff.mnemonicPrefix=false`, so a repository that sets `diff.noprefix` gets the same result.
 - A run that exceeds `MUTATION_TIMEOUT` fails with its own line and no end marker.
 - `MUTATION_TIMEOUT` accepts only a positive whole number of seconds. Any other value fails before the run starts.
-- With no `MUTATION_TIMEOUT`, the limit is 3600 seconds when the diff changes a Go file under `internal/flow`, and 1200 seconds otherwise. A flow run with 4 workers took 2478 seconds for 21 mutants.
-- The script starts gremlins with `--workers`: one worker for each four cores, at least one. Gremlins starts one worker for each core by default, and each worker runs a test binary that runs tests in parallel, so the default overloads the host and every mutant times out. `MUTATION_WORKERS` sets another positive whole number. Any other value fails before the run starts. `make mutation` uses the same count.
+- With no `MUTATION_TIMEOUT`, the limit is 3600 seconds when the diff changes a non-test Go file in `internal/flow` or below it, and 1200 seconds otherwise. A flow run with 4 workers took 2478 seconds for 21 mutants.
+- The file `.gremlins.yaml` at the module root sets 4 gremlins workers for `make mutation`, `make mutation-pr` and a direct run. Gremlins starts one worker for each core by default, and each worker runs a test binary that runs tests in parallel. On a 16-core host that load made the mutants of `internal/flow` time out. `--workers` or `GREMLINS_UNLEASH_WORKERS` sets another count.
 
 `examples/remediation/CONFORMANCE.md` has one row for each rule of the method, with its home (`core`, `file`, `skill` or `drop`) and its status (`gap`, `expressed`, `proven` or `n/a`). A row moves to `proven` when a behavior test runs it. A test in the `workflow` package fails when:
 

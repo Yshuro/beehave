@@ -1,0 +1,4 @@
+# Gremlins reads this file at the module root. Set another count with --workers or GREMLINS_UNLEASH_WORKERS.
+# The default is one worker for each core, and each worker runs a test binary that runs its tests in parallel.
+unleash:
+  workers: 4

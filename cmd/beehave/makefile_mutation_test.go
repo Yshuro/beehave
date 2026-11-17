@@ -32,6 +32,36 @@ func TestMakefile_SetupInstallsGremlinsAtThePinnedVersion(t *testing.T) {
 	assert.Contains(t, string(out), "go install github.com/go-gremlins/gremlins/cmd/gremlins@v0.6.0\n")
 }
 
+func TestMakefile_MutationLeavesTheWorkerCountToTheGremlinsConfig(t *testing.T) {
+	t.Parallel()
+
+	if _, err := exec.LookPath("make"); err != nil {
+		t.Skip("make is not on the path")
+	}
+
+	fake := t.TempDir()
+	args := filepath.Join(fake, "args")
+	require.NoError(t, os.WriteFile(filepath.Join(fake, "gremlins"), []byte("#!/bin/sh\necho \"$*\" > "+args+"\n"), 0o700)) //nolint:gosec // the fake must be executable
+
+	command := exec.CommandContext(t.Context(), "make", "-s", "-C", filepath.Dir(makefile(t)), "mutation", "PKG=./internal/cli") //nolint:gosec // G204: the arguments are constants of this test
+	command.Env = []string{"PATH=" + fake + ":/usr/bin:/bin:/usr/sbin:/sbin"}
+
+	out, err := command.CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	got, err := os.ReadFile(args) //nolint:gosec // G304: the path is in the temporary folder of this test
+	require.NoError(t, err)
+	assert.Equal(t, "unleash ./internal/cli\n", string(got), "the Makefile must leave the worker count to .gremlins.yaml")
+}
+
+func TestGremlinsConfig_SetsFourWorkers(t *testing.T) {
+	t.Parallel()
+
+	config, err := os.ReadFile(filepath.Join("..", "..", ".gremlins.yaml"))
+	require.NoError(t, err)
+	assert.Contains(t, string(config), "\nunleash:\n  workers: 4\n")
+}
+
 func TestMakefile_MutationRefusesAPackagePatternWithDots(t *testing.T) {
 	t.Parallel()
 

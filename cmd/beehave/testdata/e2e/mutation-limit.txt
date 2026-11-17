@@ -1,5 +1,5 @@
-# scripts/mutation-pr.sh chooses the default whole-run limit: 3600 when the diff changes a Go file under internal/flow, otherwise 1200.
-# Only gremlins, timeout and getconf are stubs. The stub timeout writes its limit to limit.
+# scripts/mutation-pr.sh chooses the default whole-run limit: 3600 when the diff changes a non-test Go file in internal/flow or below it, otherwise 1200.
+# Only gremlins and timeout are stubs. The stub timeout writes its limit to limit.
 [!exec:jq] skip
 [!exec:git] skip
 env HOME=$WORK/home
@@ -7,17 +7,18 @@ env GIT_CONFIG_GLOBAL=/dev/null
 env GIT_CONFIG_NOSYSTEM=1
 chmod 755 fake/gremlins
 chmod 755 fake/timeout
-chmod 755 fake/getconf
 env PATH=$WORK/fake:$PATH
-env FAKE_CORES=16
 
 exec git init -q -b main repo
 mkdir repo/internal/flow
+mkdir repo/other/internal/flow
 cp a.go repo/a.go
 cp f.go repo/internal/flow/f.go
+cp f.go repo/internal/flow/f_test.go
+cp f.go repo/other/internal/flow/z.go
 cp gomod repo/go.mod
 script mutation-pr.sh repo/scripts/mutation-pr.sh
-exec git -C repo add a.go internal go.mod scripts
+exec git -C repo add a.go internal other go.mod scripts
 exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
 
 # A change outside internal/flow keeps the limit of 1200.
@@ -39,7 +40,41 @@ env GREMLINS_REPORT=$WORK/flow.json
 exec sh repo/scripts/mutation-pr.sh main
 grep '^3600$' limit
 
+# A flow file that is not the first changed file counts too.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b both
+cp a2.go repo/a.go
+cp f2.go repo/internal/flow/f.go
+exec git -C repo add a.go internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m both
+env GREMLINS_REPORT=$WORK/both.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^3600$' limit
+
+# A path that only holds internal/flow further down keeps 1200.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b nested
+cp f2.go repo/other/internal/flow/z.go
+exec git -C repo add other
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m nested
+env GREMLINS_REPORT=$WORK/nested.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^1200$' limit
+
+# A flow test file does not count: a diff with a flow test file and a file outside keeps 1200.
+exec git -C repo checkout -q main
+exec git -C repo checkout -q -b flowtest
+cp a2.go repo/a.go
+cp f2.go repo/internal/flow/f_test.go
+exec git -C repo add a.go internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m flowtest
+env GREMLINS_REPORT=$WORK/outside.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^1200$' limit
+
 # An empty MUTATION_TIMEOUT takes the default, and a set one wins over it.
+exec git -C repo checkout -q flow
+env GREMLINS_REPORT=$WORK/flow.json
 env MUTATION_TIMEOUT=
 exec sh repo/scripts/mutation-pr.sh main
 grep '^3600$' limit
@@ -71,10 +106,11 @@ cp "$GREMLINS_REPORT" "$5"
 echo "$3" > "$WORK/limit"
 shift 3
 exec "$@"
--- fake/getconf --
-#!/bin/sh
-echo "$FAKE_CORES"
 -- outside.json --
 {"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
 -- flow.json --
 {"files":[{"file_name":"internal/flow/f.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- both.json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]},{"file_name":"internal/flow/f.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- nested.json --
+{"files":[{"file_name":"other/internal/flow/z.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
