@@ -49,8 +49,8 @@ type ghComment struct {
 
 // Create files an issue for the key. It writes the line `beehave-key: <key>` at the end of the body and, before it writes, searches all issues for that line, so a repeated key returns the first issue.
 // The search index of GitHub can lag behind a create, so a search that finds nothing is followed by a read of the newest issues, which does not use the index.
-// A parent is set with --parent, which needs gh 2.101 or newer. The step record of the engine is the first guard
-// against a second write, and the key covers the window in which a crash comes between the create and the record.
+// A parent is set with --parent, which needs gh 2.101 or newer. The key makes a repeated call safe, as after a crash between the create and the step record.
+// The search and the create are separate calls, so two writers of one key at the same time need the key lock of the caller (see store.Writer).
 func (s *Store) Create(ctx context.Context, key string, item store.NewItem) (string, bool, error) {
 	found, err := s.keyed(ctx, key)
 	if err != nil || found != "" {

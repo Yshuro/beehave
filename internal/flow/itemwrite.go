@@ -35,6 +35,24 @@ var errNoWriter = errors.New("this build cannot write to a tracker. Use a build 
 // scoped joins the key of a file to the run id, so two runs never share a key. The run id is the id of the DBOS workflow, which a replay keeps.
 func (s *script) scoped(key string) string { return workflowID(s.ctx) + ":" + key }
 
+// create files the item of an item_create call. Without shared, the key is joined to the run id.
+// With shared, the key is used as it is, and the call holds the lock of the key in the state folder around the lookup and the create of the tracker,
+// so two runs of this engine at the same time file one item. Writers on another host, or with another state folder, do not take this lock.
+func (s *script) create(ctx context.Context, key string, shared bool, item trackerstore.NewItem) (id string, created bool, err error) {
+	if !shared {
+		return s.e.deps.Writer.Create(ctx, s.in.Project, s.scoped(key), item)
+	}
+
+	unlock, err := trackerstore.LockKey(ctx, s.e.dir, s.in.Project+"\n"+key)
+	if err != nil {
+		return "", false, err
+	}
+
+	defer func() { err = errors.Join(err, unlock()) }()
+
+	return s.e.deps.Writer.Create(ctx, s.in.Project, key, item)
+}
+
 // check returns the first problem of a write call before the step starts: an empty argument, a status that is not known, or a build with no writer.
 func (s *script) check(problems ...error) error {
 	if s.e.deps.Writer == nil {
@@ -67,13 +85,14 @@ func (s *script) write(builtin, label string, fn func(ctx context.Context) (map[
 }
 
 // itemCreate files an item in the tracker of the project. The key makes the call safe to repeat: the same key gives the same item and created = False.
+// The engine joins the key to the run id. With shared = True it does not, so every run of this engine that gives the same key gets the same item (see create).
 func (s *script) itemCreate(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	var title, key, body, parent, assignee, severity, label string
 
-	var operator bool
+	var operator, shared bool
 
 	rules, err := unpackPosting(b, args, kwargs, map[string]any{
-		titleKeyword: &title, keyKeyword: &key, bodyKeyword: &body, parentKeyword: &parent, assigneeKeyword: &assignee, severityField: &severity, "operator": &operator, nameKeyword: &label,
+		titleKeyword: &title, keyKeyword: &key, bodyKeyword: &body, parentKeyword: &parent, assigneeKeyword: &assignee, severityField: &severity, "operator": &operator, "shared": &shared, nameKeyword: &label,
 	})
 	if err != nil {
 		return nil, err
@@ -84,7 +103,7 @@ func (s *script) itemCreate(b *starlark.Builtin, args starlark.Tuple, kwargs []s
 	}
 
 	return s.write("item_create", label, func(ctx context.Context) (map[string]any, error) {
-		id, created, err := s.e.deps.Writer.Create(ctx, s.in.Project, s.scoped(key), trackerstore.NewItem{Title: title, Body: body, Parent: parent, Assignee: assignee, Severity: severity, Operator: operator})
+		id, created, err := s.create(ctx, key, shared, trackerstore.NewItem{Title: title, Body: body, Parent: parent, Assignee: assignee, Severity: severity, Operator: operator})
 
 		return createOutputs(id, created), err
 	})
