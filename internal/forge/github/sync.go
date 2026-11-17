@@ -36,7 +36,7 @@ func (f *Forge) CommitsAhead(ctx context.Context, base, head string) (int, error
 	return ahead, nil
 }
 
-// MergeBranch merges head into base with a merge commit and returns its sha. GitHub answers 204 with no body when base already holds head.
+// MergeBranch merges head into base with a merge commit and returns its sha. GitHub makes the merge commit also when base is an ancestor of head, and answers 204 with no body when base already holds head.
 // A conflict is the answer 409, and it changes nothing.
 // https://docs.github.com/en/rest/branches/branches#merge-a-branch
 func (f *Forge) MergeBranch(ctx context.Context, base, head string) (string, error) {

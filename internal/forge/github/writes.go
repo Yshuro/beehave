@@ -18,7 +18,7 @@ var (
 	quotedScope = regexp.MustCompile(`'([^']+)'`)
 )
 
-// workflowRefusal is the text of the refusal that GitHub gives when the token cannot change workflow files.
+// workflowRefusal is the text of GitHub's refusal of a push that changes a workflow file without the workflow permission.
 const workflowRefusal = "create or update workflow"
 
 // refused returns the refusal of a failed write. It keeps the first line of what gh printed as the detail, and marks a workflow permission refusal.

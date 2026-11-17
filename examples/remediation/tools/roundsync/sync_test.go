@@ -203,8 +203,24 @@ func TestCheck_AConflictLeavesTheBranchAtTheBaseTipAndOpensNoPull(t *testing.T) 
 	result, err := check(t, w)
 
 	require.NoError(t, err)
-	assert.Equal(t, "state=conflict branch="+syncName+" base_tip="+baseTip, result.Line())
+	assert.Equal(t, "state=conflict branch="+syncName+" source="+trunk+" base_tip="+baseTip, result.Line())
 	assert.Equal(t, []string{"branch " + syncName + " " + baseTip}, w.writes)
+}
+
+func TestCheck_AConflictWithTheMovedBaseNamesTheBaseAsTheSource(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.ahead[syncName+"..."+trunk] = 0
+	w.ahead[syncName+"..."+base] = 1
+	w.fail["MergeBranch:"+base] = &forge.Error{Message: "cannot merge", Err: forge.ErrMergeConflict}
+
+	result, err := check(t, w)
+
+	require.NoError(t, err)
+	assert.Equal(t, "state=conflict branch="+syncName+" source="+base+" base_tip="+baseTip, result.Line())
+	assert.Empty(t, w.writes, "the trunk is in the branch already, and the conflicting merge writes nothing")
 }
 
 func TestCheck_ARefusalForTheWorkflowPermissionIsTheStateRefusedWithItsReason(t *testing.T) {

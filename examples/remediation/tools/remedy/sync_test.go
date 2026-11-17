@@ -97,7 +97,7 @@ func TestSync_CheckShowsTheStateOfTheMoveOnOneLine(t *testing.T) {
 
 				return w
 			}(),
-			"state=conflict branch=" + syncRef + " base_tip=" + roundTip + "\n", remedy.ExitPass,
+			"state=conflict branch=" + syncRef + " source=main base_tip=" + roundTip + "\n", remedy.ExitPass,
 		},
 	} {
 		code, out, _ := run(t, syncDeps(test.world), "sync", "--base", roundBase)

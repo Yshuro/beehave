@@ -61,9 +61,11 @@ type LandRequest struct {
 }
 
 // Result is how a call ended. A field that the state does not use is empty.
+// Source is the branch whose merge into the sync branch conflicted: the trunk or the round base.
 type Result struct {
 	State   State
 	Branch  string
+	Source  string
 	PR      int
 	Head    string
 	BaseTip string
@@ -80,7 +82,7 @@ func (r Result) Line() string {
 	fields := []string{"state=" + string(r.State)}
 
 	for _, field := range []struct{ key, value string }{
-		{"branch", r.Branch}, {"head", r.Head}, {"base_tip", r.BaseTip}, {"reason", r.Reason},
+		{"branch", r.Branch}, {"source", r.Source}, {"head", r.Head}, {"base_tip", r.BaseTip}, {"reason", r.Reason},
 	} {
 		if field.value != "" {
 			fields = append(fields, field.key+"="+field.value)
@@ -180,18 +182,18 @@ func (s *syncer) mergeAll(branch, baseTip string) (result Result, done bool, err
 		}
 
 		if _, err := s.forge.MergeBranch(s.ctx, branch, source); err != nil {
-			return s.refusal(err, branch, baseTip)
+			return s.refusal(err, branch, source, baseTip)
 		}
 	}
 
 	return Result{}, false, nil
 }
 
-// refusal turns a failed merge into the result that ends the call. A conflict and a refusal for the workflow permission are states. Any other failure is an error.
-func (s *syncer) refusal(cause error, branch, baseTip string) (Result, bool, error) {
+// refusal turns a failed merge of source into the result that ends the call. A conflict and a refusal for the workflow permission are states. Any other failure is an error.
+func (s *syncer) refusal(cause error, branch, source, baseTip string) (Result, bool, error) {
 	switch {
 	case errors.Is(cause, forge.ErrMergeConflict):
-		return Result{State: Conflict, Branch: branch, BaseTip: baseTip}, true, nil
+		return Result{State: Conflict, Branch: branch, Source: source, BaseTip: baseTip}, true, nil
 	case errors.Is(cause, forge.ErrWorkflowPermission):
 		return Result{State: Refused, Branch: branch, BaseTip: baseTip, Reason: ReasonRefused}, true, nil
 	default:

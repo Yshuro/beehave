@@ -380,8 +380,10 @@ A dry run takes the same path and prints `WOULD:` lines, and it makes no write c
 |---|---|
 | `current` | The round base holds the trunk tip. Nothing is written. |
 | `synced` | The branch `sync/<base>/<first 8 characters of the trunk tip>` holds a merge commit of the base tip and the trunk tip, and a draft pull request into the base is open. The line gives `branch`, `pr`, `head` and `base_tip`. |
-| `conflict` | The merge conflicts. The sync branch stays at the base tip and no pull request opens. An agent merges the trunk on that branch and pushes, and a second call opens the pull request. |
+| `conflict` | A merge into the sync branch conflicts, and that merge writes nothing. The line gives `source`, the branch whose merge conflicted: the trunk, or the round base when the base moved after the branch was cut. An agent merges `source` on the sync branch and pushes. The next call merges what is left and opens the pull request, or names the next conflict. |
 | `refused` | The forge refuses the merge for the workflow permission. The line has `reason=sync-refused`. |
+
+GitHub's merges endpoint (`POST /repos/{owner}/{repo}/merges`) makes a merge commit with two parents, the base tip first, also when the base tip is an ancestor of the head: it never fast-forwards. It answers 201 with the commit, 204 with no body when the base holds the head, and 409 `Merge conflict` with nothing written. The tool reads a 409 as a conflict. It reads a refusal as `sync-refused` only when the forge's message holds `create or update workflow`, the text of GitHub's refused push of a workflow file. The merges endpoint's text for that refusal is not measured, and GitHub lists the endpoint under the contents permission only. Any refusal with another text is exit code 2, so an unknown text stops the round loudly and is never a silent pass.
 
 The forge does each merge, so no checkout is written, and the round branch is never rebased. A repeat call finds the branch, the merge and the pull request. A base that moved after the branch was cut is merged into the branch, so the gated head holds every commit that the landing keeps. Any other failure of the forge is exit code 2.
 
