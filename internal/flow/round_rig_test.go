@@ -544,7 +544,13 @@ func (r *roundRig) answerOnce(t *testing.T, client *Client, owner *answering) {
 		return
 	}
 
-	r.deadlines = append(r.deadlines, infos[at].Deadline)
+	// The deadline is read after the record check: the status read above can come before the record.
+	view, err := client.Steps(infos[at].ID)
+	if err != nil {
+		return
+	}
+
+	r.deadlines = append(r.deadlines, view.Deadline)
 
 	require.NoError(t, client.AnswerAs(testItem, shipOwner, r.answerFor(owner.given)))
 
