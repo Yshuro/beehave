@@ -131,8 +131,8 @@ func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBui
 	harness.tick(t)
 	<-done
 
-	require.ErrorIs(t, other.CancelRun("item-12-r1"), errWrongState, "a finished run of another build has nothing to cancel")
-	require.ErrorIs(t, same.CancelRun("item-12-r1"), errWrongState)
+	require.NoError(t, other.CancelRun("item-12-r1"), "a canceled run of another build is canceled again")
+	require.NoError(t, same.CancelRun("item-12-r1"), "a canceled run is canceled again")
 }
 
 func TestRoundRun_CancelRunRefusesAnIdNoRunHas(t *testing.T) {
@@ -197,7 +197,7 @@ func TestRoundRun_StatusListsARunOfTheRoundWorkflowNameBesideTheItemRuns(t *test
 	assert.Equal(t, runDone, stateOfRun(t, harness.client(t, testVersion), testPassID))
 }
 
-func TestRoundRun_CancelRunRefusesARunOfAnotherBuildAndARunThatHasEnded(t *testing.T) {
+func TestRoundRun_CancelRunRefusesARunOfAnotherBuildAndCancelsACanceledRunAgain(t *testing.T) {
 	t.Parallel()
 
 	harness := newHarness(t)
@@ -212,10 +212,25 @@ func TestRoundRun_CancelRunRefusesARunOfAnotherBuildAndARunThatHasEnded(t *testi
 	require.ErrorIs(t, other.CancelRun("item-12-r1"), errStranded)
 
 	require.NoError(t, client.CancelRun("item-12-r1"))
-	require.ErrorIs(t, client.CancelRun("item-12-r1"), errWrongState, "a run that ended has nothing to cancel")
+	require.NoError(t, client.CancelRun("item-12-r1"), "a canceled run is canceled again")
 
 	harness.tick(t)
 	<-done
+}
+
+func TestRoundRun_CancelRunRefusesARunThatFinished(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	engine := harness.engine(t)
+	client := harness.client(t, testVersion)
+
+	_, err := engine.Run(testItem, testProject)
+	require.NoError(t, err)
+
+	err = client.CancelRun("item-12-r1")
+	require.ErrorIs(t, err, errWrongState)
+	require.ErrorContains(t, err, "item-12-r1 is done and has nothing to cancel")
 }
 
 func TestRoundRun_CancelRunReportsAStoreThatIsGone(t *testing.T) {

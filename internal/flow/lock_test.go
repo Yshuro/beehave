@@ -234,7 +234,7 @@ func TestCancel_ReportsAnEngineLockThatCannotOpen(t *testing.T) {
 	client := harness.client(t, testVersion)
 	require.NoError(t, os.MkdirAll(filepath.Join(harness.opts.StateDir, engineLockName), 0o700))
 
-	err := client.giveBackUnowned(testProject, testItem, run{})
+	err := client.releaseUnowned(testProject, testItem, run{})
 
 	require.ErrorContains(t, err, engineLockName)
 	assert.NotErrorIs(t, err, ErrStateBusy)
@@ -299,7 +299,7 @@ func TestLocks_AProbeLockFileThatCannotOpenIsReported(t *testing.T) {
 	_, err = NewEngine(t.Context(), harness.opts, harness.deps())
 	require.ErrorContains(t, err, probeLockName)
 
-	err = client.giveBackUnowned(testProject, testItem, run{})
+	err = client.underProbe(func() error { return nil })
 	require.ErrorContains(t, err, probeLockName)
 }
 

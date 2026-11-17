@@ -407,7 +407,8 @@ func (c *Client) Resume(item string) error {
 		return err
 	}
 
-	if err := c.reopenRun(last); err != nil {
+	// probe.lock keeps a cancel of the tree out while the reopen reads it (see docs/design/durable-loop.md).
+	if err := c.underProbe(func() error { return c.reopenRun(last) }); err != nil {
 		return errors.Join(err, c.dropClaim(project, item, last.Status.ID, owner))
 	}
 
@@ -491,21 +492,21 @@ func (c *Client) claimFresh(project, item, id string) (string, error) {
 	return owner, nil
 }
 
-// Cancel stops the open run of an item and the phases it started.
+// Cancel stops the open run of an item and the phases it started. A canceled run is canceled again, so the cancel reaches the children that an earlier cancel left open.
 func (c *Client) Cancel(item string) error {
 	last, err := c.latest(item)
 	if err != nil {
 		return err
 	}
 
-	if last.terminal() {
+	if !last.cancelable() {
 		return fmt.Errorf("%w: %s is %s and has nothing to cancel", errWrongState, last.Status.ID, stateOf(last.Status.Status))
 	}
 
 	return c.cancelRun(item, last)
 }
 
-// CancelRun stops the open run with this run id, a pass run included. The run need not be the latest run of its item.
+// CancelRun stops the open run with this run id, a pass run included, and cancels a canceled run again, as Cancel does. The run need not be the latest run of its item.
 func (c *Client) CancelRun(id string) error {
 	target, err := c.runWithID(id)
 	if err != nil {
@@ -515,7 +516,7 @@ func (c *Client) CancelRun(id string) error {
 	switch {
 	case target.Status.ApplicationVersion != c.version && !target.terminal():
 		return strandedError(target, c.version)
-	case target.terminal():
+	case !target.cancelable():
 		return fmt.Errorf("%w: %s is %s and has nothing to cancel", errWrongState, id, stateOf(target.Status.Status))
 	}
 
@@ -545,7 +546,7 @@ func (c *Client) runWithID(id string) (run, error) {
 	return run{Status: rows[0]}, nil
 }
 
-// cancelRun cancels an open run and its children, and gives back what the run held when no engine runs.
+// cancelRun cancels a run and its children, and gives back what the run held when no engine runs. It holds probe.lock to the end of the release (see docs/design/durable-loop.md).
 func (c *Client) cancelRun(item string, last run) error {
 	// The marker comes first. An engine that stops before its release ends leaves it, and the next start finishes the release.
 	// A marker for a run that stays open is harmless: the start drops it.
@@ -554,12 +555,23 @@ func (c *Client) cancelRun(item string, last run) error {
 		return err
 	}
 
-	err = dbos.CancelWorkflow(c.flow, last.Status.ID, dbos.WithCancelChildren())
-	if err == nil {
-		err = c.giveBackUnowned(project, item, last)
+	return c.underProbe(func() error {
+		if err := dbos.CancelWorkflow(c.flow, last.Status.ID, dbos.WithCancelChildren()); err != nil {
+			return err
+		}
+
+		return c.releaseUnowned(project, item, last)
+	})
+}
+
+// underProbe runs f while it holds probe.lock.
+func (c *Client) underProbe(f func() error) error {
+	probe, err := holdProbe(c.dir)
+	if err != nil {
+		return err
 	}
 
-	return err
+	return errors.Join(f(), probe.Unlock())
 }
 
 // markCancel writes the cancel marker of a run and returns the project of the run.
@@ -572,19 +584,8 @@ func (c *Client) markCancel(item string, last run) (string, error) {
 	return project, markCancel(c.dir, last.Status.ID, ItemInput{Item: item, Project: project})
 }
 
-// giveBackUnowned releases the worktree and the claim of a canceled run when no engine runs. A running engine does it on its next tick,
-// and an engine that stops first leaves the cancel marker, so the next start does it.
-// It holds probe.lock and the engine lock until the release ends, so no engine starts in between and no check meets a holder that is not an engine.
-func (c *Client) giveBackUnowned(project, item string, last run) error {
-	probe, err := holdProbe(c.dir)
-	if err != nil {
-		return err
-	}
-
-	return errors.Join(c.releaseUnowned(project, item, last), probe.Unlock())
-}
-
-// releaseUnowned does the release of giveBackUnowned, under probe.lock, when it takes the engine lock.
+// releaseUnowned releases the worktree and the claim of a canceled run, under probe.lock, when it takes the engine lock: no engine runs.
+// A running engine does it on its next tick, and an engine that stops first leaves the cancel marker, so the next start does it.
 func (c *Client) releaseUnowned(project, item string, last run) error {
 	held, err := holdEngine(c.dir)
 	if errors.Is(err, ErrStateBusy) {

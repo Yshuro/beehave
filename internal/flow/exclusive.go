@@ -445,7 +445,8 @@ func (e *Engine) stopOlderGates(run dbos.Context, in ExclusiveInput) error {
 // stopSuperseded cancels each gate of the same pull request that is queued or runs for another head than the tip of in, and returns their ids.
 // It reads the head again, because the read at queue time can be old: a gate cancels only while its tip is the head the forge reports now, so it never cancels
 // the gate of the head. The queue then starts the gate of the new head at once: a queued gate never starts, and a running gate stops at the next tick of this engine.
-// The cancel reaches the build job of each old gate, a job that starts during the cancel included, so the host frees its slot too. A cancel that fails is logged: the old gate then runs to its end.
+// The cancel reaches the build job of each old gate, a job that starts during the cancel included, so the host frees its slot too.
+// A cancel that fails is logged, and the gate of a later head cancels again (see docs/design/gate.md).
 func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string {
 	standing, read := e.gateStanding(ctx, in)
 	if !read || standing.Head != in.Tip {
@@ -458,7 +459,7 @@ func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string
 	}
 
 	if err != nil {
-		e.logger.WarnContext(ctx, "cannot stop the old gates of the pull request, so they keep their place", "item", in.Item, "error", err)
+		e.logger.WarnContext(ctx, "cannot stop the old gates of the pull request; the gate of the next head tries again", "item", in.Item, "error", err)
 
 		return nil
 	}
@@ -466,14 +467,52 @@ func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string
 	return old
 }
 
-// olderGates lists the ids of the queued and running gates of the pull request of in that judge another head than the tip of in.
+// olderGates lists the ids of the gates of the pull request of in that judge another head than the tip of in: the queued and running ones,
+// and a canceled one whose build job is still queued or running.
 func (e *Engine) olderGates(in ExclusiveInput) ([]string, error) {
-	rows, err := dbos.ListWorkflows(dbos.WithoutCancel(e.ctx), dbos.WithFilterName(exclusiveName), dbos.WithFilterLoadInput(true),
-		dbos.WithFilterStatus(dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusPending))
+	ctx := dbos.WithoutCancel(e.ctx)
+
+	rows, err := dbos.ListWorkflows(ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterLoadInput(true), dbos.WithFilterStatus(dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusPending))
+	if err == nil {
+		var stranded []dbos.WorkflowStatus
+
+		stranded, err = canceledGatesWithAJob(ctx)
+		rows = append(rows, stranded...)
+	}
+
 	if err != nil {
 		return nil, err //nolint:wrapcheck // stopSuperseded logs the error with its context
 	}
 
+	return gatesOfOtherHeads(rows, in), nil
+}
+
+// canceledGatesWithAJob lists the canceled gates whose build job is still queued or running.
+func canceledGatesWithAJob(ctx dbos.Context) ([]dbos.WorkflowStatus, error) {
+	jobs, err := dbos.ListWorkflows(ctx, dbos.WithFilterName(hostJobName), dbos.WithFilterStatus(dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusPending))
+
+	parents := parentsOf(jobs)
+	if err != nil || len(parents) == 0 {
+		return nil, err //nolint:wrapcheck // stopSuperseded logs the error with its context
+	}
+
+	return dbos.ListWorkflows(ctx, dbos.WithFilterWorkflowIDs(parents...), dbos.WithFilterName(exclusiveName), dbos.WithFilterLoadInput(true), //nolint:wrapcheck // stopSuperseded logs the error with its context
+		dbos.WithFilterStatus(dbos.WorkflowStatusCancelled))
+}
+
+// parentsOf returns the parent ids of the rows.
+func parentsOf(rows []dbos.WorkflowStatus) []string {
+	parents := make([]string, len(rows))
+
+	for i, row := range rows {
+		parents[i] = row.ParentWorkflowID
+	}
+
+	return parents
+}
+
+// gatesOfOtherHeads returns the ids of the gate rows of the pull request of in that judge another head than the tip of in.
+func gatesOfOtherHeads(rows []dbos.WorkflowStatus, in ExclusiveInput) []string {
 	var old []string
 
 	for _, row := range rows {
@@ -482,7 +521,7 @@ func (e *Engine) olderGates(in ExclusiveInput) ([]string, error) {
 		}
 	}
 
-	return old, nil
+	return old
 }
 
 // gateInputOf reads the input of a queued run when it is the input of a gate.

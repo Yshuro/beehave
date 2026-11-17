@@ -265,17 +265,23 @@ func TestExclusiveHost_ANewHeadCancelsTheBuildJobOfTheOldGateWithTheGate(t *test
 
 	current := queueHostGate(engine, testProject, testItem, "B", "box")
 
+	var oldGate string
+
 	eventually(t, func() bool {
 		rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterStatus(dbos.WorkflowStatusCancelled))
+		if err == nil && len(rows) == 1 {
+			oldGate = rows[0].ID
+		}
 
-		return err == nil && len(rows) == 1
+		return oldGate != ""
 	})
 
+	// The gate of the new head starts its own job once the old gate is canceled, so the read names the parent.
 	require.Eventually(t, func() bool {
-		jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName))
+		jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName), dbos.WithFilterParentWorkflowID(oldGate))
 
 		return err == nil && len(jobs) == 1 && jobs[0].Status == dbos.WorkflowStatusCancelled
-	}, eventTimeout, pollEvery, "the cancel of the old gate reached the only build job without a tick")
+	}, eventTimeout, pollEvery, "the cancel of the old gate reached its build job without a tick")
 
 	require.ErrorIs(t, endsAfterTicks(t, h, old).err, errSuperseded)
 	close(gated.release)
