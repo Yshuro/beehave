@@ -105,11 +105,12 @@ func Branch(base, trunkTip string) string {
 	return "sync/" + base + "/" + trunkTip[:min(len(trunkTip), shortLength)]
 }
 
-// syncer holds the state of one check.
+// syncer holds the state of one call. limit is the most time that the return to draft of a landing may take.
 type syncer struct {
 	ctx   context.Context
 	forge Forge
 	req   Request
+	limit time.Duration
 }
 
 // Check finds out whether the trunk has commits that the round base lacks. If it has, the check merges the trunk into the sync branch and opens the pull request of the sync.
@@ -261,9 +262,14 @@ func (s *syncer) create(branch string) (int, error) {
 // It lands only when the round base is still at the tip that the sync recorded, so the base tree after the merge equals the gated tree.
 // A moved base is the state Stale and a moved head is the state HeadMoved. Neither writes.
 // The sync opens a draft, which the forge does not merge, so the landing marks it ready just before the merge. A merge that fails or is canceled makes it a draft again,
-// and a failed return to draft is part of the error.
+// and a failed return to draft is part of the error. A kill of the process can leave it ready, until a Check on the same sync branch makes it a draft.
 func Land(ctx context.Context, forge Forge, req LandRequest) (Result, error) {
-	s := &syncer{ctx: ctx, forge: forge}
+	return landWithin(ctx, forge, req, draftLimit)
+}
+
+// landWithin is Land with limit as the most time that the return to draft may take.
+func landWithin(ctx context.Context, forge Forge, req LandRequest, limit time.Duration) (Result, error) {
+	s := &syncer{ctx: ctx, forge: forge, limit: limit}
 
 	pull, err := forge.PRView(ctx, req.PR, "state", "baseRefName", "headRefName", "isDraft")
 	if err != nil {
@@ -334,16 +340,17 @@ func (s *syncer) merge(req LandRequest, draft bool) error {
 		return nil
 	}
 
-	return errors.Join(err, backToDraft(s.ctx, s.forge, req.PR))
+	return errors.Join(err, backToDraft(s.ctx, s.forge, req.PR, s.limit))
 }
 
-// backToDraft makes a pull request a draft on a context that a cancel of ctx does not end, with its own time limit.
-func backToDraft(ctx context.Context, forge Forge, pr int) error {
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), draftLimit)
+// backToDraft makes a pull request a draft on a context that a cancel of ctx does not end, within limit.
+// The merge failed, so the state of the pull request is not known: GitHub can have merged it while gh was stopped.
+func backToDraft(ctx context.Context, forge Forge, pr int, limit time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), limit)
 	defer cancel()
 
 	if err := forge.SetDraft(ctx, pr, true); err != nil {
-		return fmt.Errorf("pull request #%d is still ready for review, so a person can merge a head that the round did not land. Convert it to a draft by hand: %w", pr, err)
+		return fmt.Errorf("cannot make pull request #%d a draft again after the failed merge. If it is open and ready for review, convert it to a draft by hand: %w", pr, err)
 	}
 
 	return nil

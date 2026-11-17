@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -25,7 +26,10 @@ const (
 	mergedTip = "cccccccccccccccccccccccccccccccccccccccc"
 )
 
-var errDown = errors.New("down")
+var (
+	errDown = errors.New("down")
+	errHung = errors.New("the draft call hung")
+)
 
 // world is a fake forge. ahead holds the answer of each compare ("base...head"). fail holds an error for an operation: "Op", "Op:arg" or "Op:arg#n" for the nth call.
 // A write is recorded in writes, in order. reads holds the arguments of each list and the fields of each view. A merge sets the compare of its pair to 0 and moves the tip of the target branch.
@@ -40,6 +44,7 @@ type world struct {
 	writes        []string
 	reads         []string
 	cancelOnMerge context.CancelFunc
+	hangDraft     bool
 }
 
 func newWorld() *world {
@@ -129,8 +134,17 @@ func (w *world) MergePR(ctx context.Context, pr int, sha string) error {
 	return nil
 }
 
-// SetDraft fails on a canceled context, as a gh call does.
+// SetDraft fails on a canceled context, as a gh call does. With hangDraft set, a call that makes a draft waits for the end of its context, or fails with errHung after 5 seconds.
 func (w *world) SetDraft(ctx context.Context, pr int, draft bool) error {
+	if w.hangDraft && draft {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(5 * time.Second):
+			return errHung
+		}
+	}
+
 	if err := w.failIf("SetDraft", strconv.FormatBool(draft)); err != nil {
 		return err
 	}
@@ -430,7 +444,28 @@ func TestLand_AFailedReadyOrAFailedReturnToDraftIsAnError(t *testing.T) {
 
 	require.ErrorIs(t, err, errDown)
 	require.ErrorIs(t, err, errBack)
-	assert.ErrorContains(t, err, "pull request #7 is still ready for review")
+	assert.ErrorContains(t, err, "cannot make pull request #7 a draft again after the failed merge")
+}
+
+func TestLand_TheReturnToDraftMayTake30Seconds(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, 30*time.Second, roundsync.DraftLimit)
+}
+
+func TestLand_AReturnToDraftThatHangsEndsAtItsLimit(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.fail["MergePR"] = errDown
+	w.hangDraft = true
+
+	_, err := roundsync.LandWithin(context.Background(), w, roundsync.LandRequest{PR: 7, Head: mergedTip, BaseTip: baseTip}, 20*time.Millisecond)
+
+	require.ErrorIs(t, err, errDown)
+	require.ErrorIs(t, err, context.DeadlineExceeded, "the limit ends the call, not the hang of the fake")
+	assert.NotErrorIs(t, err, errHung)
 }
 
 func TestLand_ACancelDuringTheMergeLeavesADraft(t *testing.T) {
