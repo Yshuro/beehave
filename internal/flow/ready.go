@@ -98,7 +98,7 @@ func (e *Engine) holdHead(ctx context.Context, project, item string, read review
 	}
 
 	if draftErr := e.backToDraft(ctx, project, item, read.Number); draftErr != nil {
-		return errors.Join(fmt.Errorf("put pull request %d back to draft: %w", read.Number, draftErr), err)
+		return errors.Join(draftErr, err)
 	}
 
 	if err != nil {
@@ -121,17 +121,28 @@ func (e *Engine) backToDraft(ctx context.Context, project, item string, pr int) 
 	if pr == 0 {
 		read, err := e.deps.Forge.Pull(ctx, project, item)
 		if err != nil {
-			return fmt.Errorf("cannot read the pull request of item %s to make it a draft again. If it is open and ready for review, run `gh pr ready --undo <number>`: %w", item, err)
+			return fmt.Errorf("cannot read the pull request of item %s to make it a draft again. If it is open and ready for review, convert it to a draft by hand: %w", item, err)
 		}
 
 		pr = read.Number
 	}
 
 	if err := e.deps.Watch.SetDraft(ctx, project, pr, true); err != nil {
-		return fmt.Errorf("cannot make pull request %d a draft again. If it is open and ready for review, run `gh pr ready --undo %d`: %w", pr, pr, err)
+		return fmt.Errorf("cannot make pull request %d a draft again. If it is open and ready for review, convert it to a draft by hand: %w", pr, err)
 	}
 
 	return nil
+}
+
+// mergeOrDraft merges the ready pull request. A merge that fails or is refused, or a run that the owner canceled, puts the pull request back to draft:
+// nothing watches it after the merge ends. A stop of the engine does not: the run resumes at the merge, and a draft would make the merge refuse it.
+func (e *Engine) mergeOrDraft(ctx dbos.Context, project, item, head string, settings MergeSettings) error {
+	err := e.mergeReady(ctx, project, item, head, settings)
+	if err == nil || !endsTheMerge(ctx) {
+		return err
+	}
+
+	return errors.Join(err, e.backToDraft(ctx, project, item, 0))
 }
 
 // readyStep runs markReady as the recorded step of the lifecycle. A replay reads the recorded head, so the merge pins the same head after a restart.
