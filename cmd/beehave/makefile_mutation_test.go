@@ -8,6 +8,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.yaml.in/yaml/v3"
 )
 
 // makefile returns the absolute path of the Makefile of the repository.
@@ -57,9 +58,22 @@ func TestMakefile_MutationLeavesTheWorkerCountToTheGremlinsConfig(t *testing.T) 
 func TestGremlinsConfig_SetsFourWorkers(t *testing.T) {
 	t.Parallel()
 
-	config, err := os.ReadFile(filepath.Join("..", "..", ".gremlins.yaml"))
+	config, err := os.Open(filepath.Join("..", "..", ".gremlins.yaml"))
 	require.NoError(t, err)
-	assert.Contains(t, string(config), "\nunleash:\n  workers: 4\n")
+
+	defer func() { require.NoError(t, config.Close()) }()
+
+	// Gremlins drops the whole file with no message when it cannot read it, so a line that is not YAML or a repeated key must fail here.
+	var parsed struct {
+		Unleash struct {
+			Workers int `yaml:"workers"`
+		} `yaml:"unleash"`
+	}
+
+	decoder := yaml.NewDecoder(config)
+	decoder.KnownFields(true)
+	require.NoError(t, decoder.Decode(&parsed))
+	assert.Equal(t, 4, parsed.Unleash.Workers)
 }
 
 func TestMakefile_MutationRefusesAPackagePatternWithDots(t *testing.T) {

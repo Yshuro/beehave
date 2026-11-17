@@ -153,7 +153,7 @@ check-darwin:  ## On a Mac: run the Seatbelt enforcer tests and the contract sui
 	go test -count=1 -v -run 'TestEnforcer_PassesTheContractSuite' ./internal/sandbox/seatbelt | grep -v '^=== ' | grep -q -e '--- PASS: TestEnforcer_PassesTheContractSuite' || { echo "the contract suite did not pass under the real enforcer (skipped or failed)"; exit 1; }
 	go test -count=1 ./internal/sandbox/...
 
-# Both mutation targets start 4 gremlins workers, set in .gremlins.yaml. --workers or GREMLINS_UNLEASH_WORKERS sets another count.
+# Both mutation targets start 4 gremlins workers, set in .gremlins.yaml. To change the count, edit that file.
 # Run on one package: make mutation PKG=./internal/cli
 # PKG is a folder, never a "..." pattern: gremlins reads "./internal/..." as a folder name, finds no file and passes. The target refuses such a PKG.
 mutation:
