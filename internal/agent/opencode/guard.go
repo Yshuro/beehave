@@ -24,7 +24,7 @@ var pluginTemplate string
 // The plugin refuses the call when the command exits with code 2, and on any other failure of the command.
 // The launch also closes the run: the project config, the Claude Code files and the external skills are off, no update or download runs,
 // and XDG_CONFIG_HOME names an empty folder so that no global plugin of the owner loads. OPENCODE_PURE stays unset, because it may switch off the plugin.
-// The plugin loads through the plugin interface of the versions that the profile supports, and the runner refuses any other version.
+// The plugin is proven on the 1.x plugin interface only, and the runner does not start a guarded step on a version from Profile.GuardBefore.
 // The plugin writes a marker file when it loads (Launch.Loaded); the runner sets Result.GuardMissing when the marker is missing at the end of the run.
 func (Adapter) Guard(command, runDir string) agent.Launch {
 	return launch(command, runDir)

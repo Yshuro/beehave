@@ -130,7 +130,6 @@ func TestGuard_ThePluginRunOnNodeDecidesFromTheExitCodeOfTheCheck(t *testing.T) 
 	}{
 		{"exit code 0 lets a bash call through", "0", "bash", "pass"},
 		{"exit code 2 refuses with the text of the check", "2", "bash", "refused: beehave refused: no staging"},
-		{"exit code 2 refuses a shell call of OpenCode 2.x", "2", "shell", "refused: beehave refused: no staging"},
 		{"another exit code refuses", "1", "bash", "refused: beehave refused: the check of the command failed"},
 		{"a call of another tool is never checked", "2", "read", "pass"},
 	}
