@@ -316,9 +316,9 @@ func newSkyPilotHost(project model.Project) (host.Host, error) { //nolint:iretur
 	return h, nil
 }
 
-// slurmQueue builds the Slurm queue that SkyPilot runs its jobs on.
+// slurmQueue builds the Slurm queue that SkyPilot runs its jobs on. Every job it submits ends at `host.max_run`, as on the Slurm host.
 func slurmQueue(l *link.Link, config model.HostConfig, slot skypilot.Slot) skypilot.Queue { //nolint:ireturn // SkyPilot takes the queue as a builder that returns the interface it owns
-	return slurm.New(l, config, slot)
+	return slurm.New(l, config, slot, slurm.WithLimit(config.MaxRun))
 }
 
 // newSSHHost builds the host of a machine that the owner provides. It runs no ssh: the first call to the machine is Up.

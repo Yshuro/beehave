@@ -71,7 +71,7 @@ func lostSkyPilot(t *testing.T) (host.Host, hosttest.LostJob) {
 	cfg := model.HostConfig{Provider: skypilot.Name, IdleMinutes: 60, MaxRun: 2 * time.Hour}
 
 	h, err := skypilot.New("lane-host", cfg, &proctest.Scripted{}, &proctest.Scripted{}, func(l *link.Link, config model.HostConfig, slot skypilot.Slot) skypilot.Queue {
-		return slurm.New(l, config, slot)
+		return slurm.New(l, config, slot, slurm.WithLimit(config.MaxRun))
 	})
 	require.NoError(t, err)
 
