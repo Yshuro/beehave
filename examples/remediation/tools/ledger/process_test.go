@@ -15,10 +15,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 
+	"github.com/tobocop2/beehave/examples/remediation/tools/check"
 	"github.com/tobocop2/beehave/examples/remediation/tools/ledger"
 	"github.com/tobocop2/beehave/internal/lockfile"
 )
@@ -373,6 +375,26 @@ func TestAdd_TheLedgerLockFileIsMadeAtMode0600(t *testing.T) {
 	info, err := os.Stat(filepath.Join(h.dir, ledger.LockName))
 	require.NoError(t, err)
 	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestAdd_ARowThatLandedIsReportedWhenTheLedgerLockCannotBeFreed(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	ledger.FreeWith(h.ledger, func(turn *flock.Flock) error {
+		require.NoError(t, turn.Unlock())
+
+		return errors.New("bad file descriptor")
+	})
+
+	added, err := h.ledger.Add(ledger.Request{Key: "5", Lane: "fix-1", Kind: ledger.KindFix, At: at})
+
+	var refusal *check.Refusal
+
+	require.ErrorAs(t, err, &refusal)
+	assert.Contains(t, err.Error(), "the lane is recorded in "+h.file()+", but the lock file cannot be freed: bad file descriptor.")
+	assert.Equal(t, 1, added.FixLanes, "the result of the write stays with the error")
+	assert.Equal(t, 1, h.count("5", ""), "the row landed")
 }
 
 func TestAdd_AProcessThatDiesHoldingTheLedgerLockLetsTheNextAddLand(t *testing.T) {

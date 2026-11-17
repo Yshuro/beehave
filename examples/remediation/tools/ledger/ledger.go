@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	// The driver registers itself under the name sqlite, as it does for the workflow store.
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
@@ -158,11 +159,13 @@ type Rounds struct {
 type Ledger struct {
 	path   string
 	busyMs int
+	// free releases the lock file after a write. A test replaces it to make the release fail.
+	free func(turn *flock.Flock) error
 }
 
 // Open returns the ledger in the state folder dir. The file is made by the first Add.
 func Open(dir string) *Ledger {
-	return &Ledger{path: filepath.Join(dir, FileName), busyMs: busyTimeoutMs}
+	return &Ledger{path: filepath.Join(dir, FileName), busyMs: busyTimeoutMs, free: (*flock.Flock).Unlock}
 }
 
 func refuse(format string, args ...any) error {
@@ -383,6 +386,7 @@ func mechanismOK(mechanism string) error {
 // Add records the lane unless its key already has a row for it. The first review of a key also records the issues its pull request closes.
 // The lane row and the closes go in one transaction, so a reader sees both or neither.
 // Add first waits, with no time limit, for its turn on the lock file next to the database. The kernel frees that lock when its holder ends, so a crash leaves no stale lock.
+// If the row is written and the lock file then cannot be freed, Add returns the result of the write with a refusal that says the lane is recorded.
 func (l *Ledger) Add(request Request) (Added, error) {
 	if err := request.check(); err != nil {
 		return Added{}, err
@@ -406,8 +410,9 @@ func (l *Ledger) addInTurn(request Request, numbers []string, first bool) (Added
 
 	added, err := l.addLocked(request, numbers, first)
 
-	if freed := turn.Unlock(); err == nil && freed != nil {
-		return Added{}, l.fail("free the lock of", freed)
+	if freed := l.free(turn); err == nil && freed != nil {
+		// The row is in the database, so the result stays with the error. The kernel frees the lock when this process ends.
+		return added, refuse("the lane is recorded in %s, but the lock file cannot be freed: %s. The lock frees when this process ends.", l.path, driverWords(freed))
 	}
 
 	return added, err
