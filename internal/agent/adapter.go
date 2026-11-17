@@ -55,6 +55,9 @@ type Profile struct {
 	// VersionArgs are arguments that only a CLI of the version From or later takes. The runner adds each entry whose From is at or below the version that the
 	// CLI prints, after Args and before the model. A profile with VersionArgs sets the supported range, so the version is always read.
 	VersionArgs []VersionArgs
+	// GuardBefore is the first version of the CLI whose hook of Guard is known not to refuse a command. A step with a guard does not start on that version or a
+	// later one. It needs the supported versions, so the runner reads the version. Empty means no such version is known.
+	GuardBefore string
 	// GuardPosixOnly is true when the hook of Guard needs a POSIX shell, so a run with a guard does not start on Windows.
 	GuardPosixOnly bool
 	// NoSkillCalls is true when the CLI reports no skill calls on its output, so a step that requires skills cannot be proved and does not start.

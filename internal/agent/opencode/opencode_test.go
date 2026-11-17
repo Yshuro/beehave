@@ -272,6 +272,13 @@ func TestRun_ARunNeedsAnOpenCodeVersionFrom1_19_5UpToBut3_0_0OnEveryPath(t *test
 
 				result := guardedRun(t, guarded(absolute(t, "testdata/ok.jsonl"), tc.version, true), func(s *agent.Spec) { s.Guard = guard })
 
+				if tc.starts && guard != "" && strings.HasPrefix(tc.version, "2.") {
+					assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
+					assert.Contains(t, result.Note, "the guard of forbid_commands does not work from version 2.0.0 on")
+
+					return
+				}
+
 				if tc.starts {
 					assert.Equal(t, agent.OutcomeExited, result.Outcome, result.Note)
 
@@ -284,6 +291,16 @@ func TestRun_ARunNeedsAnOpenCodeVersionFrom1_19_5UpToBut3_0_0OnEveryPath(t *test
 			})
 		}
 	}
+}
+
+func TestRun_AGuardedRunWhoseVersionCannotBeReadNamesTheRange(t *testing.T) {
+	t.Parallel()
+
+	result := guardedRun(t, guarded(absolute(t, "testdata/ok.jsonl"), "next", true), func(s *agent.Spec) {})
+
+	assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
+	assert.Contains(t, result.Note, "1.19.5 up to but not including 3.0.0")
+	assert.NotContains(t, result.Note, "forbid_commands")
 }
 
 func TestRun_ARunWhoseVersionCannotBeReadDoesNotStart(t *testing.T) {
@@ -338,6 +355,7 @@ func TestProfile_PinsTheRecordedVersionAndRefusesWhatItCannotProve(t *testing.T)
 
 	assert.Equal(t, "1.19.5", p.SupportedFrom)
 	assert.Equal(t, "3.0.0", p.SupportedBefore)
+	assert.Equal(t, "2.0.0", p.GuardBefore)
 	assert.True(t, p.GuardPosixOnly)
 	assert.True(t, p.NoSkillCalls)
 	assert.Equal(t, time.Hour, p.DefaultTimeout)

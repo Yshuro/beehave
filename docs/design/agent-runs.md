@@ -21,7 +21,8 @@ The adapter starts `opencode run --format json` and reads its event stream. The 
 A step author must know these limits:
 
 - **Supported versions.** The adapter supports OpenCode from 1.19.5 up to but not including 3.0.0. The tests hold a recording of 1.19.5 and one of 2.2.5. The runner reads `opencode --version` before every run. A version outside the range, or one that it cannot read, stops the step before it starts, and the note names the range.
-- **OpenCode 2.x runs with a private server.** From 2.0.0 the runner adds `--standalone`. Without it, OpenCode 2.x sends the run to a shared background service, and a service that another process holds on its port makes the run fail. The 2.x line names the shell tool `shell`, and the guard plugin checks calls of both names. No real 2.x run has loaded the guard plugin yet: the 2.2.5 recording is of a run with no `forbid_commands`.
+- **OpenCode 2.x runs with a private server.** From 2.0.0 the runner adds `--standalone`. Without it, OpenCode 2.x sends the run to a shared background service, and a service that another process holds on its port makes the run fail. The 2.x line names the shell tool `shell`.
+- **No `forbid_commands` on OpenCode 2.x.** In a real step on 2.2.5 the guard plugin did not refuse a command that the check forbids: the command ran and wrote its file. A step with `forbid_commands` does not start on 2.0.0 or later, and the note says so. Remove `forbid_commands` from the step, or use OpenCode 1.x.
 - **No sandbox.** A step with a sandbox does not start. Set `sandbox = None` on the step.
 - **No skill proof.** OpenCode reports no skill calls, so a step with `require_skills` does not start.
 - **A lost run starts again.** OpenCode keeps all sessions in one database and has no file for one session. The transcript path in the step output names a path that no file holds. The check before a resume finds no file, so a lost OpenCode step starts again from its note and never resumes.

@@ -100,13 +100,29 @@ func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, en
 		return unreadable(p, err, needs, ranged), ""
 	}
 
-	problems := []string{rangeProblem(p, out)}
+	problems := []string{rangeProblem(p, out), guardVersionProblem(spec, p, out)}
 
 	for _, need := range needs {
 		problems = append(problems, versionText(p, out, need))
 	}
 
 	return cmp.Or(problems...), out
+}
+
+// guardVersionProblem says why a step with a guard does not start on the version that the CLI printed, or returns "" when the step has no guard, the profile
+// names no version from which the guard fails, or the version is below it.
+func guardVersionProblem(spec Spec, p Profile, out string) string {
+	found := versionNumber.FindStringSubmatch(out)
+	if spec.Guard == "" || p.GuardBefore == "" || found == nil {
+		return ""
+	}
+
+	if semver.Compare(semverOf(found), "v"+p.GuardBefore) < 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("%s is at version %s.%s.%s, and the guard of forbid_commands does not work from version %s on, so a step with forbid_commands is not started. Remove forbid_commands from the step, or install a version below %s.",
+		p.Binary, found[1], found[2], found[3], p.GuardBefore, p.GuardBefore)
 }
 
 // versionArgs returns the arguments of the entries of Profile.VersionArgs that the version in out reaches. It returns none when out holds no version.
