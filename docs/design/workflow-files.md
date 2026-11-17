@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -243,6 +243,16 @@ The `parent` argument:
 | The pull request of `parent` is open. | The new pull request is based on the branch of the parent and linked into its native stack with `gh stack link` (the pull requests go by address, on github.com). The first link of a stack passes `--base` with the base of the call. The call reads the base of the parent pull request before and after every link. If the base moved on a new stack, the call unstacks, checks that the stack is gone, sets the base back and links again with that base. A second move, a stack that stays after the unstack, or a move on a stack that already held other pull requests fails the step. The call then reads the stack id of both pull requests, and fails unless they show one non-empty id. `stack` holds the id. |
 | The pull request of `parent` merged. | The base stays as given, and the call links nothing. |
 | `parent` has no pull request. | An error. |
+
+#### `pr_state`
+
+`pr_state(pr, name)` reads the state of the pull request with the number `pr` and returns `state`: `OPEN`, `CLOSED` or `MERGED`.
+
+- The call reads that number. It looks no pull request up by the branch of the item, so a pull request of another author on any branch and any base reads the same.
+- A `pr` below 1 is refused before any read. So is a project with no repository.
+- The read is a recorded step, so a resumed run replays the first state.
+- A read that fails ends the step with an error. A project with no forge cannot show a state, which is an error too.
+- A build with no queue reader fails the call. A dry run does not fake the read: it reports the step as not run and ends there.
 
 #### Closing keywords in posted text
 

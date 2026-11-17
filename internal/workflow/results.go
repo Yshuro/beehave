@@ -37,6 +37,7 @@ const (
 	prAssignName     = "pr_assign"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
+	prStateName      = "pr_state"
 	baseField        = "base"
 	numberField      = "number"
 	statusField      = "status"
@@ -87,7 +88,7 @@ func factsResultFields() map[string][]string {
 	}}
 }
 
-// trackerResultFields holds the fields of the builtins that write the tracker or the pull request.
+// trackerResultFields holds the fields of the builtins that write the tracker or the pull request, and of pr_state, which reads the pull request.
 func trackerResultFields() map[string][]string {
 	return map[string][]string{
 		boardSyncName:   {numberField, statusField},
@@ -99,6 +100,7 @@ func trackerResultFields() map[string][]string {
 		prAssignName:    {numberField, "issues"},
 		prCommentName:   {numberField},
 		prOpenName:      {numberField, "created", "stack"},
+		prStateName:     {"state"},
 	}
 }
 
