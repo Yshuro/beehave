@@ -121,7 +121,8 @@ func (f *Forge) SetBase(ctx context.Context, pr int, base string) error {
 	return nil
 }
 
-// AddAssignee assigns a pull request or an issue to a login. The forge keeps one entry for a login, so the same call twice changes nothing.
+// AddAssignee assigns a pull request or an issue to a login. The call adds and never replaces: "Users already assigned to an issue are not replaced."
+// https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue
 func (f *Forge) AddAssignee(ctx context.Context, number int, login string) error {
 	done := f.run.Run(ctx, []string{argAPI, "-X", "POST", "repos/" + f.repo + "/issues/" + strconv.Itoa(number) + "/assignees", "-f", "assignees[]=" + login})
 	if done.ExitCode != 0 {

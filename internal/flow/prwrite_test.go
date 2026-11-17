@@ -34,6 +34,43 @@ command(run = [str(posted.number)])
 	assert.Equal(t, []string{"7"}, h.commands.ran())
 }
 
+func TestPRWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(t *testing.T) {
+	t.Parallel()
+
+	const (
+		comment = testProject + "|" + testItem + "|" + testRun + ":take|taken"
+		assign  = testProject + "|" + testItem + "|alice|true"
+		open    = testProject + "|" + testItem + "|Fix|text|5|main|"
+		card    = testProject + "|" + testItem + "|3||5|Done"
+	)
+
+	tests := map[string]struct {
+		call, method string
+		logged       func(*fakeForge) []string
+		want         string
+	}{
+		"pr_comment": {`pr_comment(text = "taken", key = "take", name = "c")`, "comment", func(f *fakeForge) []string { return f.notes }, comment},
+		"pr_assign":  {`pr_assign(assignee = "alice", linked = True, name = "c")`, "assign", func(f *fakeForge) []string { return f.assigned }, assign},
+		"pr_open":    {`pr_open(title = "Fix", body = "text", issue = 5, base = "main", name = "c")`, "open", func(f *fakeForge) []string { return f.opened }, open},
+		"board_sync": {`board_sync(board = 3, status = "Done", issue = 5, name = "c")`, "card", func(f *fakeForge) []string { return f.placed }, card},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h, f := prHarness(t)
+			f.cardStatus = "Done"
+			deps := h.deps()
+			deps.Forge = &crashForge{forge: f, crash: newCrash(t, h), on: tt.method}
+
+			crashAndResume(t, h, deps, tt.call+"\n")
+
+			assert.Equal(t, []string{tt.want, tt.want}, tt.logged(f), "the rerun reached the forge with the key and the arguments of the first call")
+		})
+	}
+}
+
 func TestPRWrite_AssignAssignsThePullRequestAndOnlyWithLinkedItsIssues(t *testing.T) {
 	t.Parallel()
 

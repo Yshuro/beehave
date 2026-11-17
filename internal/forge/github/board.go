@@ -51,7 +51,9 @@ type boardItems struct {
 }
 
 // PlaceCard adds the pull request or issue to the board and sets the option of its Status field. gh item-add returns the existing card for an item
-// that is on the board already, and item-edit with the same option changes nothing, so the same call again is safe. The column is looked up by name before
+// that is on the board already: "If you try to add an item that already exists, the existing item ID is returned instead."
+// (https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects).
+// The item-edit half rests on the call that sets the same option, and no GitHub page states that a repeat is a no-op. The column is looked up by name before
 // any write, so a name that the board lacks is refused with the names that it has.
 func (f *Forge) PlaceCard(ctx context.Context, card model.Card) error {
 	project, field, option, err := f.columnIDs(ctx, card)
