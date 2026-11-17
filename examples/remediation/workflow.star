@@ -511,7 +511,7 @@ SYNC_REASONS = {
     "sync-conflict": "The agent did not resolve the conflict on the sync branch. Merge the branch that the sync step names into the sync branch, resolve and push.",
     "sync-refused": "The forge refused the merge for the workflow permission. Merge the trunk into the round branch by hand.",
     "sync-red": "The gate failed on the head of the sync branch. Read the gate of the sync pull request.",
-    "sync-review": "The review did not approve the sync pull request. Read its findings.",
+    "sync-review": "The review did not approve the sync pull request. Its findings are in the reply of the step sync-review of the last pass: beehave status with the run id of the round lists the steps.",
 }
 
 def sync_check(name, run):
@@ -664,7 +664,7 @@ def ready_items(q, round_settings):
 
 def round(item):
     """The round: one entry for the whole round, with one child run (the entry pipeline) for each item. `item` is the round itself, an id that no tracker row uses.
-    A pass is sync-<n> (sync_trunk), queue-audit-<n>, round-queue-<n>, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open.
+    A pass is sync-<n> (sync_trunk), queue-audit-<n>, round-queue-<n>, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
     A sync that ends with a reason holds the round: the later passes start no sync and no item, and only gather the open runs. With none open, the round waits in round-wait with the reason.
     It stops when no ready row can move and no child run is open: then it runs round-integration and waits for the owner in round-wait. CONTINUE starts another pass, which checks the trunk again.
     A STOP or the timeout returns the state waiting with the reason, an empty text when no sync held the round. When the integration pull request is merged and vars.round.next_base is set, the round cuts the next round."""

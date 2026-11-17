@@ -414,9 +414,11 @@ Four results hold the round. Each has a reason:
 | `sync-conflict` | The agent did not resolve the conflict. |
 | `sync-refused` | The forge refused the merge for the workflow permission. |
 | `sync-red` | The gate did not pass on the sync head. |
-| `sync-review` | The review did not approve the sync pull request. |
+| `sync-review` | The review did not approve the sync pull request. Its findings are in the reply of the step `sync-review-<n>`. |
 
-A held round starts no sync and no item in a later pass. It gathers and lands the child runs that are open, so it never returns while one is open. With none open, it waits in `round-wait` with a question that names the reason and what the owner does. CONTINUE starts a pass that checks the trunk again. STOP or the timeout returns `{"state": "waiting", "base": ..., "pr": ..., "reason": <reason>}`; the reason is an empty text when no sync held the round.
+A landing that ends `stale` or `head-moved` holds nothing: the same pass goes on to `queue-audit-<n>` on the round base as it is, with the folder of the round still at the sync head, and the next pass syncs again.
+
+A held round starts no sync and no item in a later pass. It gathers and lands the child runs that are open, so it never returns while one is open. A step that stops the run, such as an exit code 2 of `sync-<n>` in a later pass, ends the round with its open runs. With none open, it waits in `round-wait` with a question that names the reason and what the owner does. CONTINUE starts a pass that checks the trunk again. STOP or the timeout returns `{"state": "waiting", "base": ..., "pr": ..., "reason": <reason>}`; the reason is an empty text when no sync held the round.
 
 ### `remedy audit`
 
