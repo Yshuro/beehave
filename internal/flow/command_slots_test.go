@@ -67,17 +67,34 @@ func (j *slotJobs) order() []string {
 	return slices.Clone(j.log)
 }
 
-// nextStart returns the program of the next job that starts, and fails the test when the test ends first.
+// slotWait is the longest wait of a test for the start or the end of a job. A job that does not come ends the test with a failure at once, so the package does not wait for its own timeout.
+const slotWait = 30 * time.Second
+
+// nextStart returns the program of the next job that starts, and fails the test when no job starts within slotWait.
 func (j *slotJobs) nextStart(t *testing.T) string {
 	t.Helper()
 
 	select {
 	case program := <-j.started:
 		return program
-	case <-t.Context().Done():
-		require.FailNow(t, "the test ended before another job started")
+	case <-time.After(slotWait):
+		require.FailNow(t, "no job started in time")
 
 		return ""
+	}
+}
+
+// runEnd returns the result of a run that a test started, and fails the test when the run does not end within slotWait.
+func runEnd(t *testing.T, ended <-chan error) error {
+	t.Helper()
+
+	select {
+	case err := <-ended:
+		return err
+	case <-time.After(slotWait):
+		require.FailNow(t, "the run did not end in time")
+
+		return nil
 	}
 }
 
@@ -257,7 +274,7 @@ func TestCommand_AHostJobWaitsForAFreeSlotOfItsClass(t *testing.T) {
 	assert.Equal(t, 1, enqueuedJobs(t, engine), "the second mutation job still waits in its queue")
 
 	jobs.let("m1")
-	require.NoError(t, <-first)
+	require.NoError(t, runEnd(t, first))
 
 	assert.Equal(t, "m2", jobs.nextStart(t), "the second mutation job starts after the first ends")
 
@@ -270,7 +287,7 @@ func TestCommand_AHostJobWaitsForAFreeSlotOfItsClass(t *testing.T) {
 	endPasses()
 
 	for _, ended := range []<-chan error{second, bench, plain} {
-		require.NoError(t, <-ended)
+		require.NoError(t, runEnd(t, ended))
 	}
 }
 
@@ -302,7 +319,7 @@ func passesOfClassQueue(t *testing.T, engine *Engine, jobs *slotJobs, host *gran
 		}
 
 		for _, end := range ended {
-			require.NoError(t, <-end)
+			require.NoError(t, runEnd(t, end))
 		}
 	}
 }
@@ -347,7 +364,7 @@ func TestCommand_ACanceledSlotJobFreesItsSlotAndTheReopenWaitsOnTheQueueOfItsCla
 	assert.Equal(t, 1, entriesOf(jobs.order(), "start m1"), "the reopened job waits: the slot is held by the other job")
 
 	jobs.let("m2")
-	require.NoError(t, <-second)
+	require.NoError(t, runEnd(t, second))
 
 	assert.Equal(t, "m1", jobs.nextStart(t))
 	jobs.let("m1")
@@ -382,22 +399,29 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 	eventually(t, func() bool { return enqueuedJobs(t, first) == 1 })
 
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
-	require.Error(t, <-waiting)
+	require.Error(t, runEnd(t, ended))
+	require.Error(t, runEnd(t, waiting))
 
 	second := engineOn(t, h, deps)
 
-	assert.Equal(t, "m1", jobs.nextStart(t), "the job that ran is recovered and runs again")
+	// The recovered job and the waiting job are both queued in the class after the restart, and the engine promises no order between them: the
+	// recovery of the stopped run and the look of the queue run side by side. The promise is the limit, so the test follows the job that starts first.
+	holder := jobs.nextStart(t)
+	require.Contains(t, []string{"m1", "m2"}, holder, "a job of the class holds the slot after the restart")
+
+	waits := map[string]string{"m1": "m2", "m2": "m1"}[holder]
 
 	endPasses := passesOfClassQueue(t, second, jobs, &host, "p1", "p2", "p3")
 	host.Store("box")
 
-	assert.Equal(t, 0, entriesOf(jobs.order(), "start m2"), "the waiting job does not start while the recovered job holds the slot")
+	// m1 started once before the stop, and m2 never did.
+	startsBefore := map[string]int{"m1": 1, "m2": 0}[waits]
+	require.Equal(t, startsBefore, entriesOf(jobs.order(), "start "+waits), "the other job of the class does not start while the holder has the slot")
 
-	jobs.let("m1")
+	jobs.let(holder)
 
-	assert.Equal(t, "m2", jobs.nextStart(t))
-	jobs.let("m2")
+	require.Equal(t, waits, jobs.nextStart(t), "the other job starts after the holder ends")
+	jobs.let(waits)
 	endPasses()
 
 	for _, item := range []string{testItem, "13"} {
