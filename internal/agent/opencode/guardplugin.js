@@ -25,7 +25,7 @@ export const BeehaveGuard = async ({ directory }) => {
   return {
     // OpenCode refuses the tool call when this hook throws.
     "tool.execute.before": async (input, output) => {
-      if (input.tool !== "bash") return
+      if (input.tool !== "bash" && input.tool !== "shell") return
       const why = verdict(directory, output && output.args ? output.args.command : undefined)
       if (why !== "") throw new Error("beehave refused: " + why)
     },

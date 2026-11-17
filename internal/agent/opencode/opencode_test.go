@@ -144,6 +144,36 @@ func TestRun_AResumeNamesTheSessionInTheArguments(t *testing.T) {
 	assert.Contains(t, result.Stderr, "args=run --format json --model p/m --session ses_1")
 }
 
+func TestRun_ARunOnVersionsFrom2_0_0OnUsesAPrivateServerAndOlderRunsDoNot(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		version string
+		private bool
+	}{{"1.19.5", false}, {"1.99.99", false}, {"2.0.0", true}, {"2.2.5", true}, {"2.99.99", true}} {
+		t.Run(tc.version, func(t *testing.T) {
+			t.Parallel()
+
+			script := "#!/bin/sh\n" + answersVersion(tc.version) + "echo \"args=$*\" >&2\ncat > /dev/null\ncat '" + absolute(t, "testdata/ok-2x.jsonl") + "'\n"
+			result := guardedRun(t, script, func(s *agent.Spec) { s.Guard = "" })
+
+			assert.Equal(t, agent.OutcomeExited, result.Outcome, result.Note)
+			assert.Equal(t, tc.private, strings.Contains(result.Stderr, "args=run --format json --standalone"), result.Stderr)
+			assert.Equal(t, !tc.private, strings.Contains(result.Stderr, "args=run --format json\n"), result.Stderr)
+		})
+	}
+}
+
+func TestRun_TheRunnerSumsTheDollarsOfThe2xRecording(t *testing.T) {
+	t.Parallel()
+
+	script := "#!/bin/sh\n" + answersVersion("2.2.5") + "cat > /dev/null\ncat '" + absolute(t, "testdata/ok-2x.jsonl") + "'\n"
+	result := guardedRun(t, script, func(s *agent.Spec) { s.Guard = ""; s.MaxBudget = 1 })
+
+	assert.Equal(t, agent.OutcomeExited, result.Outcome, result.Note)
+	assert.InDelta(t, 0.0020401, result.Streamed, 1e-12)
+}
+
 func TestRun_TheRunnerAddsTheStreamedDollarsOfTheReplay(t *testing.T) {
 	t.Parallel()
 
@@ -225,14 +255,14 @@ func TestRun_ARunWithNoGuardIsNeverFlagged(t *testing.T) {
 	assert.False(t, result.GuardMissing)
 }
 
-func TestRun_ARunNeedsAnOpenCodeVersionFrom1_19_5UpToBut2_0_0OnEveryPath(t *testing.T) {
+func TestRun_ARunNeedsAnOpenCodeVersionFrom1_19_5UpToBut3_0_0OnEveryPath(t *testing.T) {
 	t.Parallel()
 
 	versions := []struct {
 		version string
 		starts  bool
 	}{
-		{"1.19.4", false}, {"1.19.5", true}, {"1.19.6", true}, {"1.99.99", true}, {"2.0.0", false}, {"2.2.5", false}, {"3.0.0", false},
+		{"1.19.4", false}, {"1.19.5", true}, {"1.19.6", true}, {"1.99.99", true}, {"2.0.0", true}, {"2.2.5", true}, {"2.99.99", true}, {"3.0.0", false}, {"3.0.1", false},
 	}
 
 	for _, guard := range []string{"", "beehave check command"} {
@@ -250,7 +280,7 @@ func TestRun_ARunNeedsAnOpenCodeVersionFrom1_19_5UpToBut2_0_0OnEveryPath(t *test
 
 				assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
 				assert.Contains(t, result.Note, "opencode is at version "+tc.version)
-				assert.Contains(t, result.Note, "It supports 1.19.5 up to but not including 2.0.0")
+				assert.Contains(t, result.Note, "It supports 1.19.5 up to but not including 3.0.0")
 			})
 		}
 	}
@@ -262,7 +292,7 @@ func TestRun_ARunWhoseVersionCannotBeReadDoesNotStart(t *testing.T) {
 	result := guardedRun(t, guarded(absolute(t, "testdata/ok.jsonl"), "next", true), func(s *agent.Spec) { s.Guard = "" })
 
 	assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
-	assert.Contains(t, result.Note, "1.19.5 up to but not including 2.0.0")
+	assert.Contains(t, result.Note, "1.19.5 up to but not including 3.0.0")
 }
 
 func TestRun_AGuardedRunOnWindowsDoesNotStart(t *testing.T) {
@@ -307,7 +337,7 @@ func TestProfile_PinsTheRecordedVersionAndRefusesWhatItCannotProve(t *testing.T)
 	p := opencode.New().Profile()
 
 	assert.Equal(t, "1.19.5", p.SupportedFrom)
-	assert.Equal(t, "2.0.0", p.SupportedBefore)
+	assert.Equal(t, "3.0.0", p.SupportedBefore)
 	assert.True(t, p.GuardPosixOnly)
 	assert.True(t, p.NoSkillCalls)
 	assert.Equal(t, time.Hour, p.DefaultTimeout)

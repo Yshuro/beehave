@@ -10,4 +10,11 @@ The timestamps are the clock of that host. The session ids are random.
 - `noguard.jsonl`: the same forbidden command with no plugin loaded. The call ran, with `state.status` `completed`, and the run exited with code 0.
 - `error.jsonl`: an unknown model. The line has a top-level `error` with `name` and `data.message`, and the run exits with code 1.
 
+## OpenCode 2.2.5
+
+`ok-2x.jsonl` and `error-2x.jsonl` are the output of `opencode run --standalone --format json --model opencode/deepseek-v4.1-flash` of OpenCode 2.2.5 (Homebrew `opencode-v2`), with the prompt on stdin, byte for byte. They come from a real, paid model.
+
+- `ok-2x.jsonl`: one shell call, then the answer. The tool is named `shell`, the call id is the `id` of the part, and the steps end with `tool-calls` and `stop`.
+- `error-2x.jsonl`: the output of the same command line with no `--standalone`, on a machine where another process held the port of the background service. The error has `type` and `message`, and the run exits with code 1.
+
 The constant `pinnedVersion` in `profile.go` names the version of the recording. Record again with a newer OpenCode before you raise it.

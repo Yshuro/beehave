@@ -262,11 +262,12 @@ func launchRun(ctx context.Context, spec Spec, p Profile, binary, runDir string,
 
 	env := envFor(spec, p, launch.Env)
 
-	if problem := versionProblem(ctx, spec, p, binary, env, version); problem != "" {
+	problem, printed := versionProblem(ctx, spec, p, binary, env, version)
+	if problem != "" {
 		return Result{Outcome: OutcomeNotStarted, Note: problem}
 	}
 
-	cmd := proc.GroupCommand(ctx, binary, argsOf(spec, p, launch), spec.Dir)
+	cmd := proc.GroupCommand(ctx, binary, argsOf(spec, p, launch, versionArgs(p, printed)), spec.Dir)
 
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(spec.Prompt)
@@ -327,10 +328,11 @@ func withSpend(result Result, counter *spendCounter) Result {
 	return result.AddNote(note)
 }
 
-// argsOf returns the arguments of the profile, then the model, the session to resume, the caps and the arguments of the launch.
+// argsOf returns the arguments of the profile, the arguments that the version reaches (later), then the model, the session to resume, the caps and the arguments of the launch.
 // A resume that opens a subcommand (Profile.ResumeLast) comes after all of them.
-func argsOf(spec Spec, p Profile, launch Launch) []string {
+func argsOf(spec Spec, p Profile, launch Launch, later []string) []string {
 	args := slices.Clone(p.Args)
+	args = append(args, later...)
 	args = append(args, editArgs(spec, p)...)
 
 	if spec.Model != "" {

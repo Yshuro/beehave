@@ -12,8 +12,12 @@ import (
 // pinnedVersion is the OpenCode version that the recorded output in testdata comes from, and the oldest version that the adapter supports.
 const pinnedVersion = "1.19.5"
 
-// firstUnsupported is the first OpenCode version that the adapter refuses: the 2.x line prints other shapes and has no recording in testdata.
-const firstUnsupported = "2.0.0"
+// firstUnsupported is the first OpenCode version that the adapter refuses: the 3.x line has no recording in testdata.
+const firstUnsupported = "3.0.0"
+
+// privateServerFrom is the first OpenCode version that runs through a shared background service unless told otherwise. The flag --standalone gives the run
+// its own server, so the environment of the run (the login folder, the guard plugin) is the one that applies.
+const privateServerFrom = "2.0.0"
 
 // stallNote names the likely cause of a run that printed nothing until its limit. With --format json, OpenCode prints no error for a model over its usage quota and retries.
 const stallNote = "OpenCode prints nothing and retries when the model is over its usage quota, which is the likely cause if the run printed no line. Check the quota of the model, or use a model with a key."
@@ -40,6 +44,7 @@ func (Adapter) Profile() agent.Profile {
 		Resume:      func(id string) []string { return []string{"--session", id} },
 		StreamsCost: true,
 
+		VersionArgs:     []agent.VersionArgs{{From: privateServerFrom, Args: []string{"--standalone"}}},
 		SupportedFrom:   pinnedVersion,
 		SupportedBefore: firstUnsupported,
 		GuardPosixOnly:  true,

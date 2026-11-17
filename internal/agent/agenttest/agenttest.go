@@ -147,6 +147,8 @@ func CheckProfile(r Reporter, adapter agent.Adapter) {
 	expect(r, len(profile.ConfigVars) > 0, "the profile has no login variable: the CLI would use the login of the caller")
 	expect(r, (profile.SupportedFrom == "") == (profile.SupportedBefore == ""),
 		"the profile sets one bound of the supported versions: set both SupportedFrom and SupportedBefore, or neither")
+	expect(r, len(profile.VersionArgs) == 0 || profile.SupportedFrom != "",
+		"the profile sets VersionArgs but no supported versions: the runner reads the version only for a profile with a range")
 }
 
 // CheckRun starts a fake CLI named by the profile, in dir, and checks what it saw: the arguments of the profile, the prompt on stdin,

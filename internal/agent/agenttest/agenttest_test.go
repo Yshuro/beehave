@@ -151,6 +151,14 @@ func TestCheckProfile(t *testing.T) {
 		{"both_bounds_of_a_range", flawed(func(p *agent.Profile) { p.SupportedFrom, p.SupportedBefore = "1.0.0", "2.0.0" }), ""},
 		{"only_the_first_supported_version", flawed(func(p *agent.Profile) { p.SupportedFrom = "1.0.0" }), rangeFailure},
 		{"only_the_first_unsupported_version", flawed(func(p *agent.Profile) { p.SupportedBefore = "2.0.0" }), rangeFailure},
+		{"version_arguments_with_a_range", flawed(func(p *agent.Profile) {
+			p.SupportedFrom, p.SupportedBefore = "1.0.0", "3.0.0"
+			p.VersionArgs = []agent.VersionArgs{{From: "2.0.0", Args: []string{"--x"}}}
+		}), ""},
+		{
+			"version_arguments_with_no_range", flawed(func(p *agent.Profile) { p.VersionArgs = []agent.VersionArgs{{From: "2.0.0", Args: []string{"--x"}}} }),
+			"the profile sets VersionArgs but no supported versions: the runner reads the version only for a profile with a range",
+		},
 		{"no_login_variable", flawed(func(p *agent.Profile) { p.ConfigVars = nil }), "the profile has no login variable: the CLI would use the login of the caller"},
 	}
 

@@ -88,6 +88,38 @@ func TestStream_ReadsTheSessionTheLastTextTheDollarsAndTheTokens(t *testing.T) {
 	assert.True(t, got.priced)
 }
 
+func TestStream_Reads2xOutputToTheSameFieldsAs1x(t *testing.T) {
+	t.Parallel()
+
+	got := read(t, fixtureLines(t, "ok-2x.jsonl"))
+
+	assert.Equal(t, "ses_e14c7a96cffe6Xr79HWn8T6FsK", got.session)
+	assert.Equal(t, "done", got.text)
+	assert.InDelta(t, 0.0020401, got.spent, 1e-12)
+	assert.Equal(t, agent.Tokens{Input: 13312, CachedInput: 6816, Output: 42}, got.usage)
+	assert.Equal(t, []string{"echo hi"}, got.commands, "OpenCode 2.x names the shell tool shell, not bash")
+	assert.Empty(t, got.refused)
+	assert.Empty(t, got.failed)
+	assert.True(t, got.result)
+	assert.True(t, got.priced)
+}
+
+func TestCalls_The2xCallIdIsTheIdOfThePart(t *testing.T) {
+	t.Parallel()
+
+	seen := opencode.New().Calls(fixtureLines(t, "ok-2x.jsonl")[1])
+
+	assert.Equal(t, []agent.Call{{ID: "call_995b1dc40d65458b85e7f4ab", Text: "echo hi"}}, seen.Shell)
+}
+
+func TestCalls_ARefusalOn2xNamesTheCallThatTheGuardRefused(t *testing.T) {
+	t.Parallel()
+
+	line := strings.Replace(fixtureLines(t, "ok-2x.jsonl")[1], `"status":"completed"`, `"status":"error","error":"beehave refused: no"`, 1)
+
+	assert.Equal(t, []string{"call_995b1dc40d65458b85e7f4ab"}, opencode.New().Calls(line).Refused)
+}
+
 func TestStream_ACutStreamHasNoResultLine(t *testing.T) {
 	t.Parallel()
 
@@ -156,6 +188,15 @@ func TestCalls_AnErrorLineSetsFailed(t *testing.T) {
 			assert.Equal(t, tc.want, opencode.New().Calls(tc.line).Failed)
 		})
 	}
+}
+
+func TestCalls_The2xErrorLineKeepsItsMessage(t *testing.T) {
+	t.Parallel()
+
+	failed := opencode.New().Calls(fixtureLines(t, "error-2x.jsonl")[0]).Failed
+
+	assert.Contains(t, failed, "Server process exited with code 1")
+	assert.Contains(t, failed, "is already in use by PID")
 }
 
 func TestCalls_AStepThatEndsInAFailureReasonFailsTheRun(t *testing.T) {

@@ -107,7 +107,7 @@ var decisions = []struct {
 	{"any other exit code refuses", `if (run.status !== 0) return "the check of the command failed"`, true},
 	{"only exit code 0 lets the call through", `return ""`, true},
 	{"a throw refuses, and never with an empty text", `return String(err && err.message ? err.message : err) || "the check of the command threw"`, true},
-	{"only the bash tool is checked", `if (input.tool !== "bash") return`, false},
+	{"only the bash tool of 1.x and the shell tool of 2.x are checked", `if (input.tool !== "bash" && input.tool !== "shell") return`, false},
 	{"the hook asks the verdict about the command of the call", `const why = verdict(directory, output && output.args ? output.args.command : undefined)`, false},
 	{"a refusal throws", `if (why !== "") throw new Error("beehave refused: " + why)`, false},
 }
@@ -169,7 +169,8 @@ func TestGuard_AMutantOfThePluginBreaksADecision(t *testing.T) {
 		{"a spawn error passes", `    if (run.error) return "the check of the command did not run"` + "\n", ""},
 		{"a throw passes", `return String(err && err.message ? err.message : err) || "the check of the command threw"`, `return ""`},
 		{"a throw with an empty text passes", ` || "the check of the command threw"`, ``},
-		{"every tool is skipped", `if (input.tool !== "bash") return`, `if (input.tool !== "bash" || true) return`},
+		{"every tool is skipped", `if (input.tool !== "bash" && input.tool !== "shell") return`, `if (input.tool !== "bash" && input.tool !== "shell" || true) return`},
+		{"the shell tool of 2.x is skipped", `if (input.tool !== "bash" && input.tool !== "shell") return`, `if (input.tool !== "bash") return`},
 		{"the hook skips the verdict", `const why = verdict(directory, output && output.args ? output.args.command : undefined)`, `const why = ""`},
 		{"the verdict never runs the guard command", `const run = spawnSync(GUARD, { shell: true, input: event, encoding: "utf8", timeout: 30000 })`, `const run = { status: 0 }`},
 		{"a refusal does not throw", `if (why !== "") throw new Error("beehave refused: " + why)`, `if (why !== "") return`},

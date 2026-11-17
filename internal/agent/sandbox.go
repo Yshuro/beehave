@@ -86,17 +86,18 @@ func rangeText(p Profile) string {
 // versionProblem runs the CLI with --version and says why the run cannot start, or returns "" when the version is in the supported range of the profile and
 // new enough for the sandbox. A CLI that ignores a sandbox setting or a hook it does not know runs with no sandbox or no guard and exits with code 0, and a
 // CLI of a line that the adapter has no recording of can print a shape that the adapter reads wrong, so an old, new or unreadable version stops the run.
-func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, env []string, version versionOf) string {
+// It also returns what the CLI printed, which is "" when the version was not read.
+func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, env []string, version versionOf) (string, string) {
 	needs := versionNeeds(spec, p)
 	ranged := p.SupportedFrom != ""
 
 	if len(needs) == 0 && !ranged {
-		return ""
+		return "", ""
 	}
 
 	out, err := version(ctx, binary, env)
 	if err != nil {
-		return unreadable(p, err, needs, ranged)
+		return unreadable(p, err, needs, ranged), ""
 	}
 
 	problems := []string{rangeProblem(p, out)}
@@ -105,7 +106,25 @@ func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, en
 		problems = append(problems, versionText(p, out, need))
 	}
 
-	return cmp.Or(problems...)
+	return cmp.Or(problems...), out
+}
+
+// versionArgs returns the arguments of the entries of Profile.VersionArgs that the version in out reaches. It returns none when out holds no version.
+func versionArgs(p Profile, out string) []string {
+	found := versionNumber.FindStringSubmatch(out)
+	if found == nil {
+		return nil
+	}
+
+	var args []string
+
+	for _, entry := range p.VersionArgs {
+		if semver.Compare(semverOf(found), "v"+entry.From) >= 0 {
+			args = append(args, entry.Args...)
+		}
+	}
+
+	return args
 }
 
 // unreadable says why a run does not start when the version of the CLI cannot be read.

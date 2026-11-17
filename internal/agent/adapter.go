@@ -9,6 +9,12 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
+// VersionArgs are arguments that a CLI takes from the version From on, such as "2.0.0".
+type VersionArgs struct {
+	From string
+	Args []string
+}
+
 // Profile is the command line and the login variables of one agent CLI. The prompt always goes on stdin.
 // ModelFlag is the flag that takes a model name. An empty flag means the CLI has no such option.
 type Profile struct {
@@ -46,6 +52,9 @@ type Profile struct {
 	// A CLI older than SupportedFrom can fail to load the hook of Guard, and then it runs every shell command with no check and exits with code 0.
 	SupportedFrom   string
 	SupportedBefore string
+	// VersionArgs are arguments that only a CLI of the version From or later takes. The runner adds each entry whose From is at or below the version that the
+	// CLI prints, after Args and before the model. A profile with VersionArgs sets the supported range, so the version is always read.
+	VersionArgs []VersionArgs
 	// GuardPosixOnly is true when the hook of Guard needs a POSIX shell, so a run with a guard does not start on Windows.
 	GuardPosixOnly bool
 	// NoSkillCalls is true when the CLI reports no skill calls on its output, so a step that requires skills cannot be proved and does not start.
