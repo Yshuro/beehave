@@ -516,8 +516,12 @@ SYNC_REASONS = {
 
 def sync_check(name, run):
     """Runs one check of `remedy sync` as the command step `name` and returns the fields of its line, with the state set.
-    Exit code 2 (a forge failure or a bad argument) stops the round with the line of the tool. A state the round does not know, or a field that its state needs and lacks, stops the run."""
-    fields = line_fields(command(name = name, run = run, stop_on_rc = [2]).stdout)
+    Exit code 2 (a forge failure or a bad argument) stops the round with the line of the tool. Any other exit code but 0, a state the round does not know, or a field that its state needs and lacks, stops the run."""
+    out = command(name = name, run = run, stop_on_rc = [2])
+    if out.rc != 0:
+        fail("REFUSE: the check %s ended with the exit code %d and the line %r. Check the remedy tool of the round, then run the round again." % (name, out.rc, out.stdout))
+
+    fields = line_fields(out.stdout)
     state = fields.get("state", "current")
     if state not in SYNC_FIELDS:
         fail("REFUSE: the line of %s has the state %r, which the round does not know. Check the remedy tool of the round, then run the round again." % (name, state))

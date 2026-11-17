@@ -34,6 +34,7 @@ type syncScript struct {
 	head   string // the head of the sync branch that a synced line names
 	tip    string // the round base tip that a synced line names
 	review string // the verdict of the sync review
+	rc     int    // the exit code of each check call
 }
 
 // syncedLine is the line of a clean sync that the fake tool prints.
@@ -137,7 +138,7 @@ func (s *syncScript) answer(land bool) CommandOutput {
 		line = s.syncedLine()
 	}
 
-	return CommandOutput{Stdout: line + "\n"}
+	return CommandOutput{Stdout: line + "\n", RC: s.rc}
 }
 
 // checkoutInRound runs git with the words in the folder of the round, as the command step of the round does.
@@ -356,7 +357,7 @@ func TestRoundSync_ALandingOnAMovedBaseGoesOnAndTheNextPassSyncsAgain(t *testing
 	}
 }
 
-func TestRoundSync_ALineTheRoundDoesNotKnowStopsTheRun(t *testing.T) {
+func TestRoundSync_ALineOrAnExitCodeTheRoundDoesNotKnowStopsTheRun(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]struct {
@@ -367,6 +368,8 @@ func TestRoundSync_ALineTheRoundDoesNotKnowStopsTheRun(t *testing.T) {
 		"landing_with_no_state": {&syncScript{lines: []string{"synced"}, land: CommandOutput{RC: 2, Stdout: "REFUSE: the forge refused the merge\n"}}, "the landing of the sync pull request 7"},
 		"synced_with_no_head":   {&syncScript{lines: []string{"state=synced branch=" + syncBranch + " pr=7"}}, "the synced line of sync-1 has no head, base_tip"},
 		"conflict_no_source":    {&syncScript{lines: []string{"state=conflict branch=" + syncBranch}}, "the conflict line of sync-1 has no source"},
+		"check_exit_one_empty":  {&syncScript{lines: []string{""}, rc: 1}, "the check sync-1 ended with the exit code 1"},
+		"check_not_found":       {&syncScript{lines: []string{""}, rc: 127}, "the check sync-1 ended with the exit code 127"},
 		"head_not_in_the_clone": {&syncScript{lines: []string{"state=synced branch=" + syncBranch + " pr=7 head=0123456789abcdef0123456789abcdef01234567 base_tip=abc"}}, "the step sync-checkout-1 could not put the folder"},
 	}
 

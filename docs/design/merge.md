@@ -403,7 +403,7 @@ The round of `examples/remediation/workflow.star` runs the sync at the start of 
 | `sync-review-<n>` | A read-only review (`prompts/sync_review.md`) pinned to the gated head. It writes the verdict `approve` or `changes`. |
 | `sync-land-<n>` | Runs `remedy sync land` pinned to the gated head and the base tip of the line. `stale` and `head-moved` land nothing, and the next pass syncs again. |
 
-A line with no `state` reads as `current`: the tool prints a state on every exit 0, and a dry run prints nothing. A state that the round does not know, or a line that lacks a field that its state needs, stops the run.
+A line with no `state` reads as `current`: the tool prints a state on every exit 0, and a dry run prints nothing. Any other exit code but 0 and 2, a state that the round does not know, or a line that lacks a field that its state needs, stops the run.
 
 Four results hold the round. Each has a reason:
 
