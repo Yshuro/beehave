@@ -276,6 +276,8 @@ type roundRig struct {
 	answers []string // the answers to the waits in order, which win over answer
 	// deadlines is the deadline of each wait that run answered, as the status showed it, in order.
 	deadlines []time.Time
+	// questions is the text of each wait that run answered, in order.
+	questions []string
 	// forge, when set, is the merger of the run in place of the land merger of the batch rig: the real merge over a forge fake.
 	forge merger
 }
@@ -495,6 +497,14 @@ func (r *roundRig) run(t *testing.T) (ItemResult, error) {
 
 	engine := r.engine(t)
 	r.last = engine
+
+	return r.runOn(t, engine)
+}
+
+// runOn is run on an engine that the test built.
+func (r *roundRig) runOn(t *testing.T, engine *Engine) (ItemResult, error) {
+	t.Helper()
+
 	done := make(chan runOutcome, 1)
 
 	go func() {
@@ -545,6 +555,7 @@ func (r *roundRig) answerOnce(t *testing.T, client *Client, owner *answering) {
 	}
 
 	r.deadlines = append(r.deadlines, infos[at].Deadline)
+	r.questions = append(r.questions, infos[at].Question)
 
 	require.NoError(t, client.AnswerAs(testItem, shipOwner, r.answerFor(owner.given)))
 
