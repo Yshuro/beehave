@@ -104,6 +104,7 @@ func ledgerUsage(errOut io.Writer) bool {
 }
 
 // ledgerCommand reads or writes the lane ledger in the state folder that --state names. A read that fails and a row that the ledger refuses are exit code 2.
+// The lines that a verb gives are printed before its error, so a row that is written but not released still shows its issues.
 func ledgerCommand(ctx context.Context, deps Deps, s streams, args []string) int {
 	verb, pos, given, ok := parseLedger(args, s.err)
 	if !ok {
@@ -111,17 +112,27 @@ func ledgerCommand(ctx context.Context, deps Deps, s streams, args []string) int
 	}
 
 	lines, err := ledgerRun(ctx, deps, verb, pos, given)
+
+	for _, line := range lines {
+		say(s.out, "%s\n", line)
+	}
+
 	if err != nil {
 		say(s.err, "remedy ledger %s: %v\n", verb, err)
 
 		return ExitRefused
 	}
 
-	for _, line := range lines {
-		say(s.out, "%s\n", line)
+	return ExitPass
+}
+
+// answer gives the line of a read that worked, and no line when the read failed, so a failed read prints no value.
+func answer(line string, err error) ([]string, error) {
+	if err != nil {
+		return nil, err
 	}
 
-	return ExitPass
+	return []string{line}, nil
 }
 
 // ledgerRun runs one verb on the ledger of the state folder and gives the lines to print. The verb is one that parseLedger checked.
@@ -134,15 +145,15 @@ func ledgerRun(ctx context.Context, deps Deps, verb string, pos []string, given 
 	case "count":
 		count, err := book.Count(pos[0], pos[1])
 
-		return []string{strconv.Itoa(count)}, err
+		return answer(strconv.Itoa(count), err)
 	case "rounds":
 		rounds, err := book.Rounds(pos[0], pos[1])
 
-		return []string{fmt.Sprintf("%d open=%t", rounds.Count, rounds.Open)}, err
+		return answer(fmt.Sprintf("%d open=%t", rounds.Count, rounds.Open), err)
 	case "prior":
 		prior, err := book.Prior(pos[0], pos[1])
 
-		return []string{strconv.Itoa(prior)}, err
+		return answer(strconv.Itoa(prior), err)
 	}
 
 	return book.Closes(pos[0])

@@ -174,6 +174,27 @@ func TestLedger_ARefusedRowIsExitCodeTwoAndWritesNothing(t *testing.T) {
 	}
 }
 
+// unfreedBook is a ledger whose add writes the row and returns the issues of the row with the refusal that the lock could not be freed.
+type unfreedBook struct{ fakeBook }
+
+func (unfreedBook) Add(ledger.Request) (ledger.Added, error) {
+	return ledger.Added{Closes: []string{"13", "14"}}, errDown
+}
+
+func TestLedger_ARowThatIsWrittenButNotReleasedPrintsItsIssuesAndIsExitCodeTwo(t *testing.T) {
+	t.Parallel()
+
+	deps := ledgerDeps(&bodyWorld{})
+	deps.Book = func(string) remedy.Book { return unfreedBook{} }
+
+	code, out, errOut := run(t, deps, "ledger", "add", "7", "rev-1", "review", "--state", "/state")
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Equal(t, "13\n14\n", out)
+	assert.Contains(t, errOut, "remedy ledger add:")
+	assert.Contains(t, errOut, errDown.Error())
+}
+
 func TestLedger_APullRequestThatCannotBeReadIsExitCodeTwo(t *testing.T) {
 	t.Parallel()
 
