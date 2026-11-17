@@ -43,7 +43,7 @@ A fix lane is a fix, a rework or a relay.
 
 ### The state folder
 
-The state folder is a flag. Every `remedy ledger` verb and `remedy scope` take `--state <folder>`. `remedy admit` takes the same flag. The ledger file is `lane-ledger.db` in that folder.
+The state folder is a flag. Every `remedy ledger` verb and `remedy scope` take `--state <folder>`. `remedy admit` takes the same flag. The ledger file is `lane-ledger.db` in that folder. A writer waits in turn on an operating system lock on `lane-ledger.lock` in the same folder, with no time limit, and a reader never takes that lock.
 
 The tool does not guess the folder from the working folder, and it reads no environment variable for it. The workflow passes the folder that it keeps for the run.
 

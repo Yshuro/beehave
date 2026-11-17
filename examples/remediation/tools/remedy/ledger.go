@@ -104,6 +104,8 @@ func ledgerUsage(errOut io.Writer) bool {
 }
 
 // ledgerCommand reads or writes the lane ledger in the state folder that --state names. A read that fails and a row that the ledger refuses are exit code 2.
+// Only add prints lines together with an error, because only add can write its row and still fail, so a row that is written but not released still shows its issues.
+// A read verb prints no line when it fails.
 func ledgerCommand(ctx context.Context, deps Deps, s streams, args []string) int {
 	verb, pos, given, ok := parseLedger(args, s.err)
 	if !ok {
@@ -111,26 +113,46 @@ func ledgerCommand(ctx context.Context, deps Deps, s streams, args []string) int
 	}
 
 	lines, err := ledgerRun(ctx, deps, verb, pos, given)
+
+	for _, line := range lines {
+		say(s.out, "%s\n", line)
+	}
+
 	if err != nil {
 		say(s.err, "remedy ledger %s: %v\n", verb, err)
 
 		return ExitRefused
 	}
 
-	for _, line := range lines {
-		say(s.out, "%s\n", line)
-	}
-
 	return ExitPass
 }
 
 // ledgerRun runs one verb on the ledger of the state folder and gives the lines to print. The verb is one that parseLedger checked.
+// Only add returns its lines straight, with its error. Every other verb is a read and goes through ledgerRead.
 func ledgerRun(ctx context.Context, deps Deps, verb string, pos []string, given ledgerFlags) ([]string, error) {
 	book := deps.Book(given.state)
 
-	switch verb {
-	case verbAdd:
+	if verb == verbAdd {
 		return ledgerAdd(ctx, deps, book, pos, given)
+	}
+
+	return ledgerRead(book, verb, pos)
+}
+
+// ledgerRead runs a read verb and gives no line when the read failed, so a failed read prints no value.
+// A read verb that is new gets this rule because it can be reached only through here.
+func ledgerRead(book Book, verb string, pos []string) ([]string, error) {
+	lines, err := readLines(book, verb, pos)
+	if err != nil {
+		return nil, err
+	}
+
+	return lines, nil
+}
+
+// readLines gives the lines of a read verb. It may give lines with an error; ledgerRead drops them.
+func readLines(book Book, verb string, pos []string) ([]string, error) {
+	switch verb {
 	case "count":
 		count, err := book.Count(pos[0], pos[1])
 

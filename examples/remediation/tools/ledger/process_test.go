@@ -15,11 +15,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gofrs/flock"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 
+	"github.com/tobocop2/beehave/examples/remediation/tools/check"
 	"github.com/tobocop2/beehave/examples/remediation/tools/ledger"
+	"github.com/tobocop2/beehave/internal/lockfile"
 )
 
 // The tests below run the ledger in separate operating system processes. The test binary starts itself as the helper:
@@ -45,7 +48,31 @@ func TestHelperProcess(t *testing.T) {
 		require.NoError(t, helperHold(t.Context(), args[1]))
 	case "crash":
 		require.NoError(t, helperCrash(t.Context(), args[1]))
+	case "hold-lock":
+		require.NoError(t, helperHoldLock(args[1]))
 	}
+}
+
+// helperHoldLock takes the ledger lock, makes the ready file, and frees the lock when the release file exists.
+func helperHoldLock(dir string) error {
+	turn := lockfile.Open(filepath.Join(dir, ledger.LockName))
+	if err := turn.Lock(); err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, readyFile), nil, 0o600); err != nil {
+		return err
+	}
+
+	for {
+		if _, err := os.Stat(filepath.Join(dir, releaseFile)); err == nil {
+			break
+		}
+
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	return turn.Unlock()
 }
 
 // helperCrash starts a write transaction that is too big for the page cache, so SQLite writes the journal and part of the file.
@@ -219,9 +246,7 @@ func TestAdd_FourProcessesAddingAtOnceGetNoErrorLoseNoRowAndDoubleNoRow(t *testi
 
 	const (
 		processes = 4
-		// Each add is a durable write that takes the file lock. The number of adds is small, so that a loaded host never holds a writer
-		// past the 30 s busy wait of the ledger: the test checks that processes share the file, not how fast it takes writes.
-		adds = 40
+		adds      = 300
 	)
 
 	h := newHarness(t)
@@ -261,6 +286,164 @@ func TestAdd_FourProcessesAddingAtOnceGetNoErrorLoseNoRowAndDoubleNoRow(t *testi
 	require.NoError(t, errors.Join(err, db.Close()))
 	assert.Equal(t, want, rows)
 	assert.Equal(t, want, names)
+}
+
+// settle is how long a test waits to show that an add has not landed. The proof of order is the lock, not this time:
+// an add that ignores the lock lands within microseconds, so it fails the test long before this time ends.
+const settle = 300 * time.Millisecond
+
+// addInBackground adds one lane in a goroutine and returns the channel that gets the error of the add.
+func addInBackground(h *harness, lane string) <-chan error {
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := h.ledger.Add(ledger.Request{Key: "5", Lane: lane, Kind: ledger.KindFix, At: at})
+		done <- err
+	}()
+
+	return done
+}
+
+// requireWaiting fails the test if the add finished before the settle time.
+func requireWaiting(t *testing.T, done <-chan error) {
+	t.Helper()
+
+	select {
+	case err := <-done:
+		require.FailNow(t, "the add did not wait for the ledger lock", "it returned %v", err)
+	case <-time.After(settle):
+	}
+}
+
+// requireLands waits up to 30 s for the add and fails the test if it errs or does not return.
+func requireLands(t *testing.T, done <-chan error) {
+	t.Helper()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(30 * time.Second):
+		require.FailNow(t, "the add did not land after the lock was freed")
+	}
+}
+
+func TestAdd_AnAddWaitsWhileTheLedgerLockIsHeldAndLandsWhenItIsReleased(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	turn := lockfile.Open(filepath.Join(h.dir, ledger.LockName))
+	require.NoError(t, turn.Lock())
+
+	done := addInBackground(h, "fix-1")
+	requireWaiting(t, done)
+	assert.Zero(t, h.count("5", ""), "the row landed while the lock was held")
+
+	require.NoError(t, turn.Unlock())
+	requireLands(t, done)
+	assert.Equal(t, 1, h.count("5", ""))
+}
+
+func TestAdd_AnAddInAnotherProcessWaitsForTheLedgerLockAndLandsWhenItIsReleased(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	cmd := helper(t, "hold-lock", h.dir)
+	require.NoError(t, cmd.Start())
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(h.dir, readyFile))
+
+		return err == nil
+	}, 30*time.Second, 5*time.Millisecond)
+
+	done := addInBackground(h, "fix-1")
+	requireWaiting(t, done)
+	assert.Zero(t, h.count("5", ""), "the row landed while the other process held the lock")
+
+	require.NoError(t, os.WriteFile(filepath.Join(h.dir, releaseFile), nil, 0o600))
+	require.NoError(t, cmd.Wait())
+	requireLands(t, done)
+	assert.Equal(t, 1, h.count("5", ""))
+}
+
+func TestAdd_TheLedgerLockFileIsMadeAtMode0600(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.add("5", "fix-1", ledger.KindFix, "")
+
+	info, err := os.Stat(filepath.Join(h.dir, ledger.LockName))
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+}
+
+func TestAdd_ARowThatLandedIsReportedWhenTheLedgerLockCannotBeFreed(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	ledger.FreeWith(h.ledger, func(turn *flock.Flock) error {
+		require.NoError(t, turn.Unlock())
+
+		return errors.New("bad file descriptor")
+	})
+
+	added, err := h.ledger.Add(ledger.Request{Key: "5", Lane: "fix-1", Kind: ledger.KindFix, At: at})
+
+	var refusal *check.Refusal
+
+	require.ErrorAs(t, err, &refusal)
+	assert.Contains(t, err.Error(), "the lane is recorded in "+h.file()+", but the lock file cannot be freed: bad file descriptor.")
+	assert.Equal(t, 1, added.FixLanes, "the result of the write stays with the error")
+	assert.Equal(t, 1, h.count("5", ""), "the row landed")
+}
+
+func TestAdd_AProcessThatDiesHoldingTheLedgerLockLetsTheNextAddLand(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+
+	cmd := helper(t, "hold-lock", h.dir)
+	require.NoError(t, cmd.Start())
+	require.Eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(h.dir, readyFile))
+
+		return err == nil
+	}, 30*time.Second, 5*time.Millisecond)
+	require.NoError(t, cmd.Process.Kill())
+	require.Error(t, cmd.Wait())
+
+	requireLands(t, addInBackground(h, "fix-1"))
+	assert.Equal(t, 1, h.count("5", ""))
+}
+
+func TestReads_AReadIsNotHeldByTheLedgerLock(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.add("5", "fix-1", ledger.KindFix, "")
+
+	turn := lockfile.Open(filepath.Join(h.dir, ledger.LockName))
+	require.NoError(t, turn.Lock())
+
+	counted := make(chan int, 1)
+
+	go func() {
+		n, err := h.ledger.Count("5", "")
+		if err != nil {
+			n = -1
+		}
+
+		counted <- n
+	}()
+
+	select {
+	case n := <-counted:
+		assert.Equal(t, 1, n)
+	case <-time.After(30 * time.Second):
+		assert.Fail(t, "the read waited for the ledger lock")
+	}
+
+	require.NoError(t, turn.Unlock())
 }
 
 func TestReads_AReaderBesideAWriterInAnotherProcessSeesNoneOrAllOfItsTransaction(t *testing.T) {
@@ -396,7 +579,7 @@ func TestErrors_AFileThatIsLockedUnreadableOrNotADatabaseIsNamedInWords(t *testi
 		require.NoError(t, err)
 
 		_, err = h.ledger.Add(ledger.Request{Key: "7", Lane: "fix-2", Kind: ledger.KindFix, At: at})
-		require.EqualError(t, err, "cannot write "+h.file()+": the ledger is locked by another process")
+		require.EqualError(t, err, "cannot write "+h.file()+": the ledger stayed locked by another process until the wait ended. Run the command again")
 
 		require.NoError(t, errors.Join(conn.Close(), db.Close()))
 	})
