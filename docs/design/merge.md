@@ -389,6 +389,33 @@ The forge does each merge, so no checkout is written, and the round branch is ne
 
 `remedy sync land --pr <number> --head <sha> --base-tip <sha>` merges the pull request with a merge commit pinned to `--head`. It lands only when the base is still at `--base-tip`. A moved base is `state=stale` and a moved head is `state=head-moved`. Both are exit code 2 and write nothing. A landing prints `state=landed`.
 
+#### The sync step of the round
+
+The round of `examples/remediation/workflow.star` runs the sync at the start of each pass, before `queue-audit-<n>` and before any spawn. The engine has no builtin for it: the sync is command steps, one agent step and a gate of the workflow.
+
+| Step | What it does |
+|---|---|
+| `sync-<n>` | Runs `remedy sync --base <round base> --trunk <base_branch>`. Exit code 2 stops the round with the line of the tool. |
+| `sync-resolve-<n>` | Runs only on `conflict`. One agent step (`prompts/sync.md`) merges `source` into the sync branch, resolves, commits the merge commit and pushes. |
+| `sync-again-<n>` | Runs `remedy sync` again after the agent. A second `conflict` ends the pass. |
+| `sync-fetch-<n>`, `sync-checkout-<n>` | Put the folder of the round at the head of a `synced` line, so the gate and the review read that head. |
+| `sync-gate-<n>` | The gate with no base: the gate command only, with no new-tests check and no mutation step. |
+| `sync-review-<n>` | A read-only review (`prompts/sync_review.md`) pinned to the gated head. It writes the verdict `approve` or `changes`. |
+| `sync-land-<n>` | Runs `remedy sync land` pinned to the gated head and the base tip of the line. `stale` and `head-moved` land nothing, and the next pass syncs again. |
+
+A line with no `state` reads as `current`: the tool prints a state on every exit 0, and a dry run prints nothing. A state that the round does not know, or a line that lacks a field that its state needs, stops the run.
+
+Four results hold the round. Each has a reason:
+
+| Reason | Cause |
+|---|---|
+| `sync-conflict` | The agent did not resolve the conflict. |
+| `sync-refused` | The forge refused the merge for the workflow permission. |
+| `sync-red` | The gate did not pass on the sync head. |
+| `sync-review` | The review did not approve the sync pull request. |
+
+A held round starts no sync and no item in a later pass. It gathers and lands the child runs that are open, so it never returns while one is open. With none open, it waits in `round-wait` with a question that names the reason and what the owner does. CONTINUE starts a pass that checks the trunk again. STOP or the timeout returns `{"state": "waiting", "base": ..., "pr": ..., "reason": <reason>}`; the reason is an empty text when no sync held the round.
+
 ### `remedy audit`
 
 `remedy audit authored <span>` and `remedy audit present <tip> <base>` run `audit`. The audit reads the merges of a range through git, with `-z` path lists.
