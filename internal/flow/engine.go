@@ -79,7 +79,8 @@ type Options struct {
 	KeepRuns bool
 	// OverCap lets the first agent step of a run take a runner that is over its usage cap when no runner has room. The step records that it did.
 	OverCap bool
-	// Progress receives one line when a run starts and one when each top-level step of a run starts and ends. A nil Progress prints nothing.
+	// Progress receives one line when a run starts and one when each top-level step of a run starts and ends.
+	// A client writes there the runs that a cancel of a canceled run stopped. A nil Progress prints nothing.
 	Progress io.Writer
 	// Mode is ModeRun or ModeServe: what beehave status says about the engine that holds the state folder. The empty value means ModeRun.
 	Mode string

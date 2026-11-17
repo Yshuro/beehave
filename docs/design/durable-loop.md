@@ -623,7 +623,7 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent3.tracker1.forge2.land3.gate1.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent3.tracker1.forge2.land3.gate2.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 
 A stored version that ends in `+star30` stands for every module at version 1. A change to the recorded steps of one builtin bumps the version of its module and no other module, so a run that never used that module still moves. The first build with module versions has a new application version, so an open run of an older build moves only with this command.
@@ -822,6 +822,8 @@ So a held `engine.lock` is always one of these:
 - A `beehave cancel` that gives back a run when no engine runs. It holds both locks for the release, so a check waits for it.
 
 The client commands that join a run, show the schedules, or cancel a run take these locks for the check only. The other client commands take none.
+
+`beehave cancel` holds `probe.lock` from the cancel of the run to the end of its release. `beehave resume`, with or without `--on-this-build`, holds it while it reads and reopens the tree of the run. DBOS commits each level of a cancel in its own transaction. Without the lock, a resume that reads the tree between two levels skips a child that is still open, and the cancel then cancels that child under the reopened run. With the lock, a resume reads the tree only before or after a cancel. A child that a resume finds open under a canceled parent belongs to a cancel that stopped, and the resume leaves it running. `beehave cancel` of the canceled run cancels it.
 
 #### The file `engine.version`
 

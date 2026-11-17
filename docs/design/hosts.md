@@ -209,7 +209,21 @@ A dropped link never submits the job again.
 | `slurm` | `ended`, when `squeue` or `sacct` names a final state after `scancel`: `succeeded`, `failed`, `canceled` or `timed_out`. A state that is not final is no proof. An empty record (`died`) is no proof, because the accounting record can come late. The exit status of `scancel` is not read. |
 | `skypilot` | No proof. The read of the cluster state is issue #401. |
 
-The key `host.lost_job_wait` is the time that the engine waits for a proof. See the host block below. No part of the engine reads the key yet.
+The key `host.lost_job_wait` is the time that the engine waits for a proof. See the host block below.
+
+#### The wait for a proof
+
+When the wait of a project gate ends as `lost`, the gate keeps its host slot and waits for a proof. It submits no second job.
+
+- The step `gate:lost-start` records the time that the wait starts.
+- Each look is one step, `gate:lost-look.<k>` from 0. A look calls `LostProof` once, then reads the clock.
+- A durable sleep of one minute comes between two looks, so a restart replays the earlier looks.
+- Each look reads `host.lost_job_wait` from the config of the engine that runs it. A project with no host block waits for the default.
+- A proof ends the wait as a void gate. `passed` is false, every step of the list is `unknown`, and the report says "the gate job was lost on <host> and the proof is <kind>". The field `host_loss` holds the job, the host, the head, the proof and the time of the look.
+- A look with no proof at or after the limit fails the gate with `ErrLost`. The error keeps the cancel command of the provider.
+- A look whose read of the proof fails fails the gate with that error.
+- If the run is canceled during the wait, the engine calls `LostProof` once more under a context that the cancel does not reach. A call with no proof is logged, because the job can still run. The wait never cancels the job: a cancel waits for the job and banks its work.
+- A build with no host reader has no proof, and the wait runs to the limit.
 
 ### Host config
 

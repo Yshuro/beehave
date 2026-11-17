@@ -92,6 +92,11 @@ func (f *fakeHosts) Teardown(ctx context.Context, project, _ string) error {
 	return host.Teardown(ctx, f.host, git, find, f.private)
 }
 
+// LostProof gives no proof: no run of these examples loses a gate job.
+func (*fakeHosts) LostProof(context.Context, string, string, string) (model.LostProof, error) {
+	return model.LostProof{}, nil
+}
+
 var _ proc.Runner = scriptRunner(nil)
 
 func TestExampleHost_ARoundStartsTheHostOnceBeforeAnyItem(t *testing.T) {
@@ -147,6 +152,10 @@ type failingHosts struct{ err error }
 func (failingHosts) Up(context.Context, string, string) (bool, string, error) { return false, "", nil }
 
 func (f failingHosts) Teardown(context.Context, string, string) error { return f.err }
+
+func (f failingHosts) LostProof(context.Context, string, string, string) (model.LostProof, error) {
+	return model.LostProof{}, f.err
+}
 
 func TestStopHost_ACanceledRunRecordsNoResultSoAResumeStopsTheHostAgain(t *testing.T) {
 	t.Parallel()
