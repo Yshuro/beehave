@@ -403,25 +403,25 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 	require.Error(t, runEnd(t, waiting))
 
 	second := engineOn(t, h, deps)
+	diagDump(t, second, "after second launch")
 
-	// The recovered job and the waiting job are both queued in the class after the restart, and the engine promises no order between them: the
-	// recovery of the stopped run and the look of the queue run side by side. The promise is the limit, so the test follows the job that starts first.
 	holder := jobs.nextStart(t)
-	require.Contains(t, []string{"m1", "m2"}, holder, "a job of the class holds the slot after the restart")
+	if holder != "m1" {
+		diagDump(t, second, "at failure")
+	}
 
-	waits := map[string]string{"m1": "m2", "m2": "m1"}[holder]
+	// The queue of the class dequeues by priority, then by the time of creation, and recovery keeps both. The recovered job was created first.
+	require.Equal(t, "m1", holder, "the job that ran is recovered and runs first")
 
 	endPasses := passesOfClassQueue(t, second, jobs, &host, "p1", "p2", "p3")
 	host.Store("box")
 
-	// m1 started once before the stop, and m2 never did.
-	startsBefore := map[string]int{"m1": 1, "m2": 0}[waits]
-	require.Equal(t, startsBefore, entriesOf(jobs.order(), "start "+waits), "the other job of the class does not start while the holder has the slot")
+	require.Equal(t, 0, entriesOf(jobs.order(), "start m2"), "the waiting job does not start while the recovered job holds the slot")
 
-	jobs.let(holder)
+	jobs.let("m1")
 
-	require.Equal(t, waits, jobs.nextStart(t), "the other job starts after the holder ends")
-	jobs.let(waits)
+	require.Equal(t, "m2", jobs.nextStart(t), "the waiting job starts after the recovered job ends")
+	jobs.let("m2")
 	endPasses()
 
 	for _, item := range []string{testItem, "13"} {
