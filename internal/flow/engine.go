@@ -504,10 +504,17 @@ func (e *Engine) oldRuns() ([]string, error) {
 // The item belongs to the project from this call on; an open run under another project is refused.
 // The run pins the SHA-256 of the file, and a replay refuses a changed file.
 func (e *Engine) RunFile(item, project, file string) (ItemResult, error) {
+	return e.runEntry(item, project, file, "")
+}
+
+// runEntry runs the pinned file for the item at the named entry. An empty entry runs main.
+func (e *Engine) runEntry(item, project, file, entry string) (ItemResult, error) {
 	in, err := pinnedInput(item, project, file)
 	if err != nil {
 		return ItemResult{}, err
 	}
+
+	in.Entry = entry
 
 	return e.run(in)
 }

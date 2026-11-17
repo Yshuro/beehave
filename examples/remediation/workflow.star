@@ -48,41 +48,23 @@ def rank(rows, me):
 # The review loop reads the violations of the latest run of the implementer: a hit sends the run back to a fix round.
 FORBID = ["bulk-staging", "local-delete", "remote-delete", "opaque-command", "git-author", "git-bypass", "env-override", "config-read", "protected-path", "zsh-expansion", "laptop-copy"]
 
-# The agent works in the worktree of the item and must not write in the checkout of the owner. The environment variable SOURCE_CHECKOUT names that checkout.
+# The agent works in the worktree of the item and must not write in the checkout of the owner. The setting vars.round.source_checkout names that checkout.
 # The kind protected-path refuses a write there, and a git command there that is not a read. A command that reads the checkout passes.
-def protected():
-    return [env("SOURCE_CHECKOUT")]
+def protected(round_settings):
+    if round_settings["source_checkout"] == "":
+        return []
 
-def lane_scope():
+    return [round_settings["source_checkout"]]
+
+def lane_scope(round_settings):
     """Returns the allow_paths setting of the lane, as a dict to pass with `**`.
-    The environment variable LANE_KIND names the kind of lane: impl (the default), papers or design.
-    An impl lane may change any path. A papers or design lane may change only the globs in ALLOW_PATHS, split by spaces.
+    The setting vars.round.lane_kind names the kind of lane: impl (the default), papers or design. The settings function refuses any other kind, and a papers or design round with no allow_paths.
+    An impl lane may change any path. A papers or design lane may change only the globs in vars.round.allow_paths.
     The implement step and every fix step fail, and the message names each path outside the globs, when they change another path."""
-    kind = env("LANE_KIND", default = "impl")
-    if kind == "impl":
-        return {}
+    if round_settings["lane_kind"] in ["papers", "design"]:
+        return {"allow_paths": round_settings["allow_paths"]}
 
-    if kind not in ["papers", "design"]:
-        fail("REFUSE: LANE_KIND is %r. The kinds are impl, papers or design" % kind)
-
-    globs = env("ALLOW_PATHS", default = "").split()
-    if len(globs) == 0:
-        fail("REFUSE: a %s lane changes no source path, so ALLOW_PATHS must list the globs it may change, split by spaces" % kind)
-
-    return {"allow_paths": globs}
-
-# The most fix lanes that one pull request gets. The review loop runs one more pass than it: the last pass reviews the last fix.
-# The environment variable PATCH_ROUNDS can lower the cap for a run. It cannot raise it.
-MAX_PATCH_ROUNDS = 5
-
-def patch_rounds():
-    """Returns the number of fix lanes that one pull request gets: the value of PATCH_ROUNDS from 1 to MAX_PATCH_ROUNDS, and MAX_PATCH_ROUNDS when it is not set.
-    A value that is not a whole number in that range stops the run before any agent starts."""
-    text = env("PATCH_ROUNDS", default = str(MAX_PATCH_ROUNDS))
-    if not text.isdigit() or int(text) < 1 or int(text) > MAX_PATCH_ROUNDS:
-        fail("REFUSE: PATCH_ROUNDS is %r. Use a whole number from 1 to %d: the fix lanes that one pull request gets" % (text, MAX_PATCH_ROUNDS))
-
-    return int(text)
+    return {}
 
 # The settings of a round are the dict `round` of the project file vars: vars = {"round": {...}}. Each key has its type and the fix that a refusal names.
 ROUND_KEYS = {
@@ -202,11 +184,11 @@ def _round_selector(block, got):
             _round_refuse("items", "lists %r. Write an item id: a number, or a beads id such as bd-12." % item)
 
 def settings(project):
-    """Returns the settings of the round as a dict, with the default of each key that the project vars leave out, or None when the project vars hold no `round`.
-    The engine reads no setting. This function is the one check of them: it refuses a missing key, a key of the wrong type, a value out of range and a key that is no setting,
-    each with a message that names the key and the fix. `project` is the value of facts()."""
+    """Returns the settings of the round as a dict, with the default of each key that the project vars leave out.
+    The engine reads no setting. This function is the one check of them: it refuses project vars with no `round`, a missing key, a key of the wrong type, a value out of range and a key that is no setting,
+    each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
     if "round" not in project.vars:
-        return None
+        fail("REFUSE: the project vars hold no round. Add the settings of the round to the project file: vars = {\"round\": {\"base\": \"integration/r2\", \"owner\": \"your-login\", \"lane_cap\": 4, \"fix_rounds\": 5, \"label\": \"beehave-round\"}}.")
 
     block = project.vars["round"]
     if type(block) != "dict":
@@ -264,21 +246,22 @@ def regression_rise(start, end):
 
 def mutation_command(project):
     """Returns the mutation command of the project: the list of words in the key mutation_command of its vars. The key is required, and the run is refused before any agent starts when it is missing or is not a list of words.
-    The command runs on the build host in the slot class mutation. The workflow adds one word at the end, the base ref (origin/<BASE>), so the command mutates only the lines that differ from it."""
+    The command runs on the build host in the slot class mutation. The workflow adds one word at the end, the base ref (origin/ and vars.round.base), so the command mutates only the lines that differ from it."""
     words = project.vars.get("mutation_command")
     if type(words) != "list" or len(words) == 0 or [w for w in words if type(w) != "string" or w == ""] != []:
         fail("REFUSE: vars.mutation_command of the project file is %r. Set it to the command that runs the mutation tool, a list of words such as [\"sh\", \"scripts/mutation-pr.sh\"]. See docs/design/workflow-files.md, the mutation step" % (words,))
 
     return words
 
-def check_mutation(words):
+def check_mutation(words, base):
     """Runs the mutation command of the project on the build host, in the slot class mutation, and returns the findings as text. An empty text means the head is clean.
+    `base` is vars.round.base: the last word of the command is origin/<base>.
     The command prints one finding per line, such as finding: path/file.go:12: a mutant lived: ARITHMETIC_BASE, and exits with a code other than 0 when the run fails.
     A run that applied no mutant is a failed run: the command says so itself. A diff that holds nothing to mutate exits with 0, as "not applicable" or "no candidate".
     Exit code 0 is a pass, and its output is ignored.
     The output of a failed host job is the end of its log, so it holds the noise of the tool too. A failed run gives each line that starts with "finding: " as one finding, without the prefix.
     A failed run with no such line gives each non-blank line, the last 20 at most, as one finding. A failed run that printed no line gives one finding with its exit code."""
-    run = command(name = "mutation", run = words + ["origin/" + env("BASE")], host = "build", slots = "mutation")
+    run = command(name = "mutation", run = words + ["origin/" + base], host = "build", slots = "mutation")
     if run.rc == 0:
         return ""
 
@@ -317,7 +300,7 @@ def severity_problem(severity, operator):
 
 FINDING_FIELDS = ["id", "title", "body", "found", "severity", "operator"]
 
-def changelog_missing(changelog, head, id, fetch = False):
+def changelog_missing(changelog, base, head, id, fetch = False):
     """Returns the reason to refuse a change, or "" when it may merge: the project declares a changelog and the change from the base to `head` does not touch that file.
     A project that declares none passes. The paths come from git in the folder of the item. Both merge paths call this, so the rule has one place.
     `fetch` is true for a head that may not be in the folder yet (the members of a batch): the head is fetched before it is read."""
@@ -329,7 +312,7 @@ def changelog_missing(changelog, head, id, fetch = False):
         if got.rc != 0:
             return "REFUSE: the head %s of item %s could not be fetched, so the changelog %s could not be checked: %s" % (head, id, changelog, got.stderr.strip())
 
-    paths = command(name = "changed-paths-" + id, run = ["git", "diff", "--name-only", "origin/" + env("BASE") + "..." + head], stop_on_rc = [2])
+    paths = command(name = "changed-paths-" + id, run = ["git", "diff", "--name-only", "origin/" + base + "..." + head], stop_on_rc = [2])
     if paths.rc != 0:
         return "REFUSE: the changed paths of item %s could not be read, so the changelog %s could not be checked: %s" % (id, changelog, paths.stderr.strip())
 
@@ -382,38 +365,35 @@ def file_parked(parked):
             forbid_text = ATTRIBUTION,
         )
 
-def land(item, pins):
-    """Lands the ready items as one batch: one gate run on the union of their heads, and a split of the union when the gate is red.
-    Each entry of `pins` is id=sha: the item and the full SHA the owner reviewed, as EXPECT_HEAD is for one item.
-    The MERGE switch, the stops before the work and the guards are those of the pipeline of one item. The branch of each pull request has the id of its item."""
-    if env("MERGE") != "true":
+def land(approved, project, round_settings, n):
+    """Lands the approved items of a pass as one batch named round-land-<n>: one gate run on the union of their heads, and a split of the union when the gate is red.
+    Each entry of `approved` has an item id, the full SHA that the review approved, and the verdict of the child run (`approved`). Each member of the batch carries that verdict, so our own pull request
+    lands only on the approval of its own review, and the approval of one member never reaches another. The setting vars.round.merge, the stops before the work and the guards are those of the pipeline of one item.
+    The branch of each pull request has the id of its item. Each item that the batch merged is recorded with record_merge."""
+    if not round_settings["merge"]:
         return
 
-    project = facts()
+    base = round_settings["base"]
     prs = []
     stopped = []
 
-    for pin in pins:
-        pair = pin.split("=")
-        if len(pair) != 2 or pair[0] == "" or pair[1] == "":
-            fail("LAND entry %r is not id=sha. Give the full SHA that the owner reviewed for each item" % pin)
-
-        id, head = pair[0], pair[1]
+    for entry in approved:
+        id, head = entry.item, entry.head
 
         # The stops of the pipeline of one item, for each item: merged, closed, branch gone, hold, draft, base, and a head that is not the reviewed one.
         # An item that stops is reported with its reason, and the other items still land.
-        check = preflight(name = "intake-" + id, id = id, head = head, base = env("BASE"), hold = "hold", own = {"logins": [env("OWNER_LOGIN")]})
+        check = preflight(name = "intake-" + id, id = id, head = head, base = base, hold = "hold", own = {"logins": [round_settings["owner"]]})
         if not check.ok:
             stopped.append(struct(item = id, reason = check.reason))
             continue
 
         # A project that declares a changelog lands no item without an entry, as the merge of one item does.
-        missing = changelog_missing(project.changelog, head, id, fetch = True)
+        missing = changelog_missing(project.changelog, base, head, id, fetch = True)
         if missing != "":
             stopped.append(struct(item = id, reason = missing))
             continue
 
-        prs.append(struct(item = id, head = head))
+        prs.append(struct(item = id, head = head, approved = entry.approved))
 
     for skipped in stopped:
         item_comment(name = "stop-" + skipped.item, id = skipped.item, key = "rejected", text = skipped.reason, forbid_text = ATTRIBUTION)
@@ -423,14 +403,14 @@ def land(item, pins):
         return
 
     out = batch_merge(
-        name = "land",
+        name = "round-land-%d" % n,
         prs = prs,
-        base = env("BASE"),
-        repo = env("REPO"),
+        base = base,
+        repo = project.repo,
         hold = "hold",
-        own = {"logins": [env("OWNER_LOGIN")], "emails": [env("OWNER_EMAIL")]},
+        own = {"logins": [round_settings["owner"]], "emails": [round_settings["owner_email"]]},
         forbid_text = ATTRIBUTION + id_patterns([pr.item for pr in prs]),
-        integration = int(env("INTEGRATION_PR", default = "0")),
+        integration = round_settings["integration_pr"],
     )
 
     # A rejected item gets the reason as a comment and the hold status, so it does not come back until a person reads it.
@@ -439,14 +419,15 @@ def land(item, pins):
         item_status(name = "hold-" + rejected.item, id = rejected.item, status = "hold")
 
     # Each merged item moves its card to the merged column, as the pipeline of one item does. The item ids of a project with a board are issue numbers.
+    heads = {entry.item: entry.head for entry in approved}
     for landed in out.merged:
         _move_card(project, "merged", int(landed))
+        record_merge(landed, heads[landed], base)
 
-    # The read of the issues after the batch. A note means the read did not run, which is not a pass: the owner sees it as a comment.
+    # The read of the issues after the batch. A note means the read did not run, which is not a pass: the round prints it in the run record, because the round has no item issue for a comment.
     # A finding stops the run. The batch has landed, so the owner fixes the state of the issues by hand.
     if out.note != "":
         print("the issue check did not run: " + out.note)
-        item_comment(name = "issue-check", id = item.id, key = "issue-check", text = "the issue check did not run: " + out.note, forbid_text = ATTRIBUTION)
 
     # A merged item named in unproven is not on the base, and not on the vehicle commit. The owner reads the lines before any issue closes.
     if len(out.unproven) > 0:
@@ -455,41 +436,15 @@ def land(item, pins):
     if len(out.findings) > 0:
         fail("REFUSE: the batch landed, but the issues are not as they must be. Fix the state of each issue by hand:\n" + "\n".join(out.findings))
 
-def sweep(item):
-    """Starts the ready items in the order of the queue, up to the free slots, and waits for the runs.
-    QUEUE_SWEEP="true" selects this pass. The queue is read again here, so a pull request that arrived since the last pass shows in the order.
-    The runs are the pipeline of one item each. The rank rule is above.
-    A project whose vars hold a `round` reads the settings of the round first and queues only the items that its label or its item list selects. Another project queues every item."""
-    # The run of the sweep claims the item id it is given, as every run does. That is wanted: the claim lets only one pass run for that id, so two passes cannot start the same items twice. Give the sweep an id that is no real item.
-    # The label is the one selector the engine applies, because the rows hold no labels. The item list is applied here, to the rows.
-    label = ""
-    listed = []
-    round = settings(facts())
-    if round != None:
-        label = round["label"]
-        listed = round["items"]
-
-    q = queue(name = "sweep-queue", hold = "hold", label = label)
-    rows = [r for r in q.rows if len(listed) == 0 or r.item in listed]
-    take = [r.item for r in rank(rows, env("OWNER_LOGIN"))][:q.free]
-    if len(take) == 0:
-        return
-
-    gather(spawn(items = take, entry = "pipeline", name = "sweep-spawn").runs, name = "sweep-gather")
-
-def take_over(item, pr):
+def take_over(item, pr, author, project, round_settings):
     """Takes over the pull request `pr` of somebody else, in this order: the review, the notice, the grace period, the take.
+    No entry calls it yet: the foreign path of the pipeline (M2 PR 9) does. `author` is the author of the pull request, from the queue row.
     1. A review agent posts the findings as a changes-requested review. The notice is refused until the review is on the pull request.
     2. The tool posts the notice that asks the author for an answer, and refuses when the pull request is not stale (IDLE_HOURS) or is ours.
-    3. The grace period (GRACE_HOURS) is a clock rule: the author has that long to answer KEEP or RELEASE. KEEP stops the item. RELEASE or no answer when the time is over goes on to the take. TAKE_AUTHOR names the author.
+    3. The grace period (GRACE_HOURS) is a clock rule: the author has that long to answer KEEP or RELEASE. KEEP stops the item. RELEASE or no answer when the time is over goes on to the take.
     4. The tool takes the pull request only when no one forbade it. It checks the clock itself as a second guard, and a take with replies that carry neither token is refused: the item then holds with the reason of the tool, and a person reads the replies.
     The run of the item holds the claim, so the take writes none. A refusal of the tool (exit code 2) ends the item with the lines it printed."""
-    me = env("OWNER_LOGIN")
-    author = env("TAKE_AUTHOR")
-    base = ["remedy", "take", pr, "--me", me, "--idle", IDLE_HOURS, "--grace", GRACE_HOURS, "--item", item.id]
-
-    # This run is the take-over run, so this is its one read of the facts, before its one agent.
-    project = facts()
+    base = ["remedy", "take", pr, "--me", round_settings["owner"], "--idle", IDLE_HOURS, "--grace", GRACE_HOURS, "--item", item.id]
 
     agent(
         name = "take-review",
@@ -516,117 +471,143 @@ def take_over(item, pr):
 
     command(name = "take-claim", run = base + ["--take"], stop_on_rc = [2])
 
-def _count(line, name):
-    """Returns the number after `name=` in a line of the recount tool. A line with no such figure fails the step: an unknown count never turns the assert off."""
-    for word in line.split():
-        if word.startswith(name + "=") and word[len(name) + 1:].isdigit():
-            return int(word[len(name) + 1:])
-
-    fail("REFUSE: the line of recount-before has no `%s=<n>` figure, so the step cannot assert that the count moved. The line is %r" % (name, line))
-
-def record_merge(item, merged):
-    """Records the merge of the pull request `merged` in the integration pull request: its row, a closing row for each issue it resolves, the recount of the heading and the title, and the close of each resolved issue with the evidence.
-    INTEGRATION_PR names the integration pull request. "0" or "none" means the round tracks no rows, and the step does nothing. CLOSES lists the issues that the merge resolves, split by spaces.
-    The recount tool reads the pull request before and after the agent. It fails the step when the heading or the title says another number than the rows, when the row count did not change, and, when CLOSES is not empty, when the issue count did not change.
-    The method never uses the merge queue of GitHub: the merge step above runs one pinned merge of the head."""
-    integration = env("INTEGRATION_PR", default = "0")
-    if integration in ["0", "none", ""]:
-        return
-
-    closes = env("CLOSES", default = "")
-    before = command(name = "recount-before", run = ["remedy", "recount", "--pr", integration], stop_on_rc = [2])
-
-    # A before-line with no figure fails here, before the agent runs: the assert after it never runs without a known count.
-    was = ["--was-rows", str(_count(before.stdout, "rows"))]
-    if closes != "":
-        was += ["--was-issues", str(_count(before.stdout, "issues"))]
-
-    # This run is the integration run, so this is its one read of the facts, before its one agent.
-    project = facts()
-
-    agent(
-        name = "integrate",
-        prompt = "prompts/integrate.md",
-        model = "sonnet",
-        edits = False,
-        sandbox = sandbox(network = ["github.com", "api.github.com"]),
-        inputs = {"item": item, "pr": merged, "integration": integration, "closes": closes if closes != "" else "none", "facts": project},
+def record_merge(id, head, base):
+    """Closes the issue of the item `id` that a batch merged into the round branch `base`, with the evidence: a comment, then the status closed. The tracker builtins do both,
+    so the close does not depend on an agent, on the gh tool or on an integration pull request that exists (vars.round.integration_pr may be 0).
+    The count rows of the integration pull request are written by round_integration, not here."""
+    item_comment(
+        name = "merged-" + id,
+        id = id,
+        key = "merged",
+        text = "Merged into %s at %s. The gate passed at that head and the review approved it." % (base, head),
+        forbid_text = ATTRIBUTION + id_patterns([id]),
     )
+    item_status(name = "closed-" + id, id = id, status = "closed")
 
-    command(name = "recount-after", run = ["remedy", "recount", "--pr", integration] + was, stop_on_rc = [1, 2])
+def round_integration(project, round_settings):
+    """Finds or creates the integration pull request from the round branch into the trunk, and returns its number and state.
+    The tool `remedy integration` uses vars.round.integration_pr when it is not 0, and prints `pr=<n> state=<state>`. The tool counts the rows of the table itself, with the count rules of `remedy recount`."""
+    out = command(
+        name = "round-integration",
+        run = ["remedy", "integration", "--base", round_settings["base"], "--into", project.base_branch, "--pr", str(round_settings["integration_pr"])],
+        stop_on_rc = [2],
+    )
+    fields = {}
+    for word in out.stdout.split():
+        pair = word.split("=", 1)
+        if len(pair) == 2:
+            fields[pair[0]] = pair[1]
 
-def next_round(item):
-    """Cuts the next round after the last pull request of the old round merged. NEXT_BASE names the new round branch. BASE is the old one, and INTEGRATION_PR is the integration pull request.
+    if not fields.get("pr", "").isdigit():
+        fail("REFUSE: the line of round-integration has no `pr=<n>` figure. The line is %r" % out.stdout)
+
+    return struct(pr = int(fields["pr"]), merged = fields.get("state", "") == "MERGED")
+
+def next_round(project, round_settings, pr):
+    """Cuts the next round after the integration pull request `pr` of the old round merged. vars.round.next_base names the new round branch. vars.round.base is the old one.
+    `pr` is the number that round_integration returned, so a round with vars.round.integration_pr 0 cuts with the pull request that the tool found.
     The cut tool refuses while the integration pull request is not merged (exit code 2), so no round starts before the one before it ended."""
     command(
-        name = "next-round",
-        run = ["remedy", "cut", "--old", env("BASE"), "--new", env("NEXT_BASE"), "--pr", env("INTEGRATION_PR"), "--trunk", env("TRUNK", default = "main")],
+        name = "round-cut",
+        run = ["remedy", "cut", "--old", round_settings["base"], "--new", round_settings["next_base"], "--pr", str(pr), "--trunk", project.base_branch],
         stop_on_rc = [2],
     )
 
-def record_base_reds(item):
-    """Writes the one record of the known base reds: the reds that BASE_REDS lists (split by spaces), the time and the tip of the base. Each new write replaces the file, so the file holds one record.
-    BASE_REDS_FILE names the file (base-reds.md by default). The prompts tell each lane to read this file and not to copy the list."""
-    tip = command(name = "base-tip", run = ["git", "rev-parse", "origin/" + env("BASE")], stop_on_rc = [2]).stdout.strip()
-    reds = env("BASE_REDS").split()
-    text = "# Known base reds\n\nMeasured at %s on the tip %s of %s.\n\n%s\n" % (now(), tip, env("BASE"), "\n".join(["- " + red for red in reds]))
+def record_base_reds(round_settings):
+    """Writes the one record of the known base reds: the reds of vars.round.base_reds, the time and the tip of the base. Each new write replaces the file, so the file holds one record.
+    vars.round.base_reds_file names the file. The prompts tell each lane to read this file and not to copy the list."""
+    base = round_settings["base"]
+    tip = command(name = "base-tip", run = ["git", "rev-parse", "origin/" + base], stop_on_rc = [2]).stdout.strip()
+    text = "# Known base reds\n\nMeasured at %s on the tip %s of %s.\n\n%s\n" % (now(), tip, base, "\n".join(["- " + red for red in round_settings["base_reds"]]))
 
-    write(name = "base-reds", run = ["tee", env("BASE_REDS_FILE", default = "base-reds.md")], stdin = text)
+    write(name = "base-reds", run = ["tee", round_settings["base_reds_file"]], stdin = text)
 
-def round_step(item):
-    """Runs the round step that the environment names and returns True, or returns False when no round step is named.
-    ROUND_STEP names the step, so a run with no round step reads one variable: "merge" runs record_merge for the pull request in MERGED_PR, "cut" runs next_round, and "reds" runs record_base_reds."""
-    step = env("ROUND_STEP", default = "")
-    if step == "":
-        return False
+# A bound for the loop of the round, because Starlark has no while. A pass ends one run or starts one, so the bound is far above the work of any real round.
+MAX_PASSES = 500
 
-    if step == "merge":
-        record_merge(item, env("MERGED_PR"))
-    elif step == "cut":
-        next_round(item)
-    elif step == "reds":
-        record_base_reds(item)
-    else:
-        fail("REFUSE: ROUND_STEP is %r. The steps are merge, cut or reds" % step)
+def queue_audit(item, project, round_settings, n):
+    """Runs the agent step queue-audit-<n> before the queue read of the pass and before every spawn, also when the queue is empty."""
+    agent(
+        name = "queue-audit-%d" % n,
+        prompt = "prompts/queue.md",
+        model = "sonnet",
+        edits = False,
+        kind = "review",
+        sandbox = sandbox(network = ["github.com", "api.github.com"]),
+        inputs = {"item": item, "pass": n, "base": round_settings["base"], "facts": project},
+    )
 
-    return True
+def ready_items(q, round_settings):
+    """Returns the ids of the rows of the queue `q` that this pass may start, in the order of the rank rule, up to the free slots and vars.round.lane_cap.
+    The queue read applies vars.round.label, because the rows hold no labels. The item list vars.round.items is applied here, to the rows."""
+    listed = round_settings["items"]
+    rows = [r for r in q.rows if len(listed) == 0 or r.item in listed]
+    return [r.item for r in rank(rows, round_settings["owner"])][:min(q.free, round_settings["lane_cap"])]
+
+def round(item):
+    """The round: one entry for the whole round, with one child run (the entry pipeline) for each item. `item` is the round itself, an id that no tracker row uses.
+    A pass is queue-audit-<n>, round-queue-<n>, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open.
+    It stops when no ready row can move and no child run is open: then it runs round-integration and waits for the owner in round-wait. CONTINUE starts another pass.
+    A STOP or the timeout returns the state waiting. When the integration pull request is merged and vars.round.next_base is set, the round cuts the next round."""
+    project = facts()
+    round_settings = settings(project)
+
+    # The round starts its host once. The child entry pipeline calls no host builtin, so a child cannot stop it. finish stops it.
+    host_up(name = "round-host", host = project.build_host)
+    record_base_reds(round_settings)
+
+    runs = []
+    approved = []
+
+    for n in range(1, MAX_PASSES + 1):
+        queue_audit(item, project, round_settings, n)
+        q = queue(name = "round-queue-%d" % n, hold = "hold", label = round_settings["label"])
+        take = ready_items(q, round_settings)
+        if len(take) > 0:
+            runs = runs + spawn(items = take, entry = "pipeline", name = "round-spawn-%d" % n).runs
+
+        if len(runs) > 0:
+            ended = gather(runs, until = "any", name = "round-gather-%d" % n).results
+            ended_items = [e.item for e in ended]
+            runs = [r for r in runs if r.item not in ended_items]
+            for result in ended:
+                if result.ok and result.value != None and result.value["approved"]:
+                    approved.append(struct(item = result.item, head = result.value["head"], approved = result.value["approved"]))
+
+            if len(approved) > 0:
+                land(approved, project, round_settings, n)
+                approved = []
+
+            continue
+
+        # No ready row can move and no child run of this round is open.
+        integration = round_integration(project, round_settings)
+        answer = wait(
+            "The round has no item it can move. Read the integration pull request %d and answer." % integration.pr,
+            name = "round-wait",
+            timeout = "%dh" % round_settings["wait_hours"],
+            to = [round_settings["owner"]],
+            choices = ["CONTINUE", "STOP"],
+        )
+        if answer.timed_out or answer.answer == "STOP":
+            return {"state": "waiting", "base": round_settings["base"], "pr": integration.pr}
+
+        if integration.merged and round_settings["next_base"] != "":
+            next_round(project, round_settings, integration.pr)
+            return {"state": "cut", "base": round_settings["next_base"]}
+
+    return {"state": "waiting", "base": round_settings["base"], "pr": 0}
 
 def main(item):
-    # QUEUE_SWEEP="true" runs one pass over the queue and starts no host: each run it starts is the pipeline of one item.
-    if env("QUEUE_SWEEP", default = "") == "true":
-        sweep(item)
-        return
-
-    # TAKE_PR names a pull request of somebody else to take over. The run does the take-over steps and then stops.
-    pr = env("TAKE_PR", default = "")
-    if pr != "":
-        take_over(item, pr)
-        return
-
-    # ROUND_STEP names a step of the round: the record of a merge, the cut of the next round, or the record of the base reds.
-    if round_step(item):
-        return
-
-    # HOST_UP="true" launches the build host when it is absent. Without it the run starts no host, so a run that needs none costs nothing.
-    # A project with no host, or a host that is already up, starts nothing. The host deletes itself when idle (host.idle_minutes).
-    # BUILD_HOST names the cluster of this run: one of the clusters that build_host of the project declares. Without it the run uses the first one, the default.
-    # host_up records the cluster. The gate, the command steps with a host and host_teardown all use that one. A second run on its own host sets another BUILD_HOST.
-    if env("HOST_UP", default = "") == "true":
-        host_up(name = "host", host = env("BUILD_HOST", default = ""))
-
-    pipeline(item)
+    round(item)
 
 def finish(item):
-    """The engine calls finish after main on every end of the run except a cancel: success, error and command stop.
-    It stops the build host when HOST_TEARDOWN is "true" and this run launched the host (host_up started it). A host that was already up is never stopped: another run may use it.
-    HOST_TEARDOWN is for one item on the host: the stop deletes the host, so a second item on it would lose its agent. Two runs that start together can both report `started`, and then both stop the host. Teardown for a shared host is not done.
-    The stop banks the work on the host first. A host that cannot bank its work stays up, and the item gets a comment with the reason, so the cost is not silent."""
-    if env("HOST_TEARDOWN", default = "") != "true":
-        return
-
-    stop = host_teardown(name = "teardown")
+    """The engine calls finish after main on every end of the run except a cancel: success, error and command stop. A child run never calls it.
+    It stops the build host once. A host that this round did not launch (host_up started it) is never stopped: another run may use it.
+    The stop banks the work on the host first. A host that cannot bank its work stays up and finish prints the reason: the round has no item issue for a comment."""
+    stop = host_teardown(name = "round-teardown")
     if not stop.down:
-        item_comment(name = "host-stays-up", id = item.id, key = "host-stays-up", text = "The build host stays up. " + stop.reason, forbid_text = ATTRIBUTION)
+        print("the build host stays up: " + stop.reason)
 
 def _move_card(project, stage, issue = 0):
     """Moves the card to the column that the board block of the project names for `stage` ("started" or "merged"), and reads it back.
@@ -642,31 +623,38 @@ def _move_card(project, stage, issue = 0):
         issue = issue,
     )
 
+def item_value(item, head, approved, reason):
+    """The value that a child run returns to the round: the item, the head it reached, whether the review approved it, and why not when it did not."""
+    return {"item": item.id, "head": head, "approved": approved, "reason": reason}
+
 def pipeline(item):
-    # LAND lists ready items as id=sha, split by spaces. A run with LAND set starts no agent: it lands those items with one batch_merge. Without LAND, the run is the pipeline of one item.
-    ready = env("LAND", default = "").split()
-    if len(ready) > 0:
-        land(item, ready)
-        return
+    """The child entry: the pipeline of one item. The round starts one child for each item with spawn(entry = "pipeline"). It calls no host builtin.
+    It returns item_value to the round, which lands the approved heads in one batch. The child never merges."""
+    # The facts of the project file (people, rules, limits, traps and the vars that hold the round settings). The step records them, so a resume keeps the facts the run started with.
+    # Each agent of the example gets them as the input `facts`; no agent reads a path for them.
+    project = facts()
+    round_settings = settings(project)
+    base = round_settings["base"]
 
     # Before any agent starts, the pull request of the item must be as the owner left it: not merged, not closed, its branch still on the remote,
-    # no hold label, not a draft, the head the owner named in EXPECT_HEAD (a full SHA; when it is not set, no head is checked), and the base BASE.
+    # no hold label, not a draft, and the base vars.round.base.
     # A stop is a result: the run ends here and starts no agent. The result of the run holds the stop as `stopped`: the step, the exit code and the reason.
     # An item with no pull request yet passes. An open pull request by a login that is not in `own` claims the item: somebody else is on it, and no agent starts.
-    intake = preflight(name = "intake", head = env("EXPECT_HEAD", default = ""), base = env("BASE"), hold = "hold", own = {"logins": [env("OWNER_LOGIN")]})
+    intake = preflight(name = "intake", head = "", base = base, hold = "hold", own = {"logins": [round_settings["owner"]]})
     if not intake.ok:
-        return
+        return item_value(item, "", False, "stopped")
 
-    scope = lane_scope()
+    scope = lane_scope(round_settings)
 
     # The cap is for the pull request, not for one run: the fix lanes that earlier runs of this item started count against it. The engine keeps the record of each run, so the count survives a restart.
     spent = earlier_calls(call = "fix", name = "fix-lanes-spent").count
-    rounds = max(patch_rounds() - spent, 0) + 1
+    rounds = max(round_settings["fix_rounds"] - spent, 0) + 1
 
-    # The facts of the project file (people, rules, limits, traps and the identity keys). The step records them, so a resume keeps the facts the run started with.
-    # Each agent of the example gets them as the input `facts`; no agent reads a path for them. The take-over run and the integration run read them once, before their one agent.
-    project = facts()
+    # The mutation command is read before any agent starts, so a project with no vars.mutation_command is refused here.
     mutation = mutation_command(project)
+
+    # The item this one depends on is the parent of its row. An item with no parent has none.
+    parent = item_read(name = "parent", of = "parent")
 
     plan = agent(
         name = "plan",
@@ -688,9 +676,9 @@ def pipeline(item):
         model = "sonnet",
         require_skills = ["blast-radius-review"],
         forbid_commands = FORBID,
-        protect_paths = protected(),
+        protect_paths = protected(round_settings),
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
-        inputs = {"item": item, "plan": plan.text, "facts": project, "base": env("BASE"), "acceptance": env("ACCEPTANCE", default = ""), "base_result": env("BASE_RESULT", default = "")},
+        inputs = {"item": item, "plan": plan.text, "facts": project, "base": base, "acceptance": round_settings["acceptance"], "base_result": round_settings["base_result"]},
         **scope
     )
 
@@ -700,14 +688,14 @@ def pipeline(item):
 
     # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the agent pushed.
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
-    # when PARENT names the item this one depends on, links it into the native stack of the pull request of that item. The call owns only the closing line of the body:
+    # when the item has a parent, links it into the native stack of the pull request of that item. The call owns only the closing line of the body:
     # `Closes #N` when the base is the default branch and `Addresses #N` on any other. An item id that is not an issue number gets no line, and a body that exists is kept.
     pr_open(
         name = "draft",
         title = item.title,
-        base = env("BASE"),
+        base = base,
         issue = int(item.id) if item.id.isdigit() else 0,
-        parent = env("PARENT", default = ""),
+        parent = parent.id,
         forbid_text = ATTRIBUTION,
     )
 
@@ -721,25 +709,25 @@ def pipeline(item):
     # This method has no follow-ups: a review that leaves any finding open gets the verdict "changes", and the loop runs a fix round.
     # Before each review, design and fix agent, the loop reads the pull request again, with the head the gate ran on (the head of the worktree), the base, the hold label and the own logins.
     # A stop in the loop ends the run as the stop at the intake does: no more agents start, and the result holds the step, the exit code and the reason.
-    guard = {"base": env("BASE"), "hold": "hold", "own": {"logins": [env("OWNER_LOGIN")]}}
+    guard = {"base": base, "hold": "hold", "own": {"logins": [round_settings["owner"]]}}
     # The loop calls rise_after_review after each review, so a rise ends the loop before the next fix lane starts.
     def rise_after_review(review):
         return regression_rise(plan.regressions, review.regressions)
 
     # The mutation run follows each green gate and comes before the review: a lived mutant is a finding for the fix lane, and the review never judges a head that has one.
     def mutants(gate):
-        return check_mutation(mutation)
+        return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", follow_ups = "forbid", protect = protected(), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, gate_check = mutants)
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, gate_check = mutants)
 
     if loop.stopped:
-        return
+        return item_value(item, "", False, "stopped")
 
     # A reject verdict ends the loop with no fix round. The item gets the text of the review as the reason and the hold status.
     if loop.rejected:
         item_comment(name = "rejected", id = item.id, key = "rejected", text = loop.review.text, forbid_text = ATTRIBUTION)
         item_status(name = "hold-rejected", id = item.id, status = "hold")
-        return
+        return item_value(item, loop.gate.head, False, "rejected")
 
     # A rise of the regression count, from the report of the plan to the report of any review, holds the item with the reason. So does a count that is unknown in either report.
     # The loop stops at the review that shows the rise: a held item gets no more fix lane, no owner ruling and no settle step. Nothing merges.
@@ -747,7 +735,7 @@ def pipeline(item):
     if loop.held != "":
         item_comment(name = "regression-rise", id = item.id, key = "regression-rise", text = loop.held, forbid_text = ATTRIBUTION)
         item_status(name = "hold-regression-rise", id = item.id, status = "hold")
-        return
+        return item_value(item, loop.gate.head, False, "regression-rise")
 
     # After two fix rounds on one mechanism, a design step decides whether the mechanism should exist. A replace or a delete ends the loop:
     # the item gets the decision and the reason as the comment and the hold status, and a person rules on it.
@@ -760,7 +748,7 @@ def pipeline(item):
             forbid_text = ATTRIBUTION,
         )
         item_status(name = "hold-design", id = item.id, status = "hold")
-        return
+        return item_value(item, loop.gate.head, False, "design")
 
     # After the last round, no fix lane starts. A person rules on each open finding, and the settle step applies the ruling once: it is the only edit after the last round, no review follows it, and nothing merges.
     if loop.exhausted:
@@ -771,7 +759,7 @@ def pipeline(item):
 
         # The ruling can take days. The settle agent is a dispatch like the others, so the pull request is read again first, with the head the last gate ran on.
         if not preflight(name = "before-settle", id = item.id, head = loop.gate.head, **guard).ok:
-            return
+            return item_value(item, loop.gate.head, False, "stopped")
 
         settle = agent(
             name = "settle",
@@ -788,36 +776,12 @@ def pipeline(item):
         # Each finding that the owner parked stays open after the last round: it gets its own issue, so it is not lost with the pull request.
         file_parked(settle.parked)
 
-        return
+        return item_value(item, loop.gate.head, False, "settled")
 
-    # An approved head is marked ready. The call merges it when MERGE is "true". With MERGE set to anything else, the call stops after the mark
-    # and the owner merges, so a dry run stays possible. The guards of the merge run on every merge: reviews, change requests, open threads,
-    # own work, authors, draft, state and the pin of the head. The repository, the base, the switch and the owner identity come from the environment,
-    # so the file holds no login or address.
-    # `base` is the integration branch of the repository, never the default branch.
-    # `approved` is the verdict of the review, which is not the agent that wrote the code. Our own pull requests merge only when it is true.
-    # The call passes `tree = loop.gate.tree`, so the merge step proves the merged tree after the merge. A gate that records no tree stops the run at the call. The proof runs after the merge:
-    # a stop does not undo it, and the item ends failed with the pull request merged.
-    # The call also passes `steps = loop.gate.steps`: it merges only when every step of the gate at the head is a pass. A step that is unknown is not a pass. A call that can merge and leaves out `steps` is refused by `beehave check workflow` and again at the call.
-    # `forbid_text` holds the patterns of the attribution rule of the merge gate, each case-insensitive, and the pattern of the tracker id of the item (id_patterns).
-    missing = changelog_missing(project.changelog, loop.gate.head, item.id)
+    # The child never merges. It returns the head that the gate ran on and the verdict of the review, and the round lands every approved head of a pass in one batch (land).
+    # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.
+    missing = changelog_missing(project.changelog, base, loop.gate.head, item.id)
     if missing != "":
         fail(missing)
 
-    shipped = merge(
-        name = "ship",
-        head = loop.gate.head,
-        tree = loop.gate.tree,
-        steps = loop.gate.steps,
-        merge = env("MERGE") == "true",
-        repo = env("REPO"),
-        base = env("BASE"),
-        hold = "hold",
-        own = {"logins": [env("OWNER_LOGIN")], "emails": [env("OWNER_EMAIL")]},
-        approved = loop.review.verdict == "approve",
-        forbid_text = ATTRIBUTION + id_patterns([item.id]),
-        children = "retarget",
-    )
-
-    if shipped.state == "merged":
-        _move_card(project, "merged")
+    return item_value(item, loop.gate.head, loop.review.verdict == "approve", "" if loop.review.verdict == "approve" else loop.review.verdict)

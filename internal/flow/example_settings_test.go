@@ -79,17 +79,14 @@ func refusalOf(t *testing.T, vars map[string]any) string {
 func TestRound_AMissingBaseIsRefusedByTheWorkflow(t *testing.T) {
 	t.Parallel()
 
-	rig, file := exampleRig(t, func(int) string { return "approve" })
-	rig.h.opts.Env["QUEUE_SWEEP"] = "true"
-	rig.h.queue = &fakeQueue{items: []model.Item{queueItem("21", model.SeverityP1)}}
-	rig.h.facts = func(project string) model.Project {
-		return model.Project{Name: project, Vars: roundVars(with(roundSettings(), map[string]any{"base": nil}))}
-	}
+	rig := newRoundRig(t, "21")
+	rig.setRound("base", nil)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.ErrorContains(t, err, "vars.round.base is missing")
-	assert.Empty(t, rig.models(), "the sweep starts no item")
+	assert.Empty(t, rig.kids.started(), "the round starts no child")
+	assert.Empty(t, rig.h.agents.seen(), "the round runs no agent")
 }
 
 func TestRound_ASettingThatTheRoundNeedsIsRefusedWhenItIsMissing(t *testing.T) {
@@ -102,13 +99,10 @@ func TestRound_ASettingThatTheRoundNeedsIsRefusedWhenItIsMissing(t *testing.T) {
 	}
 }
 
-func TestRound_AProjectWithNoRoundSettingsHasNoRound(t *testing.T) {
+func TestRound_AProjectWithNoRoundSettingsIsRefused(t *testing.T) {
 	t.Parallel()
 
-	shown, err := settingsOf(t, map[string]any{"mutation": json.Number("1")})
-
-	require.NoError(t, err)
-	assert.Equal(t, "None", shown)
+	assert.Contains(t, refusalOf(t, map[string]any{"mutation": json.Number("1")}), "REFUSE: the project vars hold no round.")
 }
 
 func TestRound_TheSettingsGiveEveryKeyAndTheDefaultsOfTheKeysTheFileLeavesOut(t *testing.T) {

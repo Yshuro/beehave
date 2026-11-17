@@ -72,7 +72,7 @@ type command struct {
 
 // commands is the command table. The binary runs from it, `remedy --help` prints from it, and the test of workflow.star reads it.
 func commands() []command {
-	return slices.Concat(roundCommands(), syncCommands(), briefCommands(), ledgerCommands(), papersCommands(), spendCommands(), gateCommands())
+	return slices.Concat(roundCommands(), mergeCommands(), syncCommands(), briefCommands(), ledgerCommands(), papersCommands(), spendCommands(), gateCommands())
 }
 
 // ledgerCommands are the subcommands that keep the lane ledger and check the scope of a pull request against it.
@@ -117,7 +117,7 @@ func briefCommands() []command {
 	}
 }
 
-// roundCommands are the subcommands that cut a round, audit merges and decide a takeover.
+// roundCommands are the subcommands that cut a round and keep its integration pull request.
 func roundCommands() []command {
 	return []command{
 		{
@@ -126,6 +126,18 @@ func roundCommands() []command {
 			summary: "cut the next round branch after the integration pull request merged",
 			run:     cutCommand,
 		},
+		{
+			name:    "integration",
+			usage:   integrationSyntax,
+			summary: "find the integration pull request of the round, or open it, add a row for each pull request merged into the round branch, and print `pr=<n> state=<state>`",
+			run:     integrationCommand,
+		},
+	}
+}
+
+// mergeCommands are the subcommands that audit merges and decide a takeover.
+func mergeCommands() []command {
+	return []command{
 		{
 			name:    "audit",
 			usage:   "audit authored <span> | audit present <tip> <base>",

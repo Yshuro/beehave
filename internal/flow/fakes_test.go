@@ -851,6 +851,8 @@ type fakeForge struct {
 	state review.Standing
 	err   error
 	asked []string
+	// heads is the head of the pull request of each item that has its own. An item that is not in it gets the head of state.
+	heads map[string]string
 	// rewritten makes Reviewed report a head other than the reviewed commit as a rewrite of it.
 	rewritten bool
 	// failFrom, when above zero, makes the read of that number and every later read fail with errFake.
@@ -951,7 +953,12 @@ func (f *fakeForge) Pull(_ context.Context, _, item string) (review.Standing, er
 		return review.Standing{}, errFake
 	}
 
-	return f.state, f.err
+	standing := f.state
+	if head, own := f.heads[item]; own {
+		standing.Head = head
+	}
+
+	return standing, f.err
 }
 
 // ClosingIssues answers with the next of closing and then repeats the last. A set of nil is the empty set. noPull makes it report no pull request. closingErr fails every read.
@@ -1048,6 +1055,8 @@ type fakeTrees struct {
 	dir  string
 	err  error
 	late *lateFolder
+	// per, when set, gives the folder of each item and wins over dir and late.
+	per func(ctx context.Context, item string) (string, error)
 }
 
 // lateFolder is a worktree that exists only after Ensure.
@@ -1077,7 +1086,11 @@ func (l *lateFolder) make() string {
 	return l.dir
 }
 
-func (f fakeTrees) Path(context.Context, string, string) (string, error) {
+func (f fakeTrees) Path(ctx context.Context, _, item string) (string, error) {
+	if f.per != nil {
+		return f.per(ctx, item)
+	}
+
 	if f.late != nil {
 		return f.late.path(), f.err
 	}
@@ -1085,7 +1098,11 @@ func (f fakeTrees) Path(context.Context, string, string) (string, error) {
 	return f.dir, f.err
 }
 
-func (f fakeTrees) Ensure(context.Context, string, string) (string, error) {
+func (f fakeTrees) Ensure(ctx context.Context, _, item string) (string, error) {
+	if f.per != nil {
+		return f.per(ctx, item)
+	}
+
 	if f.late != nil {
 		return f.late.make(), f.err
 	}
