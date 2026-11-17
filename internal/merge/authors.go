@@ -14,8 +14,9 @@ const shaWidth = 9
 // noLogin stands for a commit author with no linked account, and for a missing address.
 const noLogin = "?"
 
-// attribution refuses a line of the body, a commit headline or a commit body that matches a pattern of the request, and names each line.
-// A line number counts from the first line of the body, then the commit bodies, then the headlines. With no pattern, nothing is forbidden.
+// attribution refuses a line of the body, a commit headline or a commit body that matches a pattern of the request. It names each line by its number
+// and the pattern by its position, and never quotes either. A line number counts from the first line of the body, then the commit bodies, then the headlines.
+// With no pattern, nothing is forbidden.
 func (a *attempt) attribution() *refusal {
 	hits := forbiddenLines(a.view, a.req.ForbidText)
 	if len(hits) == 0 {
@@ -38,8 +39,8 @@ func forbiddenLines(view model.PullRequest, forbidden []*regexp.Regexp) []string
 	var hits []string
 
 	for number, line := range strings.Split(whole, "\n")[:strings.Count(whole, "\n")] {
-		if _, found := matchingRule(forbidden, line); found {
-			hits = append(hits, fmt.Sprintf("  %d:%s", number+1, line))
+		if i := matchingRule(forbidden, line); i >= 0 {
+			hits = append(hits, fmt.Sprintf("  line %d matches %s", number+1, patternWord(i)))
 		}
 	}
 

@@ -14,6 +14,8 @@
 
 <p align="center"><strong>A deterministic, durable workflow engine for AI coding agents: write your process down once, and beehave makes your agents follow it, every time.</strong></p>
 
+<p align="center">A process written in plain language is not durable: an agent reads it, skips a step or invents one, and nothing records where it stopped. beehave keeps the steps in code. The agent does the work inside a step, and the engine decides which step runs next.</p>
+
 <p align="center"><a href="#quickstart">Quickstart</a> &nbsp;·&nbsp; <a href="#examples">Examples</a> &nbsp;·&nbsp; <a href="docs/architecture.md">Architecture</a> &nbsp;·&nbsp; <a href="docs/claude-code-plugin.md">Claude Code plugin</a></p>
 
 <p align="center">

@@ -36,6 +36,9 @@ const (
 	// A cap crossed on the last line (read after the process exited) ends the run as OutcomeBudgetCap too.
 	OutcomeTurnCap   Outcome = "turn-cap"
 	OutcomeBudgetCap Outcome = "budget-cap"
+	// OutcomeLimited means a provider limit (a rate limit or a spend limit) refused more work, and Result.Limit says which. The caller sets it from the
+	// output of the CLI, whatever the exit code.
+	OutcomeLimited Outcome = "limited"
 )
 
 const (
@@ -92,6 +95,8 @@ type Spec struct {
 // that the cost is unknown.
 // Streamed is the sum of the dollars that single output lines reported (Seen.Spent), which the runner adds for a profile with StreamsCost, and 0 for any other.
 // The runner is the one reader of those dollars; the caller takes Streamed and does not read Seen.Spent itself.
+// Limit is the provider limit of a run that ended as OutcomeLimited, and nil for any other run. The caller fills it from the output lines, as Session.
+// Resumed is true for a run that resumed the session of a lost run. The caller that chose to resume sets it.
 type Result struct {
 	Spend
 	Streamed   float64
@@ -104,6 +109,15 @@ type Result struct {
 	Text       string
 	Skills     []string
 	Violations []string
+	Limit      *Limit
+	Resumed    bool
+}
+
+// AddNote returns the result with note joined after its Note by "; ". An empty note on either side adds no separator.
+func (r Result) AddNote(note string) Result {
+	r.Note = strings.Join(slices.DeleteFunc([]string{r.Note, note}, func(s string) bool { return s == "" }), "; ")
+
+	return r
 }
 
 // Timer is the part of time.Timer that the idle limit and the total limit use.
@@ -279,9 +293,8 @@ func withSpend(result Result, counter *spendCounter) Result {
 	}
 
 	result.Outcome = OutcomeBudgetCap
-	result.Note = strings.Join(slices.DeleteFunc([]string{result.Note, note}, func(s string) bool { return s == "" }), "; ")
 
-	return result
+	return result.AddNote(note)
 }
 
 // argsOf returns the arguments of the profile, then the model, the session to resume, the caps and the arguments of the launch.

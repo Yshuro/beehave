@@ -37,6 +37,34 @@ func TestUp_PassesTheIdleMinutesTheRunLimitAndThePlacementToSkyLaunch(t *testing
 	}}, sky.Calls)
 }
 
+func TestUp_ARunLimitWithAPartOfASecondGivesTheNextWholeSecond(t *testing.T) {
+	t.Parallel()
+
+	cfg := hostConfig(nil)
+	cfg.MaxRun = 1900 * time.Millisecond
+	h, _, sky, _ := newHost(t, cfg)
+	sky.Plan("", "launch")
+
+	require.NoError(t, h.Up(context.Background()))
+	require.Len(t, sky.Calls, 1)
+	assert.Contains(t, sky.Calls[0], "gcp.managed_instance_group.run_duration=2")
+}
+
+func TestSlot_ARunLimitWithAPartOfASecondGivesTheSlotJobTheNextWholeSecond(t *testing.T) {
+	t.Parallel()
+
+	cfg := hostConfig(nil)
+	cfg.MaxRun = 1900 * time.Millisecond
+	_, queue, sky, _ := newHost(t, cfg)
+	sky.Plan("", "exec")
+
+	require.NoError(t, queue.slot.Hold(context.Background(), jobwait.Job{ID: "77", Nonce: "n"}))
+	assert.Equal(t, [][]string{{
+		"exec", "lane-host", "-d",
+		"cd ~ && timeout 2 sh -c 'until test -e .beehave-banked-lane-host-77-n; do sleep 5; done'",
+	}}, sky.Calls)
+}
+
 func TestUp_LeavesOutThePlacementThatTheProjectDoesNotSet(t *testing.T) {
 	t.Parallel()
 

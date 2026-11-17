@@ -53,6 +53,9 @@ const (
 // errBadOptions is returned when the options of the engine or the client are not usable.
 var errBadOptions = errors.New("invalid flow options")
 
+// errEngineShutDown is returned when a run asks for its item after the engine began to shut down. The engine starts nothing then.
+var errEngineShutDown = errors.New("the engine has shut down")
+
 // Options holds the settings the engine and the client share.
 // Version is the build version that pins each run.
 // MaxConcurrent is agents.max_concurrent, the cap of the implement queue. MaxReviewConcurrent is agents.max_review_concurrent, the cap of the review queue.
@@ -179,8 +182,11 @@ type Engine struct {
 	progress *progress
 	// launched is the time of the last Launch. A run that was open then and ended after it was resumed by this engine.
 	launched time.Time
-	down     sync.Once
-	downErr  error
+	// starts orders the start of a run against the shutdown: a start holds it for reading, and the shutdown takes it to set stopped.
+	starts  sync.RWMutex
+	stopped bool
+	down    sync.Once
+	downErr error
 }
 
 // NewEngine opens the state folder and registers the workflows and the agents queue. Nothing runs until Launch.
@@ -498,10 +504,17 @@ func (e *Engine) oldRuns() ([]string, error) {
 // The item belongs to the project from this call on; an open run under another project is refused.
 // The run pins the SHA-256 of the file, and a replay refuses a changed file.
 func (e *Engine) RunFile(item, project, file string) (ItemResult, error) {
+	return e.runEntry(item, project, file, "")
+}
+
+// runEntry runs the pinned file for the item at the named entry. An empty entry runs main.
+func (e *Engine) runEntry(item, project, file, entry string) (ItemResult, error) {
 	in, err := pinnedInput(item, project, file)
 	if err != nil {
 		return ItemResult{}, err
 	}
+
+	in.Entry = entry
 
 	return e.run(in)
 }
@@ -536,12 +549,24 @@ func (e *Engine) run(in ItemInput) (ItemResult, error) {
 		return ItemResult{}, err
 	}
 
-	handle, err := e.handleFor(in)
+	handle, err := e.joinOrStart(in)
 	if err != nil {
 		return ItemResult{}, err
 	}
 
 	return e.result(handle, in.Item)
+}
+
+// joinOrStart joins or starts the run of the item while it holds off the shutdown. After the shutdown began, it starts nothing.
+func (e *Engine) joinOrStart(in ItemInput) (dbos.WorkflowHandle[ItemResult], error) {
+	e.starts.RLock()
+	defer e.starts.RUnlock()
+
+	if e.stopped {
+		return nil, fmt.Errorf("%w: item %s was not started: run beehave run %s again", errEngineShutDown, in.Item, in.Item)
+	}
+
+	return e.handleFor(in)
 }
 
 // result waits for the run and returns its result.
@@ -691,6 +716,7 @@ func (e *Engine) Shutdown() error {
 }
 
 func (e *Engine) shutdown() error {
+	e.refuseStarts()
 	close(e.tickEnd)
 	e.tickRun.Wait()
 
@@ -707,4 +733,12 @@ func (e *Engine) shutdown() error {
 	e.holds.clear()
 
 	return errors.Join(killed, waited, e.log.Close(), removeEngineFiles(e.dir), e.lock.Unlock())
+}
+
+// refuseStarts waits for each start in flight to hand its run to the library, and makes every later start fail.
+func (e *Engine) refuseStarts() {
+	e.starts.Lock()
+	defer e.starts.Unlock()
+
+	e.stopped = true
 }

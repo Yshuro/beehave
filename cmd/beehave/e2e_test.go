@@ -7,12 +7,15 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/rogpeppe/go-internal/testscript"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/agent/claude"
@@ -78,7 +81,7 @@ func e2eFlow(dir, path string) cli.Flow {
 
 			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
 				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg.Projects),
-				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files,
+				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
 			}, dir, cfg))
 			if err != nil {
 				return nil, err
@@ -100,6 +103,23 @@ func (e2eFiles) Fields(_ context.Context, _, item string) (map[string]string, er
 // Preflight finds nothing changed: the scripts own no pull request before the first agent.
 func (e2eFiles) Preflight(context.Context, string, string, preflight.Request, string) (preflight.Result, error) {
 	return preflight.Result{}, nil
+}
+
+// Comments gives an item no comments: the pipeline of the example reads the parent of its item.
+func (e2eFiles) Comments(context.Context, string, string) ([]string, error) { return nil, nil }
+
+// Parent gives an item no parent.
+func (e2eFiles) Parent(context.Context, string, string) (string, error) { return "", nil }
+
+// Up starts no host: the project of the scripts has none. The finish function of the example stops the host that the round started.
+func (e2eFiles) Up(context.Context, string, string) (bool, string, error) { return false, "", nil }
+
+// Teardown stops no host.
+func (e2eFiles) Teardown(context.Context, string, string) error { return nil }
+
+// LostProof gives no proof: the project of the scripts has no host, so it has no host job.
+func (e2eFiles) LostProof(context.Context, string, string, string) (model.LostProof, error) {
+	return model.LostProof{}, nil
 }
 
 func (f e2eFiles) event(name, item string) error {
@@ -254,21 +274,26 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 type e2eAgents struct{ dir, path string }
 
 // It describes the run as the real agents do: the session from the output of the program, the skill calls from the tool_use lines that it printed.
+// A start after a lost run resumes its session or adds the note, as the real agents decide it.
 func (a e2eAgents) Run(ctx context.Context, request flow.AgentRequest) (agent.Result, error) {
-	prompt := "login=" + request.Login + "\n" + request.Prompt
-	env := map[string]string{"PATH": a.path}
 	adapter := newAdapters(nil, nil, nil).agent(claude.Name)
 	runner := model.Runner{Name: request.Login, Agent: claude.Name, ConfigDir: a.dir}
-	tap := newSessionTap(adapter, agent.DefaultPrices())
+	request, resumed := replayOf(request, runner, a.dir, adapter)
+	prompt := "login=" + request.Login + "\n" + request.Prompt
+	env := map[string]string{"PATH": a.path}
+	tap := newSessionTap(adapter, agent.DefaultPrices(), request.Named)
 	protect := protectionOf(request.Protect, a.dir)
 
 	result := agent.Runner{}.Run(ctx, agent.Spec{
 		Adapter: adapter, Runner: runner,
-		Dir: a.dir, Prompt: prompt, Env: env, Log: tap, OnStart: request.Started, NoEdits: request.NoEdits,
+		Dir: a.dir, Prompt: prompt, Env: env, Log: tap, OnStart: request.Started, NoEdits: request.NoEdits, Resume: request.Resume,
 		Guard: agents{guard: guardCommand(os.Executable)}.guardFor(request.Forbid, protect),
 	})
 
-	return describe(adapter, runner, a.dir, tap, result, request.Forbid, protect)
+	result, err := endOf(adapter, runner, a.dir, tap, result, request.Forbid, protect)
+	result.Resumed = resumed
+
+	return result, err
 }
 
 // The agent runs in the work folder of the script and sees no other variable than PATH.
@@ -284,11 +309,18 @@ const e2eClaude = `#!/bin/sh
 # The implement step also makes one Bash call for each line of the file cmds, when it exists.
 # When the file edit-file exists, the implement step writes edited.txt with the Write tool. As with the real claude in print mode,
 # the write is refused unless the start arguments hold --permission-mode acceptEdits: the fake adds a line to refused.log and prints the tool_result of the refusal.
+# When the file hang-session exists, the call that blocks first names the session of that file in an init line and writes the transcript of the session:
+# the prompt, under the transcript folder of the login. A call with --resume <id> adds its prompt to resumed.log.
+# A resumed call whose prompt names no step (the continue prompt) reads the prompt of the session from its transcript, as the real claude continues a session that holds its brief.
+# Each resumed call then adds "<step> --resume <id>" to resumes.log, with the flag and the id as it got them.
 hook=
 mode=
+resume=
+resumed=
 while [ $# -gt 0 ]; do
   if [ "$1" = --settings ]; then hook=$(printf '%s' "$2" | sed 's/.*"command":"\([^"]*\)".*/\1/'); fi
   if [ "$1" = --permission-mode ]; then mode=$2; fi
+  if [ "$1" = --resume ]; then resume=$2; resumed="$1 $2"; fi
   shift
 done
 write_call() {
@@ -313,6 +345,11 @@ bash_call() {
 }
 prompt=$(cat)
 field() { printf '%s\n' "$prompt" | sed -n "s/^$1=//p"; }
+if [ -n "$resume" ]; then
+  printf '%s\n' "$prompt" >> resumed.log
+  if [ -z "$(field step)" ]; then prompt=$(cat "%TRANSCRIPTS%/$resume.jsonl"); fi
+  echo "$(field step) $resumed" >> resumes.log
+fi
 step=$(field step)
 echo "$step $(field round) $(field login) $(field ruling)" >> calls.log
 seen=$(field seen)
@@ -322,6 +359,12 @@ if [ -n "$found" ]; then echo "$step: $found" >> found.log; fi
 # A prompt that carries a found value also adds all its lines, from that value to the end, to findings.log.
 if [ -n "$found" ]; then printf '%s\n' "$prompt" | sed -n '/^found=/,$p' >> findings.log; fi
 if [ -e hang ] && [ "$step" = "$(cat hang)" ] && [ ! -e started ]; then
+  if [ -e hang-session ]; then
+    session=$(cat hang-session)
+    echo '{"type":"system","subtype":"init","session_id":"'"$session"'"}'
+    mkdir -p "%TRANSCRIPTS%"
+    printf '%s\n' "$prompt" > "%TRANSCRIPTS%/$session.jsonl"
+  fi
   : > started
   exec sleep 300
 fi
@@ -356,7 +399,7 @@ if [ "$step" = fix ]; then
     bash_call "toolu_fix$n" "git add -A"
   fi
 fi
-echo '{"type":"result","session_id":"s1","result":"done"}'
+echo '{"type":"result","session_id":"'"${resume:-s1}"'","result":"done"}'
 `
 
 // e2eLogins picks the runner "a" of the config, so no script reads the usage of a login.
@@ -394,9 +437,25 @@ const e2eProject = `project(
     test_report = "r.xml",
     build_host = "build",
     host = host(provider = "ssh", disk_floor_gb = 50, slots = {"mutation": 1}, ssh = ssh(address = "10.0.0.5")),
-    vars = {"mutation_command": ["sh", "mutation.sh"]},
+    vars = {
+        "round": {"base": "integration", "owner": "owner", "lane_cap": 1, "fix_rounds": 5, "source_checkout": "/own/checkout", "label": "round"},
+        "mutation_command": ["sh", "mutation.sh"],
+    },
 )
 `
+
+// exampleMain is the one entry of the example that the scripts replace.
+const exampleMain = "def main(item):"
+
+// oneItemCopy returns the text of the example for the scripts that run one item: its main is renamed round_main and a new main runs pipeline.
+// The scripts prove the engine in a real process over the pipeline. A full round needs the queue, remedy, a base branch and a host.
+func oneItemCopy(example string) (string, error) {
+	if found := strings.Count(example, exampleMain); found != 1 {
+		return "", fmt.Errorf("the example holds %d lines %q, want 1", found, exampleMain)
+	}
+
+	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
+}
 
 // exampleSkill returns the one skill that an agent of examples/remediation/workflow.star requires.
 func exampleSkill() (string, error) {
@@ -425,40 +484,14 @@ func exampleSkill() (string, error) {
 	return skills[0], nil
 }
 
-// e2eSetup writes the config folder and the fake claude into the work folder of a script.
-func e2eSetup(env *testscript.Env) error {
-	work := env.WorkDir
-	skill, err := exampleSkill()
-	if err != nil {
-		return err
-	}
+// e2eFile is a file of the work folder of a script.
+type e2eFile struct {
+	text string
+	mode os.FileMode
+}
 
-	files := map[string]struct {
-		text string
-		mode os.FileMode
-	}{
-		"bin/claude":                {strings.ReplaceAll(e2eClaude, "%SKILL%", skill), e2eScriptMode},
-		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), e2eFileMode},
-		"config/projects/shop.star": {e2eProject, e2eFileMode},
-	}
-
-	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	if err != nil {
-		return err
-	}
-
-	files["flow/workflow.star"] = struct {
-		text string
-		mode os.FileMode
-	}{string(example), e2eFileMode}
-
-	for name, text := range e2ePrompts {
-		files["flow/prompts/"+name+".md"] = struct {
-			text string
-			mode os.FileMode
-		}{text, e2eFileMode}
-	}
-
+// writeE2EFiles writes each file below work, with the folders it needs.
+func writeE2EFiles(work string, files map[string]e2eFile) error {
 	for name, file := range files {
 		path := filepath.Join(work, name)
 		if err := os.MkdirAll(filepath.Dir(path), e2eFolderMode); err != nil {
@@ -468,6 +501,47 @@ func e2eSetup(env *testscript.Env) error {
 		if err := os.WriteFile(path, []byte(file.text), file.mode); err != nil {
 			return err
 		}
+	}
+
+	return nil
+}
+
+// e2eSetup writes the config folder and the fake claude into the work folder of a script.
+func e2eSetup(env *testscript.Env) error {
+	work := env.WorkDir
+	skill, err := exampleSkill()
+	if err != nil {
+		return err
+	}
+
+	// The fake claude keeps a transcript where the adapter looks for it: the agent of the scripts runs in the work folder with the work folder as its login folder.
+	transcripts := filepath.Dir(newAdapters(nil, nil, nil).agent(claude.Name).TranscriptPath(work, work, "session"))
+	fake := strings.NewReplacer("%SKILL%", skill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
+
+	files := map[string]e2eFile{
+		"bin/claude":                {fake, e2eScriptMode},
+		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), e2eFileMode},
+		"config/projects/shop.star": {e2eProject, e2eFileMode},
+	}
+
+	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	if err != nil {
+		return err
+	}
+
+	copied, err := oneItemCopy(string(example))
+	if err != nil {
+		return err
+	}
+
+	files["flow/workflow.star"] = e2eFile{copied, e2eFileMode}
+
+	for name, text := range e2ePrompts {
+		files["flow/prompts/"+name+".md"] = e2eFile{text, e2eFileMode}
+	}
+
+	if err := writeE2EFiles(work, files); err != nil {
+		return err
 	}
 
 	tree := filepath.Join(work, "tree")
@@ -485,11 +559,6 @@ func e2eSetup(env *testscript.Env) error {
 	env.Setenv("BEEHAVE_CONFIG", filepath.Join(work, "config"))
 	env.Setenv("BEEHAVE_STATE_DIR", filepath.Join(work, "state"))
 	env.Setenv(e2eDirVariable, work)
-	// The example merges only when MERGE is "true". The scripts run it as a dry run: the owner merges, and no merge guard runs.
-	env.Setenv("MERGE", "false")
-	// The preflight call of the example reads these before the first agent. The fake preflight finds nothing changed, so the values only have to exist.
-	env.Setenv("EXPECT_HEAD", "")
-	env.Setenv("BASE", "integration")
 
 	return nil
 }
@@ -516,6 +585,22 @@ func cmdWaitFile(ts *testscript.TestScript, _ bool, args []string) {
 		_, err := os.Stat(path)
 
 		return err == nil
+	})
+}
+
+// cmdWaitSession is "waitsession <id>": it waits until the log of the engine, flow.log in the state folder, says that the engine saved the session id.
+// The engine saves the id on a goroutine of its own after the agent names it, so a kill that only waits for the agent could come before the save.
+func cmdWaitSession(ts *testscript.TestScript, _ bool, args []string) {
+	if len(args) != 1 {
+		ts.Fatalf("usage: waitsession <id>")
+	}
+
+	waitFor(ts, "the engine to save the session "+args[0], func() bool {
+		text, err := os.ReadFile(filepath.Join(ts.Getenv("BEEHAVE_STATE_DIR"), "flow.log"))
+
+		return err == nil && slices.ContainsFunc(strings.Split(string(text), "\n"), func(line string) bool {
+			return strings.Contains(line, `msg="saved the session of the agent"`) && strings.HasSuffix(line, " session="+args[0])
+		})
 	})
 }
 
@@ -550,6 +635,28 @@ func cmdWaitStatus(ts *testscript.TestScript, _ bool, args []string) {
 	})
 }
 
+func TestE2E_TheOneItemCopyHasOneMain(t *testing.T) {
+	t.Parallel()
+
+	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	require.NoError(t, err)
+
+	copied, err := oneItemCopy(string(example))
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, strings.Count(copied, exampleMain))
+	assert.Contains(t, copied, "def round_main(item):")
+	assert.True(t, strings.HasSuffix(copied, exampleMain+"\n    return pipeline(item)\n"))
+}
+
+func TestE2E_TheOneItemCopyRefusesAnExampleWithTwoMains(t *testing.T) {
+	t.Parallel()
+
+	_, err := oneItemCopy("def main(item):\n    pass\ndef main(item):\n    pass\n")
+
+	require.ErrorContains(t, err, "holds 2 lines")
+}
+
 func TestScripts(t *testing.T) {
 	t.Parallel()
 
@@ -559,7 +666,7 @@ func TestScripts(t *testing.T) {
 		Dir:   "testdata/e2e",
 		Setup: e2eSetup,
 		Cmds: map[string]func(*testscript.TestScript, bool, []string){
-			"waitfile": cmdWaitFile, "waitstatus": cmdWaitStatus,
+			"waitfile": cmdWaitFile, "waitstatus": cmdWaitStatus, "waitsession": cmdWaitSession,
 			"example": cmdExample, "script": cmdScript, "subst": cmdSubst, "isolate": isolateFunc(tools), "exitcode": cmdExitCode, "noclaims": cmdNoClaims, "mode": cmdMode,
 			"swarmfakes": cmdSwarmFakes, "batchsetup": cmdBatchSetup, "replace": cmdReplace, "serve": cmdServe, "fakeclaude": cmdFakeClaude, "deskfakes": cmdDeskFakes, "deskinit": cmdDeskInit,
 			"incidentfakes": cmdIncidentFakes, "incidentinit": cmdIncidentInit, "maintfakes": cmdMaintFakes, "maintinit": cmdMaintInit,

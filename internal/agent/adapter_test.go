@@ -17,6 +17,13 @@ func TestLaunch_IsEmptyOnlyWhenItAddsNothing(t *testing.T) {
 	assert.False(t, agent.Launch{Files: map[string]string{"f": "c"}}.Empty())
 }
 
+func TestLimit_NameNamesTheKindAndTheWindowOnlyWhenTheCLIGivesOne(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "rate limit five_hour", agent.Limit{Kind: agent.LimitRate, Window: "five_hour"}.Name())
+	assert.Equal(t, "spend limit", agent.Limit{Kind: agent.LimitSpend}.Name(), "no window, no trailing space")
+}
+
 func TestTokens_AddSumsEveryCount(t *testing.T) {
 	t.Parallel()
 

@@ -1,0 +1,24 @@
+#!/bin/sh
+# Fake systemctl: the user manager runs, and the watchdog state comes from FAKE_WD_* or from the file watchdog-active in FAKE_STATE.
+printf 'systemctl %s\n' "$*" >>"$FAKE_LOG"
+active=${FAKE_WD_ACTIVE:-active}
+if [ -f "$FAKE_STATE/watchdog-active" ]; then active=$(cat "$FAKE_STATE/watchdog-active"); fi
+enabled=${FAKE_WD_ENABLED:-enabled}
+case "$*" in
+'--user is-system-running') echo "${FAKE_MANAGER:-running}" ;;
+'--user daemon-reload') ;;
+'--user show-environment') "$(dirname "$0")/fake-unit-env" ;;
+'is-active '*)
+	echo "$active"
+	[ "$active" = active ]
+	;;
+'is-enabled '*)
+	echo "$enabled"
+	[ "$enabled" = enabled ]
+	;;
+'show -p Restart --value '*) echo "${FAKE_WD_RESTART:-always}" ;;
+*)
+	echo "fake systemctl: unexpected $*" >&2
+	exit 1
+	;;
+esac

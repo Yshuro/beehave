@@ -137,6 +137,34 @@ When the agent CLI stops a run at `agents.max_turns` or `agents.max_budget_usd`,
 
 `beehave resume` starts a new agent run with the same cap for each run. The cap of one agent run does not count across resumes. For the cap of an item run, see [Cost budgets](#cost-budgets).
 
+#### Provider limits
+
+When a provider limit (a rate limit or a spend limit) stops an agent run, the step does not fail. The phase ends with the outcome `limited` and records the limit in its `limit` field. The item run then waits for the reset and runs the same agent call again.
+
+- The wait is in the item run, after the phase, so it holds no slot of the agents queue.
+- The rerun is part of the same call. It uses no try of `output_tries`, and `earlier_calls` counts the call as one lane.
+- The rerun keeps the login of the limited run, because the session of the run lives in the config folder of that login. It uses the `resume` keyword of the call, as the first run did.
+- Before the rerun, the run cap and the tree cap are checked again. The limited run can spend money before the limit stops it, and that cost is in the sum.
+
+For try `t` and run `k` (from 0) inside the try, the call records these steps:
+
+| Step | When |
+|---|---|
+| `…/budget<t>.<look>` | Before each run. The look number continues across the runs of the try. |
+| `…/limit<t>.<k>` | After a limited run. It holds `limit` (`kind`, `window`, `resets_at`), `login`, `wait_until`, `session` and the cost of the run. |
+| `DBOS.sleep` | After each limit step, until `wait_until`. |
+
+`wait_until` is fixed inside the limit step, so a restart during the wait sleeps only the time that is left and starts the agent once after the reset.
+
+| Case | What the step does |
+|---|---|
+| The limit has a reset time in the future | Sleeps until the reset time, then runs again. |
+| The reset time has passed | Sleeps the least wait (one minute), then runs again. |
+| The next run is limited again and its reset time has passed too | Fails. The error names the limit and the login. The reset time is wrong, and a loop on it has no end. |
+| The agent gives no reset time | Fails. The error names the limit and the login, and says to run `beehave resume <item>` when the limit is gone. |
+
+In the two cases that fail, the phase is the failed step, and the run records no limit step. The phase input of a rerun after a past reset holds `reset_passed`, so the phase knows that a second past reset fails. `beehave resume <item>` reopens the failed phase, as it reopens any failed agent run, and the agent runs again. The cost of the failed run counts once, in the cost record of a failed run.
+
 ### The `rewrote` output
 
 Every agent call returns `rewrote`. It is true when the commit of the item folder before the agent started is not in the history of its commit after the run, so the agent amended, squashed or reset.
@@ -163,7 +191,7 @@ The three outputs `cost_usd`, `cost_estimated` and `cost_unknown` form one cost.
 
 When a run has a cost cap and its CLI does not cap dollars itself, the run does not start if its model has no price. A run cap and a tree cap stop the next step after a cost that is unknown, because the cap cannot be checked. A cost is unknown when its model has no price, or when its recorded cost cannot be read. The stop message names which.
 
-The cost is recorded in the phase and in the read step of the agent call. A replay returns the recorded cost and never asks the CLI again. A run that fails before its result line leaves no cost.
+The cost is recorded in the phase and in the read step of the agent call, and in the limit step of a run that a provider limit stopped. A replay returns the recorded cost and never asks the CLI again. A run that fails before its result line leaves no cost.
 
 #### The three caps
 
@@ -186,7 +214,7 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 **The cap of one item run: `agents.max_run_budget_usd`** (or `BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD`). It caps the sum for one item run.
 
 - A child workflow that the run spawns starts its own sum at 0. The cap applies to each sum alone.
-- Before an agent step starts, the engine adds the `cost_usd` that the earlier agent steps of the item run recorded, and the cost of each run that failed.
+- Before an agent step starts, the engine adds the `cost_usd` that the earlier agent steps of the item run recorded, the cost of each run that a provider limit stopped, and the cost of each run that failed.
 - If the sum is at or past the cap, the step waits before it starts. The run stays open and the step is not a failure. The stop names the cap and the spent sum.
 - The check runs only when a step starts, so one step can pass the cap by its own cost. The cap of the step (`max_budget_usd`) or the global cap limits that. With neither set, a step has no limit.
 - Each look at the caps is a recorded step named `budget`, and a stop is followed by a durable sleep before the next look. A step that started under the cap does not stop on a replay after the cap changes.
@@ -201,6 +229,8 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 - The rule and the wait are the same as for the run cap. Both caps apply when both are set.
 
 **The stop in the status.** `beehave status <run id> --json` shows `cap_stop` with `scope` (`run` or `tree`), `cap_usd`, `spent_usd` and `note` on the run, and on the line of the held agent step, while the run reads `running`.
+
+**The wait for a provider limit in the status.** While an agent step waits for a provider limit to reset, `beehave status <run id> --json` shows `limit_wait` with `limit`, `login` and `wait_until` on the run and on the line of the step. The run reads `running`.
 
 #### Not covered
 
@@ -474,16 +504,31 @@ The phase records the loss in the step `agent/lost<n>`, a recorded step in the r
 - If the store holds no claim lease for the item, the run time is unknown. The note, the record and the log say so, and no time is made up.
 - The cause is always "the process ended with no record". The agent was a child of the engine that died, and nothing it left shows an exit status or a signal.
 
+#### The saved session
+
+The agent step saves the session id of the agent while the agent runs. The tap of the output gives each new id to the engine at the line that holds it, which is the `init` line, before any tool call. The engine writes the id as the DBOS event `session` of the phase, with `SetEvent` from the context of the agent step. That write takes no step id, so the step count stays the same. A saver goroutine does the write, and the tap only gives it the newest id, so a slow write never stops the reading of the output. While the store is down, DBOS retries the write until the step ends: the agent runs on, and the idle timer still sees its output. The step waits for the saver before it records its output, so the event comes first. A saved id adds the line "saved the session of the agent" with the item and the session to `flow.log`. A refused write logs a warning and the run goes on. No side file holds the id.
+
+The `agent/lost<n>` step reads the event of the phase with the context of the engine, because DBOS refuses a read of an event inside a step. The record holds the id as `session`, so a second replay resumes the same session. A rewind of the phase drops the event with the agent step that wrote it, so a rerun after `beehave resume` starts a fresh session.
+
+The record also holds `diff_stat`: the output of `git diff --stat --stat-count=50 <start commit>` in the item folder. The start commit is the head that the render step of the call read. The summary covers the commits of the lost agent and its edits to tracked files. A plain folder has no start commit and no summary. Only the note uses the summary. If the engine cannot find the folder or read the diff, the step logs a warning with the reason, the note says that the engine could not read the summary, and the session still resumes. A failed read of the event fails the step.
+
+#### Resume or start again
+
+When the loss record holds a session, the agents layer decides once, before the start, whether the session can resume. It cannot resume when the CLI of the runner has no resume option, or when the transcript file of the session is missing (a moved worktree, a cleaned login folder, another login). A session that can resume starts with `--resume <id>` and a short prompt: the engine stopped after N minutes, continue the step, the brief and the output file are earlier in the session. The phase output records `resumed`. The saved session wins over the `resume` keyword of the call.
+
+A session that cannot resume, and a loss before the agent named a session, start the agent again with the prompt and the note. A start that the CLI refuses at run time fails the step as any failed run does.
+
 #### The note in the prompt
 
-The second start of an agent step adds one paragraph to the prompt. The paragraph says:
+The note is one paragraph after the prompt. It says:
 
 - that the step ran before,
 - how many minutes it ran before the loss, or that the time is unknown,
 - that the work tree may hold its edits,
+- the diff summary in a fenced block, that the engine found no change to tracked files since the step started, or that the engine could not read the summary,
 - that the agent must read `git status` and `git diff` first.
 
-The text is the same for every workflow. It is in the record of the step `agent/lost<n>`, so a replay uses the same prompt. A first start gets no note. The agent still starts again from the beginning: the note is the only part of the resume that the engine adds.
+The text is the same for every workflow. It is in the record of the step `agent/lost<n>`, so a replay uses the same prompt. A first start gets no note.
 
 ### Ready and release
 
@@ -576,7 +621,7 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent1.tracker1.forge1.land1.gate2.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent3.tracker1.forge1.land3.gate2.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 
 A stored version that ends in `+star30` stands for every module at version 1. A change to the recorded steps of one builtin bumps the version of its module and no other module, so a run that never used that module still moves. The first build with module versions has a new application version, so an open run of an older build moves only with this command.
@@ -587,8 +632,9 @@ A line of the list also shows these facts when the run has them. Each is a tab-s
 
 | Note | Meaning |
 |---|---|
-| `spent $S of $C` | The cost so far against `agents.max_run_budget_usd`: the sum of the `cost_usd` of the read steps and of the failed runs. It is the same sum that the run cap checks. `spent $S` when no cap is set. |
+| `spent $S of $C` | The cost so far against `agents.max_run_budget_usd`: the sum of the `cost_usd` of the read steps, of the limited runs and of the failed runs. It is the same sum that the run cap checks. `spent $S` when no cap is set. |
 | `stopped at the <scope> cap $C, spent $S` | A cap holds an agent step of the open run back. The scope is `run` or `tree`. The step waits until the cap is raised and beehave restarts. |
+| `waits for the <kind> limit <window> of login <login> until <time>` | A provider limit holds an agent step of the open run. The step runs again after that time. |
 | `now <step>` | The step that an open run is in. A run that asks a question shows the question in place of the step and, when the `wait` has a `timeout`, `answer by <time>`. |
 | `gate pass at <head>` or `gate fail at <head>` | The newest gate result and the head it judged. |
 | `fix U of C` and `review U of C` | The count of the agent calls of the lanes `rework` and `review` against the cap that those calls name with the keyword `rounds`. A call that names none shows the count alone. |
@@ -601,6 +647,7 @@ Every value is read from the step records, the events and the options of the cli
 
 - `spent` (`cost_usd`, `cost_estimated`, `cost_unknown`)
 - `cap_usd`
+- `cap_stop` and `limit_wait`, while a cap or a provider limit holds a step
 - `now`
 - `deadline`
 - `gate` (`passed`, `head`)
@@ -749,7 +796,9 @@ The line shows no next due time. The library counts the first tick of a fixed de
 
 No engine renews the fresh claim between `beehave resume` and the next `beehave run`. So run the item within 5 minutes after the resume. When the lease of the fresh claim ends, any other `beehave run` can take the item.
 
-After a crash, or after Ctrl-C of `beehave run`, the run stays open. `beehave run <item>` continues it without `resume`.
+After a crash, or after Ctrl-C of `beehave run`, the run stays open. `beehave run <item>` continues it without `resume`. A second Ctrl-C during the stop exits at once with code 130.
+
+The shutdown of the engine and the start of a run do not overlap. The shutdown waits for a start in flight to hand its run to DBOS, and only then stops DBOS. A start that comes after the shutdown began stores no run and fails with `the engine has shut down`. DBOS v1.8.0 does not give this order itself: its wait for the open runs races with a direct `RunWorkflow`.
 
 #### When `beehave run` starts a new run
 

@@ -224,7 +224,7 @@ func runAgentOf(ctx context.Context, engine *Engine, in PhaseInput) (PhaseOutput
 		return PhaseOutput{}, err
 	}
 
-	return engine.runAgent(ctx, claim, in)
+	return engine.runAgent(ctx, claim, in, nil)
 }
 
 func TestRunAgent_AGroupDiesWhenThePhaseIsCancelled(t *testing.T) {

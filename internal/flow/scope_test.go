@@ -138,7 +138,7 @@ func TestScope_AMergeWithNoGateOfTheRunIsRefusedAndReadsNothing(t *testing.T) {
 
 	_, err := walkText(t, h, bodyFlow("merge(head = \""+gatedHead+"\", steps = [{\"name\": \"command\", \"status\": \"pass\"}], merge = True, name = \"ship\")\n"))
 
-	require.Error(t, err)
+	require.ErrorContains(t, err, "not the steps of a gate call in this run")
 	assert.Empty(t, h.merge.asked)
 	assert.Zero(t, h.forge.closingReads)
 }

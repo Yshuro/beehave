@@ -59,6 +59,7 @@ type scanner struct {
 	budget      int                   // values the current lookup may still work out
 	cut         bool                  // the current lookup ran out of budget
 	resolutions int                   // values worked out so far, for the tests
+	reads       int                   // shell strings read by scanOnce so far, for the tests
 	used        []string              // variables the current command expanded
 	findings    []model.Finding
 	lines       map[string]bool   // shell strings read from the words behind a wrapper: each is read once, so nested wrappers cost a polynomial time

@@ -31,6 +31,7 @@ type fakeIssue struct {
 	closed      bool
 	labels      []string
 	comments    []string
+	assignees   []string
 }
 
 // fakeGh keeps issues in memory and answers the gh issue commands of the writer. It also plays the search of gh issue list: an issue matches when its body holds the quoted text.
@@ -157,7 +158,12 @@ func (f *fakeGh) view(number int) model.CommandResult {
 		comments = append(comments, map[string]string{"body": comment})
 	}
 
-	return model.CommandResult{Stdout: mustMarshal(map[string]any{"state": state, "labels": labels, "comments": comments, "number": number})}
+	assignees := []map[string]string{}
+	for _, login := range issue.assignees {
+		assignees = append(assignees, map[string]string{"login": login})
+	}
+
+	return model.CommandResult{Stdout: mustMarshal(map[string]any{"state": state, "labels": labels, "comments": comments, "assignees": assignees, "number": number})}
 }
 
 func (f *fakeGh) change(command string, number int, flags map[string]string) model.CommandResult {
@@ -180,6 +186,10 @@ func (f *fakeGh) change(command string, number int, flags map[string]string) mod
 
 		if label := flags["--remove-label"]; label != "" {
 			issue.labels = slices.DeleteFunc(issue.labels, func(l string) bool { return l == label })
+		}
+
+		if login := flags["--add-assignee"]; login != "" {
+			issue.assignees = append(issue.assignees, login)
 		}
 	}
 
@@ -306,20 +316,46 @@ func TestCreate_FilesTheOperatorFlagAsTheOperatorLabelBesideTheSeverity(t *testi
 	assert.NotContains(t, fake.calls[len(fake.calls)-1], "operator")
 }
 
-func TestAssign_AddsTheAssigneeWithOneEdit(t *testing.T) {
+func TestAssign_ReadsTheAssigneesAndAddsTheLoginWithOneEdit(t *testing.T) {
 	t.Parallel()
 
 	run := &proctest.Scripted{}
+	run.Plan(`{"assignees":[{"login":"bob"}]}`, "issue", "view")
 	run.Plan("", "issue", "edit")
 
 	s, err := github.New(ghRepo, run)
 	require.NoError(t, err)
 	require.NoError(t, s.Assign(t.Context(), "7", "alice"))
-	assert.Equal(t, [][]string{{"issue", "edit", "7", "--repo", ghRepo, "--add-assignee", "alice"}}, run.Calls)
+	assert.Equal(t, [][]string{
+		{"issue", "view", "7", "--repo", ghRepo, "--json", "assignees"},
+		{"issue", "edit", "7", "--repo", ghRepo, "--add-assignee", "alice"},
+	}, run.Calls)
 
 	down, err := github.New(ghRepo, proctest.Always(model.CommandResult{ExitCode: 1}))
 	require.NoError(t, err)
 	require.Error(t, down.Assign(t.Context(), "7", "alice"))
+}
+
+func TestAssign_ARepeatedCallSendsNoSecondEdit(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeGh()
+	fake.issues[7] = &fakeIssue{}
+	s := writerOver(t, fake)
+
+	require.NoError(t, s.Assign(t.Context(), "7", "alice"))
+	require.NoError(t, s.Assign(t.Context(), "7", "Alice"))
+
+	edits := 0
+
+	for _, call := range fake.calls {
+		if call[1] == "edit" {
+			edits++
+		}
+	}
+
+	assert.Equal(t, 1, edits, "the second call finds the login and sends no edit")
+	assert.Equal(t, []string{"alice"}, fake.issues[7].assignees)
 }
 
 func TestCreate_FindsTheKeyInTheListWhenTheSearchIndexLags(t *testing.T) {

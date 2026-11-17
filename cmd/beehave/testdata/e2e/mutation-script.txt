@@ -9,11 +9,12 @@ chmod 755 fake/gremlins
 chmod 755 fake/timeout
 env PATH=$WORK/fake:$PATH
 
-# The repository has the script, a base commit and a change to a Go source file.
+# The repository has the module and the script at its top folder, a base commit and a change to a Go source file.
 exec git init -q -b main repo
 cp a.go repo/a.go
+cp gomod repo/go.mod
 script mutation-pr.sh repo/scripts/mutation-pr.sh
-exec git -C repo add a.go scripts/mutation-pr.sh
+exec git -C repo add a.go go.mod scripts
 exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
 exec git -C repo checkout -q -b change
 cp a2.go repo/a.go
@@ -30,19 +31,35 @@ stdout '^      KILLED CONDITIONALS_NEGATION at a.go:30:4$'
 ! stdout 'finding: a.go:4'
 ! stdout 'finding: a.go:5'
 ! stdout 'finding: a.go:6'
+stdout '^mutation-pr: 1 mutant\(s\) lived, 1 finding line\(s\) printed\. Kill each one with a test\.$'
+# The engine reads the lived mutant from its marker line, after the counts line, and the end marker is the last "mutation-pr:" line.
+stdout -count=1 '^mutation-pr: lived '
+stdout '(?s)^mutation-pr: applied=3 .*^mutation-pr: lived a\.go:3 CONDITIONALS_NEGATION$'
+stdout '^mutation-pr: end count=1 printed=1$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 
-# A report with no lived mutant: the script passes and prints no finding.
+# A report with no lived mutant: the script passes and prints no finding, no marker line and the end marker with count 0.
 env GREMLINS_REPORT=$WORK/clean.json
 exec sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
 ! stdout '^finding: '
+! stdout '^mutation-pr: lived '
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 
+-- gomod --
+module example.com/r
+
+go 1.27
 -- a.go --
 package a
 -- a2.go --
 package a
 
 func F(x int) bool { return x > 0 }
+func G(x int) int  { return x + 1 }
+func H(x int) int  { return -x }
+func I(x int)      { x++ }
 -- fake/gremlins --
 #!/bin/sh
 cp "$GREMLINS_REPORT" "$5"

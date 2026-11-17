@@ -1,0 +1,376 @@
+# scripts/mutation-pr.sh over a stub gremlins: each result of the script and each input that it refuses.
+# The script never passes a run that tested nothing. It reads "no candidate" from an all-skipped report only after the report proves its paths.
+[!exec:jq] skip
+[!exec:git] skip
+env HOME=$WORK/home
+env GIT_CONFIG_GLOBAL=/dev/null
+env GIT_CONFIG_NOSYSTEM=1
+chmod 755 fake/gremlins
+chmod 755 fake/timeout
+chmod 755 bare/git
+chmod 755 bare/dirname
+env SAVED_PATH=$PATH
+env PATH=$WORK/fake:$PATH
+
+# The base commit holds the module and the script at the top folder of the repository, b.go, which no branch changes,
+# and c.go, which only the branches twoedits and renamed change. Each branch changes one thing.
+exec git init -q -b main repo
+cp a.go repo/a.go
+cp b.go repo/b.go
+cp c.go repo/c.go
+cp gomod repo/go.mod
+script mutation-pr.sh repo/scripts/mutation-pr.sh
+exec git -C repo add a.go b.go c.go go.mod scripts
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+exec git -C repo checkout -q -b docs
+cp notes.txt repo/notes.txt
+exec git -C repo add notes.txt
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m docs
+exec git -C repo checkout -q -b nocand main
+cp nocand.go repo/a.go
+exec git -C repo add a.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m nocand
+exec git -C repo checkout -q -b cand main
+cp cand.go repo/a.go
+exec git -C repo add a.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m cand
+
+# MUTATION_TIMEOUT accepts only a positive whole number of seconds. The fake gremlins fails the run if it starts.
+env MUTATION_TIMEOUT=0
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: MUTATION_TIMEOUT is "0"\. Set it to a positive whole number of seconds, such as 1200\.$'
+! stdout 'the fake gremlins ran'
+env MUTATION_TIMEOUT=ten
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: MUTATION_TIMEOUT is "ten"\.'
+env MUTATION_TIMEOUT=-5
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: MUTATION_TIMEOUT is "-5"\.'
+env MUTATION_TIMEOUT=
+
+# A diff with no Go source change is not applicable, and it needs no tool: the path holds git and dirname only.
+exec git -C repo checkout -q docs
+env PATH=$WORK/bare
+exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: not applicable: no Go source change against main$'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
+env PATH=$WORK/fake:$SAVED_PATH
+
+# Changed lines whose operators sit only in a comment, a string or a pointer type: gremlins finds mutants in b.go only,
+# all skipped. The report names files under the module root, so the run passes as "no candidate".
+# This path prints no counts line: a counts line with applied=0 is a failed run for the reader of the job log.
+exec git -C repo checkout -q nocand
+env GREMLINS_REPORT=$WORK/allskipped.json
+exec /bin/sh repo/scripts/mutation-pr.sh main
+! stdout '^mutation-pr: applied='
+stdout '^mutation-pr: no candidate: no changed line of a\.go holds an operator that gremlins mutates; the report marks all 2 mutant\(s\) of the module skipped$'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
+
+# A changed line with an operator and a report with no mutant for it fails: an empty report, a report of other paths,
+# a report with no mutant, or mutants on changed lines that are all not covered.
+# A run that stops before its counts line is a tool error and prints no end marker. A run that fails after it prints the end marker.
+exec git -C repo checkout -q cand
+env GREMLINS_REPORT=$WORK/empty.json
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: gremlins wrote no report: it found no mutant in the module$'
+! stdout 'no candidate'
+! stdout '^mutation-pr: end '
+env GREMLINS_REPORT=$WORK/otherpath.json
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: the gremlins report names files that are not under .*: internal/a\.go internal/b\.go\. Its paths do not match the diff\.$'
+! stdout 'no candidate'
+! stdout '^mutation-pr: end '
+env GREMLINS_REPORT=$WORK/nomutant.json
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: the gremlins report holds no mutant$'
+! stdout 'no candidate'
+stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'
+stdout '(?s)^mutation-pr: applied=0 .*^mutation-pr: the gremlins report holds no mutant$'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
+env GREMLINS_REPORT=$WORK/notcovered.json
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'
+stdout '^mutation-pr: no mutant was applied\.'
+! stdout 'no candidate'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
+
+# A report that does not match the diff fails, even when its files exist: a skipped mutant on a changed line,
+# or a mutant off the changed lines that gremlins did not skip.
+env GREMLINS_REPORT=$WORK/skippedchanged.json
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: the gremlins report does not match the diff against main: .* at a\.go:3$'
+! stdout 'no candidate'
+! stdout '^mutation-pr: end '
+env GREMLINS_REPORT=$WORK/keptunchanged.json
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: the gremlins report does not match the diff against main: .* at b\.go:3$'
+! stdout 'no candidate'
+! stdout '^mutation-pr: end '
+
+# The changed lines are the lines that gremlins reads from its own diff, which has context lines. For each hunk,
+# gremlins starts at the first line after the leading context and counts one line for each added line.
+# Edits on lines 3 and 7 of c.go form one hunk, so gremlins keeps lines 3 and 4 and skips line 7. That report matches.
+exec git -C repo checkout -q -b twoedits main
+cp c-twoedits.go repo/c.go
+exec git -C repo add c.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m twoedits
+env GREMLINS_REPORT=$WORK/twoedits.json
+exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=2 killed=2 lived=0 timed_out=0$'
+! stdout 'does not match'
+
+# gremlins finds renames in its diff. A file that is renamed and edited has only its edited line changed. That report matches.
+exec git -C repo checkout -q -b renamed main
+exec git -C repo mv c.go d.go
+cp d-renamed.go repo/d.go
+exec git -C repo add d.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m renamed
+env GREMLINS_REPORT=$WORK/renamed.json
+exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
+! stdout 'does not match'
+# diff.noprefix removes the "b/" of the diff. gremlins still reads a file at the top folder by its name, and so does the script.
+exec git -C repo config diff.noprefix true
+exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
+! stdout 'does not match'
+exec git -C repo config --unset diff.noprefix
+
+# With diff.noprefix, gremlins reads a file in a subfolder without its first folder, and skips its mutants. So the script
+# gives the git of gremlins a config that keeps the prefixes, after the config that the environment already holds.
+# This fake gremlins reads its own git diff: it keeps the mutant of sub/e.go only when the diff names "b/sub/e.go".
+exec git -C repo checkout -q -b subfolder main
+mkdir repo/sub
+cp cand.go repo/sub/e.go
+exec git -C repo add sub/e.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m subfolder
+exec git -C repo config diff.noprefix true
+env GIT_CONFIG_COUNT=1
+env GIT_CONFIG_KEY_0=e2e.kept
+env GIT_CONFIG_VALUE_0=yes
+env GREMLINS_REPORT=owndiff
+exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
+! stdout 'does not match'
+exec git -C repo config --unset diff.noprefix
+exec git -C repo config diff.mnemonicPrefix true
+exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
+! stdout 'does not match'
+env GIT_CONFIG_COUNT=0
+exec git -C repo config --unset diff.mnemonicPrefix
+
+# More than 50 lived mutants on changed lines: 50 finding lines and 50 marker lines; the summary line and the end marker hold the full count.
+exec git -C repo checkout -q -b many main
+cp many.go repo/a.go
+exec git -C repo add a.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m many
+env GREMLINS_REPORT=many
+! exec /bin/sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: applied=51 killed=0 lived=51 timed_out=0$'
+stdout -count=50 '^finding: a\.go:[0-9]+: a mutant lived: ARITHMETIC_BASE$'
+stdout '^finding: a\.go:51: '
+! stdout '^finding: a\.go:52: '
+stdout '^mutation-pr: 51 mutant\(s\) lived, 50 finding line\(s\) printed\. Kill each one with a test\.$'
+stdout -count=50 '^mutation-pr: lived a\.go:[0-9]+ ARITHMETIC_BASE$'
+stdout '^mutation-pr: lived a\.go:51 '
+! stdout '^mutation-pr: lived a\.go:52 '
+stdout '^mutation-pr: end count=51 printed=50$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
+
+# The paths of gremlins and git match only at the top folder of the repository, in the module root. Each other place fails before gremlins starts.
+env GREMLINS_REPORT=
+exec git init -q -b main nested
+mkdir nested/sub
+cp a.go nested/sub/a.go
+cp gomod nested/sub/go.mod
+script mutation-pr.sh nested/sub/scripts/mutation-pr.sh
+exec git -C nested add sub
+exec git -C nested -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+exec git -C nested checkout -q -b cand
+cp cand.go nested/sub/a.go
+exec git -C nested add sub
+exec git -C nested -c user.name=e2e -c user.email=e2e@example.com commit -q -m cand
+! exec /bin/sh nested/sub/scripts/mutation-pr.sh main
+stdout '^mutation-pr: .*/sub is not the top folder of its git repository$'
+! stdout 'the fake gremlins ran'
+
+exec git init -q -b main nomod
+cp a.go nomod/a.go
+script mutation-pr.sh nomod/scripts/mutation-pr.sh
+exec git -C nomod add a.go scripts
+exec git -C nomod -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+exec git -C nomod checkout -q -b cand
+cp cand.go nomod/a.go
+exec git -C nomod add a.go
+exec git -C nomod -c user.name=e2e -c user.email=e2e@example.com commit -q -m cand
+! exec /bin/sh nomod/scripts/mutation-pr.sh main
+stdout '^mutation-pr: .*/nomod has no go\.mod, so it is not the module root$'
+! stdout 'the fake gremlins ran'
+
+-- gomod --
+module example.com/r
+
+go 1.27
+-- a.go --
+package a
+-- b.go --
+package a
+
+func B(x int) bool { return x > 0 }
+-- c.go --
+package a
+
+var c3 = 3 + 1
+var c4 = 4 + 1
+
+// Lines 5 and 6 hold no operator.
+var c7 = 7 + 1
+
+// Lines 8 to 10 hold no operator.
+// They give the hunk its trailing context.
+-- c-twoedits.go --
+package a
+
+var c3 = 3 - 1
+var c4 = 4 + 1
+
+// Lines 5 and 6 hold no operator.
+var c7 = 7 - 1
+
+// Lines 8 to 10 hold no operator.
+// They give the hunk its trailing context.
+-- d-renamed.go --
+package a
+
+var c3 = 3 - 1
+var c4 = 4 + 1
+
+// Lines 5 and 6 hold no operator.
+var c7 = 7 + 1
+
+// Lines 8 to 10 hold no operator.
+// They give the hunk its trailing context.
+-- notes.txt --
+notes
+-- nocand.go --
+package a
+
+// G returns a - b + c, in words only.
+func G(p *int) string { return "x+y-z" }
+-- cand.go --
+package a
+
+func F(x int) bool { return x > 0 }
+-- many.go --
+package a
+var v2 = 2 + 1
+var v3 = 3 + 1
+var v4 = 4 + 1
+var v5 = 5 + 1
+var v6 = 6 + 1
+var v7 = 7 + 1
+var v8 = 8 + 1
+var v9 = 9 + 1
+var v10 = 10 + 1
+var v11 = 11 + 1
+var v12 = 12 + 1
+var v13 = 13 + 1
+var v14 = 14 + 1
+var v15 = 15 + 1
+var v16 = 16 + 1
+var v17 = 17 + 1
+var v18 = 18 + 1
+var v19 = 19 + 1
+var v20 = 20 + 1
+var v21 = 21 + 1
+var v22 = 22 + 1
+var v23 = 23 + 1
+var v24 = 24 + 1
+var v25 = 25 + 1
+var v26 = 26 + 1
+var v27 = 27 + 1
+var v28 = 28 + 1
+var v29 = 29 + 1
+var v30 = 30 + 1
+var v31 = 31 + 1
+var v32 = 32 + 1
+var v33 = 33 + 1
+var v34 = 34 + 1
+var v35 = 35 + 1
+var v36 = 36 + 1
+var v37 = 37 + 1
+var v38 = 38 + 1
+var v39 = 39 + 1
+var v40 = 40 + 1
+var v41 = 41 + 1
+var v42 = 42 + 1
+var v43 = 43 + 1
+var v44 = 44 + 1
+var v45 = 45 + 1
+var v46 = 46 + 1
+var v47 = 47 + 1
+var v48 = 48 + 1
+var v49 = 49 + 1
+var v50 = 50 + 1
+var v51 = 51 + 1
+var v52 = 52 + 1
+-- fake/gremlins --
+#!/bin/sh
+[ -n "${GREMLINS_REPORT:-}" ] || { echo "the fake gremlins ran"; exit 99; }
+if [ "$GREMLINS_REPORT" = many ]; then
+	{
+		printf '{"files":[{"file_name":"a.go","mutations":['
+		i=2
+		while [ "$i" -le 52 ]; do
+			[ "$i" -eq 2 ] || printf ','
+			printf '{"line":%d,"type":"ARITHMETIC_BASE","status":"LIVED"}' "$i"
+			i=$((i + 1))
+		done
+		printf ']}]}'
+	} > "$5"
+	exit 0
+fi
+if [ "$GREMLINS_REPORT" = owndiff ]; then
+	[ "$(git config --get e2e.kept)" = yes ] || { echo "the fake gremlins lost the git config of the environment"; exit 98; }
+	state=SKIPPED
+	if git diff --merge-base "$3" | grep -q '^+++ b/sub/e\.go$'; then state=KILLED; fi
+	printf '{"files":[{"file_name":"sub/e.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"%s"}]}]}' "$state" > "$5"
+	exit 0
+fi
+cp "$GREMLINS_REPORT" "$5"
+-- fake/timeout --
+#!/bin/sh
+shift 3
+exec "$@"
+-- bare/git --
+#!/bin/sh
+PATH=$SAVED_PATH
+export PATH
+exec git "$@"
+-- bare/dirname --
+#!/bin/sh
+PATH=$SAVED_PATH
+export PATH
+exec dirname "$@"
+-- empty.json --
+-- allskipped.json --
+{"files":[{"file_name":"b.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"},{"line":3,"type":"CONDITIONALS_BOUNDARY","status":"SKIPPED"}]}]}
+-- otherpath.json --
+{"files":[{"file_name":"internal/a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"}]},{"file_name":"internal/b.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"}]}]}
+-- nomutant.json --
+{"files":[]}
+-- notcovered.json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"NOT COVERED"},{"line":3,"type":"CONDITIONALS_BOUNDARY","status":"NOT COVERED"}]},{"file_name":"b.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"}]}]}
+-- skippedchanged.json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"}]},{"file_name":"b.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"}]}]}
+-- twoedits.json --
+{"files":[{"file_name":"b.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"}]},{"file_name":"c.go","mutations":[{"line":3,"type":"ARITHMETIC_BASE","status":"KILLED"},{"line":4,"type":"ARITHMETIC_BASE","status":"KILLED"},{"line":7,"type":"ARITHMETIC_BASE","status":"SKIPPED"}]}]}
+-- renamed.json --
+{"files":[{"file_name":"b.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"SKIPPED"}]},{"file_name":"d.go","mutations":[{"line":3,"type":"ARITHMETIC_BASE","status":"KILLED"},{"line":4,"type":"ARITHMETIC_BASE","status":"SKIPPED"},{"line":7,"type":"ARITHMETIC_BASE","status":"SKIPPED"}]}]}
+-- keptunchanged.json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]},{"file_name":"b.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}

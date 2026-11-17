@@ -3,6 +3,8 @@ package agent
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
 )
@@ -48,6 +50,31 @@ const (
 	StopTurns  Stop = "turns"
 	StopBudget Stop = "budget"
 )
+
+// LimitKind names the provider limit that refused more work.
+type LimitKind string
+
+// The provider limits that stop a run.
+const (
+	// LimitRate is a usage window of the plan, such as five hours or seven days.
+	LimitRate LimitKind = "rate"
+	// LimitSpend is a cap on the dollars that the account spends past its plan.
+	LimitSpend LimitKind = "spend"
+)
+
+// Limit is a provider limit that refused more work. Window is the name that the CLI gives the limit, such as five_hour, or empty when it names none.
+// ResetsAt is the time when the provider takes work again, or the zero time when the line gives none.
+// The JSON form is the form that the engine records.
+type Limit struct {
+	Kind     LimitKind `json:"kind"`
+	Window   string    `json:"window,omitempty"`
+	ResetsAt time.Time `json:"resets_at,omitzero"`
+}
+
+// Name names the limit for a message, such as "rate limit five_hour", or "rate limit" when the CLI names no window.
+func (l Limit) Name() string {
+	return strings.TrimSpace(string(l.Kind) + " limit " + l.Window)
+}
 
 // Launch is what an adapter adds to the start of one run, beyond the arguments of its profile.
 // Args are appended to the command line. Env is added to the environment after the allow-list; it never replaces a login variable or the token.
@@ -97,6 +124,10 @@ type Call struct {
 // A line with Spent above 0 counts as priced without it. A capped run of a profile with StreamsCost ends as a budget cap only when no line was priced.
 // A CLI that reports a run total in Cost does not also set Spent for the same dollars.
 // Usage is the tokens that the line reports for the part of the run that it closes, or zero when it reports none; the caller adds the Usage of all lines.
+// Limit is the provider limit that the line reports as the reason the CLI refused more work, or nil when it reports none. A line that only warns that
+// a limit is near reports none.
+// Denied is the reason why the provider refused more work in a way that no wait cures, such as usage credits that the account does not have or a pause of
+// the organization, or empty when the line reports none. A line with Denied reports no Limit.
 type Seen struct {
 	Cost    float64
 	Spent   float64
@@ -109,11 +140,14 @@ type Seen struct {
 	Result  bool
 	Invalid bool
 	Priced  bool
+	Limit   *Limit
+	Denied  string
 }
 
 // Adapter is one agent CLI. The runner calls Profile and, when the spec sets a guard, Guard before it starts a run.
 // Call order for one run: Profile, then Guard or Sandbox, before the CLI starts, then Line and Calls for each output line while it runs, then TranscriptPath after it ends.
-// Line and Calls never see a line of an earlier run, and TranscriptPath needs the session id that Line returned.
+// Line and Calls never see a line of an earlier run, and TranscriptPath needs the session id that Line returned. A start that follows a lost run also
+// calls TranscriptPath before the CLI starts, with the session that Line returned in the lost run.
 // ReadUsage runs outside a run, when the pool or the doctor asks for the usage of one runner of this agent.
 type Adapter interface {
 	// Profile returns the command line and the login variables of the CLI.
@@ -132,6 +166,7 @@ type Adapter interface {
 	// the dollars, the caller for the calls), so a call that keeps state for a line must not change what a later reader gets for it in any field but
 	// Seen.Spent. The runner reads Seen.Spent once for each line; no other reader does, so a dedupe of the dollars by message id is allowed.
 	Calls(line string) Seen
-	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Nothing reads the file.
+	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Before a start that follows
+	// a lost run, the agents resume the session of that run only when the file exists, and they do not read it.
 	TranscriptPath(configDir, dir, session string) string
 }

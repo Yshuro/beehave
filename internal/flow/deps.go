@@ -41,6 +41,20 @@ type AgentRequest struct {
 	OutputFile string
 	Outputs    []string
 	Started    func(pid int)
+	// Named receives each new session id of the agent at the output line that holds it, before the run ends. The engine saves the id at once,
+	// so a replay of a lost step can resume the session.
+	Named func(session string)
+	// Lost is set for a start that follows the loss of a start that named a session. It is nil for any other start.
+	Lost *LostRun
+}
+
+// LostRun is what the agent of a step needs after the loss of an earlier start that named a session. Session is the session to resume.
+// Continue is the prompt of the resumed session. Note goes after the prompt of a fresh run, when the session cannot resume:
+// the CLI has no resume option, or the transcript file of the session is missing.
+type LostRun struct {
+	Session  string
+	Note     string
+	Continue string
 }
 
 // GateResult is the outcome of a gate that ran. Report holds the findings when Passed is false. Head is the commit the gate ran on.

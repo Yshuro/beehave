@@ -236,7 +236,7 @@ func (s *script) batchScope(name string) error {
 	return nil
 }
 
-// members reads the `prs` argument: a list of structs with the text fields `item` and `head`.
+// members reads the `prs` argument: a list of structs with the text fields `item` and `head`, and the optional bool field `approved`.
 func members(v starlark.Value) ([]batch.Member, error) {
 	prs, err := workflow.PullRequests(v)
 	if err != nil {
@@ -245,7 +245,7 @@ func members(v starlark.Value) ([]batch.Member, error) {
 
 	list := make([]batch.Member, len(prs))
 	for i, pr := range prs {
-		list[i] = batch.Member{Item: pr.Item, Head: pr.Head}
+		list[i] = batch.Member{Item: pr.Item, Head: pr.Head, Approved: pr.Approved}
 	}
 
 	return list, nil
@@ -411,8 +411,9 @@ func (b *batchBase) Merge(ctx context.Context, m batch.Member, prefixTree string
 		return batch.MergeOutcome{Status: batch.StatusRefused, Reason: read.Refused}, nil
 	}
 
+	// The approval is a fact about this member only, so the call settings never carry one.
 	settings := b.call.settings
-	settings.GatedTree, settings.Intent = prefixTree, &read.Intent
+	settings.GatedTree, settings.Intent, settings.Approved = prefixTree, &read.Intent, m.Approved
 
 	return b.mergeReads(ctx, m, settings)
 }
@@ -486,17 +487,14 @@ func (b *batchBase) stepName(kind, item string, read int) string {
 	return name
 }
 
-// verdictOf maps the result of merge.Run to the answer of a batch. A refusal of the member rejects it. A mergeable state that is UNKNOWN is unsettled,
-// and the caller reads again. A stop on the tree proof is an error, as it is for the merge builtin.
+// verdictOf maps the result of merge.Run to the answer of a batch. A refusal of the member rejects it, and a transient one defers it, with every line
+// of the refusal as the reason. A mergeable state that is UNKNOWN is unsettled, and the caller reads again. A stop on the tree proof is an error, as it is for the merge builtin.
 func verdictOf(got merge.Result) (out batch.MergeOutcome, unsettled bool, err error) {
 	if got.Stop == merge.Done {
 		return batch.MergeOutcome{Status: batch.StatusMerged}, false, nil
 	}
 
-	last := ""
-	if len(got.Lines) > 0 {
-		last = got.Lines[len(got.Lines)-1]
-	}
+	reason := strings.Join(got.Refusal, "\n")
 
 	switch got.Reason {
 	case merge.TreeProof:
@@ -505,9 +503,9 @@ func verdictOf(got merge.Result) (out batch.MergeOutcome, unsettled bool, err er
 		return batch.MergeOutcome{Reason: "mergeable is UNKNOWN"}, true, nil
 	case merge.Transient:
 		// A transient refusal defers the member without a second read. The merge call may have reached the forge, and a second merge step is never run in one attempt.
-		return batch.MergeOutcome{Status: batch.StatusUnsettled, Reason: last}, false, nil
+		return batch.MergeOutcome{Status: batch.StatusUnsettled, Reason: reason}, false, nil
 	case merge.Plain, merge.Queued:
 	}
 
-	return batch.MergeOutcome{Status: batch.StatusRefused, Reason: last}, false, nil
+	return batch.MergeOutcome{Status: batch.StatusRefused, Reason: reason}, false, nil
 }

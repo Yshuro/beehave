@@ -1,6 +1,7 @@
 package merge_test
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -40,10 +41,12 @@ type world struct {
 	tipFound     bool
 	body         string
 	fails        map[string]bool
-	views        int
-	calls        []string
-	writes       []string
-	listed       []string
+	// down is the error of a method named in fails. Nil means errDown.
+	down   error
+	views  int
+	calls  []string
+	writes []string
+	listed []string
 	// counts is what the forge counts for the pull request. Nil means the count of the first read.
 	counts *counts
 	// tipReads are the answers of the next reads of the base tip, in order. When they are used up, the read gives tip.
@@ -162,7 +165,7 @@ func (w *world) set(t *testing.T, over map[string]any) *world {
 
 func (w *world) fail(name string) error {
 	if w.fails[name] {
-		return fmt.Errorf("%s: %w", name, errDown)
+		return fmt.Errorf("%s: %w", name, cmp.Or(w.down, errDown))
 	}
 
 	return nil

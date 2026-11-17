@@ -1,5 +1,4 @@
 # Cancel stops a run while its agent works. status shows the run as cancelled.
-env OWNER_LOGIN=owner
 ! exec beehave run 7 --workflow flow/workflow.star &
 waitfile started
 

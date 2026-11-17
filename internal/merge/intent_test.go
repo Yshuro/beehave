@@ -182,7 +182,7 @@ func TestRun_AnIntentDoesNotSkipTheChecksTheHoldOrTheForbiddenText(t *testing.T)
 	req = replay()
 	req.ForbidText = compiled([]string{"secret"})
 	forbidden := mergedWorld(t, intentTime.Add(time.Minute), map[string]any{"body": "a secret"})
-	assert.Contains(t, last(forbidden.run(req)), "a secret")
+	assert.Equal(t, "  line 1 matches pattern 1 of forbid_text", last(forbidden.run(req)))
 }
 
 func TestRun_AnIntentSkipsTheGuardsOfAnOpenPullRequest(t *testing.T) {

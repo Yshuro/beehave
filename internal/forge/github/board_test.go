@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,6 +41,29 @@ func TestPlaceCard_AddsThePullRequestAndSetsTheOptionOfTheStatusField(t *testing
 		{"project", "item-add", "3", "--owner", "owner", "--url", "https://github.com/" + repo + "/pull/8", "--format", "json"},
 		{"project", "item-edit", "--id", "PVTI_9", "--project-id", "PVT_1", "--field-id", "F1", "--single-select-option-id", "o2"},
 	}, run.Calls)
+}
+
+// The repeat of a placement is safe because GitHub answers an add of a card that is on the board with the id of the existing card:
+// "If you try to add an item that already exists, the existing item ID is returned instead."
+// https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects
+// The edit then sets the Status field to the option that the call names, which is the same value again. No test touches a real board.
+// This test pins the exact calls of both runs, so a change to a call that is not an add by address, or an edit that is not a set, turns it red.
+func TestPlaceCard_ARepeatSendsTheSameAddByAddressAndTheSameSet(t *testing.T) {
+	t.Parallel()
+
+	run, place := boardForge(t)
+	card := model.Card{Board: 3, Number: 8, Pull: true, Status: "In Review"}
+
+	require.NoError(t, place(card))
+	require.NoError(t, place(card))
+
+	once := [][]string{
+		{"project", "view", "3", "--owner", "owner", "--format", "json"},
+		{"project", "field-list", "3", "--owner", "owner", "--format", "json"},
+		{"project", "item-add", "3", "--owner", "owner", "--url", "https://github.com/" + repo + "/pull/8", "--format", "json"},
+		{"project", "item-edit", "--id", "PVTI_9", "--project-id", "PVT_1", "--field-id", "F1", "--single-select-option-id", "o2"},
+	}
+	assert.Equal(t, append(slices.Clone(once), once...), run.Calls)
 }
 
 func TestPlaceCard_AnIssueGetsTheIssueAddressAndAnOwnerThatTheCallNamesIsUsed(t *testing.T) {

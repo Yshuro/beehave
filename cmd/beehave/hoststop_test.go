@@ -142,7 +142,7 @@ func TestHostStop_RefusesAProjectWithNoHostAndAProviderWithNoTeardown(t *testing
 
 // clusters is a hostStop whose project declares gpu and gpu-b. Every host it builds records the cluster it was built for.
 func clusters(built *[]string, h host.Host) hostStop {
-	project := model.Project{Name: "p", BuildHost: "gpu", BuildHosts: []string{"gpu", "gpu-b"}, Host: &model.HostConfig{}}
+	project := model.Project{Name: "p", BuildHost: "gpu", BuildHosts: []string{"gpu", "gpu-b"}, Host: loaderHost()}
 
 	return hostStop{programs: programs{
 		declared: func(name, cluster string) (string, error) {

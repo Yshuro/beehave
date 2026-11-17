@@ -706,11 +706,20 @@ func (p pulls) Reviewed(ctx context.Context, project, item, reviewed string) (re
 	return standing, nil
 }
 
-// Ready takes the pull request of the item out of draft.
+// Ready takes the pull request of the item out of draft. It reads the draft state first and makes no call for a pull request that is ready, so a step that runs again changes nothing.
 func (p pulls) Ready(ctx context.Context, project, item string) error {
 	built, number, err := p.find(ctx, project, item)
 	if err != nil {
 		return err
+	}
+
+	view, err := built.PRView(ctx, number, "isDraft")
+	if err != nil {
+		return err
+	}
+
+	if view.IsDraft != nil && !*view.IsDraft {
+		return nil
 	}
 
 	return built.SetDraft(ctx, number, false)
@@ -978,7 +987,9 @@ func repoRefusal(err error) (merge.Result, bool) {
 		return merge.Result{}, false
 	}
 
-	return merge.Result{Stop: merge.Refused, Lines: []string{wrong.Error()}}, true
+	lines := []string{wrong.Error()}
+
+	return merge.Result{Stop: merge.Refused, Lines: lines, Refusal: lines}, true
 }
 
 // audited returns the issues that the item names, or the line that says why the audit is off.

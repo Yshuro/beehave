@@ -135,6 +135,31 @@ func TestItemWrite_AReplayWritesNothingTwiceAndKeepsTheStepNames(t *testing.T) {
 	assert.Equal(t, []string{"item_create:c1#1", "wait:ask#1", "item_comment:n1#1", "item_status:hold#1"}, stepNames(t, next))
 }
 
+func TestItemWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct{ call, method, want string }{
+		"item_create":  {`item_create(title = "t", key = "k", name = "c")`, "create", "create|" + testProject + "|" + testRun + ":k|t"},
+		"item_comment": {`item_comment(id = "n-1", text = "hi", key = "k", name = "c")`, "comment", "comment|" + testProject + "|n-1|" + testRun + ":k|hi"},
+		"item_status":  {`item_status(id = "n-1", status = "closed", name = "c")`, "status", "status|" + testProject + "|n-1|closed"},
+		"item_assign":  {`item_assign(id = "n-1", assignee = "alice", name = "c")`, "assign", "assign|" + testProject + "|n-1|alice"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			w := &crashWriter{writer: newFakeWriter(), crash: newCrash(t, h), on: tt.method}
+			h.writer = w
+
+			crashAndResume(t, h, h.deps(), tt.call+"\n")
+
+			assert.Equal(t, []string{tt.want, tt.want}, w.calls, "the rerun reached the tracker with the key and the arguments of the first call")
+		})
+	}
+}
+
 func TestItemWrite_ABadStatusFailsBeforeAnyWrite(t *testing.T) {
 	t.Parallel()
 

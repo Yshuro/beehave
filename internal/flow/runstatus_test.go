@@ -165,6 +165,19 @@ func TestStatus_AnOpenRunNamesTheStepThatRunsNow(t *testing.T) {
 	assert.Empty(t, onlyRun(t, client).Now, "a finished run runs no step")
 }
 
+// waitForTheDeadline waits until the open run shows its question and the deadline of its wait. The run sets the question before the receive records its deadline, so a wait on the question alone can read the run in between.
+func waitForTheDeadline(t *testing.T, client *Client) {
+	t.Helper()
+
+	read := newStatusRead(client)
+
+	pollUntil(t, "the open run to show a question and a deadline", read.last, func() (bool, error) {
+		infos := read.next()
+
+		return read.err == nil && len(infos) == 1 && infos[0].Question != "" && !infos[0].Deadline.IsZero(), nil
+	})
+}
+
 func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *testing.T) {
 	t.Parallel()
 
@@ -178,7 +191,7 @@ func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *test
 
 	before := time.Now()
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitForTheDeadline(t, client)
 
 	info := onlyRun(t, client)
 	assert.Equal(t, "What now?", info.Question)
@@ -224,6 +237,7 @@ func TestStatus_ARunThatWaitsWithNoDeadlineShowsNone(t *testing.T) {
 
 	done := runInBackground(engine, testItem)
 	waitForTheOwner(t, harness)
+	waitForTheSleep(t, engine)
 
 	info := onlyRun(t, client)
 	assert.True(t, info.Deadline.IsZero())

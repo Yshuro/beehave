@@ -137,7 +137,7 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 
 	for i, name := range names {
 		go func() {
-			_, err := engines[i].RunFile(testItem, testProject, files[i])
+			_, err := runPipeline(engines[i], files[i])
 			results <- raceOutcome{who: name, err: err}
 		}()
 	}
@@ -170,7 +170,7 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 
 		if name == winner.who {
 			assert.Positive(t, started, "the winner starts its agents")
-			assert.Equal(t, []string{"claim:" + testItem, "ready:" + testItem, "release:" + testItem}, lives[i].seen())
+			assert.Equal(t, []string{"claim:" + testItem, "release:" + testItem}, lives[i].seen())
 
 			continue
 		}
@@ -189,7 +189,7 @@ func TestExampleClaim_AnItemThatAnotherRunHoldsIsRefusedAndNoAgentStarts(t *test
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	life := &claimingLife{fakeLifecycle: rig.h.life, claims: claims[1], owner: "latecomer"}
 
-	_, err := engineWith(t, rig, life).RunFile(testItem, testProject, file)
+	_, err := runPipeline(engineWith(t, rig, life), file)
 
 	var refusal *claim.Error
 

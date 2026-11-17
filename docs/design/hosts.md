@@ -84,6 +84,24 @@ The unit is stopped and reset after the bank. So the poll that first reads a fin
 
 `host/sshtest` is the fake machine, and the adapter runs `host/hosttest` against it.
 
+#### Make a build host
+
+`scripts/host-setup.sh` makes a linux amd64 machine ready for the ssh provider, then proves it. Run it on the machine, as the login user of the jobs, from a clone of the repository at the commit under test:
+
+```sh
+sh scripts/host-setup.sh --work-root /home/jobs/dogfood --watchdog idle-selfdestruct.service
+```
+
+- **Refusals.** Before any change, it refuses the root user, a machine that is not linux amd64, sudo that asks for a password, and a work root that the adapter refuses. It also refuses a work root that holds a single quote, a work root that is not its canonical path (a `.` or `..` part, a doubled or trailing slash, or a link), a system folder such as `/` or `/home`, and an existing work root that the login user does not own or cannot write. A missing work root needs a parent folder that exists and that the login user owns. The script makes only that last folder, as the login user, with `mkdir` and no `-p`. It uses no `sudo` and no `chown` for the work root, and it never changes the owner or the mode of a folder. If another user or root owns the parent, the script refuses and prints the command that makes the work root by hand. In an existing work root the script writes two things only: the folder `.beehave` and the record in it. It changes neither the owner nor the mode of the work root.
+- **The watchdog.** The machine needs a self-delete watchdog unit. The script refuses to start, and refuses to finish, unless that unit is active, enabled and `Restart=always`. The host maker installs the watchdog. The script installs none, and it names no cloud.
+- **Tools.** `scripts/host-tools.sh` installs the apt packages, the Go toolchain that `go.mod` names (checked against the sha256 that go.dev lists), uv and actionlint. For a new Go, the old Go moves to `/usr/local/go.old`. The script deletes that folder only when the Go in `/usr/local/go` prints the pinned version. If both folders hold a Go and the one in place is not the pinned one, the script stops, names both folders and deletes neither. A host maker with its own idle delete can run it alone. `make setup` and `make contract-tools-install` install the other tools at their pins.
+- **The PATH of a job.** A job runs with the PATH of the user manager, not the login PATH. The script writes `~/.config/environment.d/zz-beehave.conf`, which puts the Go folders on that PATH and sets `BEEHAVE_BD_132`. systemd reads the environment.d files in file name order and the last `PATH` line wins. The name `zz-` sorts after every file with a number prefix, such as the `99-environment.conf` that Ubuntu ships. The script then reads `systemctl --user show-environment` and fails with the cause if the Go folders are not first. So a gate is plain `make check`.
+- **The proof.** The script runs each tool once as a transient user unit, the way the adapter runs a job. A tool that does not run, or that is not at the pin in `go.mod`, the `Makefile` or `host-tools.sh`, fails the script. A tool that `go install` builds shows no version in its own output, so the script reads the `mod` line of `go version -m` and compares its version with the pin exactly. Then it runs the reads of `Up`: linger, the user manager, the systemd version and the work root.
+- **The record.** The script writes `<work_root>/.beehave/host-setup.record` and prints it: the time, the commit, the kernel, systemd, the Landlock result, the watchdog state and the version of each tool. A kernel older than 6.7, or one without the Landlock module, is a warning only, because only an agent run on the host needs the sandbox.
+- **A second run.** Go, uv, actionlint, linger, the environment file and the work root are read first and changed only when they differ. `apt-get` runs each time and changes no package that is installed. A second run gives the same record except the time.
+
+The last line of a pass is `HOST-SETUP-DONE`. No other path prints it.
+
 ### The SkyPilot provider
 
 `host/skypilot` is the SkyPilot adapter. It runs the `sky` and `ssh` command lines through `proc.Runner`, links no cloud library and opens no listener. The `sky` command starts its own local API server; only a project that selects this provider gets it. A project with no `host` block builds no adapter and needs neither `sky` nor Slurm.
@@ -95,6 +113,7 @@ It composes the Slurm adapter: SkyPilot creates and deletes the cluster, and the
 - `Status` reads `sky status -o json`, then `sinfo` and `df` through the Slurm adapter.
 - The Slurm adapter calls the SkyPilot slot: `Hold` after the job is queued, `Release` once the work is banked.
 - The `skypilot` provider keeps its own slot and its own run limit (the `timeout` in the slot command).
+- The Slurm queue of the `skypilot` provider sends `--time` with `host.max_run`, rounded up to whole minutes, as the `slurm` provider does. This ends the whole gate job at the run limit.
 - Every parser refuses an answer it does not recognise.
 
 ### Teardown

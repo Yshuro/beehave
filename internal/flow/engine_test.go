@@ -325,12 +325,67 @@ func TestEngine_PinsTheApplicationVersionToTheBuildVersion(t *testing.T) {
 	_, err := engine.Run(testItem, testProject)
 	require.NoError(t, err)
 
-	assert.Equal(t, "v1.2.3-pinned+core3.agent1.tracker1.forge1.land1.gate2.host1.round1", dbos.GetApplicationVersion(engine.ctx), "the build version and one version for each step module")
+	assert.Equal(t, "v1.2.3-pinned+core3.agent3.tracker1.forge1.land3.gate2.host1.round1", dbos.GetApplicationVersion(engine.ctx), "the build version and one version for each step module")
 
 	infos, err := harness.client(t, "v1.2.3-pinned").Status()
 	require.NoError(t, err)
 	require.Len(t, infos, 1)
 	assert.Equal(t, "v1.2.3-pinned", infos[0].Version)
+}
+
+func TestEngine_ARunAfterTheShutdownIsRefusedByTheEngine(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	engine := harness.engine(t)
+	require.NoError(t, engine.Shutdown())
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.ErrorIs(t, err, errEngineShutDown)
+	require.ErrorContains(t, err, "item 12 was not started: run beehave run 12 again")
+	assert.Empty(t, rowsOf(t, harness.client(t, testVersion), testItem), "a refused run stores no row")
+}
+
+func TestEngine_TheShutdownWaitsForAStartInFlight(t *testing.T) {
+	t.Parallel()
+
+	engine := newHarness(t).engine(t)
+
+	// Hold the start as a run does between its store read and the hand-off of the run to the library.
+	engine.starts.RLock()
+
+	// The cleanup releases the start before the cleanup of the engine shuts it down, so a failed check does not hang the test.
+	release := sync.OnceFunc(engine.starts.RUnlock)
+	t.Cleanup(release)
+
+	down := make(chan error, 1)
+
+	go func() { down <- engine.Shutdown() }()
+
+	// A new reader fails only while a writer waits for the lock: the shutdown has begun and waits for the start.
+	// A stopped library also ends the poll, so a shutdown that does not wait fails the check below at once.
+	eventually(t, func() bool {
+		if engine.ctx.Err() != nil {
+			return true
+		}
+
+		if engine.starts.TryRLock() {
+			engine.starts.RUnlock()
+
+			return false
+		}
+
+		return true
+	})
+
+	whileHeld := engine.ctx.Err()
+
+	release()
+
+	require.NoError(t, whileHeld, "the library is not stopped while a start is in flight")
+	require.NoError(t, <-down)
+	assert.True(t, engine.stopped)
 }
 
 func TestEngine_RunsAsTheLocalExecutor(t *testing.T) {

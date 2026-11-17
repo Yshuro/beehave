@@ -58,9 +58,12 @@ type fakeAgents struct {
 	pid      int
 	result   func(AgentRequest) agent.Result
 	err      error
+	// named is the session id that the agent names before it counts as in flight, when it is set.
+	named string
 }
 
 // Run holds each agent in flight until the test closes gate, when gate is set. It reports pid as the process of the agent, when pid is set.
+// It names the session named before it counts as in flight, so a test that sees the agent in flight sees the saved session.
 // Like the command of the real runner, it starts nothing under a context that is done, and it kills the group of its process when the context ends.
 func (a *fakeAgents) Run(ctx context.Context, request AgentRequest) (agent.Result, error) {
 	if err := ctx.Err(); err != nil {
@@ -77,6 +80,10 @@ func (a *fakeAgents) Run(ctx context.Context, request AgentRequest) (agent.Resul
 	}
 
 	a.mu.Lock()
+	if a.named != "" {
+		request.Named(a.named)
+	}
+
 	a.requests = append(a.requests, request)
 	a.inFlight++
 	a.perLogin[request.Login]++
@@ -687,9 +694,38 @@ func (h *harness) fresh(t *testing.T) {
 func (h *harness) engine(t *testing.T) *Engine {
 	t.Helper()
 
+	return h.engineWith(t, func(*Engine) {})
+}
+
+// engineWith is engine with a change that runs on the built engine before Launch. Nothing reads the engine before Launch, so a field the change sets has no reader to race with.
+func (h *harness) engineWith(t *testing.T, change func(*Engine)) *Engine {
+	t.Helper()
+
 	engine, err := NewEngine(t.Context(), h.opts, h.deps())
 	require.NoError(t, err)
+
+	change(engine)
+
 	require.NoError(t, engine.Launch())
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	return engine
+}
+
+// opened builds and opens an engine over the harness without launching it, so that the test registers its own workflows and then launches. The cleanup shuts it down.
+// engine and engineWith differ: they launch the engine with the workflows of the flow.
+func (h *harness) opened(t *testing.T) *Engine {
+	t.Helper()
+
+	opts := h.opts
+	state, err := openStore(opts)
+	require.NoError(t, err)
+
+	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
+	require.NoError(t, err)
+
+	engine := newEngine(opts, h.deps(), state, held, moduleRegistry(t))
+	require.NoError(t, engine.open(t.Context(), opts, state))
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
 	return engine
@@ -819,6 +855,8 @@ type fakeForge struct {
 	state review.Standing
 	err   error
 	asked []string
+	// heads is the head of the pull request of each item that has its own. An item that is not in it gets the head of state.
+	heads map[string]string
 	// rewritten makes Reviewed report a head other than the reviewed commit as a rewrite of it.
 	rewritten bool
 	// failFrom, when above zero, makes the read of that number and every later read fail with errFake.
@@ -919,7 +957,12 @@ func (f *fakeForge) Pull(_ context.Context, _, item string) (review.Standing, er
 		return review.Standing{}, errFake
 	}
 
-	return f.state, f.err
+	standing := f.state
+	if head, own := f.heads[item]; own {
+		standing.Head = head
+	}
+
+	return standing, f.err
 }
 
 // ClosingIssues answers with the next of closing and then repeats the last. A set of nil is the empty set. noPull makes it report no pull request. closingErr fails every read.
@@ -1016,6 +1059,8 @@ type fakeTrees struct {
 	dir  string
 	err  error
 	late *lateFolder
+	// per, when set, gives the folder of each item and wins over dir and late.
+	per func(ctx context.Context, item string) (string, error)
 }
 
 // lateFolder is a worktree that exists only after Ensure.
@@ -1045,7 +1090,11 @@ func (l *lateFolder) make() string {
 	return l.dir
 }
 
-func (f fakeTrees) Path(context.Context, string, string) (string, error) {
+func (f fakeTrees) Path(ctx context.Context, _, item string) (string, error) {
+	if f.per != nil {
+		return f.per(ctx, item)
+	}
+
 	if f.late != nil {
 		return f.late.path(), f.err
 	}
@@ -1053,7 +1102,11 @@ func (f fakeTrees) Path(context.Context, string, string) (string, error) {
 	return f.dir, f.err
 }
 
-func (f fakeTrees) Ensure(context.Context, string, string) (string, error) {
+func (f fakeTrees) Ensure(ctx context.Context, _, item string) (string, error) {
+	if f.per != nil {
+		return f.per(ctx, item)
+	}
+
 	if f.late != nil {
 		return f.late.make(), f.err
 	}

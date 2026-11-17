@@ -38,12 +38,21 @@ FLOW_LETTERS := $(subst $(space),,$(FLOW_SHARDS))
 FLOW_PROFILES := $(subst $(space),,coverage.out$(foreach s,$(FLOW_SHARDS),$(comma)coverage-flow-$(s).out)$(comma)coverage-flow-rest.out)
 GOLANGCI_LINT_VERSION := v2.15.0
 GOTESTSUM_VERSION := v1.13.0
+GO_TEST_COVERAGE_VERSION := v2.20.1
+GOVULNCHECK_VERSION := v1.9.0
+# GO_INSTALL_DIR is the folder where go install writes a binary: GOBIN when set, else the bin folder of the first GOPATH entry.
+GO_INSTALL_DIR = $(or $(shell go env GOBIN),$(firstword $(subst :, ,$(shell go env GOPATH)))/bin)
+# GO_TOOL_AT succeeds when the binary that go install writes for $(1) was built from module $(2) at version $(3). make setup reinstalls a tool
+# when it fails. It reads the file in GO_INSTALL_DIR, not the first copy on PATH, so an older copy earlier on PATH does not force a reinstall.
+GO_TOOL_AT = go version -m "$(GO_INSTALL_DIR)/$(1)" 2>/dev/null | grep -Eq '^[[:space:]]+mod[[:space:]]+$(subst .,\.,$(2))[[:space:]]+$(subst .,\.,$(3))[[:space:]]'
 # Each run of "test" goes through gotestsum, which writes one JUnit file in REPORT_DIR (the glob reports/*.xml matches them all).
 REPORT_DIR := reports
 GOTESTSUM = gotestsum --format standard-quiet --junitfile $(REPORT_DIR)
 AI_RULEZ_VERSION := v5.9.2
 # The secret scan of the candidate gate job runs gitleaks. The "git" subcommand exists from 8.19 on.
 GITLEAKS_VERSION := v8.30.1
+# make mutation and make mutation-pr run gremlins. scripts/mutation-pr.sh reads the JSON report of this version.
+GREMLINS_VERSION := v0.6.0
 BIN := bin/beehave
 REMEDY := bin/remedy
 
@@ -55,11 +64,12 @@ DEADCODE_VERSION := golang.org/x/tools/cmd/deadcode@v0.51.0
 setup:  ## Install the Go tools and generate the agent files
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	$(MAKE) ai-rulez-install
-	command -v go-test-coverage >/dev/null 2>&1 || go install github.com/vladopajic/go-test-coverage/v2@v2.20.1
-	command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-	command -v gotestsum >/dev/null 2>&1 || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
-	command -v deadcode >/dev/null 2>&1 || go install $(DEADCODE_VERSION)
-	[ "$$(gitleaks version 2>/dev/null)" = "$(GITLEAKS_VERSION:v%=%)" ] || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	$(call GO_TOOL_AT,go-test-coverage,github.com/vladopajic/go-test-coverage/v2,$(GO_TEST_COVERAGE_VERSION)) || go install github.com/vladopajic/go-test-coverage/v2@$(GO_TEST_COVERAGE_VERSION)
+	$(call GO_TOOL_AT,govulncheck,golang.org/x/vuln,$(GOVULNCHECK_VERSION)) || go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	$(call GO_TOOL_AT,gotestsum,gotest.tools/gotestsum,$(GOTESTSUM_VERSION)) || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
+	$(call GO_TOOL_AT,deadcode,golang.org/x/tools,$(word 2,$(subst @, ,$(DEADCODE_VERSION)))) || go install $(DEADCODE_VERSION)
+	$(call GO_TOOL_AT,gitleaks,github.com/zricethezav/gitleaks/v8,$(GITLEAKS_VERSION)) || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 	$(MAKE) governance-generate
 
 build:  ## Build bin/beehave and bin/remedy
@@ -107,7 +117,7 @@ vuln:  ## Fail on a known vulnerability the code can reach
 	GOTELEMETRY=off govulncheck ./...
 
 test:  ## Run the Go tests with the race detector and write coverage.out, the flow profiles and the JUnit reports in reports/
-	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml; \
+	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml coverage.out coverage-flow-*.out test-*.log; \
 	logs=test-other.log; \
 	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-other.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage.out $$(go list ./... | grep -v '/internal/flow$$') > test-other.log 2>&1 & pids=$$!; \
 	for s in $(FLOW_SHARDS); do \
@@ -144,13 +154,14 @@ check-darwin:  ## On a Mac: run the Seatbelt enforcer tests and the contract sui
 	go test -count=1 ./internal/sandbox/...
 
 # Run on one package: make mutation PKG=./internal/cli
-# PKG is a folder, never a "..." pattern: gremlins walks the folder, so "./internal/..." finds no file and reports nothing.
+# PKG is a folder, never a "..." pattern: gremlins reads "./internal/..." as a folder name, finds no file and passes. The target refuses such a PKG.
 mutation:
+	@case "$(PKG)" in *...*) echo 'PKG=$(PKG) holds "...": gremlins reads it as a folder name and mutates nothing. Name one folder, such as PKG=./internal/cli'; exit 2;; esac
 	gremlins unleash $(or $(PKG),.)
 
 # Per-PR run: mutate only the Go lines that differ from BASE, the branch the pull request targets. BASE is required: make mutation-pr BASE=origin/integration/r1
-# Needs gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit in seconds (default 1200).
-# Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes.
+# Needs git, go, gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit, a positive whole number of seconds (default 1200).
+# Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes. A diff whose changed lines hold no operator that gremlins mutates is "no candidate" and passes.
 mutation-pr:
 	sh scripts/mutation-pr.sh "$(BASE)"
 

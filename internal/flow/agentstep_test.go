@@ -56,6 +56,8 @@ type agentRig struct {
 	h    *harness
 	dir  string
 	head string
+	// project is the project facts of the run. The example rig fills it, and a test changes a field before the run starts.
+	project model.Project
 
 	mu     sync.Mutex
 	failed []error
@@ -707,8 +709,7 @@ func TestAgentStep_AReplayReadsTheOutputFileThatTheRecordedPromptNames(t *testin
 	require.FileExists(t, outputFile(rig.h.opts.StateDir, testItem, aStep))
 
 	// The name function now gives another path: the engine computes the file in another folder. The record still names the first one.
-	next := rig.h.engine(t)
-	next.dir = t.TempDir()
+	next := rig.h.engineWith(t, func(e *Engine) { e.dir = t.TempDir() })
 
 	_, err := next.RunFile(testItem, testProject, file)
 

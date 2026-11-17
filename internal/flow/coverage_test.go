@@ -366,7 +366,7 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 	require.ErrorContains(t, engine.deleteOldRuns(), "list the finished runs")
 	engine.retain()
 
-	_, err = engine.Run(testItem, testProject)
+	_, err = engine.handleFor(ItemInput{Item: testItem, Project: testProject})
 	require.ErrorContains(t, err, "list the runs of item 12")
 
 	// Outside a workflow the run id is empty: hold a trusted claim under it, so the guard on the phase start passes.
@@ -393,7 +393,7 @@ func TestMarkStarts_ReportsAStartThatIsNotInAWorkflow(t *testing.T) {
 
 	t.Cleanup(func() { assert.NoError(t, engine.Shutdown()) })
 
-	_, err = engine.markStarts(engine.ctx, PhaseInput{Item: testItem})
+	_, _, err = engine.markStarts(engine.ctx, PhaseInput{Item: testItem})
 	require.Error(t, err, "outside a workflow the start mark is not a step")
 }
 

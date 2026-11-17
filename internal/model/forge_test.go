@@ -35,8 +35,20 @@ func TestReviewThread_Summary(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			assert.Equal(t, tt.want, tt.thread.Summary())
+			assert.Equal(t, tt.want, tt.thread.Where()+": "+tt.thread.Comment(), "the summary is the place and the comment")
 		})
 	}
+}
+
+func TestReviewThread_WhereAndCommentSplitTheSummary(t *testing.T) {
+	t.Parallel()
+
+	path, line, fix := "a.go", 4, "fix: now"
+	thread := model.ReviewThread{Path: &path, Line: &line, First: &model.ThreadComment{Author: model.Account{Login: "gz"}, Body: &fix}}
+
+	assert.Equal(t, "a.go:4 gz", thread.Where())
+	assert.Equal(t, "fix: now", thread.Comment())
+	assert.Equal(t, "null", model.ReviewThread{}.Comment())
 }
 
 func TestChangeRequest_ShowsNineCharactersOfTheCommit(t *testing.T) {
