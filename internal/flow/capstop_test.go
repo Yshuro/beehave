@@ -285,7 +285,14 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 
 		ends <- cancel
 
-		s := &script{e: engine, ctx: own, in: in, spent: agent.Spend{Cost: 6}}
+		// The run records a cost of 6 dollars, so the run cap of 5 stops the look and the hold waits.
+		if _, err := runStep(engine, own, "agent:a#1/spent0", func(context.Context) (stepResult, error) {
+			return stepResult{Outputs: spendOutputs(agent.Spend{Cost: 6})}, nil
+		}); err != nil {
+			return "", err
+		}
+
+		s := &script{e: engine, ctx: own, in: in}
 
 		next, err := s.holdForCaps("q", 1, 0)
 		if err == nil {
