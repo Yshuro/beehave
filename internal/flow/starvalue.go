@@ -123,8 +123,15 @@ func countedStep[T any](s *script, kind, label string, fn func(context.Context) 
 }
 
 func (s *script) countedName(builtin, label string) string {
+	name := s.nextName(builtin, label)
 	s.counts[builtin]++
-	n := strconv.Itoa(s.counts[builtin])
+
+	return name
+}
+
+// nextName is the name that the next call of builtin with label records, `<builtin>:<label>#<n>`. It counts nothing.
+func (s *script) nextName(builtin, label string) string {
+	n := strconv.Itoa(s.counts[builtin] + 1)
 
 	if label != "" {
 		builtin += ":" + label

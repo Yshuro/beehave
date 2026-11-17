@@ -65,6 +65,8 @@ type RunInfo struct {
 	Closed string `json:"closed,omitempty"`
 	// Merge is the state of the merge step: owner_merge while an open run waits for the owner, then merged, sent_back or closed. It is empty for a run with no merge step.
 	Merge string `json:"merge,omitempty"`
+	// LostJob is the lost gate job that an open run asks the owner about, after the wait for its proof reached host.lost_job_wait. It is nil for every other run.
+	LostJob *LostJobShown `json:"lost_job,omitempty"`
 	// Stopped is the command step that ended a finished run on a code of its `stop_on_rc`. It is nil when no step did. A run with a Stopped has the state stopped.
 	Stopped *Stopped `json:"stopped,omitempty"`
 	// RunProgress holds the cost against the run cap, the step that runs now, the deadline of a wait, the last gate result and the rounds.
@@ -277,7 +279,7 @@ func (c *Client) details(row dbos.WorkflowStatus, info *RunInfo) error {
 	return err
 }
 
-// openDetails reads what an open run shows: its question, the other orchestrators it found and its merge state.
+// openDetails reads what an open run shows: its question, the other orchestrators it found, its merge state and the lost gate job it asks about.
 func (c *Client) openDetails(id string, info *RunInfo) error {
 	var err error
 
@@ -289,9 +291,26 @@ func (c *Client) openDetails(id string, info *RunInfo) error {
 		return err
 	}
 
-	info.Merge, err = c.mergeOf(id)
+	if info.Merge, err = c.mergeOf(id); err != nil {
+		return err
+	}
+
+	shown, err := c.lostJobShown(id)
+	if shown.Job != "" {
+		info.LostJob = &shown
+	}
 
 	return err
+}
+
+// lostJobShown reads the lost gate job that an open run asks the owner about. A run that asks about none, or whose job got its proof, gives an empty Job.
+func (c *Client) lostJobShown(id string) (LostJobShown, error) {
+	shown, err := dbos.GetEvent[LostJobShown](c.flow, id, lostJobKey, questionReadLimit)
+	if err != nil && !errors.Is(err, context.DeadlineExceeded) {
+		return LostJobShown{}, fmt.Errorf("read the lost gate job of %s: %w", id, err)
+	}
+
+	return shown, nil
 }
 
 // waitOf reads the question and the people of the open wait of a run. A wait that names people or choices sets the ask event and leaves the question event unset,

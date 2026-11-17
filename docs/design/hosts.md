@@ -220,10 +220,22 @@ When the wait of a project gate ends as `lost`, the gate keeps its host slot and
 - A durable sleep of one minute comes between two looks, so a restart replays the earlier looks.
 - Each look reads `host.lost_job_wait` from the config of the engine that runs it. A project with no host block waits for the default.
 - A proof ends the wait as a void gate. `passed` is false, every step of the list is `unknown`, and the report says "the gate job was lost on <host> and the proof is <kind>". The field `host_loss` holds the job, the host, the head, the proof and the time of the look.
-- A look with no proof at or after the limit fails the gate with `ErrLost`. The error keeps the cancel command of the provider.
+- A look with no proof at or after the limit ends the wait, and the host slot and the exclusive slot are free. See "The owner wait for a lost job" below.
 - A look whose read of the proof fails fails the gate with that error.
 - If the run is canceled during the wait, the engine calls `LostProof` once more under a context that the cancel does not reach. A call with no proof is logged, because the job can still run. The wait never cancels the job: a cancel waits for the job and banks its work.
 - A build with no host reader has no proof, and the wait runs to the limit.
+
+#### The owner wait for a lost job
+
+When the wait for a proof reaches the limit, the item run asks the owner. Only the item run receives an answer, so this wait is never in a child run.
+
+- The run reads `running`, and no step fails. A parent that gathers the run keeps it.
+- `beehave status <run id> --json` shows `lost_job` with `job`, `host`, `since` and `limit`. The question names the job, the host and the cancel command of the provider.
+- After each answer, the step `<call>/lost-ask.<n>` from 0 calls `LostProof` once. The documented answer is `CONTINUE`, and any answer reads the proof.
+- A proof gives the void gate of the wait above, and clears `lost_job`.
+- No proof asks the owner again.
+- The owner wait starts no gate job. No rerun of the head comes before a proof.
+- A read of the proof that fails fails the gate with that error.
 
 ### Host config
 

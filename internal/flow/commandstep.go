@@ -186,18 +186,35 @@ func (s *script) gate(b *starlark.Builtin, args starlark.Tuple, kwargs []starlar
 		return nil, err
 	}
 
-	// The gate runs as a child workflow on the exclusive queue, so no merge of the repository starts while it runs.
-	// The call records its outputs as its own step, so a replay reads them and runs no gate again.
-	ran, err := s.e.queueExclusive(s.ctx, ExclusiveInput{Kind: kindGate, Project: request.Project, Item: request.Item, Head: head, Request: request, Severity: string(s.severity)})
+	outputs, err := s.exclusiveGate(request, head, label)
 	if err != nil {
-		return nil, fmt.Errorf("gate %q could not run: %w", label, err)
+		return nil, err
 	}
 
 	if err := s.fixScope(label); err != nil {
 		return nil, err
 	}
 
-	return s.recordGate(label, ran.Outputs)
+	return s.recordGate(label, outputs)
+}
+
+// exclusiveGate runs the gate of a call as a child workflow on the exclusive queue, so no merge of the repository starts while it runs,
+// and returns its outputs. The gate call records them as its own step, so a replay reads them and runs no gate again.
+func (s *script) exclusiveGate(request CommandRequest, head, label string) (map[string]any, error) {
+	in := ExclusiveInput{Kind: kindGate, Project: request.Project, Item: request.Item, Head: head, Request: request, Severity: string(s.severity)}
+
+	ran, err := s.e.queueExclusive(s.ctx, in)
+	if err != nil {
+		return nil, fmt.Errorf("gate %q could not run: %w", label, err)
+	}
+
+	// A lost job with no proof at the limit asks the owner here, in the item run, under the name of the gate call that comes next.
+	outputs, err := s.e.lostOutputs(s.ctx, in, s.nextName(kindGate, label), ran)
+	if err != nil {
+		return nil, fmt.Errorf("gate %q lost its job: %w", label, err)
+	}
+
+	return outputs, nil
 }
 
 // programGateOutputs runs the program that a gate call names, with the exit code as the verdict. It has no key: no pass of it stands in for a later gate.
