@@ -158,7 +158,7 @@ check-darwin:  ## On a Mac: run the Seatbelt enforcer tests and the contract sui
 # PKG is a folder, never a "..." pattern: gremlins reads "./internal/..." as a folder name, finds no file and passes. The target refuses such a PKG.
 mutation:
 	@case "$(PKG)" in *...*) echo 'PKG=$(PKG) holds "...": gremlins reads it as a folder name and mutates nothing. Name one folder, such as PKG=./internal/cli'; exit 2;; esac
-	gremlins unleash --workers $$(sh scripts/mutation-pr.sh --print-workers) $(or $(PKG),.)
+	workers=$$(sh scripts/mutation-pr.sh --print-workers) || { echo "$$workers"; exit 2; }; gremlins unleash --workers "$$workers" $(or $(PKG),.)
 
 # Per-PR run: mutate only the Go lines that differ from BASE, the branch the pull request targets. BASE is required: make mutation-pr BASE=origin/integration/r1
 # Needs git, go, gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit, a positive whole number of seconds (default 1200).
