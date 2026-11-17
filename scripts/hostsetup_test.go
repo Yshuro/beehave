@@ -27,7 +27,8 @@ const (
 	done         = "HOST-SETUP-DONE"
 	noWatchdog   = "no self-delete watchdog runs on this host"
 	fakeMakefile = "GOLANGCI_LINT_VERSION := v2.15.0\nGOTESTSUM_VERSION := v1.13.0\nAI_RULEZ_VERSION := v5.9.2\n" +
-		"GITLEAKS_VERSION := v8.30.1\nGREMLINS_VERSION := v0.6.0\n"
+		"GITLEAKS_VERSION := v8.30.1\nGREMLINS_VERSION := v0.6.0\nGO_TEST_COVERAGE_VERSION := v2.20.1\nGOVULNCHECK_VERSION := v1.9.0\n" +
+		"DEADCODE_VERSION := golang.org/x/tools/cmd/deadcode@v0.51.0\n"
 	unitProof = "systemd-run --user --wait --pipe"
 )
 
@@ -66,7 +67,7 @@ var goModules = map[string]string{
 }
 
 // goInstalledPinned are the tools whose pin the script reads from the mod line.
-var goInstalledPinned = []string{"golangci-lint", "gotestsum", "gitleaks", "gremlins", "actionlint"}
+var goInstalledPinned = []string{"golangci-lint", "gotestsum", "gitleaks", "gremlins", "actionlint", "go-test-coverage", "govulncheck", "deadcode"}
 
 // provedTools are the tools that the script proves through a user unit.
 var provedTools = []string{
@@ -916,11 +917,6 @@ func TestHostSetup_ProvesEachToolThroughAUserUnit(t *testing.T) {
 			assert.Contains(t, record, "\ntool "+name+" "+goModules[name]+"\n", "the record holds the module and the version of "+name)
 		}
 
-		for _, name := range []string{"go-test-coverage", "govulncheck", "deadcode"} {
-			module, version, _ := strings.Cut(goModules[name], " ")
-			assert.Contains(t, record, "\ntool "+name+" \tmod\t"+module+"\t"+version+"\th1:x=\n", "the record holds the whole mod line of "+name)
-		}
-
 		assert.Contains(t, record, "tool shellcheck version: 0.10.0\n")
 		assert.Contains(t, out, record, "the script prints the record")
 	})
@@ -964,6 +960,9 @@ func TestHostSetup_FailsWhenAToolIsNotAtItsPin(t *testing.T) {
 		{name: "a_pseudo_version", tool: "gremlins", text: "github.com/go-gremlins/gremlins v0.6.0-0.20260101000000-abcdef123456", message: "gremlins is not at its pin 0.6.0"},
 		{name: "a_build_from_a_checkout", tool: "gremlins", text: "github.com/go-gremlins/gremlins (devel)", message: "gremlins is not at its pin 0.6.0"},
 		{name: "an_old_actionlint", tool: "actionlint", text: "github.com/rhysd/actionlint v1.7.11", message: "actionlint is not at its pin 1.7.12"},
+		{name: "an_old_go_test_coverage", tool: "go-test-coverage", text: "github.com/vladopajic/go-test-coverage/v2 v2.20.0", message: "go-test-coverage is not at its pin 2.20.1"},
+		{name: "an_old_govulncheck", tool: "govulncheck", text: "golang.org/x/vuln v1.8.0", message: "govulncheck is not at its pin 1.9.0"},
+		{name: "a_newer_deadcode", tool: "deadcode", text: "golang.org/x/tools v0.52.0", message: "deadcode is not at its pin 0.51.0"},
 	}
 
 	for _, tc := range cases {
@@ -1162,6 +1161,11 @@ func TestHostSetup_FailsWhenALaterFileReplacesThePath(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, out, "the PATH of the user manager does not start with "+h.sysroot+"/usr/local/go/bin:"+h.home+"/go/bin")
 	assert.Contains(t, out, "sorts after zz-beehave.conf")
+
+	for _, folder := range []string{"~/.config/environment.d", "/etc/environment.d", "/run/environment.d", "/usr/local/lib/environment.d", "/usr/lib/environment.d"} {
+		assert.Contains(t, out, folder, "the refusal names the folder that environment.d(5) reads for a user manager")
+	}
+
 	assert.NotContains(t, out, done)
 	assert.NotContains(t, h.read(h.log), "make setup", "the check comes before the installs of the project")
 }

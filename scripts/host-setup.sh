@@ -203,10 +203,11 @@ install_project_tools() {
 	make contract-tools-install
 }
 
-# make_pin <variable>: print the version that a `<variable> := v<version>` line of the Makefile pins.
+# make_pin <variable>: print the version that a `<variable> := v<version>` line of the Makefile pins. A value `<module>@v<version>` pins the part after the @.
 make_pin() {
 	line=$(grep -m 1 -E "^$1 :=" "$root/Makefile") || fail "the Makefile has no $1 line"
 	value=${line#*:= }
+	value=${value##*@}
 	printf '%s\n' "${value#v}"
 }
 
@@ -222,15 +223,11 @@ go_pin() {
 	printf '%s\n' "${line#toolchain go}"
 }
 
-# module_version <tool> <form>: the command that prints the mod line of `go version -m`, for a tool that go install builds.
-# The form pair prints "<module> <version>" and the form line prints the whole line. A binary with no mod line prints "no mod line" and fails.
+# module_version <tool>: the command that prints "<module> <version>" from the mod line of `go version -m`, for a tool that go install builds.
+# A binary with no mod line prints "no mod line" and fails.
 # The Go linker writes that line, so it names the pin of such a tool. The tool's own version text says "dev" or nothing.
 module_version() {
-	case $2 in
-	pair) shown='$3, $4' ;;
-	*) shown='$0' ;;
-	esac
-	printf '%s\n' "go version -m \"\$(command -v $1)\" | awk -F '\\t' '\$2 == \"mod\" { print $shown; found = 1; exit } END { if (!found) { print \"no mod line\"; exit 1 } }'"
+	printf '%s\n' "go version -m \"\$(command -v $1)\" | awk -F '\\t' '\$2 == \"mod\" { print \$3, \$4; found = 1; exit } END { if (!found) { print \"no mod line\"; exit 1 } }'"
 }
 
 # tools prints one line per tool, split by tabs: the name, how its version is read (text: the first line of the command, mod: the mod line
@@ -242,24 +239,27 @@ tools() {
 	gotestsum_v=$(make_pin GOTESTSUM_VERSION)
 	gitleaks_v=$(make_pin GITLEAKS_VERSION)
 	gremlins_v=$(make_pin GREMLINS_VERSION)
+	coverage_v=$(make_pin GO_TEST_COVERAGE_VERSION)
+	govulncheck_v=$(make_pin GOVULNCHECK_VERSION)
+	deadcode_v=$(make_pin DEADCODE_VERSION)
 	uv_v=$(script_pin uv_version)
 	actionlint_v=$(script_pin actionlint_version)
 	printf '%s\t%s\t%s\t%s\n' \
 		go text 'go version' "$go_v" \
-		golangci-lint mod "$(module_version golangci-lint pair)" "v$lint_v" \
+		golangci-lint mod "$(module_version golangci-lint)" "v$lint_v" \
 		ai-rulez text 'ai-rulez --version' "$rulez_v" \
-		gotestsum mod "$(module_version gotestsum pair)" "v$gotestsum_v" \
-		gitleaks mod "$(module_version gitleaks pair)" "v$gitleaks_v" \
-		gremlins mod "$(module_version gremlins pair)" "v$gremlins_v" \
-		go-test-coverage mod "$(module_version go-test-coverage line)" - \
-		govulncheck mod "$(module_version govulncheck line)" - \
-		deadcode mod "$(module_version deadcode line)" - \
+		gotestsum mod "$(module_version gotestsum)" "v$gotestsum_v" \
+		gitleaks mod "$(module_version gitleaks)" "v$gitleaks_v" \
+		gremlins mod "$(module_version gremlins)" "v$gremlins_v" \
+		go-test-coverage mod "$(module_version go-test-coverage)" "v$coverage_v" \
+		govulncheck mod "$(module_version govulncheck)" "v$govulncheck_v" \
+		deadcode mod "$(module_version deadcode)" "v$deadcode_v" \
 		dolt text 'dolt version' - \
 		bd text 'bd --version' - \
 		jq text 'jq --version' - \
 		uv text 'uv --version' "$uv_v" \
 		shellcheck text 'shellcheck --version | grep -m 1 "^version:"' - \
-		actionlint mod "$(module_version actionlint pair)" "v$actionlint_v" \
+		actionlint mod "$(module_version actionlint)" "v$actionlint_v" \
 		bats text 'bats --version' -
 }
 
