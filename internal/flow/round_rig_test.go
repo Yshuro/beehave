@@ -22,84 +22,120 @@ import (
 
 var errNoWorktree = errors.New("the rig could not make the worktree of an item")
 
-// barrierLimit is the longest a child waits at a barrier for the other members. A member that never arrives is a mistake of the test.
-const barrierLimit = 30 * time.Second
+// stallLimit is the longest a child waits for its turn or the round waits for a member to end. A turn that never comes is a mistake of the test.
+const stallLimit = 30 * time.Second
 
 // readsBeforeReview is the number of the read of the pull request that comes just before the review of a child: the intake is the first read.
 const readsBeforeReview = 2
 
-// barrier holds each member until every member has arrived. The children of a round pass the barrier together, so they end in the same poll of gather and the round lands them as one batch.
-// A caller that is not a member passes at once. onOpen runs once, when the last member arrives and before any member passes.
-type barrier struct {
-	stalled func(item string) // called when a member waited the whole limit
+// readsToLanding is the number of reads of the pull request of a member by the end of its landing: the intake, the read before the review and the read of its own batch.
+const readsToLanding = readsBeforeReview + 1
+
+// turn is the wait of one member. The member holds at its read before the review until the round makes its read number `read` of the queue, the first read of the pass of that number.
+type turn struct {
+	read int
+	open chan struct{}
+}
+
+// endOrder decides in which pass of the round each member ends. A member waits at its read before the review until its turn opens. A round ends one member in each pass
+// when each member has a later turn than the one before, so the round lands the members in list order, one batch for each member, at any speed of the machine.
+// A pass starts only after the gather of the pass before returned, and a run that has ended stays ended, so the outcome does not depend on timing.
+type endOrder struct {
+	stalled func(item string, what string)
+	ended   func(item string) bool // reports whether the child run of the item has ended
 
 	mu      sync.Mutex
-	members []string
-	arrived map[string]bool
-	opened  bool
-	open    chan struct{}
-	onOpen  []func()
+	turns   map[string]*turn
+	reads   map[string]int
+	waiting map[int][]string // the members that the queue read of the turn waits for, until each has ended
 }
 
-func newBarrier(members []string, stalled func(item string)) *barrier {
-	return &barrier{members: members, stalled: stalled, arrived: map[string]bool{}, open: make(chan struct{})}
-}
+func newEndOrder(members []string, stalled func(item string, what string)) *endOrder {
+	s := &endOrder{stalled: stalled, turns: map[string]*turn{}, reads: map[string]int{}, waiting: map[int][]string{}}
 
-// check opens the barrier when every member has arrived. The caller holds the lock.
-func (b *barrier) check() {
-	if b.opened || len(b.arrived) < len(b.members) {
-		return
+	for at, item := range members {
+		if at > 0 {
+			s.turns[item] = &turn{read: at + 1, open: make(chan struct{})}
+		}
 	}
 
-	b.opened = true
-
-	for _, hook := range b.onOpen {
-		hook()
-	}
-
-	close(b.open)
+	return s
 }
 
-// arrive records the item as arrived and returns at once. It reports whether the item is a member.
-func (b *barrier) arrive(item string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+// together makes the members of rest end in one read of gather. They wait for queue read 2, and that read waits until each of them has ended.
+// The run of a member that has ended stays ended, so the gather of pass 2 returns all of them. Every other member ends in pass 1. It replaces the end order of the round: call it before the run.
+func (s *endOrder) together(rest []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	if !slices.Contains(b.members, item) {
-		return false
+	s.turns = map[string]*turn{}
+	for _, item := range rest {
+		s.turns[item] = &turn{read: 2, open: make(chan struct{})}
 	}
 
-	b.arrived[item] = true
-	b.check()
-
-	return true
+	s.waiting = map[int][]string{2: slices.Clone(rest)}
 }
 
-func (b *barrier) wait(ctx context.Context, item string) {
-	if !b.arrive(item) {
+// hold is the hook of a read of the pull request: the second read of a member waits for the turn of the member.
+func (s *endOrder) hold(ctx context.Context, item string) {
+	s.mu.Lock()
+	s.reads[item]++
+	mine := s.turns[item]
+	holds := s.reads[item] == readsBeforeReview
+	s.mu.Unlock()
+
+	if mine == nil || !holds {
 		return
 	}
 
 	select {
-	case <-b.open:
+	case <-mine.open:
 	case <-ctx.Done():
-	case <-time.After(barrierLimit):
-		b.stalled(item)
+	case <-time.After(stallLimit):
+		s.stalled(item, "its turn")
+	}
+}
+
+// queueRead is called at the start of each read of the queue of the round, with the number of the read. It opens the turns of that number, and then waits until the members that the turn names have ended.
+func (s *endOrder) queueRead(n int) {
+	s.mu.Lock()
+
+	for _, mine := range s.turns {
+		if mine.read == n {
+			close(mine.open)
+		}
+	}
+
+	names := s.waiting[n]
+	s.mu.Unlock()
+
+	for _, item := range names {
+		if !waitUntil(func() bool { return s.ended(item) }) {
+			s.stalled(item, "its end")
+		}
 	}
 }
 
 // children is what the round rig knows about the child runs: the head of the branch of each item, the items that reached the gate and the review in order,
-// and the two barriers that line the children of a batch up.
+// and the order that sets the ends of the members.
 type children struct {
-	heads  map[string]string // the head of each item; an item with no branch of its own is at the tip of the base
-	base   string
-	gate   *barrier
-	review *barrier
+	heads map[string]string // the head of each item; an item with no branch of its own is at the tip of the base
+	base  string
+	turns *endOrder
 
-	mu       sync.Mutex
-	gated    []string
-	reviewed []string
-	readAt   []string // the items that were reviewed at the first read of the integration pull request
+	mu          sync.Mutex
+	gated       []string
+	reviewed    []string
+	readAt      []string            // the items that were reviewed at the first read of the integration pull request
+	reviewHooks map[string][]func() // the hooks that run when the review of the item has ended
+}
+
+// onReview registers a hook that runs when the review of the item has ended. No child reads a branch after its review.
+func (c *children) onReview(item string, hook func()) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.reviewHooks[item] = append(c.reviewHooks[item], hook)
 }
 
 func (c *children) head(item string) string {
@@ -165,7 +201,7 @@ func (t *itemTrees) tree(ctx context.Context, item string) (string, error) {
 }
 
 // afterReview makes the fake agents of the rig note the end of each review. The agent queue runs one agent for each login, so a review must not wait for another child:
-// the barrier of the reviews only counts, and its hooks run when the last member has reviewed. The review is the last agent of an approved child.
+// the hooks of an item run when its review has ended. The review is the last agent of an approved child.
 func (c *children) afterReview(inner func(AgentRequest) agent.Result) func(AgentRequest) agent.Result {
 	return func(request AgentRequest) agent.Result {
 		result := inner(request)
@@ -173,9 +209,12 @@ func (c *children) afterReview(inner func(AgentRequest) agent.Result) func(Agent
 		if strings.Contains(request.Prompt, reviewMarker) {
 			c.mu.Lock()
 			c.reviewed = append(c.reviewed, request.Item)
+			hooks := slices.Clone(c.reviewHooks[request.Item])
 			c.mu.Unlock()
 
-			c.review.arrive(request.Item)
+			for _, hook := range hooks {
+				hook()
+			}
 		}
 
 		return result
@@ -186,8 +225,22 @@ func (c *children) afterReview(inner func(AgentRequest) agent.Result) func(Agent
 type servedOnce struct {
 	*fakeQueue
 
+	turns *endOrder // told at each read of the open pull requests: only the queue read of the round makes it, one for each pass, and a child run makes none
+
 	seenMu sync.Mutex
 	seen   map[string]bool
+	reads  int
+}
+
+func (s *servedOnce) OpenPulls(ctx context.Context, project string) ([]model.PullRequest, error) {
+	s.seenMu.Lock()
+	s.reads++
+	read := s.reads
+	s.seenMu.Unlock()
+
+	s.turns.queueRead(read)
+
+	return s.fakeQueue.OpenPulls(ctx, project)
 }
 
 func (s *servedOnce) OpenItems(ctx context.Context, project string) ([]model.Item, error) {
@@ -262,25 +315,22 @@ func (g itemGate) Run(ctx context.Context, project, item, host string, job GateJ
 	return GateResult{Passed: true, Head: g.kids.head(item), Tree: exampleTree}, nil
 }
 
-// afterReviews runs the hook once, when the review of every member of the batch has ended. No child reads a branch after its review. It is the moment after the review: a push to a branch, a branch that is gone.
-func (r *roundRig) afterReviews(hook func()) {
-	r.kids.review.mu.Lock()
-	defer r.kids.review.mu.Unlock()
-
-	r.kids.review.onOpen = append(r.kids.review.onOpen, hook)
+// endTogether makes the children of the items end in one read of gather, in pass 2, and every other member end in pass 1. The round lands the two groups as two batches. Call it before the run.
+func (r *roundRig) endTogether(items ...string) {
+	r.kids.turns.together(items)
 }
 
-// inLandPhase reports whether the round is landing the batch. The children never fetch, so the first fetch is the first check of a member of the batch.
+// landing reports whether the round has fetched the head of the item to land it. The children never fetch.
 // Call it from a reply of the command fake only: the reply runs under the lock of the fake, which this reads without taking it.
-func (r *roundRig) inLandPhase() bool {
+func (r *roundRig) landing(item string) bool {
 	return slices.ContainsFunc(r.h.commands.requests, func(request CommandRequest) bool {
-		return len(request.Run) > 1 && request.Run[0] == "git" && request.Run[1] == "fetch"
+		return len(request.Run) > 2 && request.Run[0] == "git" && request.Run[1] == "fetch" && request.Run[len(request.Run)-1] == r.heads[item]
 	})
 }
 
-// pushAfterReviews moves the branch of the item on the remote to head after the reviews, and a head of "" deletes the branch.
+// pushAfterReviews moves the branch of the item on the remote to head when the review of the item has ended, and a head of "" deletes the branch.
 func (r *roundRig) pushAfterReviews(item, head string) {
-	r.afterReviews(func() {
+	r.kids.onReview(item, func() {
 		r.remote.mu.Lock()
 		defer r.remote.mu.Unlock()
 
@@ -322,25 +372,7 @@ func (r *roundRig) engineWith(t *testing.T, change func(*Deps)) *Engine {
 	return engine
 }
 
-// holdBeforeReview returns the hook of a read of the pull request that holds the second read of each member at the barrier of the batch.
-func (c *children) holdBeforeReview() func(ctx context.Context, item string) {
-	var mu sync.Mutex
-
-	reads := map[string]int{}
-
-	return func(ctx context.Context, item string) {
-		mu.Lock()
-		reads[item]++
-		before := reads[item] == readsBeforeReview
-		mu.Unlock()
-
-		if before {
-			c.gate.wait(ctx, item)
-		}
-	}
-}
-
-// loginsOf gives each item its own login. The agent queue runs one agent for each login, so the reviews of the members run at the same time.
+// loginsOf gives each item its own login. The agent queue runs one agent for each login, so no review waits for the agent of another member.
 func loginsOf(items []string) map[string]string {
 	logins := map[string]string{}
 	for _, id := range items {
@@ -370,12 +402,16 @@ func newRoundRigOf(t *testing.T, items string) *roundRig {
 	file := filepath.Join(folder, "workflow.star")
 	queued := strings.Fields(items)
 
-	// The members of the barriers are the queued items that have a branch of their own: the items that the round lands as one batch.
+	// The members are the queued items that have a branch of their own: the items that the round lands. An item with no branch ends at once and would move the pass count of the end order.
 	members := slices.DeleteFunc(slices.Clone(queued), func(id string) bool { return rig.heads[id] == "" })
-	stalled := func(item string) {
-		t.Errorf("the child of item %s waited for the other members of its batch: an item of the batch never reached the barrier", item)
+	if len(members) > 1 && len(members) != len(queued) {
+		t.Fatalf("a round with %d members and %d items with no branch: the end order of the ends needs every item to be a member", len(members), len(queued)-len(members))
 	}
-	kids := &children{heads: rig.heads, base: strings.TrimSpace(rig.repo.must(t, "rev-parse", "main")), gate: newBarrier(slices.Clone(members), stalled), review: newBarrier(slices.Clone(members), stalled)}
+
+	stalled := func(item, what string) {
+		t.Errorf("the child of item %s waited for %s: the round never reached it", item, what)
+	}
+	kids := &children{heads: rig.heads, base: strings.TrimSpace(rig.repo.must(t, "rev-parse", "main")), turns: newEndOrder(members, stalled), reviewHooks: map[string][]func(){}}
 	rig.h.logins = fakeLogins{login: testLogin, byItem: loginsOf(members)}
 	trees := &itemTrees{repo: rig.repo, kids: kids, root: t.TempDir(), dirs: map[string]string{}}
 	rig.h.trees = &fakeTrees{per: trees.tree}
@@ -417,17 +453,17 @@ func newRoundRigOf(t *testing.T, items string) *roundRig {
 	}
 
 	r.q = &fakeQueue{items: rows}
-	rig.h.queue = &servedOnce{fakeQueue: r.q, seen: map[string]bool{}}
+	rig.h.queue = &servedOnce{fakeQueue: r.q, turns: kids.turns, seen: map[string]bool{}}
+	kids.turns.ended = func(item string) bool { return itemEnded(r.last, item) }
 	rig.h.reader = &fakeReader{}
 
 	// The round starts the host once and stops it in finish.
 	r.hosts = &fakeHosts{host: &stubHost{}}
 	rig.h.hosts = r.hosts
 
-	// The barrier of the children is the second read of the pull request of an item: the read before the review (the first is the intake).
-	// A read holds no slot of the exclusive queue or of the agent queue, so the children wait there without blocking each other. Each member has its own login,
-	// so the reviews of the members run at the same time and end together, in one poll of gather.
-	r.remote = &remoteBranches{heads: map[string]string{}, before: kids.holdBeforeReview()}
+	// A member waits for its turn at the second read of the pull request of its item: the read before the review (the first is the intake).
+	// A read holds no slot of the exclusive queue or of the agent queue, so a child waits there without blocking another.
+	r.remote = &remoteBranches{heads: map[string]string{}, before: kids.turns.hold}
 
 	for _, id := range queued {
 		r.remote.heads[id] = kids.head(id)

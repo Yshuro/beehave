@@ -416,7 +416,7 @@ func TestExampleMerge_TheRoundLandsThroughTheBatchMergerAndTheGuardsOfTheForgeFa
 
 			switch {
 			case tc.defer1:
-				// A deferral defers the members after it too, and the children end together, so item 3 lands only when it merges first.
+				// A deferral defers the members of its own batch after it. Item 3 is in the next batch, so the deferral of item 1 does not reach it.
 				assert.Contains(t, forge.said("1"), "while preparing")
 				assert.Empty(t, one.writes, "a deferred merge writes nothing")
 				assert.Empty(t, heldOf(rig.writer), "a deferred item is not held")

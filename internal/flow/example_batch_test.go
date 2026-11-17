@@ -96,17 +96,26 @@ func gitLines(rig *roundRig) []string {
 	return lines
 }
 
-func TestExampleBatch_TwoApprovedItemsLandInOneBatchWithOneGateRun(t *testing.T) {
+func TestExampleBatch_TwoItemsThatEndInOneReadOfGatherLandAsOneBatchWithOneGateRun(t *testing.T) {
 	t.Parallel()
 
-	rig := newRoundRig(t, "1 3")
+	// Item 2 ends alone in pass 1 and is red at the gate. Items 1 and 3 end while the round reads the queue of pass 2, so its gather returns both.
+	rig := newRoundRig(t, "1 2 3")
+	rig.h.opts.MaxConcurrent = 3 // all three children start in pass 1
+	rig.endTogether("1", "3")
 
 	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"1", "3"}, rig.merger.landed(), "the two children end together, so the batch has no fixed order")
-	assert.Len(t, rig.gate.ran(), 1, "two green members take one gate run")
+	assert.Equal(t, []string{"1", "3"}, rig.merger.landed())
+	assert.Len(t, rig.gate.ran(), 2, "one gate run for the batch of item 2 and one for the batch of items 1 and 3")
+	assert.Equal(t, []string{testProject + "|2|hold"}, heldOf(rig.writer))
+	assert.Equal(t, []string{testProject + " main 0 1,3"}, rig.host.issueReads(), "one read after the one batch that landed both items; the batch that landed nothing makes no read")
 	assert.Equal(t, "README\none.txt\nthree.txt", rig.mainFiles(t))
+
+	joined := strings.Join(stepNames(t, rig.last), " ")
+	assert.Contains(t, joined, "round-land-2.union#", "the pass 2 lands items 1 and 3 in one batch")
+	assert.NotContains(t, joined, "round-land-3.union#", "no third batch")
 
 	for _, given := range rig.merger.given {
 		assert.Equal(t, "hold", given.Hold, "the guards of the merge of one item apply")
@@ -148,7 +157,7 @@ func TestExampleBatch_APushAfterTheReviewRefusesOnlyThatItem(t *testing.T) {
 	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "head moved")
 }
 
-func TestExampleBatch_AMemberLandsAtTheHeadTheReviewApprovedAndNotTheHeadOnTheRemote(t *testing.T) {
+func TestExampleBatch_EachMemberMergesAtThePinOfItsChild(t *testing.T) {
 	t.Parallel()
 
 	rig := newRoundRig(t, "1 3")
@@ -182,7 +191,7 @@ func TestExampleBatch_AnItemWithNoChangelogEntryIsHeldWhenTheProjectDeclaresOneA
 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
-		if request.Run[1] == "diff" && rig.inLandPhase() && strings.HasSuffix(request.Run[len(request.Run)-1], rig.heads["1"]) {
+		if request.Run[1] == "diff" && rig.landing("1") && strings.HasSuffix(request.Run[len(request.Run)-1], rig.heads["1"]) {
 			return CommandOutput{Stdout: "one.txt\n"}, nil
 		}
 
@@ -200,12 +209,13 @@ func TestExampleBatch_AnItemWithNoChangelogEntryIsHeldWhenTheProjectDeclaresOneA
 	assert.Equal(t, []string{testProject + "|1|hold"}, heldOf(rig.writer))
 	require.Len(t, notesWithKey(rig.writer, "rejected"), 1)
 	assert.Contains(t, notesWithKey(rig.writer, "rejected")[0], "the project declares the changelog CHANGELOG.md")
-	lines := gitLines(rig)
-	require.GreaterOrEqual(t, len(lines), 4)
-	assert.Equal(t, []string{
-		"git fetch origin " + rig.heads["1"], "git diff --name-only origin/main..." + rig.heads["1"],
-		"git fetch origin " + rig.heads["3"], "git diff --name-only origin/main..." + rig.heads["3"],
-	}, lines[len(lines)-4:], "after the checks of the children, each member is fetched, then read from the base to its own head")
+
+	for _, item := range []string{"1", "3"} {
+		head := rig.heads[item]
+		own := slices.DeleteFunc(gitLines(rig), func(line string) bool { return !strings.HasSuffix(line, head) })
+		require.GreaterOrEqual(t, len(own), 2, "item %s", item)
+		assert.Equal(t, []string{"git fetch origin " + head, "git diff --name-only origin/main..." + head}, own[len(own)-2:], "after the check of its child, the member is fetched, then read from the base to its own head")
+	}
 }
 
 func TestExampleBatch_TheChangelogChecksOfTwoItemsRecordTheirOwnSteps(t *testing.T) {
@@ -273,7 +283,7 @@ func TestExampleBatch_AnItemWhoseChangedPathsCannotBeReadIsHeldWithTheReasonAndT
 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
-		if rig.inLandPhase() && request.Run[1] == "diff" && strings.HasSuffix(request.Run[len(request.Run)-1], rig.heads["1"]) {
+		if rig.landing("1") && request.Run[1] == "diff" && strings.HasSuffix(request.Run[len(request.Run)-1], rig.heads["1"]) {
 			return CommandOutput{RC: 1, Stderr: "fatal: bad revision\n"}, nil
 		}
 
@@ -302,8 +312,11 @@ func TestExampleBatch_EveryItemGetsTheStopsOfOneItemBeforeTheBatch(t *testing.T)
 	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(rig.remote.asked), 2)
-	assert.ElementsMatch(t, []string{"1", "3"}, rig.remote.asked[len(rig.remote.asked)-2:], "the last two reads of the remote are the stops of the two members, one read each, before the batch")
+	assert.Len(t, rig.remote.asked, 2*readsToLanding, "each member is read three times: at its intake, before its review and once more before its own batch")
+
+	for _, item := range []string{"1", "3"} {
+		assert.Equal(t, readsToLanding, strings.Count(strings.Join(rig.remote.asked, " "), item), "item %s", item)
+	}
 }
 
 func TestExampleBatch_AMergeSettingThatIsOffLandsNothing(t *testing.T) {
@@ -342,7 +355,7 @@ func TestExampleBatch_TheIntegrationPullRequestOfTheRoundReachesTheReadAfterTheB
 	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{testProject + " main 7 1,3"}, rig.host.issueReads())
+	assert.Equal(t, []string{testProject + " main 7 1", testProject + " main 7 3"}, rig.host.issueReads(), "the members end in turn, so each lands in its own batch and each read has the number")
 }
 
 func TestExampleBatch_ARoundWithNoIntegrationPullRequestReadsWithNumberZero(t *testing.T) {
@@ -353,7 +366,7 @@ func TestExampleBatch_ARoundWithNoIntegrationPullRequestReadsWithNumberZero(t *t
 	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{testProject + " main 0 1,3"}, rig.host.issueReads())
+	assert.Equal(t, []string{testProject + " main 0 1", testProject + " main 0 3"}, rig.host.issueReads())
 }
 
 func TestExampleBatch_AFindingStopsTheRunWithARefuseForTheOwner(t *testing.T) {

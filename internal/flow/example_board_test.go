@@ -99,7 +99,7 @@ func TestExampleBoard_ALandRunWithNoBoardMovesNoCard(t *testing.T) {
 	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.ElementsMatch(t, []string{"1", "3"}, rig.merger.landed(), "the two children end together, so the batch has no fixed order")
+	assert.Equal(t, []string{"1", "3"}, rig.merger.landed(), "the members end in turn, so they land in list order")
 	assert.Empty(t, rig.h.forge.placed)
 }
 
