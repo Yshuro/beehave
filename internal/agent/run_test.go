@@ -381,8 +381,8 @@ func (a stallNoteAdapter) Profile() agent.Profile {
 }
 
 func TestRunner_ATimeoutAddsTheStallNoteOfTheProfile(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
-	f := newFixture(t, "claude", model.AgentClaude, "silent")
-	f.spec.Adapter = stallNoteAdapter{claude.New()}
+	f := newFixture(t, "claude", claude.Name, "silent")
+	f.spec.Adapter = stallNoteAdapter{claude.New(nil)}
 	f.spec.Timeout = 300 * time.Millisecond
 
 	got := agent.Runner{}.Run(context.Background(), f.spec)

@@ -75,11 +75,13 @@ type forgeAdapter struct {
 
 // agentAdapter is the registration of an agent: its constructor and its doctor fix texts. The usage read is a method of the adapter that build returns.
 // An agent with no constructor has no adapter yet: its runners are valid in the config and do not start.
+// reportsUsage is true when the CLI reports the plan limits of a login, so the doctor checks them for a runner of the agent.
 type agentAdapter struct {
 	registration
-	build     func() agent.Adapter
-	configFix func(string) string
-	tokenFix  func(string) string
+	build        func() agent.Adapter
+	reportsUsage bool
+	configFix    func(string) string
+	tokenFix     func(string) string
 }
 
 // hostAdapter is the registration of a host provider: the constructor and the sentinel errors of a failed run.
@@ -119,9 +121,10 @@ const stepAgent = claude.Name
 func agentEntries(env map[string]string) map[model.Agent]agentAdapter {
 	return map[model.Agent]agentAdapter{
 		claude.Name: {
-			build:     func() agent.Adapter { return claude.New(env) },
-			configFix: claude.ConfigFix,
-			tokenFix:  claude.TokenFix,
+			build:        func() agent.Adapter { return claude.New(env) },
+			reportsUsage: true,
+			configFix:    claude.ConfigFix,
+			tokenFix:     claude.TokenFix,
 		},
 		opencode.Name: {build: func() agent.Adapter { return opencode.New() }},
 	}
@@ -438,12 +441,12 @@ func (a adapters) toolVersions() map[string]func(context.Context) error {
 	return checks
 }
 
-// logins returns the usage read of each agent that has an adapter, by agent.
+// logins returns the usage read of each agent that has an adapter and reports usage, by agent.
 func (a adapters) logins() map[model.Agent]func(context.Context, model.Runner) model.Reading {
 	logins := map[model.Agent]func(context.Context, model.Runner) model.Reading{}
 
 	for name, entry := range a.agents {
-		if entry.build != nil {
+		if entry.build != nil && entry.reportsUsage {
 			logins[name] = entry.build().ReadUsage
 		}
 	}

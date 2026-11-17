@@ -5,6 +5,7 @@
 //   - OpenCode has no sandbox. The profile has none, so a step with a sandbox does not start; set sandbox = None on the step.
 //   - OpenCode reports no skill calls, so a step with require_skills does not start.
 //   - The session lives in the login folder of the runner. A resume works on the runner that made the session only.
+//     A start after a lost run begins again with a note, because OpenCode has no file for one session that beehave can check before it resumes.
 //   - If the guard plugin does not load, OpenCode runs the shell commands with no check and exits with code 0. A step with forbid_commands does not start on a version
 //     older than the pinned one, and a run whose plugin left no marker file ends with a violation line.
 //   - The guard needs a POSIX shell, so a step with forbid_commands does not start on Windows.
@@ -57,7 +58,8 @@ func (Adapter) Profile() agent.Profile {
 	}
 }
 
-// TranscriptPath returns <configDir>/opencode/opencode.db, the database that holds every session. Nothing reads it.
-func (Adapter) TranscriptPath(configDir, _, _ string) string {
-	return filepath.Join(configDir, "opencode", "opencode.db")
+// TranscriptPath returns <configDir>/opencode/session/<session>, a path that no file holds. OpenCode keeps every session in one database, so it has no file for
+// one session. The check before a resume finds no file, so a start after a lost run begins again with the note of the lost run and does not resume.
+func (Adapter) TranscriptPath(configDir, _, session string) string {
+	return filepath.Join(configDir, "opencode", "session", session)
 }

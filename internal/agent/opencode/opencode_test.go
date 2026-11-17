@@ -57,7 +57,7 @@ func TestProfile_HasNoSandboxSoASandboxedStepIsRefused(t *testing.T) {
 	dir := t.TempDir()
 
 	result := agent.Runner{}.Run(context.Background(), agent.Spec{
-		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: model.AgentOpenCode, ConfigDir: dir},
+		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: opencode.Name, ConfigDir: dir},
 		Dir: dir, Prompt: "p", Env: map[string]string{"PATH": dir}, Sandbox: &agent.SandboxPlan{Work: dir},
 	})
 
@@ -84,10 +84,15 @@ func TestProfile_ResumeNamesTheSessionAndNeverContinuesTheLastOne(t *testing.T) 
 	assert.False(t, p.ResumeLast)
 }
 
-func TestTranscriptPath_IsTheDatabaseInTheLoginFolder(t *testing.T) {
+func TestTranscriptPath_NamesOneFileForEachSessionThatNoFileHolds(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "/login/opencode/opencode.db", opencode.New().TranscriptPath("/login", "/work", "ses_1"))
+	dir := t.TempDir()
+	adapter := opencode.New()
+
+	assert.Equal(t, filepath.Join(dir, "opencode", "session", "ses_1"), adapter.TranscriptPath(dir, "/work", "ses_1"))
+	assert.NotEqual(t, adapter.TranscriptPath(dir, "/work", "ses_1"), adapter.TranscriptPath(dir, "/work", "ses_2"))
+	assert.NoFileExists(t, adapter.TranscriptPath(dir, "/work", "ses_1"))
 }
 
 // fakeEcho prints the arguments and then replays a fixture.
@@ -106,7 +111,7 @@ func run(t *testing.T, change func(*agent.Spec)) (agent.Result, string) {
 	var out bytes.Buffer
 
 	spec := agent.Spec{
-		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: model.AgentOpenCode, ConfigDir: dir},
+		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: opencode.Name, ConfigDir: dir},
 		Dir: dir, Prompt: "go", Env: map[string]string{"PATH": dir + ":/bin:/usr/bin"}, Log: &out,
 	}
 	change(&spec)
@@ -158,7 +163,7 @@ func guardedRun(t *testing.T, script string, change func(*agent.Spec)) agent.Res
 	require.NoError(t, exectest.Write(filepath.Join(dir, "opencode"), script))
 
 	spec := agent.Spec{
-		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: model.AgentOpenCode, ConfigDir: dir},
+		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: opencode.Name, ConfigDir: dir},
 		Dir: dir, Prompt: "go", Env: map[string]string{"PATH": dir + ":/bin:/usr/bin"}, Guard: "beehave check command",
 	}
 	change(&spec)
@@ -220,7 +225,7 @@ func TestRun_AGuardedRunOnWindowsDoesNotStart(t *testing.T) {
 	dir := t.TempDir()
 
 	result := agent.Runner{OS: "windows"}.Run(context.Background(), agent.Spec{
-		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: model.AgentOpenCode, ConfigDir: dir},
+		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: opencode.Name, ConfigDir: dir},
 		Dir: dir, Prompt: "p", Env: map[string]string{"PATH": dir}, Guard: "g",
 	})
 
@@ -241,7 +246,7 @@ func TestRun_ARunThatSetsNoTimeoutEndsAtTheProfileLimitAndNamesTheLikelyCause(t 
 
 		return time.AfterFunc(20*time.Millisecond, fire)
 	}}.Run(context.Background(), agent.Spec{
-		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: model.AgentOpenCode, ConfigDir: dir},
+		Adapter: opencode.New(), Runner: model.Runner{Name: "r", Agent: opencode.Name, ConfigDir: dir},
 		Dir: dir, Prompt: "p", Env: map[string]string{"PATH": dir + ":/bin:/usr/bin"},
 	})
 

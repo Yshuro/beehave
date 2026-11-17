@@ -89,7 +89,7 @@ func TestRunner_ALaunchWritesItsFilesInAPrivateFolderThatIsGoneAfterTheRun(t *te
 
 func TestRunner_ALaunchWhoseMarkerIsMissingAtTheEndOfTheRunIsFlagged(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	for marker, missing := range map[string]bool{"conf/hooks.json": false, "conf/never-written": true, "../outside": true, "": false} {
-		adapter := launchAdapter{Adapter: claude.New(), launch: func(runDir string) agent.Launch {
+		adapter := launchAdapter{Adapter: claude.New(nil), launch: func(runDir string) agent.Launch {
 			launch := stubLaunch(runDir)
 			launch.Loaded = marker
 
@@ -117,7 +117,7 @@ func (a guardVersioned) Profile() agent.Profile {
 
 func TestRunner_AGuardedRunNeedsTheGuardMinimumVersion(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	for version, outcome := range map[string]agent.Outcome{"2.9.9": agent.OutcomeNotStarted, "3.0.0": agent.OutcomeExited, "3.0.1": agent.OutcomeExited} {
-		f := newFixture(t, "claude", model.AgentClaude, "")
+		f := newFixture(t, "claude", claude.Name, "")
 		f.spec.Adapter, f.spec.Guard = guardVersioned{f.spec.Adapter}, "beehave check command"
 
 		got := agent.Runner{Version: seen("cli " + version)}.Run(context.Background(), f.spec)
@@ -131,7 +131,7 @@ func TestRunner_AGuardedRunNeedsTheGuardMinimumVersion(t *testing.T) { //nolint:
 }
 
 func TestRunner_ARunWithNoGuardNeverReadsTheGuardVersion(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
-	f := newFixture(t, "claude", model.AgentClaude, "")
+	f := newFixture(t, "claude", claude.Name, "")
 	f.spec.Adapter = guardVersioned{f.spec.Adapter}
 
 	reader := func(context.Context, string, []string) (string, error) { return "", errors.New("must not run") }
@@ -142,7 +142,7 @@ func TestRunner_ARunWithNoGuardNeverReadsTheGuardVersion(t *testing.T) { //nolin
 }
 
 func TestRunner_AGuardedRunWhoseHookNeedsPOSIXDoesNotStartOnWindows(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
-	f := newFixture(t, "claude", model.AgentClaude, "")
+	f := newFixture(t, "claude", claude.Name, "")
 	f.spec.Adapter, f.spec.Guard = guardVersioned{f.spec.Adapter}, "beehave check command"
 
 	got := agent.Runner{OS: "windows", Version: seen("cli 3.0.0")}.Run(context.Background(), f.spec)

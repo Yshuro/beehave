@@ -161,7 +161,7 @@ func (r Runner) Run(ctx context.Context, spec Spec) Result {
 // stalled adds the StallNote of the profile to a run that a total or idle limit ended.
 func stalled(result Result, p Profile) Result {
 	if p.StallNote != "" && (result.Outcome == OutcomeTimedOut || result.Outcome == OutcomeIdle) {
-		result.Note = strings.TrimSpace(result.Note + " " + p.StallNote)
+		return result.AddNote(p.StallNote)
 	}
 
 	return result
