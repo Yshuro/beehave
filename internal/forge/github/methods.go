@@ -174,7 +174,7 @@ func (f *Forge) refGone(ctx context.Context, done model.CommandResult) bool {
 func (f *Forge) PostComment(ctx context.Context, pr int, body string) error {
 	done := f.run.Run(ctx, []string{argPR, "comment", strconv.Itoa(pr), argRepo, f.repo, argBody, body})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot comment on pull request %d", pr)
+		return refused(done, "cannot comment on pull request %d", pr)
 	}
 
 	return nil
@@ -189,11 +189,11 @@ func (f *Forge) SetDraft(ctx context.Context, pr int, draft bool) error {
 
 	done := f.run.Run(ctx, args)
 	if done.ExitCode != 0 && draft {
-		return forge.Refuse("cannot convert pull request %d to draft", pr)
+		return refused(done, "cannot convert pull request %d to draft", pr)
 	}
 
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot mark pull request %d ready", pr)
+		return refused(done, "cannot mark pull request %d ready", pr)
 	}
 
 	return nil

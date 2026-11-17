@@ -254,8 +254,15 @@ func runHelpers(stateDir string, modes []string, deadline time.Duration) error {
 	for ready := false; !ready; {
 		select {
 		case i := <-exited:
+			// The deadline kills the helpers, so an exit seen after it is the same state as the deadline.
+			expired := ctx.Err() != nil
+
 			cancel()
 			group.Wait()
+
+			if expired {
+				return run.notReady(stateDir)
+			}
 
 			return run.failure(i, "exited before the go file")
 		case <-ctx.Done():
@@ -303,6 +310,20 @@ func TestRunHelpers_HelpersThatAreNotReadyAtTheDeadlineReportTheOutputOfThoseTha
 	require.ErrorContains(t, err, "not ready before the deadline")
 	require.ErrorContains(t, err, "the helper stalls before its ready file")
 	require.NotContains(t, err.Error(), "the helper hangs now")
+}
+
+func TestRunHelpers_ADeadlineThatPassedBeforeTheHelpersStartedIsReportedAsNotReady(t *testing.T) {
+	t.Parallel()
+
+	// A deadline that has already passed makes every helper fail to start and the deadline fire at the same moment, so the run must not depend on which one it sees first.
+	modes := []string{"stall", "stall", "stall", "stall", "stall", "stall", "stall", "stall"}
+
+	for range 200 {
+		err := runHelpers(t.TempDir(), modes, time.Nanosecond)
+
+		require.ErrorContains(t, err, "not ready before the deadline")
+		require.NotContains(t, err.Error(), "exited before the go file")
+	}
 }
 
 // This test is the guard for safe concurrent first opens: DBOS v1.8.0, not beehave, makes them safe, so a failure here

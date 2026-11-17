@@ -2,10 +2,15 @@ package flow
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -100,6 +105,84 @@ command(run = [made.id, str(made.created), str(again.created), again.id, closed.
 	assert.Equal(t, []string{testProject + "|n-1|" + testRun + ":note|hello"}, w.notes)
 	assert.Equal(t, []string{testProject + "|n-1|closed"}, w.statuses)
 	assert.Equal(t, []string{"n-1 True False n-1 closed"}, h.commands.ran())
+}
+
+func TestItemWrite_ASharedKeyIsTheKeyOfTheCallInEveryRun(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	w := newFakeWriter()
+	h.writer = w
+	engine := h.engine(t)
+	file := writeFlow(t, "def main(item):\n    made = item_create(title = \"t\", key = \"o/r:41\", shared = True)\n    command(run = [made.id, str(made.created)])\n")
+
+	for range 2 {
+		_, err := engine.RunFile(testItem, testProject, file)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, []string{testProject + "|o/r:41|t||"}, w.created, "two runs give the same key, so the tracker files one item")
+	assert.Equal(t, []string{"n-1 True", "n-1 False"}, h.commands.ran(), "the second run gets the first item")
+}
+
+// lockProbeWriter is a fakeWriter that, inside each Create, tries the key lock of the project and the key in the state folder dir.
+// held records whether another holder had the lock, as project|key|held.
+type lockProbeWriter struct {
+	*fakeWriter
+
+	dir  string
+	held []string
+}
+
+func (w *lockProbeWriter) Create(ctx context.Context, project, key string, item trackerstore.NewItem) (string, bool, error) {
+	short, cancel := context.WithTimeout(ctx, 60*time.Millisecond)
+	defer cancel()
+
+	unlock, err := trackerstore.LockKey(short, w.dir, project+"\n"+key)
+	if err != nil {
+		w.held = append(w.held, project+"|"+key+"|held")
+
+		return w.fakeWriter.Create(ctx, project, key, item)
+	}
+
+	if err := unlock(); err != nil {
+		return "", false, err
+	}
+
+	return w.fakeWriter.Create(ctx, project, key, item)
+}
+
+func TestItemWrite_ASharedCreateHoldsTheLockOfItsKeyAndARunScopedCreateDoesNot(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	w := &lockProbeWriter{fakeWriter: newFakeWriter()}
+	h.writer = w
+	engine := h.engine(t)
+	w.dir = engine.dir
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, "def main(item):\n    item_create(title = \"t\", key = \"o/r:41\", shared = True)\n    item_create(title = \"t\", key = \"plan\")\n"))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{testProject + "|o/r:41|held"}, w.held, "only the shared create holds the lock of its key")
+	assert.Len(t, w.created, 2)
+}
+
+func TestItemWrite_ASharedCreateWhoseLockCannotBeTakenFailsAndFilesNothing(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	w := newFakeWriter()
+	h.writer = w
+	engine := h.engine(t)
+
+	sum := sha256.Sum256([]byte(testProject + "\no/r:41"))
+	require.NoError(t, os.Mkdir(filepath.Join(engine.dir, "item-"+hex.EncodeToString(sum[:16])+".lock"), 0o700), "a folder in place of the lock file")
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, "def main(item):\n    item_create(title = \"t\", key = \"o/r:41\", shared = True)\n"))
+
+	require.ErrorContains(t, err, "take the lock of a shared item key")
+	assert.Empty(t, w.created)
 }
 
 func TestItemWrite_AReplayWritesNothingTwiceAndKeepsTheStepNames(t *testing.T) {

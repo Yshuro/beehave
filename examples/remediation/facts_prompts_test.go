@@ -38,7 +38,7 @@ func factRules() []factRule {
 
 // factsLanes lists every prompt of the example: every agent the example starts gets the facts.
 func factsLanes() []string {
-	return []string{plan, implement, fix, review, "design", "take_review", "settle", "queue"}
+	return []string{plan, implement, fix, review, "design", "take_review", "settle", "queue", "sync", "sync_review"}
 }
 
 // promptData holds every input a prompt of the example reads, with the given facts.
@@ -47,6 +47,7 @@ func promptData(facts map[string]any) map[string]any {
 		"item": map[string]any{"id": "1", "title": "t", "body": "b"}, "plan": "p", "round": 1, "findings": "f", "violations": "", "facts": facts,
 		"output_file": "/out.json", "mechanism": "m", "fixes": 1, "pr": "9", "ruling": "r",
 		"base": "integration", "acceptance": "", "base_result": "", "pass": 1,
+		"branch": "sync/integration/abcd1234", "source": "main", "head": "abc",
 	}
 }
 

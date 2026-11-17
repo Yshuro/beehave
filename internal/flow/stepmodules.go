@@ -42,6 +42,9 @@ const agentVersion = 3
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
 const landVersion = 3
 
+// forgeVersion is the version of the forge module. Version 2 added the pr_state step.
+const forgeVersion = 2
+
 // gateVersion is the version of the gate module. Version 2 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>).
 const gateVersion = 2
 
@@ -58,7 +61,7 @@ func moduleTable() []stepModule {
 		{name: moduleCore, version: coreVersion, kinds: []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"}},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
-		{name: moduleForge, version: 1, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open"}},
+		{name: moduleForge, version: forgeVersion, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open", prStateKind}},
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, mergeKey, kindPreflight}},
 		{name: moduleGate, version: gateVersion, kinds: []string{"before_review", kindGate}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
@@ -77,7 +80,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core3.agent3.tracker1.forge1.land3.gate2.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core3.agent3.tracker1.forge2.land3.gate2.host1.round1.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))
