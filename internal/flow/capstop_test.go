@@ -1,13 +1,17 @@
 package flow
 
 import (
+	"context"
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/agent"
 )
 
 func TestCapStop_TheStatusNoteNamesTheScopeTheCapAndTheSpend(t *testing.T) {
@@ -144,17 +148,7 @@ func TestCapStop_ARunOutsideAWorkflowCannotSumItsTree(t *testing.T) {
 func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 	t.Parallel()
 
-	rig := newAgentRig(t)
-	opts := rig.h.opts
-	state, err := openStore(opts)
-	require.NoError(t, err)
-
-	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
-	require.NoError(t, err)
-
-	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
-	require.NoError(t, engine.open(t.Context(), opts, state))
-	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+	engine := newAgentRig(t).h.opened(t)
 
 	// The run is a real workflow, so its own id reads fine. The reads of the engine fail at the first read of the climb.
 	sum := func(ctx dbos.Context, in ItemInput) (string, error) {
@@ -183,17 +177,7 @@ func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 func TestCapStop_ACapCheckWhoseTreeReadFailsReturnsTheErrorAndNoStop(t *testing.T) {
 	t.Parallel()
 
-	rig := newAgentRig(t)
-	opts := rig.h.opts
-	state, err := openStore(opts)
-	require.NoError(t, err)
-
-	held, err := claimFolder(state.dir, applicationVersion(opts.Version), ModeRun)
-	require.NoError(t, err)
-
-	engine := newEngine(opts, rig.h.deps(), state, held, moduleRegistry(t))
-	require.NoError(t, engine.open(t.Context(), opts, state))
-	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+	engine := newAgentRig(t).h.opened(t)
 
 	// The run is a real workflow, so its own id reads fine. The tree cap is set and the first read of the climb fails.
 	check := func(ctx dbos.Context, in ItemInput) (string, error) {
@@ -268,6 +252,49 @@ func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing
 		"agent:a#1/budget1.0", "agent:b#2/budget1.0",
 		"agent:c#3/budget1.0", "agent:c#3/budget1.1", "agent:c#3/budget1.2", "agent:c#3/budget1.3",
 	}, looks[:6], "the held step c records looks 0, 1, 2 and 3 in order")
+}
+
+func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.h.opts.MaxRunBudget = 5
+	// The wait is an hour, so only the end of the context of the run can end it.
+	rig.h.capWait = time.Hour
+	engine := rig.h.opened(t)
+
+	// The step runs on a context of its own that the test ends once the run is inside the sleep, not on a timer.
+	ends := make(chan context.CancelFunc, 1)
+	hold := func(ctx dbos.Context, in ItemInput) (string, error) {
+		own, cancel := dbos.WithCancel(ctx)
+		defer cancel()
+
+		ends <- cancel
+
+		s := &script{e: engine, ctx: own, in: in, spent: agent.Spend{Cost: 6}}
+
+		next, err := s.holdForCaps("q", 1, 0)
+		if err == nil {
+			return "", errors.New("the hold did not fail")
+		}
+
+		return strconv.Itoa(next) + ": " + err.Error(), nil
+	}
+
+	dbos.RegisterWorkflow(engine.ctx, hold, dbos.WithWorkflowName(itemName))
+	require.NoError(t, dbos.Launch(engine.ctx))
+
+	handle, err := dbos.RunWorkflow(engine.ctx, hold, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(testRun))
+	require.NoError(t, err)
+
+	cancel := <-ends
+
+	waitForTheSleep(t, engine)
+	cancel()
+
+	words, err := handle.GetResult()
+	require.NoError(t, err)
+	assert.Equal(t, "1: wait for a cap of item 1 to be raised: context canceled", words)
 }
 
 func TestCapStop_AReadThatFailsReachesTheCallerWithItsWords(t *testing.T) {
