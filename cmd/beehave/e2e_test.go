@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/rogpeppe/go-internal/testscript"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/agent/claude"
@@ -79,7 +81,7 @@ func e2eFlow(dir, path string) cli.Flow {
 
 			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
 				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg.Projects),
-				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files,
+				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
 			}, dir, cfg))
 			if err != nil {
 				return nil, err
@@ -102,6 +104,18 @@ func (e2eFiles) Fields(_ context.Context, _, item string) (map[string]string, er
 func (e2eFiles) Preflight(context.Context, string, string, preflight.Request, string) (preflight.Result, error) {
 	return preflight.Result{}, nil
 }
+
+// Comments gives an item no comments: the pipeline of the example reads the parent of its item.
+func (e2eFiles) Comments(context.Context, string, string) ([]string, error) { return nil, nil }
+
+// Parent gives an item no parent.
+func (e2eFiles) Parent(context.Context, string, string) (string, error) { return "", nil }
+
+// Up starts no host: the project of the scripts has none. The finish function of the example stops the host that the round started.
+func (e2eFiles) Up(context.Context, string, string) (bool, string, error) { return false, "", nil }
+
+// Teardown stops no host.
+func (e2eFiles) Teardown(context.Context, string, string) error { return nil }
 
 func (f e2eFiles) event(name, item string) error {
 	log, err := os.OpenFile(filepath.Join(f.dir, "events.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, e2eFileMode)
@@ -418,9 +432,25 @@ const e2eProject = `project(
     test_report = "r.xml",
     build_host = "build",
     host = host(provider = "ssh", disk_floor_gb = 50, slots = {"mutation": 1}, ssh = ssh(address = "10.0.0.5")),
-    vars = {"mutation_command": ["sh", "mutation.sh"]},
+    vars = {
+        "round": {"base": "integration", "owner": "owner", "lane_cap": 1, "fix_rounds": 5, "source_checkout": "/own/checkout", "label": "round"},
+        "mutation_command": ["sh", "mutation.sh"],
+    },
 )
 `
+
+// exampleMain is the one entry of the example that the scripts replace.
+const exampleMain = "def main(item):"
+
+// oneItemCopy returns the text of the example for the scripts that run one item: its main is renamed round_main and a new main runs pipeline.
+// The scripts prove the engine in a real process over the pipeline. A full round needs the queue, remedy, a base branch and a host.
+func oneItemCopy(example string) (string, error) {
+	if found := strings.Count(example, exampleMain); found != 1 {
+		return "", fmt.Errorf("the example holds %d lines %q, want 1", found, exampleMain)
+	}
+
+	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
+}
 
 // exampleSkill returns the one skill that an agent of examples/remediation/workflow.star requires.
 func exampleSkill() (string, error) {
@@ -449,6 +479,28 @@ func exampleSkill() (string, error) {
 	return skills[0], nil
 }
 
+// e2eFile is a file of the work folder of a script.
+type e2eFile struct {
+	text string
+	mode os.FileMode
+}
+
+// writeE2EFiles writes each file below work, with the folders it needs.
+func writeE2EFiles(work string, files map[string]e2eFile) error {
+	for name, file := range files {
+		path := filepath.Join(work, name)
+		if err := os.MkdirAll(filepath.Dir(path), e2eFolderMode); err != nil {
+			return err
+		}
+
+		if err := os.WriteFile(path, []byte(file.text), file.mode); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 // e2eSetup writes the config folder and the fake claude into the work folder of a script.
 func e2eSetup(env *testscript.Env) error {
 	work := env.WorkDir
@@ -461,10 +513,7 @@ func e2eSetup(env *testscript.Env) error {
 	transcripts := filepath.Dir(newAdapters(nil, nil, nil).agent(claude.Name).TranscriptPath(work, work, "session"))
 	fake := strings.NewReplacer("%SKILL%", skill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
 
-	files := map[string]struct {
-		text string
-		mode os.FileMode
-	}{
+	files := map[string]e2eFile{
 		"bin/claude":                {fake, e2eScriptMode},
 		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), e2eFileMode},
 		"config/projects/shop.star": {e2eProject, e2eFileMode},
@@ -475,27 +524,19 @@ func e2eSetup(env *testscript.Env) error {
 		return err
 	}
 
-	files["flow/workflow.star"] = struct {
-		text string
-		mode os.FileMode
-	}{string(example), e2eFileMode}
-
-	for name, text := range e2ePrompts {
-		files["flow/prompts/"+name+".md"] = struct {
-			text string
-			mode os.FileMode
-		}{text, e2eFileMode}
+	copied, err := oneItemCopy(string(example))
+	if err != nil {
+		return err
 	}
 
-	for name, file := range files {
-		path := filepath.Join(work, name)
-		if err := os.MkdirAll(filepath.Dir(path), e2eFolderMode); err != nil {
-			return err
-		}
+	files["flow/workflow.star"] = e2eFile{copied, e2eFileMode}
 
-		if err := os.WriteFile(path, []byte(file.text), file.mode); err != nil {
-			return err
-		}
+	for name, text := range e2ePrompts {
+		files["flow/prompts/"+name+".md"] = e2eFile{text, e2eFileMode}
+	}
+
+	if err := writeE2EFiles(work, files); err != nil {
+		return err
 	}
 
 	tree := filepath.Join(work, "tree")
@@ -513,11 +554,6 @@ func e2eSetup(env *testscript.Env) error {
 	env.Setenv("BEEHAVE_CONFIG", filepath.Join(work, "config"))
 	env.Setenv("BEEHAVE_STATE_DIR", filepath.Join(work, "state"))
 	env.Setenv(e2eDirVariable, work)
-	// The example merges only when MERGE is "true". The scripts run it as a dry run: the owner merges, and no merge guard runs.
-	env.Setenv("MERGE", "false")
-	// The preflight call of the example reads these before the first agent. The fake preflight finds nothing changed, so the values only have to exist.
-	env.Setenv("EXPECT_HEAD", "")
-	env.Setenv("BASE", "integration")
 
 	return nil
 }
@@ -592,6 +628,28 @@ func cmdWaitStatus(ts *testscript.TestScript, _ bool, args []string) {
 
 		return err == nil && strings.Contains(string(out), args[0])
 	})
+}
+
+func TestE2E_TheOneItemCopyHasOneMain(t *testing.T) {
+	t.Parallel()
+
+	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	require.NoError(t, err)
+
+	copied, err := oneItemCopy(string(example))
+	require.NoError(t, err)
+
+	assert.Equal(t, 1, strings.Count(copied, exampleMain))
+	assert.Contains(t, copied, "def round_main(item):")
+	assert.True(t, strings.HasSuffix(copied, exampleMain+"\n    return pipeline(item)\n"))
+}
+
+func TestE2E_TheOneItemCopyRefusesAnExampleWithTwoMains(t *testing.T) {
+	t.Parallel()
+
+	_, err := oneItemCopy("def main(item):\n    pass\ndef main(item):\n    pass\n")
+
+	require.ErrorContains(t, err, "holds 2 lines")
 }
 
 func TestScripts(t *testing.T) {

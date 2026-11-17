@@ -25,7 +25,7 @@ func TestExample_TheThirdRoundOnOneMechanismRunsTheDesignStepAndAReplaceEndsTheL
 	writer := newFakeWriter()
 	rig.h.writer = writer
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "opus"}, rig.models(), "plan, implement, three reviews, two fixes, then the design step and no third fix")
@@ -33,7 +33,7 @@ func TestExample_TheThirdRoundOnOneMechanismRunsTheDesignStepAndAReplaceEndsTheL
 	require.Len(t, writer.notes, 1)
 	assert.Contains(t, writer.notes[0], "replace")
 	assert.Contains(t, writer.notes[0], "the framework already retries")
-	assert.Empty(t, result.Merge)
+	assert.False(t, childOf(t, result).Approved)
 }
 
 func TestExample_TheLanesOfTheItemAreFixReviewReworkAndDesignInTheLedgerOfTheMethod(t *testing.T) {
@@ -42,7 +42,7 @@ func TestExample_TheLanesOfTheItemAreFixReviewReworkAndDesignInTheLedgerOfTheMet
 	rig, file := exampleRigWithDesign(t, alwaysChanges, noFindings, sameMechanism, `{"decision":"replace","reason":"the framework already retries"}`)
 	rig.h.writer = newFakeWriter()
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 	require.NoError(t, err)
 
 	lanes, err := rig.h.client(t, testVersion).Lanes(testItem)
@@ -63,7 +63,7 @@ func TestExample_ADeleteDecisionAlsoEndsTheLoop(t *testing.T) {
 	rig, file := exampleRigWithDesign(t, alwaysChanges, noFindings, sameMechanism, `{"decision":"delete","reason":"nothing needs it"}`)
 	rig.h.writer = newFakeWriter()
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Len(t, rig.models(), 8, "the loop ends at the design step")
@@ -80,7 +80,7 @@ func TestExample_AKeepDecisionRunsTheFixWithTheReasonAndDoesNotAskAgainForThatMe
 		return "approve"
 	}, noFindings, sameMechanism, `{"decision":"keep","reason":"the retry is the smallest part"}`)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "opus", "sonnet", "opus", "opus", "opus"}, rig.models(),
@@ -102,7 +102,7 @@ func TestExample_FindingsOnDifferentMechanismsKeepTheNormalFixRounds(t *testing.
 		return "approve"
 	}, noFindings, func(review int) string { return []string{"", "a.go", "b.go", "c.go", "d.go"}[review] }, `{"decision":"replace","reason":"unused"}`)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus"}, rig.models(), "no design step: no mechanism had two fixes")
@@ -119,7 +119,7 @@ func TestExample_AnEmptyMechanismNeverCountsAsOneMechanism(t *testing.T) {
 		return "approve"
 	}, noFindings, func(int) string { return " " }, `{"decision":"replace","reason":"unused"}`)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus"}, rig.models())
@@ -144,11 +144,12 @@ func TestExample_WithoutADesignPromptAReviewThatWritesNoMechanismPassesTheLoop(t
 	source, err := root.ReadFile("workflow.star")
 	require.NoError(t, err)
 
+	// The copy drops the one keyword that opts the example into the design round, and nothing else.
 	plain := strings.Replace(string(source), `, design_prompt = "prompts/design.md"`, "", 1)
 	require.NotEqual(t, string(source), plain, "the example opts into the design round")
 	require.NoError(t, root.WriteFile("workflow.star", []byte(plain), 0o600))
 
-	_, err = rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err = runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus"}, rig.models(), "plan, implement, review, fix, review")
@@ -160,7 +161,7 @@ func TestExample_TheCounterKeysOnTheFileSoAFunctionSuffixDoesNotSplitIt(t *testi
 	rig, file := exampleRigWithDesign(t, alwaysChanges, noFindings, func(review int) string { return []string{"", "a.go", "a.go:f", "a.go : g"}[review] }, `{"decision":"replace","reason":"unused"}`)
 	rig.h.writer = newFakeWriter()
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "opus"}, rig.models(), "the third review reaches the design step")
@@ -180,7 +181,7 @@ func TestExample_ADesignStepThatFailsFailsTheRunAndIsNotReadAsKeep(t *testing.T)
 		return result
 	}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "opus"}, rig.models(), "the design step is the last agent call: no fix follows it")
@@ -201,7 +202,7 @@ func TestExample_ADesignStepThatChangedTheFolderStopsTheRun(t *testing.T) {
 		return result
 	}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.ErrorContains(t, err, "the design step changed the item folder")
 }
@@ -211,7 +212,7 @@ func TestExample_ADecisionThatIsNotListedStopsTheRun(t *testing.T) {
 
 	rig, file := exampleRigWithDesign(t, alwaysChanges, noFindings, sameMechanism, `{"decision":"rewrite","reason":"x"}`)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.ErrorContains(t, err, "rewrite")
 }

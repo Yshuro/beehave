@@ -23,8 +23,8 @@ func exampleForbid(t *testing.T) []string {
 	text, err := os.ReadFile("../../examples/remediation/workflow.star")
 	require.NoError(t, err)
 	require.Contains(t, string(text), "forbid_commands = FORBID")
-	require.Contains(t, string(text), "protect_paths = protected()", "the kind protected-path needs the list of the step")
-	require.Contains(t, string(text), "protect = protected()", "the review loop gets the same list")
+	require.Contains(t, string(text), "protect_paths = protected(round_settings)", "the kind protected-path needs the list of the step")
+	require.Contains(t, string(text), "protect = protected(round_settings)", "the review loop gets the same list")
 
 	list := exampleForbidList.FindStringSubmatch(string(text))
 	require.Len(t, list, 2, "workflow.star holds one FORBID list")

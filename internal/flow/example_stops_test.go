@@ -89,7 +89,7 @@ func TestExampleLoop_AStopBeforeAnAgentOfTheReviewLoopStartsThatAgentNoMore(t *t
 
 			rig, file, _ := stopLoopRig(t, tc.turnAt, tc.over, tc.gone)
 
-			result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+			result, err := runPipeline(rig.h.engine(t), file)
 
 			require.NoError(t, err, "a stop is a result and not an error")
 			assert.Equal(t, tc.models, rig.models(), "no agent starts after the stop")
@@ -111,7 +111,8 @@ func TestReviewFix_ALoopWithNoGuardAsksTheForgeNothing(t *testing.T) {
 	spy := &turningPreflight{t: t, world: &shipWorld{pull: preflightPull(t, rig.head, nil)}, head: rig.head}
 	rig.h.preflight = spy
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	loopEngine := rig.h.engine(t)
+	_, err := loopEngine.RunFile(testItem, testProject, file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus"}, rig.models())
@@ -132,10 +133,10 @@ func TestExampleLoop_EveryDispatchOfTheLoopIsCheckedAgainstTheHeadOfTheWorktree(
 	spy := &turningPreflight{t: t, world: world, head: rig.head}
 	rig.h.preflight = spy
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved)
 	require.Len(t, spy.asked, 4, "the intake, then the review, the fix and the second review")
 
 	for _, req := range spy.asked[1:] {
@@ -154,7 +155,7 @@ func TestExampleLoop_AStopBeforeTheDesignStepStartsNoDesignAgent(t *testing.T) {
 	rig.h.preflight = &turningPreflight{t: t, world: world, head: rig.head, turnAt: 7, over: map[string]any{"state": "MERGED"}}
 	rig.h.writer = newFakeWriter()
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err, "a stop is a result and not an error")
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus"}, rig.models(), "the design agent never starts")
@@ -169,7 +170,7 @@ func TestExampleLoop_AStopDuringTheRulingOfTheOwnerStartsNoSettleAgent(t *testin
 	// Calls: the intake, six reviews with five fixes between them (eleven calls), then the settle agent at call 13 after the ruling.
 	rig, file, _ := stopLoopRig(t, 13, map[string]any{"state": "MERGED"}, false)
 	engine := rig.h.engine(t)
-	done := runInBackground2(engine, file)
+	done := pipelineInBackground(engine, file)
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))

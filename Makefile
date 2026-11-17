@@ -68,7 +68,7 @@ setup:  ## Install the Go tools and generate the agent files
 	$(call GO_TOOL_AT,govulncheck,golang.org/x/vuln,$(GOVULNCHECK_VERSION)) || go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
 	$(call GO_TOOL_AT,gotestsum,gotest.tools/gotestsum,$(GOTESTSUM_VERSION)) || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
 	$(call GO_TOOL_AT,deadcode,golang.org/x/tools,$(word 2,$(subst @, ,$(DEADCODE_VERSION)))) || go install $(DEADCODE_VERSION)
-	[ "$$("$(GO_INSTALL_DIR)/gitleaks" version 2>/dev/null)" = "$(GITLEAKS_VERSION:v%=%)" ] || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	$(call GO_TOOL_AT,gitleaks,github.com/zricethezav/gitleaks/v8,$(GITLEAKS_VERSION)) || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 	$(MAKE) governance-generate
 

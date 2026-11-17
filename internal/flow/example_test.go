@@ -2,11 +2,13 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -29,6 +31,69 @@ func mustRead(t *testing.T, path string) []byte {
 }
 
 const reviewMarker = "What every review here must do"
+
+// exampleProject is the project facts that the example rig starts with: the repository, the trunk and the settings of a round on the branch integration.
+func exampleProject() model.Project {
+	return model.Project{
+		Name: testProject, Repo: "o/r", BaseBranch: "main",
+		Vars: roundVars(map[string]any{
+			"base": "integration", "owner": "owner", "owner_email": "owner@example.com", "source_checkout": "/own/checkout",
+			"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round",
+		}),
+	}
+}
+
+// setRound sets the round setting `key` of the project of the rig before the run starts. A nil value removes the key.
+func (rig *agentRig) setRound(key string, value any) {
+	setRoundOf(&rig.project, key, value)
+}
+
+// setRoundOf sets the round setting `key` in the vars of the project. A nil value removes the key. Project vars with no round get one.
+func setRoundOf(project *model.Project, key string, value any) {
+	settings, found := project.Vars["round"].(map[string]any)
+	if !found {
+		settings = map[string]any{}
+	}
+
+	project.Vars["round"] = with(settings, map[string]any{key: value})
+}
+
+// runPipeline runs the item of the rig as the child of a round: the entry pipeline of the file, the way spawn starts it. It runs the file as it is.
+// The child never merges, so the result holds the value that pipeline returned and no merge state.
+func runPipeline(engine *Engine, file string) (ItemResult, error) {
+	return runPipelineOf(engine, testItem, file)
+}
+
+// runPipelineOf is runPipeline for the item `item`.
+func runPipelineOf(engine *Engine, item, file string) (ItemResult, error) {
+	in, err := pinnedInput(item, testProject, file)
+	if err != nil {
+		return ItemResult{}, err
+	}
+
+	in.Entry = "pipeline"
+
+	return engine.run(in)
+}
+
+// childValue is what the entry pipeline returned: the item, the head the gate ran on, whether the review approved it and the reason when it did not.
+type childValue struct {
+	Item     string `json:"item"`
+	Head     string `json:"head"`
+	Approved bool   `json:"approved"`
+	Reason   string `json:"reason"`
+}
+
+// childOf reads the value that the entry pipeline returned.
+func childOf(t *testing.T, result ItemResult) childValue {
+	t.Helper()
+
+	var value childValue
+
+	require.NoError(t, json.Unmarshal(result.Value, &value))
+
+	return value
+}
 
 // exampleRig runs examples/remediation/workflow.star, copied with its prompts, over the fake collaborators.
 // A review whose verdict is the empty string writes no output file.
@@ -76,21 +141,31 @@ func exampleRigLimited(t *testing.T, verdicts, findings, mechanisms func(review 
 	rig.h.slots = func(_, _, class string) (SlotGrant, error) {
 		return SlotGrant{Host: "box", Count: map[string]int{"mutation": 1}[class]}, nil
 	}
-	rig.h.opts.Env = map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
+	rig.project = exampleProject()
+	rig.h.facts = func(string) model.Project { return rig.project }
+	rig.h.reader = &fakeReader{}
 	rig.h.preflight = &fakePreflight{}
 	rig.h.gate.results = []GateResult{{Passed: true, Head: rig.head, Tree: exampleTree}}
 	rig.h.forge.state = review.Standing{Number: testPull, Head: rig.head}
 
-	reviews := 0
+	rig.answerLikeTheExample(skill, verdicts, findings, mechanisms, design, limit)
+
+	return rig, filepath.Join(folder, "workflow.star")
+}
+
+// answerLikeTheExample makes the fake agents of the rig answer the prompts of the example: a review writes the verdict, the findings and the mechanism of the review it is,
+// a plan or a review writes the regression count, a design step writes the design, and every run reports the skill that the implement step requires.
+func (rig *agentRig) answerLikeTheExample(skill string, verdicts, findings, mechanisms func(review int) string, design string, limit int) {
+	// The children of a round run their agents at the same time, so the count is atomic.
+	var count atomic.Int64
 
 	rig.h.agents.result = func(request AgentRequest) agent.Result {
 		if strings.Contains(request.Prompt, reviewMarker) {
-			reviews++
+			reviews := int(count.Add(1))
 
 			// A loop that does not stop where the test expects would run to the rounds cap and then wait for a person. Past the limit the
 			// review writes no output, so the run fails at once and the test reports it as an assertion, not as a timeout.
-			_, rest, _ := strings.Cut(request.Prompt, "Write it to ")
-			path, _, _ := strings.Cut(rest, " as JSON")
+			path := promptOutput(request.Prompt)
 			if verdict := verdicts(reviews); verdict != "" && reviews <= limit {
 				mechanism := ""
 				if mechanisms != nil {
@@ -108,15 +183,19 @@ func exampleRigLimited(t *testing.T, verdicts, findings, mechanisms func(review 
 		putNoParked(rig, request)
 
 		if strings.Contains(request.Prompt, designMarker) {
-			_, rest, _ := strings.Cut(request.Prompt, "Write it to ")
-			path, _, _ := strings.Cut(rest, " as JSON")
-			rig.put(path, design)
+			rig.put(promptOutput(request.Prompt), design)
 		}
 
 		return agent.Result{Outcome: agent.OutcomeExited, Session: "sess-1", Transcript: "/t.jsonl", Text: "all done", Skills: []string{skill}}
 	}
+}
 
-	return rig, filepath.Join(folder, "workflow.star")
+// promptOutput returns the path of the output file that a prompt of the example names: the text between "Write it to " and " as JSON".
+func promptOutput(prompt string) string {
+	_, rest, _ := strings.Cut(prompt, "Write it to ")
+	path, _, _ := strings.Cut(rest, " as JSON")
+
+	return path
 }
 
 // putNoParked makes the settle agent of the example rig leave no finding open: a request that declares the output `parked` gets an empty list.
@@ -170,7 +249,7 @@ func TestExample_ACappedImplementStopsTheItemWithARefuseThatNamesTheCapAndStarts
 
 	rig, file := capRig(t, func(int) string { return "approve" }, func(r AgentRequest) bool { return r.Model == "sonnet" && r.Resume == "" }, agent.OutcomeTurnCap)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -190,7 +269,7 @@ func TestExample_ACappedFixStopsTheItemWithARefuseThatNamesTheCap(t *testing.T) 
 		return "approve"
 	}, func(r AgentRequest) bool { return r.Resume != "" }, agent.OutcomeBudgetCap)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -202,11 +281,11 @@ func TestExample_AnApprovedFirstReviewMarksTheHeadReadyWithoutAFix(t *testing.T)
 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models())
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved, "the child returns the approved head for the round to land")
 }
 
 func TestExample_AnApproveWithAnOpenFindingIsAChangesVerdictAndSendsTheRunToAFix(t *testing.T) {
@@ -220,11 +299,11 @@ func TestExample_AnApproveWithAnOpenFindingIsAChangesVerdictAndSendsTheRunToAFix
 		return "[]"
 	})
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus"}, rig.models(), "the follow-up of review 1 was fixed, and review 2 approved")
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved, "the child returns the approved head for the round to land")
 }
 
 // libraryLoop is a workflow that runs the review loop of the library with the extra arguments.
@@ -252,7 +331,8 @@ func TestReviewFix_TheFollowUpsArgumentReachesTheReviewAndTheDefaultAllowsThem(t
 		})
 		require.NoError(t, os.WriteFile(file, []byte(libraryLoop(extra)), 0o600))
 
-		_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+		loopEngine := rig.h.engine(t)
+		_, err := loopEngine.RunFile(testItem, testProject, file)
 
 		require.NoError(t, err, extra)
 		assert.Equal(t, want, rig.models(), extra)
@@ -271,7 +351,8 @@ func TestReviewFix_TheStatusShowsTheRoundsUsedAgainstTheCapsOfTheLoop(t *testing
 	})
 	require.NoError(t, os.WriteFile(file, []byte(libraryLoop(`, follow_ups = "forbid", rounds = 4`)), 0o600))
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	loopEngine := rig.h.engine(t)
+	_, err := loopEngine.RunFile(testItem, testProject, file)
 	require.NoError(t, err)
 
 	info := onlyRun(t, rig.h.client(t, testVersion))
@@ -285,7 +366,7 @@ func TestExample_FiveFixRoundsAreEachFollowedByAReviewAndTheSixthReviewIsTheLast
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
 	engine := rig.h.engine(t)
-	done := runInBackground2(engine, file)
+	done := pipelineInBackground(engine, file)
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
@@ -303,7 +384,7 @@ func TestExample_AGateThatCannotRunEndsTheRunBeforeAnyReviewOrFix(t *testing.T) 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	rig.h.gate.err = errFake
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.ErrorIs(t, err, errFake)
 	assert.Equal(t, []string{"opus", "sonnet"}, rig.models(), "only the plan and the implement agents ran")
@@ -444,7 +525,7 @@ func TestExample_AGateThatExitsZeroWithZeroTestsDoesNotPassAndTheFixGetsTheReaso
 	runs := 0
 	rig.h.gate.via = zeroTestGate{head: rig.head, tree: exampleTree, dir: t.TempDir(), runs: &runs}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "sonnet", "opus"}, rig.models(), "round 1 runs the fix and no review: the gate did not pass")
@@ -459,7 +540,7 @@ func TestExample_AGateKilledByASignalIsVoidAndRerunWithNoFixAgent(t *testing.T) 
 	runs := 0
 	rig.h.gate.via = packageGate{head: rig.head, tree: exampleTree, runs: &runs}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models(), "a killed gate is void, not red: no fix agent, and the review waits for the rerun")
@@ -473,7 +554,7 @@ func TestExample_AHostGateThatDiedIsVoidAndRerunWithNoFixAgent(t *testing.T) {
 	waits := 0
 	rig.h.gate.via = hostDiedGate{head: rig.head, tree: exampleTree, waits: &waits}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models(), "a died job is void, not red: no fix agent, and the review waits for the rerun")
@@ -490,7 +571,7 @@ func TestExample_AVoidGateIsRerunInTheRunAndAPassAfterItGivesAPassWithNoFixAgent
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	rig.h.gate.results = []GateResult{voidResult(rig, "the gate wrote no report"), {Passed: true, Head: rig.head, Tree: exampleTree}}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models(), "a void gate is not red: the implementer and the review run, and no fix agent")
@@ -507,7 +588,7 @@ func TestExample_AGateThatIsVoidEveryTimeAsksTheOwnerAndRefusesAfterTheLastAnswe
 	engine := rig.h.engine(t)
 
 	go func() {
-		result, err := engine.RunFile(testItem, testProject, file)
+		result, err := runPipeline(engine, file)
 		done <- runOutcome{result: result, err: err}
 	}()
 
@@ -533,7 +614,7 @@ func TestExample_AnAnswerToAVoidGateQuestionRunsTheGateAgainAndAPassGoesToTheRev
 	engine := rig.h.engine(t)
 
 	go func() {
-		result, err := engine.RunFile(testItem, testProject, file)
+		result, err := runPipeline(engine, file)
 		done <- runOutcome{result: result, err: err}
 	}()
 
@@ -556,7 +637,7 @@ func TestExample_AGateWithAFailedStepAndAnUnknownStepIsRedAndStillGetsAFixRound(
 	done := make(chan runOutcome, 1)
 
 	go func() {
-		result, err := engine.RunFile(testItem, testProject, file)
+		result, err := runPipeline(engine, file)
 		done <- runOutcome{result: result, err: err}
 	}()
 
@@ -582,23 +663,11 @@ func TestExample_AReviewIsOnlyReadAgainstTheHeadTheGatePassed(t *testing.T) {
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	rig.h.gate.results = []GateResult{{Passed: true, Head: "0000000000000000000000000000000000000000", Tree: exampleTree}}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.ErrorContains(t, err, "0000000000000000000000000000000000000000")
 	require.ErrorContains(t, err, rig.head)
 	assert.Equal(t, []string{"opus", "sonnet"}, rig.models(), "the review agent never started")
-}
-
-func TestExample_AGateThatRecordedNoTreeStopsTheRunAtTheMergeCall(t *testing.T) {
-	t.Parallel()
-
-	rig, file := exampleRig(t, func(int) string { return "approve" })
-	rig.h.gate.results = []GateResult{{Passed: true, Head: rig.head}}
-	rig.h.opts.Env["MERGE"] = "true"
-
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
-
-	require.ErrorContains(t, err, "`tree` is empty", "a merge needs the tree of the gate, so a gate that records none stops the run")
 }
 
 func TestExample_AReviewThatWritesNoVerdictFileIsAskedOnceMore(t *testing.T) {
@@ -612,11 +681,11 @@ func TestExample_AReviewThatWritesNoVerdictFileIsAskedOnceMore(t *testing.T) {
 		return "approve"
 	})
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "opus"}, rig.models(), "the second review ran in the same round")
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved, "the child returns the approved head for the round to land")
 }
 
 func TestExample_AFailedGateSkipsTheReviewAndSendsItsReportToTheFix(t *testing.T) {
@@ -625,7 +694,7 @@ func TestExample_AFailedGateSkipsTheReviewAndSendsItsReportToTheFix(t *testing.T
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	rig.h.gate.results = []GateResult{{Passed: false, Head: rig.head, Report: "lint: unused variable x"}, {Passed: true, Head: rig.head, Tree: exampleTree}}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"opus", "sonnet", "sonnet", "opus"}, rig.models(), "round 1 runs the fix and no review; round 2 reviews")
@@ -634,11 +703,24 @@ func TestExample_AFailedGateSkipsTheReviewAndSendsItsReportToTheFix(t *testing.T
 	assert.Contains(t, fix, "lint: unused variable x", "the gate report is the findings of the fix")
 }
 
+// runInBackground2 runs the entry main of the file in the background.
 func runInBackground2(engine *Engine, file string) <-chan runOutcome {
 	done := make(chan runOutcome, 1)
 
 	go func() {
 		result, err := engine.RunFile(testItem, testProject, file)
+		done <- runOutcome{result: result, err: err}
+	}()
+
+	return done
+}
+
+// pipelineInBackground runs the entry pipeline of the example file in the background: the work on one item, which main of the example starts as a child of its round.
+func pipelineInBackground(engine *Engine, file string) <-chan runOutcome {
+	done := make(chan runOutcome, 1)
+
+	go func() {
+		result, err := runPipeline(engine, file)
 		done <- runOutcome{result: result, err: err}
 	}()
 

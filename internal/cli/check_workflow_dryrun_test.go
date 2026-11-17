@@ -23,27 +23,33 @@ func runDry(t *testing.T, env map[string]string, args ...string) (int, string, s
 	return code, stdout.String(), stderr.String()
 }
 
-// exampleProject writes a config folder whose project `code` holds the mutation command that the remediation example needs, and returns the folder.
-func exampleProject(t *testing.T) string {
-	t.Helper()
+// roundProject is a project file whose vars hold the round settings of the remediation example.
+const roundProject = "project(source = \"/srv/repo\", base_branch = \"main\", gate = \"g\", test_report = \"r.xml\", vars = {\"round\": " +
+	"{\"base\": \"integration\", \"owner\": \"owner\", \"owner_email\": \"owner@example.com\", \"lane_cap\": 3, \"fix_rounds\": 5, \"label\": \"beehave-round\"}})\n"
 
-	dir := t.TempDir()
-	writeConfig(t, dir, "projects/code.star", "project(source = \"/srv/repo\", base_branch = \"main\", gate = \"g\", test_report = \"r.xml\", vars = {\"mutation_command\": [\"sh\", \"scripts/mutation-pr.sh\"]})\n")
-
-	return dir
-}
-
-func TestCheckWorkflowDryRun_PrintsEachStepOfTheRemediationExampleInOrder(t *testing.T) {
+func TestCheckWorkflowDryRun_TheRemediationExampleIsARoundThatEndsEarlyAtTheReadOfTheQueueWithNoEnvironment(t *testing.T) {
 	t.Parallel()
 
-	env := map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
+	dir := t.TempDir()
+	writeConfig(t, dir, "projects/code.star", roundProject)
 
-	code, stdout, stderr := runDry(t, env, "--item", "12", "--config", exampleProject(t), "--project", "code", filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	code, stdout, stderr := runDry(t, map[string]string{}, "--config", dir, "--project", "code", "--item", "12", filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
 
-	require.Equal(t, 0, code, stderr)
+	require.Equal(t, 3, code, stderr)
 	assert.Empty(t, stderr)
-	assert.Less(t, strings.Index(stdout, "agent:plan#1"), strings.Index(stdout, "agent:implement#2"), stdout)
-	assert.Contains(t, stdout, "gate:check#1")
+	assert.Less(t, strings.Index(stdout, "host_up:round-host#1"), strings.Index(stdout, "agent:queue-audit-1#1"), stdout)
+	assert.Contains(t, stdout, "not run in a dry run: read the open work of the project")
+	assert.NotContains(t, stdout, "FAILED")
+	assert.NotContains(t, stdout, "env:")
+}
+
+func TestCheckWorkflowDryRun_TheRemediationExampleWithNoRoundInTheProjectVarsIsRefused(t *testing.T) {
+	t.Parallel()
+
+	code, stdout, _ := runDry(t, map[string]string{}, "--item", "12", filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+
+	require.Equal(t, 1, code, stdout)
+	assert.Contains(t, stdout, "REFUSE: the project vars hold no round.")
 }
 
 func TestCheckWorkflowDryRun_TheFactsOfANamedProjectHoldItsVars(t *testing.T) {
@@ -165,16 +171,16 @@ func TestCheckWorkflowDryRun_RefusesABadItemId(t *testing.T) {
 func TestCheckWorkflowDryRun_TheSendBackFlagWalksAFixRoundAfterTheFirstReview(t *testing.T) {
 	t.Parallel()
 
-	env := map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
-	file := filepath.Join("..", "..", "examples", "remediation", "workflow.star")
+	dir := t.TempDir()
+	writeConfig(t, dir, "p.md", "Judge the change. Nothing else.")
+	writeConfig(t, dir, "workflow.star", "def main(item):\n    r = agent(name = \"review\", prompt = \"p.md\", model = \"sonnet\", outputs = [\"verdict\"])\n    if r.verdict == \"changes\":\n        agent(name = \"fix\", prompt = \"p.md\", model = \"sonnet\")\n        agent(name = \"review\", prompt = \"p.md\", model = \"sonnet\", outputs = [\"verdict\"])\n")
+	file := filepath.Join(dir, "workflow.star")
 
-	config := exampleProject(t)
-
-	code, stdout, _ := runDry(t, env, "--item", "12", "--config", config, "--project", "code", file)
+	code, stdout, _ := runDry(t, map[string]string{}, "--item", "12", file)
 	require.Equal(t, 0, code, stdout)
 	assert.NotContains(t, stdout, "agent:fix")
 
-	code, stdout, _ = runDry(t, env, "--item", "12", "--send-back", "--config", config, "--project", "code", file)
+	code, stdout, _ = runDry(t, map[string]string{}, "--item", "12", "--send-back", file)
 	require.Equal(t, 0, code, stdout)
 	assert.Contains(t, stdout, "agent:fix")
 }
