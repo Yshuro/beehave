@@ -372,6 +372,21 @@ A bad argument is a refusal. The tool finds the repository from the `origin` rem
 
 A dry run takes the same path and prints `WOULD:` lines, and it makes no write call. The trunk is `main` when `--trunk` is not given. The number of the new round is the text after the last dash of the new branch.
 
+### `remedy sync`
+
+`remedy sync --base <branch> [--trunk <branch>]` runs `roundsync`. It prints one line, `state=<state>` followed by the fields that the state has, and the workflow branches on `state`.
+
+| State | Meaning |
+|---|---|
+| `current` | The round base holds the trunk tip. Nothing is written. |
+| `synced` | The branch `sync/<base>/<first 8 characters of the trunk tip>` holds a merge commit of the base tip and the trunk tip, and a draft pull request into the base is open. The line gives `branch`, `pr`, `head` and `base_tip`. |
+| `conflict` | The merge conflicts. The sync branch stays at the base tip and no pull request opens. An agent merges the trunk on that branch and pushes, and a second call opens the pull request. |
+| `refused` | The forge refuses the merge for the workflow permission. The line has `reason=sync-refused`. |
+
+The forge does each merge, so no checkout is written, and the round branch is never rebased. A repeat call finds the branch, the merge and the pull request. A base that moved after the branch was cut is merged into the branch, so the gated head holds every commit that the landing keeps. Any other failure of the forge is exit code 2.
+
+`remedy sync land --pr <number> --head <sha> --base-tip <sha>` merges the pull request with a merge commit pinned to `--head`. It lands only when the base is still at `--base-tip`. A moved base is `state=stale` and a moved head is `state=head-moved`. Both are exit code 2 and write nothing. A landing prints `state=landed`.
+
 ### `remedy audit`
 
 `remedy audit authored <span>` and `remedy audit present <tip> <base>` run `audit`. The audit reads the merges of a range through git, with `-z` path lists.

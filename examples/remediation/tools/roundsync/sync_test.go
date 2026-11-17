@@ -1,0 +1,372 @@
+package roundsync_test
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/examples/remediation/tools/roundsync"
+	"github.com/tobocop2/beehave/internal/forge"
+	"github.com/tobocop2/beehave/internal/model"
+)
+
+const (
+	base      = "integration/r1"
+	trunk     = "main"
+	baseTip   = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	trunkTip  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	syncName  = "sync/integration/r1/bbbbbbbb"
+	mergedTip = "cccccccccccccccccccccccccccccccccccccccc"
+)
+
+var errDown = errors.New("down")
+
+// world is a fake forge. ahead holds the answer of each compare ("base...head"). fail holds an error for an operation: "Op", "Op:arg" or "Op:arg#n" for the nth call.
+// A write is recorded in writes. A merge sets the compare of its pair to 0 and moves the tip of the target branch.
+type world struct {
+	tips   map[string]string
+	ahead  map[string]int
+	fail   map[string]error
+	pulls  []model.PullRequest
+	view   model.PullRequest
+	calls  map[string]int
+	writes []string
+}
+
+func newWorld() *world {
+	open, name := "OPEN", syncName
+	baseName := base
+
+	return &world{
+		tips:  map[string]string{base: baseTip, trunk: trunkTip},
+		ahead: map[string]int{base + "..." + trunk: 1},
+		fail:  map[string]error{},
+		calls: map[string]int{},
+		view:  model.PullRequest{State: &open, BaseRefName: &baseName, HeadRefName: &name},
+	}
+}
+
+func (w *world) failIf(op, arg string) error {
+	key := op + ":" + arg
+	w.calls[key]++
+
+	for _, k := range []string{op, key, fmt.Sprintf("%s#%d", key, w.calls[key])} {
+		if err := w.fail[k]; err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (w *world) PRView(context.Context, int, ...string) (model.PullRequest, error) {
+	return w.view, w.failIf("PRView", "")
+}
+
+func (w *world) PRList(_ context.Context, _ int, args ...string) ([]model.PullRequest, error) {
+	w.writes = append(w.writes, "list "+strings.Join(args, " "))
+
+	return w.pulls, w.failIf("PRList", "")
+}
+
+func (w *world) BranchRef(_ context.Context, branch string) (string, bool, error) {
+	sha, found := w.tips[branch]
+
+	return sha, found, w.failIf("BranchRef", branch)
+}
+
+func (w *world) CreateBranch(_ context.Context, branch, sha string) error {
+	if err := w.failIf("CreateBranch", branch); err != nil {
+		return err
+	}
+
+	w.writes = append(w.writes, "branch "+branch+" "+sha)
+	w.tips[branch] = sha
+	w.ahead[branch+"..."+trunk] = 1
+
+	return nil
+}
+
+func (w *world) CreatePR(_ context.Context, req model.NewPull) (int, error) {
+	if err := w.failIf("CreatePR", ""); err != nil {
+		return 0, err
+	}
+
+	w.writes = append(w.writes, fmt.Sprintf("pr %s %s %s", req.Head, req.Base, req.Title))
+
+	return 7, nil
+}
+
+func (w *world) MergePR(_ context.Context, pr int, sha string) error {
+	if err := w.failIf("MergePR", ""); err != nil {
+		return err
+	}
+
+	w.writes = append(w.writes, fmt.Sprintf("land %d %s", pr, sha))
+
+	return nil
+}
+
+func (w *world) CommitsAhead(_ context.Context, from, head string) (int, error) {
+	return w.ahead[from+"..."+head], w.failIf("CommitsAhead", from+"..."+head)
+}
+
+func (w *world) MergeBranch(_ context.Context, into, head string) (string, error) {
+	if err := w.failIf("MergeBranch", head); err != nil {
+		return "", err
+	}
+
+	w.writes = append(w.writes, "merge "+into+" "+head)
+	w.ahead[into+"..."+head] = 0
+	w.tips[into] = mergedTip
+
+	return mergedTip, nil
+}
+
+func check(t *testing.T, w *world) (roundsync.Result, error) {
+	t.Helper()
+
+	return roundsync.Check(context.Background(), w, roundsync.Request{Base: base, Trunk: trunk})
+}
+
+func TestCheck_ATrunkThatHasNothingNewWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.ahead[base+"..."+trunk] = 0
+
+	result, err := check(t, w)
+
+	require.NoError(t, err)
+	assert.Equal(t, "state=current", result.Line())
+	assert.Empty(t, w.writes)
+}
+
+func TestCheck_ACleanMoveCutsTheBranchMergesTheTrunkAndOpensADraftPull(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+
+	result, err := check(t, w)
+
+	require.NoError(t, err)
+	assert.Equal(t, "state=synced branch="+syncName+" head="+mergedTip+" base_tip="+baseTip+" pr=7", result.Line())
+	assert.Equal(t, []string{
+		"branch " + syncName + " " + baseTip,
+		"merge " + syncName + " " + trunk,
+		"list --state open --head " + syncName + " --base " + base + " --json number",
+		"pr " + syncName + " " + base + " Merge main into integration/r1",
+	}, w.writes)
+}
+
+func TestCheck_ARepeatCallFindsTheBranchTheMergeAndThePullRequest(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.ahead[syncName+"..."+trunk] = 0
+	w.pulls = []model.PullRequest{{Number: 3}}
+
+	result, err := check(t, w)
+
+	require.NoError(t, err)
+	assert.Equal(t, roundsync.Result{State: roundsync.Synced, Branch: syncName, PR: 3, Head: mergedTip, BaseTip: baseTip}, result)
+	assert.Len(t, w.writes, 1, "only the list of pull requests: no branch, no merge, no pull request")
+}
+
+func TestCheck_ABaseThatMovedAfterTheSyncBranchWasCutIsMergedIntoTheBranch(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.ahead[syncName+"..."+trunk] = 0
+	w.ahead[syncName+"..."+base] = 2
+	w.pulls = []model.PullRequest{{Number: 3}}
+
+	_, err := check(t, w)
+
+	require.NoError(t, err)
+	assert.Contains(t, w.writes, "merge "+syncName+" "+base)
+}
+
+func TestCheck_AConflictLeavesTheBranchAtTheBaseTipAndOpensNoPull(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.fail["MergeBranch:"+trunk] = &forge.Error{Message: "cannot merge", Err: forge.ErrMergeConflict}
+
+	result, err := check(t, w)
+
+	require.NoError(t, err)
+	assert.Equal(t, "state=conflict branch="+syncName+" base_tip="+baseTip, result.Line())
+	assert.Equal(t, []string{"branch " + syncName + " " + baseTip}, w.writes)
+}
+
+func TestCheck_ARefusalForTheWorkflowPermissionIsTheStateRefusedWithItsReason(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.fail["MergeBranch:"+trunk] = &forge.Error{Message: "cannot merge", Err: forge.ErrWorkflowPermission}
+
+	result, err := check(t, w)
+
+	require.NoError(t, err)
+	assert.Equal(t, "state=refused branch="+syncName+" base_tip="+baseTip+" reason=sync-refused", result.Line())
+}
+
+func TestCheck_AnyOtherFailureIsAnErrorAndNotAState(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"compare_of_the_trunk":     "CommitsAhead",
+		"base_tip":                 "BranchRef:" + base,
+		"trunk_tip":                "BranchRef:" + trunk,
+		"read_of_the_sync_branch":  "BranchRef:" + syncName + "#1",
+		"cut_of_the_sync_branch":   "CreateBranch",
+		"compare_of_the_branch":    "CommitsAhead:" + syncName + "..." + trunk,
+		"merge_of_the_trunk":       "MergeBranch:" + trunk,
+		"list_of_pull_requests":    "PRList",
+		"open_of_the_pull_request": "CreatePR",
+		"read_of_the_head":         "BranchRef:" + syncName + "#2",
+	}
+
+	for name, key := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld()
+			w.fail[key] = errDown
+
+			_, err := check(t, w)
+
+			require.ErrorIs(t, err, errDown)
+		})
+	}
+}
+
+func TestCheck_AMissingBranchIsAnError(t *testing.T) {
+	t.Parallel()
+
+	for _, missing := range []string{base, trunk} {
+		w := newWorld()
+		delete(w.tips, missing)
+
+		_, err := check(t, w)
+
+		require.ErrorContains(t, err, "cannot find branch "+missing)
+	}
+}
+
+func TestBranch_HoldsTheBaseAndTheFirstEightCharactersOfTheTrunkTip(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, syncName, roundsync.Branch(base, trunkTip))
+	assert.Equal(t, "sync/x/abc", roundsync.Branch("x", "abc"))
+}
+
+func land(t *testing.T, w *world, head string, tip string) (roundsync.Result, error) {
+	t.Helper()
+
+	return roundsync.Land(context.Background(), w, roundsync.LandRequest{PR: 7, Head: head, BaseTip: tip})
+}
+
+func TestLand_MergesThePinnedHeadWhenTheBaseTipIsTheRecordedOne(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+
+	result, err := land(t, w, mergedTip, baseTip)
+
+	require.NoError(t, err)
+	assert.Equal(t, "state=landed branch="+syncName+" head="+mergedTip+" base_tip="+baseTip+" pr=7", result.Line())
+	assert.Equal(t, []string{"land 7 " + mergedTip}, w.writes)
+}
+
+func TestLand_AMovedBaseIsStaleAndWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+
+	result, err := land(t, w, mergedTip, trunkTip)
+
+	require.NoError(t, err)
+	assert.Equal(t, roundsync.Stale, result.State)
+	assert.True(t, result.Stops())
+	assert.Empty(t, w.writes)
+}
+
+func TestLand_AMovedHeadIsHeadMovedAndWritesNothing(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = trunkTip
+
+	result, err := land(t, w, mergedTip, baseTip)
+
+	require.NoError(t, err)
+	assert.Equal(t, roundsync.HeadMoved, result.State)
+	assert.True(t, result.Stops())
+	assert.Empty(t, w.writes)
+}
+
+func TestLand_FailuresAreErrors(t *testing.T) {
+	t.Parallel()
+
+	for name, key := range map[string]string{
+		"view": "PRView", "base_tip": "BranchRef:" + base, "head_tip": "BranchRef:" + syncName, "merge": "MergePR",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld()
+			w.tips[syncName] = mergedTip
+			w.fail[key] = errDown
+
+			_, err := land(t, w, mergedTip, baseTip)
+
+			require.ErrorIs(t, err, errDown)
+		})
+	}
+}
+
+func TestLand_APullRequestThatIsNotOpenOrHasNoBranchesIsAnError(t *testing.T) {
+	t.Parallel()
+
+	merged := "MERGED"
+
+	for name, edit := range map[string]func(*model.PullRequest){
+		"merged":   func(p *model.PullRequest) { p.State = &merged },
+		"no_state": func(p *model.PullRequest) { p.State = nil },
+		"no_base":  func(p *model.PullRequest) { p.BaseRefName = nil },
+		"no_head":  func(p *model.PullRequest) { p.HeadRefName = nil },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld()
+			edit(&w.view)
+
+			_, err := land(t, w, mergedTip, baseTip)
+
+			require.ErrorContains(t, err, "pull request #7 is not an open pull request")
+			assert.Empty(t, w.writes)
+		})
+	}
+}
+
+func TestLand_AMissingBranchIsAnError(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+
+	_, err := land(t, w, mergedTip, baseTip)
+
+	require.ErrorContains(t, err, "cannot find branch "+syncName)
+}
