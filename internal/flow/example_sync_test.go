@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // These tests run the sync step of the round: the round merges a moved trunk into the round branch before the queue audit of a pass.
@@ -23,14 +24,19 @@ const syncReviewMarker = "What the review of a sync must do"
 // syncResolveMarker is a phrase of the prompt of the agent that resolves a sync conflict.
 const syncResolveMarker = "What the sync step must do"
 
+// syncRoundBase is the round base of the sync tests. The trunk is main.
+const syncRoundBase = "integration"
+
 // syncBranch is the sync branch that the fake tool names.
-const syncBranch = "sync/main/abcd1234"
+const syncBranch = "sync/integration/abcd1234"
 
 // syncScript is the fake `remedy sync` of a round: each check call takes the next line, and the last line repeats. land is the line and the exit code of `remedy sync land`.
 type syncScript struct {
 	lines  []string
 	land   CommandOutput
 	calls  int
+	called func(n int) // when set, runs after check call number n
+
 	head   string // the head of the sync branch that a synced line names
 	tip    string // the round base tip that a synced line names
 	review string // the verdict of the sync review
@@ -89,8 +95,11 @@ func (g *syncGate) roundBases() []string {
 }
 
 // withSync makes the command fake of the rig answer the sync tool with the script, and run a checkout of the round for real in the folder of the round.
+// The round base is syncRoundBase, so a test tells the round base from the trunk main.
 func withSync(t *testing.T, rig *roundRig, script *syncScript) {
 	t.Helper()
+
+	rig.setRound("base", syncRoundBase)
 
 	script.head = rig.heads["3"]
 	script.tip = rig.kids.base
@@ -133,6 +142,10 @@ func (s *syncScript) answer(land bool) CommandOutput {
 
 	line := s.lines[min(s.calls, len(s.lines)-1)]
 	s.calls++
+
+	if s.called != nil {
+		s.called(s.calls)
+	}
 
 	if line == "synced" {
 		line = s.syncedLine()
@@ -216,7 +229,7 @@ func TestRoundSync_AMovedTrunkLandsThroughTheSyncPullRequestWhoseGateRunsOnTheMe
 		assert.Less(t, at(names, order[i-1]), at(names, order[i]), "%s comes before %s", order[i-1], order[i])
 	}
 
-	assert.Equal(t, []string{"remedy sync --base main --trunk main"}, commandsNamed(rig, "remedy sync --base")[:1])
+	assert.Equal(t, []string{"remedy sync --base integration --trunk main"}, commandsNamed(rig, "remedy sync --base")[:1], "the round base, then the trunk")
 	assert.Equal(t, []string{"remedy sync land --pr 7 --head " + script.head + " --base-tip " + script.tip}, syncLands(rig))
 	require.NotEmpty(t, recorder.roundBases())
 	assert.Empty(t, recorder.roundBases()[0], "the gate of the sync head runs the gate command only, with no base")
@@ -424,4 +437,126 @@ func TestRoundSync_AnExitTwoOfTheCheckStopsTheRoundWithTheLineOfTheTool(t *testi
 	require.NotNil(t, result.Stopped)
 	assert.Equal(t, 2, result.Stopped.RC)
 	assert.Contains(t, result.Stopped.Output, "502")
+}
+
+// release lets the child of the item end now, in place of its turn at a queue read: a held pass reads no queue.
+func (s *endOrder) release(item string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if mine := s.turns[item]; mine != nil {
+		close(mine.open)
+		delete(s.turns, item)
+	}
+}
+
+// syncRequest returns the request of the first agent whose prompt holds the marker.
+func syncRequest(t *testing.T, rig *roundRig, marker string) AgentRequest {
+	t.Helper()
+
+	at := slices.IndexFunc(rig.h.agents.requests, func(request AgentRequest) bool { return strings.Contains(request.Prompt, marker) })
+	require.GreaterOrEqual(t, at, 0, "an agent ran with the prompt that holds %q", marker)
+
+	return rig.h.agents.requests[at]
+}
+
+func TestRoundSync_TheResolveAgentMergesTheSourceThatTheLineNames(t *testing.T) {
+	t.Parallel()
+
+	for _, source := range []string{"main", syncRoundBase} {
+		t.Run(source, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newRoundRig(t, "")
+			withSync(t, rig, &syncScript{lines: []string{"state=conflict branch=" + syncBranch + " source=" + source + " base_tip=abc"}})
+
+			_, _, err := runSync(t, rig, false)
+			require.NoError(t, err)
+
+			prompt := syncRequest(t, rig, syncResolveMarker).Prompt
+			assert.Contains(t, prompt, "git merge --no-ff origin/"+source+"`", "the agent merges the source of the line, not a fixed branch")
+			assert.Contains(t, prompt, "the round branch `"+syncRoundBase+"`")
+		})
+	}
+}
+
+func TestRoundSync_AConflictThatTheAgentResolvesIsGatedReviewedAndLandedInTheSamePass(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	script := &syncScript{lines: []string{"state=conflict branch=" + syncBranch + " source=main base_tip=abc", "synced", "state=current"}}
+	withSync(t, rig, script)
+
+	_, recorder, err := runSync(t, rig, false)
+	require.NoError(t, err)
+
+	names := stepNames(t, rig.last)
+	order := []string{"command:sync-1#", "agent:sync-resolve-1#", "command:sync-again-1#", "gate:sync-gate-1#", "agent:sync-review-1#", "command:sync-land-1#", "agent:queue-audit-1#"}
+
+	for i := 1; i < len(order); i++ {
+		require.GreaterOrEqual(t, at(names, order[i]), 0, "the step %s ran: %v", order[i], names)
+		assert.Less(t, at(names, order[i-1]), at(names, order[i]), "%s comes before %s", order[i-1], order[i])
+	}
+
+	assert.Equal(t, []string{"remedy sync land --pr 7 --head " + script.head + " --base-tip " + script.tip}, syncLands(rig))
+	assert.Equal(t, []string{""}, recorder.roundBases())
+	require.Len(t, rig.questions, 1)
+	assert.NotContains(t, rig.questions[0], "sync-")
+}
+
+func TestRoundSync_TheReviewOfTheSyncReadsOnlyAndRunsOnTheGatedHeadOnly(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	withSync(t, rig, &syncScript{lines: []string{"synced", "state=current"}})
+
+	_, _, err := runSync(t, rig, false)
+	require.NoError(t, err)
+
+	review := syncRequest(t, rig, syncReviewMarker)
+	assert.True(t, review.NoEdits, "the review cannot edit files")
+	assert.Contains(t, review.Forbid, model.FindingGitWrite, "the review cannot write with git")
+
+	moved := newRoundRig(t, "")
+	withSync(t, moved, &syncScript{lines: []string{"synced"}})
+
+	inner := moved.h.commands.reply
+	moved.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
+		if len(request.Run) > 1 && request.Run[0] == "git" && request.Run[1] == "checkout" {
+			return CommandOutput{}, nil
+		}
+
+		return inner(request)
+	}
+
+	_, _, err = runSync(t, moved, false)
+
+	require.Error(t, err, "a folder that is not at the gated head gets no review")
+	assert.Contains(t, err.Error(), "the pin is")
+	assert.Empty(t, syncLands(moved))
+}
+
+func TestRoundSync_AHeldRoundGathersItsOpenRunAndCallsNoSyncInALaterPass(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "1 2")
+	script := &syncScript{lines: []string{"state=current", "state=refused reason=sync-refused"}}
+	script.called = func(n int) {
+		if n == 2 {
+			rig.kids.turns.release("2")
+		}
+	}
+	withSync(t, rig, script)
+
+	_, _, err := runSync(t, rig, false)
+	require.NoError(t, err)
+
+	joined := strings.Join(stepNames(t, rig.last), " ")
+	assert.Contains(t, joined, "command:sync-2#", "the second pass checks the trunk and is held")
+	assert.NotContains(t, joined, "agent:queue-audit-2#", "the held pass starts no item")
+	assert.Contains(t, joined, "gather:round-gather-2#", "the held pass still gathers the open run")
+	assert.NotContains(t, joined, "command:sync-3#", "a later pass of a held round calls no sync")
+	assert.ElementsMatch(t, []string{"1", "2"}, rig.kids.started())
+	require.Len(t, rig.questions, 1)
+	assert.Contains(t, rig.questions[0], "sync-refused", "the round waits with the reason once no run is open")
 }
