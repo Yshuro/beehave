@@ -142,11 +142,32 @@ func TestCancel_ACancelThatFailedAtTheBuildJobIsFinishedByTheNextCancel(t *testi
 
 			storeExec(t, h, allowJobCancel)
 
+			var said strings.Builder
+
+			client.progress = &said
 			require.NoError(t, cancel(client, run), "a cancel of the canceled run finishes the cancel")
 			assert.Equal(t, dbos.WorkflowStatusCancelled, statusIn(t, h, job), "the second cancel reached the job that the first one left running")
+			// The fault aborts the write of the whole level under the run, so the other children of that level stay open too.
+			assert.True(t, strings.HasPrefix(said.String(), run+" was already cancelled. This cancel stopped what an earlier cancel left running: "), said.String()) //nolint:misspell // the state word that beehave status prints
+			assert.Contains(t, said.String(), job, "the cancel names the job it stopped")
+
+			err := cancel(client, run)
+			require.ErrorIs(t, err, errWrongState, "a canceled run with nothing open is refused")
+			require.ErrorContains(t, err, run+" is cancelled and has nothing to cancel") //nolint:misspell // the state word that beehave status prints
 			endsAfterTheCancel(t, h, done)
 		})
 	}
+}
+
+func TestCancel_ReportsATreeThatCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	client, err := OpenClient(t.Context(), newHarness(t).opts, ReleaseDeps{})
+	require.NoError(t, err)
+	require.NoError(t, client.Close())
+
+	_, err = client.openUnder("item-12-r1")
+	require.ErrorContains(t, err, "list the children of run item-12-r1")
 }
 
 func TestSwarm_ARaiseCancelsAgainTheChildrenThatAFailedCancelOfARunLeftRunning(t *testing.T) {

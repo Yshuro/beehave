@@ -91,6 +91,8 @@ type Client struct {
 	give       ReleaseDeps
 	logger     *slog.Logger
 	log        io.Closer
+	// progress is Options.Progress: a cancel of a canceled run writes there the runs it stopped.
+	progress io.Writer
 }
 
 // OpenClient opens the state folder for the status, answer, resume and cancel commands.
@@ -101,7 +103,7 @@ func OpenClient(ctx context.Context, opts Options, give ReleaseDeps) (*Client, e
 		return nil, err
 	}
 
-	client := &Client{version: applicationVersion(opts.Version), maxRunBudget: opts.MaxRunBudget, reviewPoll: opts.ReviewPoll, dir: state.dir, give: give, log: state.log}
+	client := &Client{version: applicationVersion(opts.Version), maxRunBudget: opts.MaxRunBudget, reviewPoll: opts.ReviewPoll, dir: state.dir, give: give, log: state.log, progress: opts.Progress}
 	if err := client.connect(ctx, state); err != nil {
 		return nil, errors.Join(fmt.Errorf("open the workflow store: %w", err), state.log.Close())
 	}
@@ -492,7 +494,7 @@ func (c *Client) claimFresh(project, item, id string) (string, error) {
 	return owner, nil
 }
 
-// Cancel stops the open run of an item and the phases it started. A canceled run is canceled again, so the cancel reaches the children that an earlier cancel left open.
+// Cancel stops the open run of an item and the phases it started. A canceled run is canceled again when a run under it is still open, so the cancel reaches the children that an earlier cancel left open.
 func (c *Client) Cancel(item string) error {
 	last, err := c.latest(item)
 	if err != nil {
@@ -506,7 +508,7 @@ func (c *Client) Cancel(item string) error {
 	return c.cancelRun(item, last)
 }
 
-// CancelRun stops the open run with this run id, a pass run included, and cancels a canceled run again, as Cancel does. The run need not be the latest run of its item.
+// CancelRun stops the open run with this run id, a pass run included, and cancels a canceled run with an open run under it again, as Cancel does. The run need not be the latest run of its item.
 func (c *Client) CancelRun(id string) error {
 	target, err := c.runWithID(id)
 	if err != nil {
@@ -548,6 +550,16 @@ func (c *Client) runWithID(id string) (run, error) {
 
 // cancelRun cancels a run and its children, and gives back what the run held when no engine runs. It holds probe.lock to the end of the release (see docs/design/durable-loop.md).
 func (c *Client) cancelRun(item string, last run) error {
+	return c.underProbe(func() error { return c.cancelHeld(item, last) })
+}
+
+// cancelHeld is cancelRun while probe.lock is held. A canceled run with no open child is refused; one with open children is canceled again, and the runs it stops are written to progress.
+func (c *Client) cancelHeld(item string, last run) error {
+	stopped, err := c.leftOpen(last)
+	if err != nil {
+		return err
+	}
+
 	// The marker comes first. An engine that stops before its release ends leaves it, and the next start finishes the release.
 	// A marker for a run that stays open is harmless: the start drops it.
 	project, err := c.markCancel(item, last)
@@ -555,13 +567,57 @@ func (c *Client) cancelRun(item string, last run) error {
 		return err
 	}
 
-	return c.underProbe(func() error {
-		if err := dbos.CancelWorkflow(c.flow, last.Status.ID, dbos.WithCancelChildren()); err != nil {
-			return err
+	if err := dbos.CancelWorkflow(c.flow, last.Status.ID, dbos.WithCancelChildren()); err != nil {
+		return err
+	}
+
+	return errors.Join(c.releaseUnowned(project, item, last), c.sayStopped(last, stopped))
+}
+
+// leftOpen returns the open runs under a canceled run, and refuses a canceled run that has none. It returns nothing for an open run.
+func (c *Client) leftOpen(last run) ([]string, error) {
+	if last.Status.Status != dbos.WorkflowStatusCancelled {
+		return nil, nil
+	}
+
+	open, err := c.openUnder(last.Status.ID)
+	if err == nil && len(open) == 0 {
+		err = fmt.Errorf("%w: %s is %s and has nothing to cancel", errWrongState, last.Status.ID, stateOf(last.Status.Status))
+	}
+
+	return open, err
+}
+
+// openUnder returns the ids of the open runs in the tree under the run with this id, at any depth.
+func (c *Client) openUnder(id string) ([]string, error) {
+	var open []string
+
+	for parents := []string{id}; len(parents) > 0; parents = parents[1:] {
+		rows, err := dbos.ListWorkflows(c.flow, dbos.WithFilterParentWorkflowID(parents[0]))
+		if err != nil {
+			return nil, fmt.Errorf("list the children of run %s: %w", parents[0], err)
 		}
 
-		return c.releaseUnowned(project, item, last)
-	})
+		for _, row := range rows {
+			parents = append(parents, row.ID)
+			if !(run{Status: row}).terminal() {
+				open = append(open, row.ID)
+			}
+		}
+	}
+
+	return open, nil
+}
+
+// sayStopped writes to progress the runs that a cancel of a canceled run stopped.
+func (c *Client) sayStopped(last run, stopped []string) error {
+	if c.progress == nil || len(stopped) == 0 {
+		return nil
+	}
+
+	_, err := fmt.Fprintf(c.progress, "%s was already cancelled. This cancel stopped what an earlier cancel left running: %s\n", last.Status.ID, strings.Join(stopped, ", ")) //nolint:misspell // the state word that beehave status prints
+
+	return err
 }
 
 // underProbe runs f while it holds probe.lock.
