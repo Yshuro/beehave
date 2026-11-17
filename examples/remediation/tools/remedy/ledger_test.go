@@ -263,6 +263,7 @@ func TestLedger_ArgumentsThatAreMissingOrUnknownAreARefusal(t *testing.T) {
 		"add with two arguments":     {"ledger", "add", "7", "fix-1", "--state", "/s"},
 		"count with no kinds":        {"ledger", "count", "7", "--state", "/s"},
 		"closes with no key":         {"ledger", "closes", "--state", "/s"},
+		"count with one argument":    {"ledger", "count", "7"},
 		"no state folder":            {"ledger", "count", "7", "fix"},
 		"an argument after flags":    {"ledger", "count", "7", "fix", "--state", "/s", "extra"},
 		"a flag that does not exist": {"ledger", "count", "7", "fix", "--bogus"},
@@ -274,6 +275,17 @@ func TestLedger_ArgumentsThatAreMissingOrUnknownAreARefusal(t *testing.T) {
 		assert.Empty(t, out, name)
 		assert.NotEmpty(t, errOut, name)
 	}
+}
+
+func TestLedger_AnUnknownVerbIsRefusedByName(t *testing.T) {
+	t.Parallel()
+
+	code, out, errOut := run(t, ledgerDeps(&bodyWorld{}), "ledger", "bake", "7", "--state", "/s")
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Empty(t, out)
+	assert.Contains(t, errOut, "remedy ledger: 'bake' is not a ledger verb.")
+	assert.Contains(t, errOut, "usage: remedy ledger add")
 }
 
 func TestLedger_HelpListsTheLedgerAndScopeCommands(t *testing.T) {

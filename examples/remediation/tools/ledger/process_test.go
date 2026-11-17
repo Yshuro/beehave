@@ -31,6 +31,7 @@ import (
 const (
 	readyFile   = "hold-ready"
 	releaseFile = "hold-release"
+	outcomeFile = "try-outcome"
 )
 
 func TestHelperProcess(t *testing.T) {
@@ -50,7 +51,125 @@ func TestHelperProcess(t *testing.T) {
 		require.NoError(t, helperCrash(t.Context(), args[1]))
 	case "hold-lock":
 		require.NoError(t, helperHoldLock(args[1]))
+	case "try-write":
+		require.NoError(t, helperTryWrite(t.Context(), args[1]))
 	}
+}
+
+// helperTryWrite writes one row without waiting for a lock and records "committed", or the error of SQLite when the commit is refused, in the outcome file.
+func helperTryWrite(ctx context.Context, dir string) error {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dir, ledger.FileName)+"?_pragma=busy_timeout(0)")
+	if err != nil {
+		return err
+	}
+
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err == nil {
+		_, err = conn.ExecContext(ctx, "INSERT INTO lanes (key, lane, kind, at) VALUES ('try', 'try-1', 'fix', 0)")
+	}
+
+	if err == nil {
+		_, err = conn.ExecContext(ctx, "COMMIT")
+	}
+
+	outcome := "committed"
+	if err != nil {
+		outcome = "refused: " + err.Error()
+	}
+
+	return os.WriteFile(filepath.Join(dir, outcomeFile), []byte(outcome), 0o600)
+}
+
+// tryWrite runs the helper that writes one row without waiting, and returns what it says: "committed", or "refused: " and the error.
+func tryWrite(t *testing.T, dir string) string {
+	t.Helper()
+
+	require.NoError(t, helper(t, "try-write", dir).Run())
+
+	outcome, err := os.ReadFile(filepath.Join(dir, outcomeFile)) //nolint:gosec // the test names its own outcome file
+	require.NoError(t, err)
+
+	return string(outcome)
+}
+
+func TestTouch_AnExistingFileKeepsTheReadLockOfAReaderInTheSameProcess(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.add("5", "fix-1", ledger.KindFix, "")
+
+	// A read transaction that has run a query holds a shared lock on the file until it ends.
+	db, err := sql.Open("sqlite", "file:"+h.file()+"?mode=ro")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, db.Close()) })
+
+	reader, err := db.BeginTx(t.Context(), nil)
+	require.NoError(t, err)
+
+	var rows int
+
+	require.NoError(t, reader.QueryRowContext(t.Context(), "SELECT count(*) FROM lanes").Scan(&rows))
+
+	// The step of a write that makes the file runs while the reader holds its lock.
+	require.NoError(t, ledger.Touch(h.ledger))
+
+	assert.Contains(t, tryWrite(t, h.dir), "refused: database is locked", "the write of the other process must wait for the reader")
+
+	require.NoError(t, reader.Rollback())
+}
+
+func TestAdd_MakingTheFileMakesItAtMode0600AndRefusesAFolderThatDoesNotExist(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	require.NoError(t, ledger.Touch(h.ledger))
+
+	info, err := os.Stat(h.file())
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	require.ErrorIs(t, ledger.Touch(ledger.Open(filepath.Join(h.dir, "gone"))), fs.ErrNotExist)
+}
+
+func TestAdd_AFolderThatCannotBeWrittenToRefusesTheAddThatMustMakeTheFile(t *testing.T) {
+	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root writes to a folder of mode 0555")
+	}
+
+	h := newHarness(t)
+	h.add("5", "fix-1", ledger.KindFix, "")
+
+	// The lock file stays, so the add gets its turn; the ledger file is gone, so the add must make it.
+	require.NoError(t, os.Remove(h.file()))
+	require.NoError(t, os.Chmod(h.dir, 0o555)) //nolint:gosec // a folder needs the execute bit
+	t.Cleanup(func() {
+		assert.NoError(t, os.Chmod(h.dir, 0o700)) //nolint:gosec // a folder needs the execute bit
+	})
+
+	_, err := h.ledger.Add(ledger.Request{Key: "5", Lane: "fix-2", Kind: ledger.KindFix, At: at})
+
+	var refusal *check.Refusal
+
+	require.ErrorAs(t, err, &refusal)
+	assert.Contains(t, err.Error(), "cannot open "+h.file()+": ")
+	assert.Contains(t, err.Error(), "permission denied")
+	assert.NoFileExists(t, h.file())
+}
+
+func TestAdd_AWriteInAnotherProcessCommitsOnceTheReaderEnds(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.add("5", "fix-1", ledger.KindFix, "")
+
+	assert.Equal(t, "committed", tryWrite(t, h.dir), "the helper commits when no reader holds the file")
 }
 
 // helperHoldLock takes the ledger lock, makes the ready file, and frees the lock when the release file exists.
