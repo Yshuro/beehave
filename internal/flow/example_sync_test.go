@@ -357,9 +357,12 @@ func TestRoundSync_AReviewThatDoesNotApproveTheSyncStopsTheRoundWithTheReasonAnd
 
 	require.NoError(t, err)
 	require.Len(t, rig.questions, 1)
-	assert.Contains(t, rig.questions[0], "sync-review")
+	assert.Contains(t, rig.questions[0], "sync-review. The review did not approve the sync pull request. Its findings are in the reply of the step sync-review of the last pass: beehave status with the run id of the round lists the steps.")
 	assert.Empty(t, syncLands(rig))
-	assert.NotContains(t, strings.Join(stepNames(t, rig.last), " "), "agent:queue-audit-1#")
+
+	steps := strings.Join(stepNames(t, rig.last), " ")
+	assert.Contains(t, steps, "agent:sync-review-1#", "the step that the reason points to is in the steps of the run")
+	assert.NotContains(t, steps, "agent:queue-audit-1#")
 }
 
 func TestRoundSync_ALandingOnAMovedBaseGoesOnAndTheNextPassSyncsAgain(t *testing.T) {

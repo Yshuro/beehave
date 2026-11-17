@@ -28,15 +28,18 @@ const (
 var errDown = errors.New("down")
 
 // world is a fake forge. ahead holds the answer of each compare ("base...head"). fail holds an error for an operation: "Op", "Op:arg" or "Op:arg#n" for the nth call.
-// A write is recorded in writes. A merge sets the compare of its pair to 0 and moves the tip of the target branch.
+// A write is recorded in writes, in order. reads holds the arguments of each list and the fields of each view. A merge sets the compare of its pair to 0 and moves the tip of the target branch.
+// cancelOnMerge, when set, is called by the merge of a pull request before it returns, as a signal to the tool does.
 type world struct {
-	tips   map[string]string
-	ahead  map[string]int
-	fail   map[string]error
-	pulls  []model.PullRequest
-	view   model.PullRequest
-	calls  map[string]int
-	writes []string
+	tips          map[string]string
+	ahead         map[string]int
+	fail          map[string]error
+	pulls         []model.PullRequest
+	view          model.PullRequest
+	calls         map[string]int
+	writes        []string
+	reads         []string
+	cancelOnMerge context.CancelFunc
 }
 
 func newWorld() *world {
@@ -65,12 +68,14 @@ func (w *world) failIf(op, arg string) error {
 	return nil
 }
 
-func (w *world) PRView(context.Context, int, ...string) (model.PullRequest, error) {
+func (w *world) PRView(_ context.Context, _ int, fields ...string) (model.PullRequest, error) {
+	w.reads = append(w.reads, "view "+strings.Join(fields, ","))
+
 	return w.view, w.failIf("PRView", "")
 }
 
 func (w *world) PRList(_ context.Context, _ int, args ...string) ([]model.PullRequest, error) {
-	w.writes = append(w.writes, "list "+strings.Join(args, " "))
+	w.reads = append(w.reads, "list "+strings.Join(args, " "))
 
 	return w.pulls, w.failIf("PRList", "")
 }
@@ -104,7 +109,13 @@ func (w *world) CreatePR(_ context.Context, req model.NewPull) (int, error) {
 }
 
 // MergePR refuses a draft, as GitHub does.
-func (w *world) MergePR(_ context.Context, pr int, sha string) error {
+func (w *world) MergePR(ctx context.Context, pr int, sha string) error {
+	if w.cancelOnMerge != nil {
+		w.cancelOnMerge()
+
+		return ctx.Err()
+	}
+
 	if err := w.failIf("MergePR", ""); err != nil {
 		return err
 	}
@@ -118,8 +129,13 @@ func (w *world) MergePR(_ context.Context, pr int, sha string) error {
 	return nil
 }
 
-func (w *world) SetDraft(_ context.Context, pr int, draft bool) error {
+// SetDraft fails on a canceled context, as a gh call does.
+func (w *world) SetDraft(ctx context.Context, pr int, draft bool) error {
 	if err := w.failIf("SetDraft", strconv.FormatBool(draft)); err != nil {
+		return err
+	}
+
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 
@@ -176,9 +192,16 @@ func TestCheck_ACleanMoveCutsTheBranchMergesTheTrunkAndOpensADraftPull(t *testin
 	assert.Equal(t, []string{
 		"branch " + syncName + " " + baseTip,
 		"merge " + syncName + " " + trunk,
-		"list --state open --head " + syncName + " --base " + base + " --json number",
 		"pr " + syncName + " " + base + " Merge main into integration/r1",
 	}, w.writes)
+	assert.Equal(t, []string{"list --state open --head " + syncName + " --base " + base + " --json number,isDraft"}, w.reads)
+}
+
+// draftPull is an open sync pull request that is a draft.
+func draftPull(number int) model.PullRequest {
+	draft := true
+
+	return model.PullRequest{Number: number, IsDraft: &draft}
 }
 
 func TestCheck_ARepeatCallFindsTheBranchTheMergeAndThePullRequest(t *testing.T) {
@@ -187,13 +210,13 @@ func TestCheck_ARepeatCallFindsTheBranchTheMergeAndThePullRequest(t *testing.T) 
 	w := newWorld()
 	w.tips[syncName] = mergedTip
 	w.ahead[syncName+"..."+trunk] = 0
-	w.pulls = []model.PullRequest{{Number: 3}}
+	w.pulls = []model.PullRequest{draftPull(3)}
 
 	result, err := check(t, w)
 
 	require.NoError(t, err)
 	assert.Equal(t, roundsync.Result{State: roundsync.Synced, Branch: syncName, PR: 3, Head: mergedTip, BaseTip: baseTip}, result)
-	assert.Len(t, w.writes, 1, "only the list of pull requests: no branch, no merge, no pull request")
+	assert.Empty(t, w.writes, "no branch, no merge, no pull request, no draft call")
 }
 
 func TestCheck_ABaseThatMovedAfterTheSyncBranchWasCutIsMergedIntoTheBranch(t *testing.T) {
@@ -203,12 +226,48 @@ func TestCheck_ABaseThatMovedAfterTheSyncBranchWasCutIsMergedIntoTheBranch(t *te
 	w.tips[syncName] = mergedTip
 	w.ahead[syncName+"..."+trunk] = 0
 	w.ahead[syncName+"..."+base] = 2
-	w.pulls = []model.PullRequest{{Number: 3}}
+	w.pulls = []model.PullRequest{draftPull(3)}
 
 	_, err := check(t, w)
 
 	require.NoError(t, err)
-	assert.Contains(t, w.writes, "merge "+syncName+" "+base)
+	assert.Equal(t, []string{"merge " + syncName + " " + base}, w.writes)
+}
+
+func TestCheck_AReadySyncPullRequestIsMadeADraftBeforeAMergeMovesItsHead(t *testing.T) {
+	t.Parallel()
+
+	for name, pull := range map[string]model.PullRequest{"ready": {Number: 3, IsDraft: new(bool)}, "no_draft_field": {Number: 3}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			w := newWorld()
+			w.tips[syncName] = mergedTip
+			w.ahead[syncName+"..."+trunk] = 0
+			w.ahead[syncName+"..."+base] = 1
+			w.pulls = []model.PullRequest{pull}
+
+			_, err := check(t, w)
+
+			require.NoError(t, err)
+			assert.Equal(t, []string{"draft 3 true", "merge " + syncName + " " + base}, w.writes, "the draft call comes before the merge that moves the head")
+		})
+	}
+}
+
+func TestCheck_AFailedDraftCallMergesNothing(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.ahead[syncName+"..."+base] = 1
+	w.pulls = []model.PullRequest{{Number: 3, IsDraft: new(bool)}}
+	w.fail["SetDraft:true"] = errDown
+
+	_, err := check(t, w)
+
+	require.ErrorIs(t, err, errDown)
+	assert.Empty(t, w.writes)
 }
 
 func TestCheck_AConflictLeavesTheBranchAtTheBaseTipAndOpensNoPull(t *testing.T) {
@@ -371,6 +430,50 @@ func TestLand_AFailedReadyOrAFailedReturnToDraftIsAnError(t *testing.T) {
 
 	require.ErrorIs(t, err, errDown)
 	require.ErrorIs(t, err, errBack)
+	assert.ErrorContains(t, err, "pull request #7 is still ready for review")
+}
+
+func TestLand_ACancelDuringTheMergeLeavesADraft(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	w.cancelOnMerge = cancel
+
+	_, err := roundsync.Land(ctx, w, roundsync.LandRequest{PR: 7, Head: mergedTip, BaseTip: baseTip})
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Equal(t, []string{"draft 7 false", "draft 7 true"}, w.writes)
+	assert.True(t, *w.view.IsDraft, "the return to draft runs on a context that the cancel does not end")
+}
+
+func TestLand_AReadyPullRequestWhoseMergeFailsIsMadeADraft(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+	*w.view.IsDraft = false
+	w.fail["MergePR"] = errDown
+
+	_, err := land(t, w, mergedTip, baseTip)
+
+	require.ErrorIs(t, err, errDown)
+	assert.Equal(t, []string{"draft 7 true"}, w.writes)
+}
+
+func TestLand_ReadsTheDraftStateOfThePullRequest(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.tips[syncName] = mergedTip
+
+	_, err := land(t, w, mergedTip, baseTip)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"view state,baseRefName,headRefName,isDraft"}, w.reads)
 }
 
 func TestLand_AMovedBaseIsStaleAndWritesNothing(t *testing.T) {

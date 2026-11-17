@@ -182,8 +182,16 @@ func TestSync_ABadArgumentShowsTheUsageAndIsARefusal(t *testing.T) {
 		code, _, errOut := run(t, syncDeps(newSyncWorld(1)), args...)
 
 		assert.Equal(t, remedy.ExitRefused, code, name)
-		assert.Contains(t, errOut, "usage: remedy sync --base", name)
+		assert.Contains(t, errOut, "usage: remedy sync --base <branch> [--trunk <branch>]\n       remedy sync land --pr <number> --head <sha> --base-tip <sha>\n", name)
 	}
+}
+
+func TestSync_TheCommandTableNamesBothCallsOfTheSync(t *testing.T) {
+	t.Parallel()
+
+	_, out, errOut := run(t, syncDeps(newSyncWorld(1)))
+
+	assert.Contains(t, out+errOut, "sync --base <branch> [--trunk <branch>] | sync land --pr <number> --head <sha> --base-tip <sha>")
 }
 
 func TestSync_AFlagThatTheCallDoesNotKnowIsARefusal(t *testing.T) {
