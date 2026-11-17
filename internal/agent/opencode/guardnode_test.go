@@ -1,6 +1,7 @@
 package opencode_test
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,6 +45,68 @@ func nodeRun(t *testing.T, node, guard, tool string) (outcome string, marker boo
 	return strings.TrimSpace(string(out)), statErr == nil
 }
 
+// stopper is the part of a test that nodeAvailable ends it with.
+type stopper interface {
+	Helper()
+	Fatal(args ...any)
+	Skip(args ...any)
+}
+
+// nodeAvailable says whether the test can run the plugin. A missing Node skips the test, except where the CI variable is set: the gate counts this test as proof
+// of the plugin, so there it fails and cannot pass unrun.
+func nodeAvailable(t stopper, lookup error, ci string) bool {
+	t.Helper()
+
+	if lookup == nil {
+		return true
+	}
+
+	if ci != "" {
+		t.Fatal("Node is not installed, and this test is a proof that the gate needs when the CI variable is set")
+
+		return false
+	}
+
+	t.Skip("Node is not installed; TestGuard_EveryDecisionOfThePluginIsInIt reads the same decisions as text")
+
+	return false
+}
+
+// recordedStop is a stopper that records how the test would end.
+type recordedStop struct{ fatal, skip bool }
+
+func (*recordedStop) Helper() {}
+
+func (s *recordedStop) Fatal(...any) { s.fatal = true }
+
+func (s *recordedStop) Skip(...any) { s.skip = true }
+
+func TestGuard_ANodeThatIsMissingFailsTheNodeTestWhereCIIsSetAndSkipsItElsewhere(t *testing.T) {
+	t.Parallel()
+
+	missing := errors.New("executable file not found")
+
+	cases := []struct {
+		name      string
+		lookup    error
+		ci        string
+		available bool
+		want      recordedStop
+	}{
+		{"node found", nil, "", true, recordedStop{}},
+		{"node found in CI", nil, "true", true, recordedStop{}},
+		{"node missing in CI", missing, "true", false, recordedStop{fatal: true}},
+		{"node missing elsewhere", missing, "", false, recordedStop{skip: true}},
+	}
+
+	for _, tc := range cases {
+		var got recordedStop
+
+		assert.Equal(t, tc.available, nodeAvailable(&got, tc.lookup, tc.ci), tc.name)
+		assert.Equal(t, tc.want, got, tc.name)
+	}
+}
+
 // checkScript writes a guard command that prints stderr and exits with code.
 func checkScript(t *testing.T, stderr, code string) string {
 	t.Helper()
@@ -58,8 +121,8 @@ func TestGuard_ThePluginRunOnNodeDecidesFromTheExitCodeOfTheCheck(t *testing.T) 
 	t.Parallel()
 
 	node, err := exec.LookPath("node")
-	if err != nil {
-		t.Skip("Node is not installed; TestGuard_EveryDecisionOfThePluginIsInIt reads the same decisions as text")
+	if !nodeAvailable(t, err, os.Getenv("CI")) { //nolint:forbidigo // the CI variable of the job decides whether a missing Node fails this proof test
+		return
 	}
 
 	cases := []struct {

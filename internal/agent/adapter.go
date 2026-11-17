@@ -190,6 +190,6 @@ type Adapter interface {
 	Calls(line string) Seen
 	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Before a start that follows
 	// a lost run, the agents resume the session of that run only when the file exists, and they do not read it. A CLI that keeps no file for one session
-	// (OpenCode keeps every session in one database) returns a distinct path inside configDir that no file holds, and a lost run of it never resumes.
+	// (it keeps every session in one database) returns a distinct path inside configDir that no file holds, and a lost run of it never resumes.
 	TranscriptPath(configDir, dir, session string) string
 }

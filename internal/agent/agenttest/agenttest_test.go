@@ -128,6 +128,8 @@ func TestCheckRun_AnAdapterWhoseRangeTheSuiteVersionMissesDoesNotRun(t *testing.
 	require.NotEmpty(t, r.failures, "a range that holds no version stops every run")
 }
 
+const rangeFailure = "the profile sets one bound of the supported versions: set both SupportedFrom and SupportedBefore, or neither"
+
 func TestCheckProfile(t *testing.T) {
 	t.Parallel()
 
@@ -146,6 +148,9 @@ func TestCheckProfile(t *testing.T) {
 		{"a_correct_profile", good(), ""},
 		{"no_binary", flawed(func(p *agent.Profile) { p.Binary = "" }), "the profile has no binary"},
 		{"a_binary_that_is_a_path", flawed(func(p *agent.Profile) { p.Binary = "/usr/bin/fake" }), `the binary "/usr/bin/fake" is a path: the runner looks the name up on PATH`},
+		{"both_bounds_of_a_range", flawed(func(p *agent.Profile) { p.SupportedFrom, p.SupportedBefore = "1.0.0", "2.0.0" }), ""},
+		{"only_the_first_supported_version", flawed(func(p *agent.Profile) { p.SupportedFrom = "1.0.0" }), rangeFailure},
+		{"only_the_first_unsupported_version", flawed(func(p *agent.Profile) { p.SupportedBefore = "2.0.0" }), rangeFailure},
 		{"no_login_variable", flawed(func(p *agent.Profile) { p.ConfigVars = nil }), "the profile has no login variable: the CLI would use the login of the caller"},
 	}
 
