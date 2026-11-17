@@ -8,8 +8,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tobocop2/beehave/internal/model"
 )
 
 // These tests call foreign_followup of the example file directly. No entry of the file reaches it while the engine refuses every foreign pull request,
@@ -17,14 +15,18 @@ import (
 const followupEntry = `
 
 def followup(item):
-    return foreign_followup(json.decode(item.recorded))
+    return foreign_followup(json.decode(item.recorded), facts())
 `
 
-// foreignPull is the pull request 41 of another author: it merged from the branch alice/patch into main. Neither is the item id or the round base.
+// foreignPull is the pull request 41 of another author. Its number is all that the follow-up reads.
 const foreignPull = 41
 
 // foreignFindings are the two findings that the foreign review recorded as open.
 const foreignFindings = `[{"class":"blocking","text":"the retry never stops"},{"class":"should-fix","text":"the log names the token"}]`
+
+// foreignIssue is the issue that the follow-up files for the pull request 41 of the repository o/r with foreignFindings: project|key|title|body|parent.
+const foreignIssue = testProject + "|foreign:o/r:41|Open review findings of the merged pull request #41|" +
+	"Pull request #41 merged with these review findings open:\n\n- blocking: the retry never stops\n- should-fix: the log names the token\n|"
 
 // foreignFakes are the fakes of a follow-up test: the forge, the tracker and the preflight reader.
 type foreignFakes struct {
@@ -42,28 +44,20 @@ func foreignRig(t *testing.T, state string) (*agentRig, foreignFakes, string) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(file, append(text, followupEntry...), 0o600)) //nolint:gosec // the example copy of this test
 
-	held := model.PullRequest{Number: foreignPull, State: new(state), HeadRefName: new("alice/patch"), BaseRefName: new("main"), Author: model.Account{Login: "alice"}}
-	fakes := foreignFakes{queue: &fakeQueue{held: []model.PullRequest{held}}, writer: newFakeWriter(), preflight: &fakePreflight{}}
+	fakes := foreignFakes{queue: &fakeQueue{states: map[int]string{foreignPull: state}}, writer: newFakeWriter(), preflight: &fakePreflight{}}
 	rig.h.queue, rig.h.writer, rig.h.preflight = fakes.queue, fakes.writer, fakes.preflight
 	rig.setRound("base", "integration")
 
 	return rig, fakes, file
 }
 
-// runFollowup runs the entry followup with the recorded value `recorded` as the item field recorded.
-func runFollowup(t *testing.T, rig *agentRig, file, recorded string) ItemResult {
+// runFollowup runs the entry followup once with the recorded value `recorded` as the item field recorded.
+func runFollowup(t *testing.T, rig *agentRig, file, recorded string) (ItemResult, error) {
 	t.Helper()
 
 	rig.h.items.fields = map[string]string{"recorded": recorded}
 
-	in, err := pinnedInput(testItem, testProject, file)
-	require.NoError(t, err)
-
-	in.Entry = "followup"
-	result, err := rig.h.engine(t).run(in)
-	require.NoError(t, err)
-
-	return result
+	return rig.h.engine(t).runEntry(testItem, testProject, file, "followup")
 }
 
 // recordedValue is the value that a foreign review of the pull request 41 records, with the findings `findings` (a JSON list).
@@ -74,16 +68,13 @@ func recordedValue(findings string) string {
 func TestExampleForeign_TheFollowUpReadsTheRecordedPullRequestAndFilesOneIssue(t *testing.T) {
 	t.Parallel()
 
-	// The pull request merged from alice/patch into main: the branch is not the item id 12, and the base is not the round base integration.
 	rig, fakes, file := foreignRig(t, "MERGED")
 
-	result := runFollowup(t, rig, file, recordedValue(foreignFindings))
+	result, err := runFollowup(t, rig, file, recordedValue(foreignFindings))
+	require.NoError(t, err)
 
 	assert.Equal(t, []int{foreignPull}, fakes.queue.stateAsked, "the step reads the state of the recorded number, once")
-	require.Len(t, fakes.writer.created, 1, "one follow-up issue holds every open finding")
-	assert.Contains(t, fakes.writer.created[0], "#41")
-	assert.Contains(t, fakes.writer.created[0], "the retry never stops")
-	assert.Contains(t, fakes.writer.created[0], "the log names the token")
+	assert.Equal(t, []string{foreignIssue}, fakes.writer.created, "one issue, keyed by the repository and the number, lists each finding by its class")
 	assert.Empty(t, rig.h.forge.opened, "the follow-up opens no pull request of its own")
 	assert.Empty(t, fakes.preflight.asked, "the follow-up does not look the pull request up again")
 
@@ -93,14 +84,45 @@ func TestExampleForeign_TheFollowUpReadsTheRecordedPullRequestAndFilesOneIssue(t
 	assert.Equal(t, "n-1", id, "the follow-up returns the id of the issue it filed")
 }
 
+func TestExampleForeign_ASecondRunForTheSamePullRequestFilesNoSecondIssue(t *testing.T) {
+	t.Parallel()
+
+	rig, fakes, file := foreignRig(t, "MERGED")
+
+	rig.h.items.fields = map[string]string{"recorded": recordedValue(foreignFindings)}
+	engine := rig.h.engine(t)
+
+	first, err := engine.runEntry(testItem, testProject, file, "followup")
+	require.NoError(t, err)
+
+	second, err := engine.runEntry(testItem, testProject, file, "followup")
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{foreignIssue}, fakes.writer.created, "two runs file one issue")
+	assert.JSONEq(t, string(first.Value), string(second.Value), "the second run returns the id of the first issue")
+}
+
+func TestExampleForeign_AFindingWithAnAttributionLineIsRefusedBeforeThePost(t *testing.T) {
+	t.Parallel()
+
+	rig, fakes, file := foreignRig(t, "MERGED")
+
+	_, err := runFollowup(t, rig, file, recordedValue(`[{"class":"nit","text":"Co-Authored-By: Claude"}]`))
+
+	require.Error(t, err)
+	assert.Empty(t, fakes.writer.created, "the follow-up posts no attribution line")
+}
+
 func TestExampleForeign_AReviewWithNoOpenFindingsFilesNothing(t *testing.T) {
 	t.Parallel()
 
 	rig, fakes, file := foreignRig(t, "MERGED")
 
-	result := runFollowup(t, rig, file, recordedValue("[]"))
+	result, err := runFollowup(t, rig, file, recordedValue("[]"))
+	require.NoError(t, err)
 
 	assert.Empty(t, fakes.writer.created, "a review with no open findings files nothing")
+	assert.Empty(t, fakes.queue.stateAsked, "a review with no open findings reads no state")
 	assert.JSONEq(t, `""`, string(result.Value))
 }
 
@@ -113,7 +135,8 @@ func TestExampleForeign_APullRequestThatHasNotMergedFilesNothing(t *testing.T) {
 
 			rig, fakes, file := foreignRig(t, state)
 
-			runFollowup(t, rig, file, recordedValue(foreignFindings))
+			_, err := runFollowup(t, rig, file, recordedValue(foreignFindings))
+			require.NoError(t, err)
 
 			assert.Equal(t, []int{foreignPull}, fakes.queue.stateAsked)
 			assert.Empty(t, fakes.writer.created, "only a merge leaves the findings with no pull request to hold them")

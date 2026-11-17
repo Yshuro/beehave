@@ -35,6 +35,15 @@ var errNoWriter = errors.New("this build cannot write to a tracker. Use a build 
 // scoped joins the key of a file to the run id, so two runs never share a key. The run id is the id of the DBOS workflow, which a replay keeps.
 func (s *script) scoped(key string) string { return workflowID(s.ctx) + ":" + key }
 
+// itemKey is the tracker key of an item_create call: the key joined to the run id, or with shared the key as it is, so every run of the project shares it.
+func (s *script) itemKey(key string, shared bool) string {
+	if shared {
+		return key
+	}
+
+	return s.scoped(key)
+}
+
 // check returns the first problem of a write call before the step starts: an empty argument, a status that is not known, or a build with no writer.
 func (s *script) check(problems ...error) error {
 	if s.e.deps.Writer == nil {
@@ -67,13 +76,14 @@ func (s *script) write(builtin, label string, fn func(ctx context.Context) (map[
 }
 
 // itemCreate files an item in the tracker of the project. The key makes the call safe to repeat: the same key gives the same item and created = False.
+// The engine joins the key to the run id. With shared = True it does not, so every run of the project that gives the same key gets the same item.
 func (s *script) itemCreate(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	var title, key, body, parent, assignee, severity, label string
 
-	var operator bool
+	var operator, shared bool
 
 	rules, err := unpackPosting(b, args, kwargs, map[string]any{
-		titleKeyword: &title, keyKeyword: &key, bodyKeyword: &body, parentKeyword: &parent, assigneeKeyword: &assignee, severityField: &severity, "operator": &operator, nameKeyword: &label,
+		titleKeyword: &title, keyKeyword: &key, bodyKeyword: &body, parentKeyword: &parent, assigneeKeyword: &assignee, severityField: &severity, "operator": &operator, "shared": &shared, nameKeyword: &label,
 	})
 	if err != nil {
 		return nil, err
@@ -84,7 +94,7 @@ func (s *script) itemCreate(b *starlark.Builtin, args starlark.Tuple, kwargs []s
 	}
 
 	return s.write("item_create", label, func(ctx context.Context) (map[string]any, error) {
-		id, created, err := s.e.deps.Writer.Create(ctx, s.in.Project, s.scoped(key), trackerstore.NewItem{Title: title, Body: body, Parent: parent, Assignee: assignee, Severity: severity, Operator: operator})
+		id, created, err := s.e.deps.Writer.Create(ctx, s.in.Project, s.itemKey(key, shared), trackerstore.NewItem{Title: title, Body: body, Parent: parent, Assignee: assignee, Severity: severity, Operator: operator})
 
 		return createOutputs(id, created), err
 	})

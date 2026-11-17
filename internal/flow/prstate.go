@@ -15,7 +15,7 @@ const (
 	stateField  = "state"
 )
 
-var errNoPullState = &absentError{message: "this build cannot read the state of a pull request. Use a build that sets a queue reader", step: "read the state of a pull request"}
+var errNoStateReader = &absentError{message: "this build cannot read the state of a pull request. Use a build that sets a queue reader", step: "read the state of a pull request"}
 
 // prState reads the state of the pull request with the number pr, open or not: OPEN, CLOSED or MERGED. It reads that number and looks no pull request up by a branch.
 // The read is a recorded step, so a replay returns the state of the first read.
@@ -51,7 +51,7 @@ func (s *script) prStateArgs(b *starlark.Builtin, args starlark.Tuple, kwargs []
 	}
 
 	if s.e.deps.Queue == nil {
-		return 0, "", errNoPullState
+		return 0, "", errNoStateReader
 	}
 
 	return pr, label, nil

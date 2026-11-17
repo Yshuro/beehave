@@ -23,6 +23,7 @@ const (
 	hostTeardownName = "host_teardown"
 	hostUpName       = "host_up"
 	reasonField      = "reason"
+	stateField       = "state"
 	waitName         = "wait"
 	mergeName        = "merge"
 	preflightName    = "preflight"
@@ -57,7 +58,7 @@ func resultFields() map[string][]string {
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
-		mergeName:        {"state", reasonField},
+		mergeName:        {stateField, reasonField},
 		preflightName:    {"ok", "stop", "code", reasonField, "foreign", "pr", "head", "author"},
 		queueName:        {"rows", "free"},
 		spawnName:        {"runs"},
@@ -100,7 +101,7 @@ func trackerResultFields() map[string][]string {
 		prAssignName:    {numberField, "issues"},
 		prCommentName:   {numberField},
 		prOpenName:      {numberField, "created", "stack"},
-		prStateName:     {"state"},
+		prStateName:     {stateField},
 	}
 }
 

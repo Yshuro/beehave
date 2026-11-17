@@ -50,7 +50,7 @@ Four cases are not safe today, and a later change fixes each of them.
 
 | Builtin | A repeat after a crash | Why |
 | --- | --- | --- |
-| `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. |
+| `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. With `shared = True` the key is the `key` of the call alone. |
 | `item_comment` | Safe. | GitHub and beads read the comments first and find the key. The `local` tracker inserts the comment under its key and ignores a second insert of that key. |
 | `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
 | `item_assign` | Safe. | On GitHub the tracker reads the assignees first and sends no edit for a login that is on the issue. A test with a repeated call shows one edit. Beads reads the assignee and refuses a different login, but for the same login it sends the same update again, and it keeps one assignee. The local tracker refuses an assignee. |
@@ -153,13 +153,13 @@ The `item_` builtins change or read the tracker of the project.
 
 | Call | Returns |
 | --- | --- |
-| `item_create(title, key, body, parent, assignee, severity, operator, forbid_text, name)` | `id`, `created` |
+| `item_create(title, key, body, parent, assignee, severity, operator, forbid_text, shared, name)` | `id`, `created` |
 | `item_status(id, status, name)` | `id`, `status` |
 | `item_comment(id, text, key, forbid_text, name)` | `id` |
 | `item_assign(id, assignee)` | `id` |
 | `item_read(of, name)` | `found`, `id`, `fields`, `comments`, `parent` |
 
-The `key` is required, and the engine joins it to the run id.
+The `key` is required, and the engine joins it to the run id. `item_create` with `shared = True` is the one exception.
 
 #### `item_create`
 
@@ -167,6 +167,7 @@ The `key` is required, and the engine joins it to the run id.
 - `assignee` is optional. The default is no assignee.
 - `severity` is optional, one of `P0` to `P3`. The call refuses any other text before it writes.
 - `operator` is an optional bool.
+- `shared` is an optional bool. The default is false: the engine joins the `key` to the run id, so two runs never share an item. With `shared = True` the engine uses the `key` as it is, so every run of the project that gives the same key gets the one item. Put in the key what makes the item unique in the project, such as the repository and a pull request number.
 
 | Tracker | `severity` | `operator` |
 | --- | --- | --- |

@@ -28,8 +28,6 @@ type fakeQueue struct {
 	states         map[int]string
 	stateErr       error
 	stateAsked     []int
-	// held is every pull request of the forge in any state. PullState reads the state of one of them when states has no entry for its number.
-	held []model.PullRequest
 }
 
 func (q *fakeQueue) OpenItems(context.Context, string) ([]model.Item, error) {
@@ -60,17 +58,7 @@ func (q *fakeQueue) PullState(_ context.Context, _ string, pr int) (string, erro
 
 	q.stateAsked = append(q.stateAsked, pr)
 
-	if state, found := q.states[pr]; found {
-		return state, q.stateErr
-	}
-
-	for _, pull := range q.held {
-		if pull.Number == pr {
-			return model.Deref(pull.State), q.stateErr
-		}
-	}
-
-	return "", q.stateErr
+	return q.states[pr], q.stateErr
 }
 
 // hold sets the hold of one item in the tracker.

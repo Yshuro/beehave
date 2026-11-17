@@ -471,11 +471,14 @@ def take_over(item, pr, author, project, round_settings):
 
     command(name = "take-claim", run = base + ["--take"], stop_on_rc = [2])
 
-def foreign_followup(recorded):
+def foreign_followup(recorded, project):
     """Files one follow-up issue for the findings that a foreign review left open, once the reviewed pull request merged, and returns its id. It returns "" when it files nothing.
+    No entry calls it yet: the engine refuses every foreign pull request until the sandbox default lands (#438), and that change wires it in.
     `recorded` is the value of the foreign review run: `pr` is the number that the intake preflight gave, and `findings` the open findings of the review, each with a `class` and a `text`.
+    `project` is the value of facts().
     The step reads the state of that number. It does not look the pull request up again, so a branch that is not the item id and a base that is not vars.round.base change nothing.
-    A review with no open findings files nothing, and so does a pull request that is still open or closed without a merge. The key holds the number, so a resume of the run files no second issue."""
+    A review with no open findings files nothing, and so does a pull request that is still open or closed without a merge.
+    The key holds the repository and the number and is shared by every run, so a second run for the same pull request files no second issue."""
     findings = recorded["findings"]
     if len(findings) == 0:
         return ""
@@ -487,7 +490,8 @@ def foreign_followup(recorded):
     lines = ["- %s: %s" % (finding["class"], finding["text"]) for finding in findings]
     return item_create(
         name = "foreign-followup",
-        key = "foreign-%d" % pr,
+        key = "foreign:%s:%d" % (project.repo, pr),
+        shared = True,
         title = "Open review findings of the merged pull request #%d" % pr,
         body = "Pull request #%d merged with these review findings open:\n\n%s\n" % (pr, "\n".join(lines)),
         forbid_text = ATTRIBUTION,

@@ -102,6 +102,24 @@ command(run = [made.id, str(made.created), str(again.created), again.id, closed.
 	assert.Equal(t, []string{"n-1 True False n-1 closed"}, h.commands.ran())
 }
 
+func TestItemWrite_ASharedKeyIsTheKeyOfTheCallInEveryRun(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	w := newFakeWriter()
+	h.writer = w
+	engine := h.engine(t)
+	file := writeFlow(t, "def main(item):\n    made = item_create(title = \"t\", key = \"o/r:41\", shared = True)\n    command(run = [made.id, str(made.created)])\n")
+
+	for range 2 {
+		_, err := engine.RunFile(testItem, testProject, file)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, []string{testProject + "|o/r:41|t||"}, w.created, "two runs give the same key, so the tracker files one item")
+	assert.Equal(t, []string{"n-1 True", "n-1 False"}, h.commands.ran(), "the second run gets the first item")
+}
+
 func TestItemWrite_AReplayWritesNothingTwiceAndKeepsTheStepNames(t *testing.T) {
 	t.Parallel()
 

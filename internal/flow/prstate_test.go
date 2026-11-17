@@ -73,7 +73,7 @@ func TestPRState_ABuildWithNoQueueReaderFailsTheCall(t *testing.T) {
 
 	_, err := newHarness(t).engine(t).RunFile(testItem, testProject, writeFlow(t, prStateFlow(`pr_state(pr = 41)`)))
 
-	require.ErrorIs(t, err, errNoPullState)
+	require.ErrorIs(t, err, errNoStateReader)
 }
 
 func TestPRState_AReadThatFailsEndsTheStepWithAnError(t *testing.T) {
