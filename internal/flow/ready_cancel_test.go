@@ -248,9 +248,12 @@ func TestMergeStep_AStopOfTheEngineInTheWaitLeavesThePullRequestReadyAndTheResum
 func TestMergeStep_ACancelInTheWaitOfAQueuedMergePutsThePullRequestBackToDraft(t *testing.T) {
 	t.Parallel()
 
-	harness, _, done := heldInTheWait(t)
+	harness, engine, done := heldInTheWait(t)
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
+	waitForTheSleep(t, engine)
 	require.NoError(t, harness.client(t, testVersion).Cancel(testItem))
+	harness.tick(t)
 
 	select {
 	case outcome := <-done:

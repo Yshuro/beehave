@@ -548,7 +548,7 @@ The ready step refuses with the pull request and each reason. The refusal lists 
 
 The ready step reads the standing, calls ready, then reads the head again. The ready call cannot name a head. If the head moved or cannot be read, the step sets the pull request back to draft and refuses. A cancel of the run does not stop that call: it runs on a context that the cancel does not end, with a limit of 30 seconds. If the call fails, its failure is part of the error of the step, and the error says to convert the pull request to a draft by hand.
 
-When the merge of the ready step fails or is refused, or the owner cancels the run during the merge, the step makes the pull request a draft again with the same call and the same limit. A stop of the engine does not: the run resumes at the merge, and a draft would make the merge refuse the pull request. A cancel during the ready call itself makes no draft call: the pull request can stay ready, at the head that the gate and the review passed, until the owner makes it a draft.
+When the merge after the ready step fails or is refused, or the owner cancels the run during the merge, the step makes the pull request a draft again with the same call and the same limit. A stop of the engine does not: the run resumes at the merge, and a draft would make the merge refuse the pull request. A cancel during the ready call itself makes no draft call: the pull request can stay ready, at the head that the gate and the review passed, until the owner makes it a draft.
 
 After the ready step marks the pull request ready, the item runs the watch step (see [Ready watch](#ready-watch)).
 
