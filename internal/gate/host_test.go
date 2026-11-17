@@ -68,7 +68,21 @@ func TestRun_TheGateCommandOnAHostRunsUnderTheRunLimitOfTheHost(t *testing.T) {
 	assert.Contains(t, remote.submitted[0].Command, `[ "$(git rev-parse HEAD)" = a1b2c3 ] && timeout 5400 sh -c 'make check'`)
 }
 
-func TestRun_AHostWithNoRunLimitGetsAGateCommandWithNoTimeout(t *testing.T) {
+func TestRun_AHostRunLimitWithAPartOfASecondIsRoundedUpInTheWrap(t *testing.T) {
+	t.Parallel()
+
+	project := hostProject()
+	project.Host = &model.HostConfig{MaxRun: 1900 * time.Millisecond}
+	remote := &fakeRemote{state: model.JobSucceeded}
+	g := build(&fakeShell{}, &fakeTree{states: []gate.State{clean(headA)}}, remote)
+
+	_, err := g.Run(context.Background(), hostRequest(project))
+	require.NoError(t, err)
+	require.Len(t, remote.submitted, 1)
+	assert.Contains(t, remote.submitted[0].Command, "&& timeout 2 sh -c 'make check'")
+}
+
+func TestRun_AProjectWithNoHostBlockGetsAGateCommandWithNoTimeout(t *testing.T) {
 	t.Parallel()
 
 	remote := &fakeRemote{state: model.JobSucceeded}

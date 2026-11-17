@@ -16,6 +16,7 @@ const (
 	defaultStaleMins  = 20
 	maxCount          = model.MaxDiskFloorGB
 	defaultMaxRun     = "24h"
+	minMaxRun         = time.Second
 	defaultBankBudget = "20s"
 	// The default and the bounds of host.lost_job_wait. The lower bound is one poll of the wait.
 	defaultLostJobWait = "60m"
@@ -188,7 +189,7 @@ func fillKeys(raw rawHost, host *model.HostConfig) error {
 func fillDurations(raw rawHost, host *model.HostConfig) error {
 	var err error
 
-	if host.MaxRun, err = duration(raw.At, "host.max_run", raw.MaxRun, defaultMaxRun); err != nil {
+	if host.MaxRun, err = maxRun(raw.At, raw.MaxRun); err != nil {
 		return err
 	}
 
@@ -199,6 +200,17 @@ func fillDurations(raw rawHost, host *model.HostConfig) error {
 	host.LostJobWait, err = lostJobWait(raw.At, raw.LostJobWait)
 
 	return err
+}
+
+// maxRun parses the text of host.max_run and refuses a value under one second. Every consumer turns the limit into whole seconds, so a smaller
+// value would turn the limit off. The refusal names the key and the smallest value.
+func maxRun(at syntax.Position, text string) (time.Duration, error) {
+	parsed, err := time.ParseDuration(text)
+	if err != nil || parsed < minMaxRun {
+		return 0, refuseAt(at, "`host.max_run` must be a duration of at least %s, such as \"%s\"; got `%s`. Fix the value.", minMaxRun, defaultMaxRun, text)
+	}
+
+	return parsed, nil
 }
 
 // lostJobWait parses the text of host.lost_job_wait and refuses a value outside the bounds. The refusal names the key and the range.

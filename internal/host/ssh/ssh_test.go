@@ -56,6 +56,22 @@ func TestSubmit_RunsTheCommandAsATransientUnitThatKeepsItsResult(t *testing.T) {
 	assert.NotContains(t, strings.Join(u.Args, " "), "TasksMax")
 }
 
+func TestSubmit_ARunLimitWithAPartOfASecondGivesTheUnitTheNextWholeSecond(t *testing.T) {
+	t.Parallel()
+
+	cfg := config()
+	cfg.MaxRun = 1900 * time.Millisecond
+	m := sshtest.New(hosttest.Working)
+	h, _, _ := newHost(t, m, cfg)
+
+	_, err := h.Submit(t.Context(), model.JobSpec{Name: "gate", Command: "true"})
+
+	require.NoError(t, err)
+	require.NotNil(t, m.Units["beehave-n1"])
+	assert.Contains(t, m.Units["beehave-n1"].Args, "RuntimeMaxSec=2", "the unit never ends the job before max_run")
+	assert.NotContains(t, m.Units["beehave-n1"].Args, "RuntimeMaxSec=1")
+}
+
 func TestSubmit_RefusesWhatItCannotRun(t *testing.T) {
 	t.Parallel()
 
