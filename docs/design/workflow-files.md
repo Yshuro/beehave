@@ -446,6 +446,7 @@ A `gate` result has two fields for a host job that was lost. See "The wait for a
 - The item run records each loss as the step `<call>/host-loss`, with the loss and the count. The step counts the `/host-loss` steps of every item run of the tree from its root, so a replay reads the recorded count. If two runs of the tree record a loss at the same time, each count can leave out the other loss. The status reads the count again and holds both.
 - `beehave status <run id> --json` shows `host_losses` for the tree of the run, and leaves it out at 0.
 - The engine sets no limit on the count. A workflow reads `host_losses` and decides when to ask the owner.
+- The library `review_fix.star` reruns a void gate with a host cause as `candidate-gate-host-<k>` at no cost to the item, and stops the loop at `HOST_LOSS_LIMIT` (5). Its result carries `host_losses` and `host_lost`. See "The host loss limit" in [durable-loop.md](durable-loop.md).
 
 #### The pinned head
 

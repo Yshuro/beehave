@@ -27,12 +27,12 @@ func TestSuperseded_AGateOfAnotherItemOfTheProjectIsNotStopped(t *testing.T) {
 
 	first := queueGate(engine, "A")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	// The other item has its own pull request and its own tip. It waits behind the first gate in the queue of the project.
 	other := queueGateOf(engine, testProject, "99", "X")
 
-	eventually(t, waitsInTheQueue(engine, 1))
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
 	setHead(h, "B")
 
 	current := queueGate(engine, "B")
@@ -40,7 +40,7 @@ func TestSuperseded_AGateOfAnotherItemOfTheProjectIsNotStopped(t *testing.T) {
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
 
 	// The cancel ends the run before the gate code sees its context end, so the count is read once the stop arrives.
-	eventually(t, func() bool { return gated.stopped.Load() >= 1 })
+	waitOn(t, condition(func() bool { return gated.stopped.Load() >= 1 }))
 
 	close(gated.release)
 
@@ -58,13 +58,13 @@ func TestSuperseded_AGateOfAnotherProjectIsNotStopped(t *testing.T) {
 	first := queueGate(engine, "A")
 	foreign := queueGateOf(engine, "other-project", testItem, "X")
 
-	eventually(t, startedCount(gated, 2))
+	waitOn(t, condition(startedCount(gated, 2)))
 	setHead(h, "B")
 
 	current := queueGate(engine, "B")
 
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
-	eventually(t, startedCount(gated, 3))
+	waitOn(t, condition(startedCount(gated, 3)))
 
 	close(gated.release)
 
@@ -85,7 +85,7 @@ func TestSuperseded_AGateThatHasNoTipIsNotStoppedByAGateThatHasOne(t *testing.T)
 
 	unread := queueGate(engine, "")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	h.forge.mu.Lock()
 	h.forge.err = nil
@@ -94,7 +94,7 @@ func TestSuperseded_AGateThatHasNoTipIsNotStoppedByAGateThatHasOne(t *testing.T)
 
 	current := queueGate(engine, "")
 
-	eventually(t, waitsInTheQueue(engine, 1))
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
 	// The gate of head B waits behind the gate with no tip. Nothing may stop it.
 	close(gated.release)
 
@@ -134,7 +134,7 @@ func TestSuperseded_AGateWhoseReadOfTheHeadIsOldNeverStopsTheGateOfTheCurrentHea
 
 	first := queueGate(engine, "A")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	// The reads so far: the tip and the stop of gate A. Gate B reads its tip as read 3 and reads the head again for its stop as read 4.
 	// Before that fourth read the head moves to C, and the gate of head C queues and stops the old gates.
@@ -146,18 +146,18 @@ func TestSuperseded_AGateWhoseReadOfTheHeadIsOldNeverStopsTheGateOfTheCurrentHea
 
 		last = queueGate(engine, "C")
 
-		eventually(t, func() bool {
+		waitOn(t, condition(func() bool {
 			rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterStatus(dbos.WorkflowStatusCancelled))
 
 			return err == nil && len(rows) == 2
-		})
+		}))
 	}
 
 	middle := queueGate(engine, "B")
 
 	require.ErrorIs(t, endsAfterTicks(t, h, middle).err, errSuperseded)
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
-	eventually(t, startedCount(gated, 2))
+	waitOn(t, condition(startedCount(gated, 2)))
 
 	close(gated.release)
 
@@ -211,8 +211,8 @@ func TestSuperseded_AReplayReadsTheHeadAndCancelsTheGatesNoMore(t *testing.T) {
 	engine := h.engine(t)
 	done := runInBackground2(engine, file)
 
-	waitForTheOwner(t, h)
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, ownerAsks(t, h))
+	waitOn(t, waiting[struct{}]{what: "the answer to be accepted", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
 	require.NoError(t, receive(t, done).err)
 	assert.Len(t, h.forge.asked, reads, "the replay reads the recorded head and asks the forge nothing more")

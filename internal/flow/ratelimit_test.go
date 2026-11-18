@@ -129,7 +129,7 @@ func TestRateLimit_ARestartDuringTheWaitSleepsTheRestAndStartsTheAgentOnceMore(t
 	first := h.engine(t)
 	done := runInBackground(first, testItem)
 
-	waitForTheSleep(t, first)
+	waitOn(t, inASleep(t, first))
 	require.NoError(t, first.Shutdown())
 	receive(t, done)
 	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
@@ -137,11 +137,11 @@ func TestRateLimit_ARestartDuringTheWaitSleepsTheRestAndStartsTheAgentOnceMore(t
 	second := h.engine(t)
 	client := h.client(t, testVersion)
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the replayed run to be done", run: runOfEngine(t, second), read: func() (struct{}, bool, error) {
 		steps, err := client.Steps(testRun)
 
-		return err == nil && steps.State == runDone
-	})
+		return struct{}{}, err == nil && steps.State == runDone, nil
+	}})
 
 	assert.Len(t, h.agents.seen(), 2, "the replay reads the recorded phase and the limit, and starts the agent once after the reset")
 	assert.Equal(t, 1, sleepsIn(recordsOfTestRun(t, second)), "the restart sleeps the rest of the one recorded sleep")
@@ -569,7 +569,7 @@ agent(model = "m", prompt = "prompts/a.md", name = "b")
 	client := rig.h.client(t, testVersion)
 	_ = resumeRun(t, engine, client)
 
-	eventually(t, func() bool { return stoppedRun(t, client, testRun) != nil || len(rig.h.agents.seen()) > 1 })
+	waitOn(t, condition(func() bool { return stoppedRun(t, client, testRun) != nil || len(rig.h.agents.seen()) > 1 }))
 
 	stop := stoppedRun(t, client, testRun)
 	require.NotNil(t, stop, "the look of the rerun of a stops it at the run cap")
@@ -676,7 +676,7 @@ func TestRateLimit_TheSleepLastsUntilTheRecordedReset(t *testing.T) {
 	engine := h.engine(t)
 	done := runInBackground(engine, testItem)
 
-	waitForTheSleep(t, engine)
+	waitOn(t, inASleep(t, engine))
 
 	var sleep dbos.StepInfo
 
@@ -760,13 +760,13 @@ func TestRateLimit_TheStatusOfAWaitingRunNamesTheLoginAndTheReset(t *testing.T) 
 
 	var steps RunSteps
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the run to show the rate limit wait", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		var err error
 
 		steps, err = client.Steps(testRun)
 
-		return err == nil && steps.LimitWait != nil
-	})
+		return struct{}{}, err == nil && steps.LimitWait != nil, nil
+	}})
 
 	note := "waits for the rate limit five_hour of login " + testLogin + " until " + limitReset.Format(time.RFC3339)
 	assert.Contains(t, steps.Notes(), note)
@@ -927,19 +927,19 @@ func TestRateLimit_ARestartDuringTheWaitResumesTheSameSessionWithTheRecordedNote
 	first := h.engine(t)
 	done := runInBackground(first, testItem)
 
-	waitForTheSleep(t, first)
+	waitOn(t, inASleep(t, first))
 	require.NoError(t, first.Shutdown())
-	<-done
+	receive(t, done)
 	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
 
 	second := h.engine(t)
 	client := h.client(t, testVersion)
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the replayed run to be done", run: runOfEngine(t, second), read: func() (struct{}, bool, error) {
 		steps, err := client.Steps(testRun)
 
-		return err == nil && steps.State == runDone
-	})
+		return struct{}{}, err == nil && steps.State == runDone, nil
+	}})
 
 	record := firstLimitRecord(t, recordsOfTestRun(t, second))
 	note, ok := record["note"].(string)
@@ -961,22 +961,22 @@ func TestRateLimit_ACommitDuringTheWaitStaysOutOfTheRecordedNoteOfTheRerun(t *te
 	first := h.engine(t)
 	done := runInBackground(first, testItem)
 
-	waitForTheSleep(t, first)
+	waitOn(t, inASleep(t, first))
 	require.NoError(t, first.Shutdown())
-	<-done
+	receive(t, done)
 	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
 
 	// A commit lands in the item folder after the limit step recorded the note.
 	commitIn(t, h.trees.dir, "late.txt")
 
-	h.engine(t)
+	second := h.engine(t)
 	client := h.client(t, testVersion)
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the replayed run to be done", run: runOfEngine(t, second), read: func() (struct{}, bool, error) {
 		steps, err := client.Steps(testRun)
 
-		return err == nil && steps.State == runDone
-	})
+		return struct{}{}, err == nil && steps.State == runDone, nil
+	}})
 
 	requests := h.agents.seen()
 	require.Len(t, requests, 2)

@@ -166,13 +166,13 @@ func TestNewEngine_ASecondEngineOnOneStateFolderIsRefusedUntilTheFirstStops(t *t
 	// A process that another test forks holds a copy of the lock file until it runs exec, so the lock can outlive Shutdown by a moment.
 	var second *Engine
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		var openErr error
 
 		second, openErr = NewEngine(t.Context(), harness.opts, harness.deps())
 
 		return openErr == nil
-	})
+	}))
 	require.NoError(t, second.Shutdown())
 }
 

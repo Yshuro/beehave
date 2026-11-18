@@ -328,7 +328,7 @@ func (g *treeGate) Run(ctx context.Context, _, _, cluster string, job GateJob) (
 
 	if wait == max(g.blockAt, 1) && g.started != nil {
 		g.started <- struct{}{}
-		<-ctx.Done()
+		hang(ctx.Done())
 
 		return GateResult{}, ctx.Err()
 	}

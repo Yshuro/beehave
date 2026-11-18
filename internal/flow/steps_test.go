@@ -106,7 +106,7 @@ func TestClient_StepsOfARunInItsAgentStepShowTheStepAsRunningWithItsElapsedTime(
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	view, err := client.Steps(testRun)
 	require.NoError(t, err)

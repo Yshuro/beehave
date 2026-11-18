@@ -98,7 +98,7 @@ func runTimed(t *testing.T, change func(*Deps)) timed {
 	})
 	done := runInBackground(engine, testItem)
 
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	return timed{inFlight: inFlight{harness: harness, engine: engine, clock: clk, done: done, agent: harness.agents.pid, finish: finish}, timers: timers}
 }
@@ -396,7 +396,7 @@ func TestRunAgent_NoAgentStartsAfterTheClaimIsLostWhileThePhaseWaitsToStart(t *t
 
 	close(gated.hold)
 	receive(t, gated.returned)
-	eventually(t, func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 })
+	waitOn(t, condition(func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 }))
 
 	assert.Empty(t, harness.agents.seen(), "the phase read the lost claim and started no agent")
 }
@@ -438,7 +438,7 @@ func TestRunAgent_AnOrphanPhaseOfALostRunStartsNoAgentWhenANewRunHoldsTheItem(t 
 
 	close(gated.hold)
 	receive(t, gated.returned)
-	eventually(t, func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 })
+	waitOn(t, condition(func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 }))
 
 	assert.Empty(t, harness.agents.seen(), "the claim of the new run is not the claim of the orphan")
 }
@@ -475,7 +475,9 @@ func TestRunAgent_APhaseReopenedByResumeWaitsForTheFirstTrustOfItsRunBeforeItSta
 	}()
 
 	// A worker took the reopened phase from the queue: its status is pending.
-	eventually(t, func() bool { return phaseCount(t, engine, dbos.WorkflowStatusPending) == 1 })
+	waitOn(t, waiting[struct{}]{what: "a worker to take the reopened phase", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		return struct{}{}, phaseCount(t, engine, dbos.WorkflowStatusPending) == 1, nil
+	}})
 	assert.Len(t, harness.agents.seen(), started, "the reopened phase is in a worker and starts no agent while its run has no trusted claim")
 
 	unblock()
@@ -539,20 +541,24 @@ func TestAwaitClaim_TheGraceTimeCountsOnTheClockOfTheEngine(t *testing.T) {
 	engine := idleEngine(t, newHarness(t))
 	clk := &leaseClock{now: time.Unix(1_000_000, 0)}
 	clk.install(&engine.deps.Clock)
-	engine.deps.Clock.Poll = storePoll
+	engine.deps.Clock.Poll = time.Millisecond
 	engine.deps.Clock.Grace = time.Minute
 
 	done := make(chan error, 1)
+	reads := clk.readCount()
 
 	go func() {
 		_, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})
 		done <- err
 	}()
 
+	// Each pass of the wait reads the clock, so five reads show five passes that did not end the wait.
+	waitOn(t, condition(func() bool { return clk.readCount() >= reads+5 }))
+
 	select {
 	case err := <-done:
 		t.Fatalf("the wait ended before the grace time passed on the clock of the engine: %v", err)
-	case <-time.After(3 * time.Second):
+	default:
 	}
 
 	clk.advance(time.Minute)

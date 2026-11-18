@@ -47,7 +47,7 @@ func TestClient_ResumeOnThisBuildNamesTheScriptsOutsideTheRepositoryWhenAFileCha
 	engine := harness.engine(t)
 
 	runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	harness.flowIs(t, waitFlow+outside+"# edited\n")
 
@@ -67,7 +67,7 @@ func TestClient_ResumeOnThisBuildCountsTheCommandsWhoseScriptsAreNotPinned(t *te
 	engine := harness.engine(t)
 
 	runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	expireLease(harness)
 
 	harness.flowIs(t, waitFlow+dynamic+"# edited\n")

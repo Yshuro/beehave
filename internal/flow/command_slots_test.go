@@ -67,13 +67,6 @@ func (j *slotJobs) order() []string {
 	return slices.Clone(j.log)
 }
 
-// nextStart returns the program of the next job that starts, and fails the test when the test ends first.
-func (j *slotJobs) nextStart(t *testing.T) string {
-	t.Helper()
-
-	return waitOn(t, waiting[string]{what: "another job to start", ch: j.started})
-}
-
 // slotFlow is the workflow file of one item: one host command of the program, in the slot class when the class is not empty.
 func slotFlow(program, class string) string {
 	if class == "" {
@@ -229,10 +222,10 @@ func TestCommand_AHostJobWaitsForAFreeSlotOfItsClass(t *testing.T) {
 	engine := h.engine(t)
 
 	first := runSlotItem(t, engine, "11", slotFlow("m1", "mutation"))
-	require.Equal(t, "m1", jobs.nextStart(t))
+	require.Equal(t, "m1", receive(t, jobs.started))
 
 	second := runSlotItem(t, engine, "12", slotFlow("m2", "mutation"))
-	eventually(t, func() bool { return enqueuedJobs(t, engine) == 1 })
+	waitOn(t, condition(func() bool { return enqueuedJobs(t, engine) == 1 }))
 
 	// The queue of the class has looked at the waiting job three times, and the job still waits. The limit is the reason: with a higher limit one of the looks starts it.
 	endPasses := passesOfClassQueue(t, engine, jobs, &host, "p1", "p2", "p3")
@@ -245,14 +238,14 @@ func TestCommand_AHostJobWaitsForAFreeSlotOfItsClass(t *testing.T) {
 	bench := runSlotItem(t, engine, "13", slotFlow("b1", "bench"))
 	plain := runSlotItem(t, engine, "14", slotFlow("n1", ""))
 
-	started := []string{jobs.nextStart(t), jobs.nextStart(t)}
+	started := []string{receive(t, jobs.started), receive(t, jobs.started)}
 	assert.ElementsMatch(t, []string{"b1", "n1"}, started, "a job of another class and a job of no class do not wait for the mutation slot")
 	assert.Equal(t, 1, enqueuedJobs(t, engine), "the second mutation job still waits in its queue")
 
 	jobs.let("m1")
 	require.NoError(t, receive(t, first))
 
-	assert.Equal(t, "m2", jobs.nextStart(t), "the second mutation job starts after the first ends")
+	assert.Equal(t, "m2", receive(t, jobs.started), "the second mutation job starts after the first ends")
 
 	order := jobs.order()
 	assert.Less(t, slices.Index(order, "end m1"), slices.Index(order, "start m2"), "the second job starts only after the first job ended")
@@ -286,7 +279,7 @@ func passesOfClassQueue(t *testing.T, engine *Engine, jobs *slotJobs, host *gran
 		host.Store(fmt.Sprintf("pass-%d", i))
 
 		ended = append(ended, runSlotItem(t, engine, fmt.Sprintf("9%d", i), slotFlow(program, "mutation")))
-		require.Equal(t, program, jobs.nextStart(t))
+		require.Equal(t, program, receive(t, jobs.started))
 	}
 
 	return func() {
@@ -312,26 +305,21 @@ func TestCommand_ACanceledSlotJobFreesItsSlotAndTheReopenWaitsOnTheQueueOfItsCla
 	client := h.client(t, testVersion)
 
 	first := runSlotItem(t, engine, testItem, slotFlow("m1", "mutation"))
-	require.Equal(t, "m1", jobs.nextStart(t))
+	require.Equal(t, "m1", receive(t, jobs.started))
 
 	second := runSlotItem(t, engine, "13", slotFlow("m2", "mutation"))
-	eventually(t, func() bool { return enqueuedJobs(t, engine) == 1 })
+	waitOn(t, condition(func() bool { return enqueuedJobs(t, engine) == 1 }))
 
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
 
-	select {
-	case err := <-first:
-		require.Error(t, err)
-	case <-time.After(20 * time.Second):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, first))
 
-	assert.Equal(t, "m2", jobs.nextStart(t), "the cancel freed the only slot, so the waiting job starts")
+	assert.Equal(t, "m2", receive(t, jobs.started), "the cancel freed the only slot, so the waiting job starts")
 
 	handle := resumeRun(t, engine, client)
 
-	eventually(t, func() bool { return enqueuedJobs(t, engine) == 1 })
+	waitOn(t, condition(func() bool { return enqueuedJobs(t, engine) == 1 }))
 
 	rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName), dbos.WithFilterStatus(dbos.WorkflowStatusEnqueued))
 	require.NoError(t, err)
@@ -342,7 +330,7 @@ func TestCommand_ACanceledSlotJobFreesItsSlotAndTheReopenWaitsOnTheQueueOfItsCla
 	jobs.let("m2")
 	require.NoError(t, receive(t, second))
 
-	assert.Equal(t, "m1", jobs.nextStart(t))
+	assert.Equal(t, "m1", receive(t, jobs.started))
 	jobs.let("m1")
 
 	_, err = resultOfHandle(t, handle)
@@ -369,10 +357,10 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 	t.Cleanup(func() { require.NoError(t, first.Shutdown()) })
 
 	ended := runSlotItem(t, first, testItem, slotFlow("m1", "mutation"))
-	require.Equal(t, "m1", jobs.nextStart(t))
+	require.Equal(t, "m1", receive(t, jobs.started))
 
 	waiting := runSlotItem(t, first, "13", slotFlow("m2", "mutation"))
-	eventually(t, func() bool { return enqueuedJobs(t, first) == 1 })
+	waitOn(t, condition(func() bool { return enqueuedJobs(t, first) == 1 }))
 
 	require.NoError(t, first.Shutdown())
 	require.Error(t, receive(t, ended))
@@ -380,7 +368,7 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 
 	second := engineOn(t, h, deps)
 
-	require.Equal(t, "m1", jobs.nextStart(t), "the job that ran is recovered and runs again")
+	require.Equal(t, "m1", receive(t, jobs.started), "the job that ran is recovered and runs again")
 
 	endPasses := passesOfClassQueue(t, second, jobs, &host, "p1", "p2", "p3")
 	host.Store("box")
@@ -389,7 +377,7 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 
 	jobs.let("m1")
 
-	require.Equal(t, "m2", jobs.nextStart(t))
+	require.Equal(t, "m2", receive(t, jobs.started))
 	jobs.let("m2")
 	endPasses()
 

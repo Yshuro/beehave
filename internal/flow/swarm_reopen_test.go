@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -91,9 +92,9 @@ func TestSpawnGather_AResumeKeepsAChildThatTheUserCanceledByHand(t *testing.T) {
 	failing.Store(false)
 	require.NoError(t, resumer.Resume(testItem))
 
-	if !waitUntil(func() bool { return childStatus(t, engine, testItem) == dbos.WorkflowStatusSuccess }) {
-		t.Fatal(dumpRuns(engine, testItem, "21", "22", "23"))
-	}
+	waitOn(t, waiting[struct{}]{what: "the item to succeed", last: func() string { return dumpRuns(engine, testItem, "21", "22", "23") }, read: func() (struct{}, bool, error) {
+		return struct{}{}, childStatus(t, engine, testItem) == dbos.WorkflowStatusSuccess, nil
+	}})
 
 	assert.Equal(t, dbos.WorkflowStatusCancelled, childStatus(t, engine, "23"), "the child that the user canceled stays canceled")
 	assert.Empty(t, h.commands.ranBy("23"), "the canceled child did not run again")
@@ -183,12 +184,10 @@ func TestSpawnGather_AFailRaiseLeavesNoPhaseWaitingOrRunningAndAResumeRunsThemAg
 	engine := h.engine(t)
 	done := runInBackground(engine, testItem)
 
-	select {
-	case outcome := <-done:
-		require.ErrorContains(t, outcome.err, "item 21 did not finish")
-	case <-time.After(eventTimeout):
-		t.Fatal(dumpRuns(engine, testItem, "21", "22"), "agents in flight:", h.agents.running())
-	}
+	outcome := waitOn(t, waiting[runOutcome]{what: "the parent to end", ch: done, last: func() string {
+		return fmt.Sprint(dumpRuns(engine, testItem, "21", "22"), "agents in flight:", h.agents.running())
+	}})
+	require.ErrorContains(t, outcome.err, "item 21 did not finish")
 
 	require.Equal(t, dbos.WorkflowStatusCancelled, childStatus(t, engine, "22"))
 	assert.Positive(t, phaseCount(t, engine), "the child did start a phase")
@@ -200,9 +199,9 @@ func TestSpawnGather_AFailRaiseLeavesNoPhaseWaitingOrRunningAndAResumeRunsThemAg
 
 	require.NoError(t, h.client(t, testVersion).Resume(testItem))
 
-	if !waitUntil(func() bool { return itemEnded(engine, "21") && itemEnded(engine, "22") }) {
-		t.Fatal(dumpRuns(engine, testItem, "21", "22"))
-	}
+	waitOn(t, waiting[struct{}]{what: "runs 21 and 22 to end", last: func() string { return dumpRuns(engine, testItem, "21", "22") }, read: func() (struct{}, bool, error) {
+		return struct{}{}, itemEnded(engine, "21") && itemEnded(engine, "22"), nil
+	}})
 }
 
 // claimSometimes is a lifecycle that cannot claim one item while off is set.
@@ -274,15 +273,15 @@ func TestSpawnGather_AResumeThatFailsOnTheSecondChildLeavesTheParentAndLetsTheFi
 	assert.Equal(t, dbos.WorkflowStatusError, childStatus(t, engine, testItem), "the parent is not rewound")
 	assert.Equal(t, dbos.WorkflowStatusCancelled, childStatus(t, engine, "22"), "the child that did not reopen stays canceled")
 
-	eventually(t, func() bool { return childStatus(t, engine, "21") == dbos.WorkflowStatusSuccess })
-	eventually(t, func() bool { return slices.Contains(h.life.releasedBy(), "owner-21#2") })
+	waitOn(t, condition(func() bool { return childStatus(t, engine, "21") == dbos.WorkflowStatusSuccess }))
+	waitOn(t, condition(func() bool { return slices.Contains(h.life.releasedBy(), "owner-21#2") }))
 
 	off.Store(false)
 	require.NoError(t, client.Resume(testItem))
 
-	if !waitUntil(func() bool { return childStatus(t, engine, testItem) == dbos.WorkflowStatusSuccess }) {
-		t.Fatal(dumpRuns(engine, testItem, "21", "22", "23"))
-	}
+	waitOn(t, waiting[struct{}]{what: "the item to succeed", last: func() string { return dumpRuns(engine, testItem, "21", "22", "23") }, read: func() (struct{}, bool, error) {
+		return struct{}{}, childStatus(t, engine, testItem) == dbos.WorkflowStatusSuccess, nil
+	}})
 
 	assert.Equal(t, dbos.WorkflowStatusSuccess, childStatus(t, engine, "22"))
 }

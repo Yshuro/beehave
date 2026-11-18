@@ -19,7 +19,6 @@ import (
 )
 
 const (
-	groupWait = 5 * time.Second
 	groupPoll = 10 * time.Millisecond
 	// groupStay is longer than the time a SIGKILL needs to land and be reaped, so a kill sent by the code under test is seen inside the window.
 	groupStay = 500 * time.Millisecond
@@ -46,7 +45,7 @@ func alive(pid int) bool {
 func requireDies(t *testing.T, pid int) {
 	t.Helper()
 
-	require.Eventually(t, func() bool { return !alive(pid) }, groupWait, groupPoll, "process %d is still alive", pid)
+	waitOn(t, waiting[struct{}]{what: "process " + strconv.Itoa(pid) + " to die", read: func() (struct{}, bool, error) { return struct{}{}, !alive(pid), nil }})
 }
 
 // requireStayAlive fails when any of the processes dies inside the window groupStay.

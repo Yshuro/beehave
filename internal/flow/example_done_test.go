@@ -67,11 +67,11 @@ func TestRound_ARoundKilledAfterItsSpawnAndResumedSpawnsNothingAgain(t *testing.
 
 	handle := resumeRun(t, engine, client)
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the resumed run to show a question", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
 		infos, statusErr := client.Status()
 
-		return statusErr == nil && slices.ContainsFunc(infos, func(info RunInfo) bool { return info.Question != "" })
-	})
+		return struct{}{}, statusErr == nil && slices.ContainsFunc(infos, func(info RunInfo) bool { return info.Question != "" }), nil
+	}})
 	require.NoError(t, client.AnswerAs(testItem, shipOwner, "STOP"))
 
 	_, err = resultOfHandle(t, handle)

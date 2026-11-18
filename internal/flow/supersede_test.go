@@ -8,7 +8,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -167,18 +166,11 @@ func waitsInTheQueue(engine *Engine, want int) func() bool {
 func endsAfterTicks(t *testing.T, h *harness, ended <-chan gateEnd) gateEnd {
 	t.Helper()
 
-	deadline := time.After(eventTimeout)
+	return waitOn(t, waiting[gateEnd]{what: "the gate to end", ch: ended, read: func() (gateEnd, bool, error) {
+		h.tick(t)
 
-	for {
-		select {
-		case end := <-ended:
-			return end
-		case <-deadline:
-			t.Fatal("the gate did not end")
-		default:
-			h.tick(t)
-		}
-	}
+		return gateEnd{}, false, nil
+	}})
 }
 
 func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueued(t *testing.T) {
@@ -189,7 +181,7 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueue
 
 	old := queueGate(engine, "A")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	h.forge.mu.Lock()
 	h.forge.state.Head = "B"
@@ -201,9 +193,9 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueue
 	require.ErrorIs(t, end.err, errSuperseded)
 	require.EqualError(t, end.err, "superseded by B")
 	// The run that waited ends when DBOS marks the gate canceled. The gate counts its stop when the tick cancels its context, a moment later.
-	eventually(t, func() bool { return gated.stopped.Load() == 1 })
+	waitOn(t, condition(func() bool { return gated.stopped.Load() == 1 }))
 
-	eventually(t, startedCount(gated, 2))
+	waitOn(t, condition(startedCount(gated, 2)))
 	close(gated.release)
 
 	newer := receive(t, fresh)
@@ -219,7 +211,7 @@ func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T
 
 	first := queueGate(engine, "A")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	// The pull request already has head C, so the gate of head B that queues now is late: it stops no gate and waits behind the gate of head A.
 	h.forge.mu.Lock()
@@ -228,7 +220,7 @@ func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T
 
 	waiting := queueGate(engine, "B")
 
-	eventually(t, waitsInTheQueue(engine, 1))
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
 
 	last := queueGate(engine, "C")
 
@@ -237,7 +229,7 @@ func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T
 	require.EqualError(t, skipped.err, "superseded by C")
 
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
-	eventually(t, startedCount(gated, 2))
+	waitOn(t, condition(startedCount(gated, 2)))
 	close(gated.release)
 	require.NoError(t, receive(t, last).err)
 	assert.EqualValues(t, 2, gated.started.Load(), "the gate of head B never started")
@@ -251,11 +243,12 @@ func TestSuperseded_AGateOfTheSameHeadIsNotStopped(t *testing.T) {
 
 	first := queueGate(engine, "A")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
-	second := queueGate(engine, "A")
+	secondRun, second := queueGateRun(engine, "A")
 
-	time.Sleep(3 * time.Second)
+	// The second gate has recorded its stop of the old gates, and the first gate still runs.
+	waitOn(t, condition(stopRecorded(engine, secondRun)))
 	close(gated.release)
 
 	require.NoError(t, receive(t, first).err)
@@ -272,13 +265,13 @@ func TestSuperseded_AGateOfAnOldHeadThatQueuesLateStopsNoGateOfTheCurrentHead(t 
 	run, current := queueGateRun(engine, "B")
 
 	// The gate of head B runs before the run that queued it records its stop of the old gates. A gate of head A that queues in between is an old gate to it.
-	eventually(t, startedCount(gated, 1))
-	eventually(t, stopRecorded(engine, run))
+	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, condition(stopRecorded(engine, run)))
 
 	lateRun, late := queueGateRun(engine, "A")
 
 	// The late gate has queued and recorded its own stop. A running gate stops at a tick of the engine, so the ticks come before the release.
-	eventually(t, stopRecorded(engine, lateRun))
+	waitOn(t, condition(stopRecorded(engine, lateRun)))
 	h.tick(t)
 	assert.Zero(t, gated.stopped.Load(), "the gate of the current head is never stopped by a late gate")
 
@@ -308,7 +301,7 @@ func TestSuperseded_AGateThatAPersonCancelsKeepsTheErrorOfTheCancel(t *testing.T
 
 	only := queueGate(engine, "A")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterStatus(dbos.WorkflowStatusPending))
 	require.NoError(t, err)
@@ -361,7 +354,7 @@ func TestSuperseded_ACancelledGateIsNeverReusedAsAPass(t *testing.T) {
 
 	old := queueGate(engine, "A")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	h.forge.mu.Lock()
 	h.forge.state.Head = "B"

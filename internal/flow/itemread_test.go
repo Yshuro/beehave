@@ -209,7 +209,7 @@ func TestItemRead_AReplayReadsTheRecordedAnswerAndNotTheTrackerAgain(t *testing.
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 	require.NoError(t, receive(t, done).err)
 
 	assert.Equal(t, 1, r.reads("comments"), "the replay does not read the comments again")

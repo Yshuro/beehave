@@ -25,7 +25,6 @@ type fakeMerge struct {
 	asked  []string
 	given  []MergeSettings
 	polls  []merge.Result
-	onPoll func()
 	lasts  []bool
 	// disarms records the items whose queued merge was turned off; disarmErr is the answer of each call.
 	disarms   []string
@@ -40,10 +39,6 @@ func (f *fakeMerge) Poll(_ context.Context, _, _, _ string, _ MergeSettings, las
 	defer f.mu.Unlock()
 
 	f.lasts = append(f.lasts, last)
-
-	if f.onPoll != nil {
-		f.onPoll()
-	}
 
 	if len(f.polls) == 0 {
 		return merge.Result{}, errFake
@@ -184,29 +179,15 @@ func TestRun_ACancelDuringTheWaitForAQueuedMergeEndsTheRun(t *testing.T) {
 	harness, _ := queuedHarness(t, merge.Result{Stop: merge.Refused, Reason: merge.Queued})
 	harness.sleep = 2 * time.Second
 
-	done := make(chan struct{})
-
-	harness.merge.onPoll = func() {
-		client := harness.client(t, testVersion)
-
-		go func() {
-			defer close(done)
-
-			time.Sleep(300 * time.Millisecond)
-
-			if err := client.Cancel(testItem); err != nil {
-				t.Error(err)
-			}
-
-			harness.tick(t)
-		}()
-	}
 	engine := harness.engine(t)
+	client := harness.client(t, testVersion)
+	run := runInBackground(engine, testItem)
 
-	_, err := engine.Run(testItem, testProject)
-	receive(t, done)
+	waitOn(t, inASleep(t, engine))
+	require.NoError(t, client.Cancel(testItem))
+	harness.tick(t)
 
-	require.Error(t, err)
+	require.Error(t, receive(t, run).err)
 	assert.Less(t, len(harness.merge.lasts), queuedReads)
 }
 
@@ -216,29 +197,15 @@ func TestAwaitQueued_ACancelDuringTheWaitTurnsOffTheQueuedMerge(t *testing.T) {
 	harness, _ := queuedHarness(t, merge.Result{Stop: merge.Refused, Reason: merge.Queued})
 	harness.sleep = 2 * time.Second
 
-	done := make(chan struct{})
-
-	harness.merge.onPoll = func() {
-		client := harness.client(t, testVersion)
-
-		go func() {
-			defer close(done)
-
-			time.Sleep(300 * time.Millisecond)
-
-			if err := client.Cancel(testItem); err != nil {
-				t.Error(err)
-			}
-
-			harness.tick(t)
-		}()
-	}
 	engine := harness.engine(t)
+	client := harness.client(t, testVersion)
+	run := runInBackground(engine, testItem)
 
-	_, err := engine.Run(testItem, testProject)
-	receive(t, done)
+	waitOn(t, inASleep(t, engine))
+	require.NoError(t, client.Cancel(testItem))
+	harness.tick(t)
 
-	require.Error(t, err)
+	require.Error(t, receive(t, run).err)
 	assert.Equal(t, []string{testItem}, harness.merge.disarms, "the queued merge is turned off once, after the cancel")
 }
 
