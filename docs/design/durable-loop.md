@@ -155,6 +155,8 @@ For try `t` and run `k` (from 0) inside the try, the call records these steps:
 | `…/limit<t>.<k>` | After a limited run. It holds `limit` (`kind`, `window`, `resets_at`), `login`, `wait_until`, `session` and the cost of the run. |
 | `DBOS.sleep` | After each limit step, until `wait_until`. |
 
+If the store refuses the limit record, the step `…/spent<t>` records the cost of the run together with that error. The resume rewinds to this failed record and replays the limit step.
+
 `wait_until` is fixed inside the limit step, so a restart during the wait sleeps only the time that is left and starts the agent once after the reset.
 
 | Case | What the step does |

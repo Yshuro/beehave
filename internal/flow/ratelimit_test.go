@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 	"sync/atomic"
@@ -407,6 +408,10 @@ func TestRateLimit_AStoreThatRefusesTheLimitRecordAndTheCostKeepsTheErrorOfTheLi
 
 	engine := h.engine(t)
 
+	var logged bytes.Buffer
+
+	engine.logger = newLogger(&logged)
+
 	_, err := sqlOf(t, h).ExecContext(t.Context(), "CREATE TRIGGER refuse_limit_and_cost BEFORE INSERT ON operation_outputs "+
 		"WHEN NEW.function_name IN ('agent:fix#1/limit1.0', 'agent:fix#1/spent1') BEGIN SELECT RAISE(ABORT, 'the store refused the record'); END")
 	require.NoError(t, err)
@@ -415,6 +420,7 @@ func TestRateLimit_AStoreThatRefusesTheLimitRecordAndTheCostKeepsTheErrorOfTheLi
 
 	require.ErrorContains(t, err, "the store refused the record")
 	assert.Len(t, h.agents.seen(), 1, "no rerun after a failed limit record")
+	assert.Contains(t, logged.String(), "cannot record the cost of the limited agent run", "a refused cost record is reported")
 }
 
 func TestClient_AStreamOfFailedRunsThatCannotBeReadFailsEveryTotal(t *testing.T) {
@@ -499,6 +505,72 @@ func TestRateLimit_AStoreThatRefusesTheLimitRecordFailsTheStepAndTheCostOfTheLim
 	tree, err := runAndBelowSpend(engine.ctx, testRun)
 	require.NoError(t, err)
 	assert.InDelta(t, 0.7, tree.Cost, 1e-9, "the cost of the limited run is recorded by the step of the failed run")
+}
+
+// refuseLimitRecord makes the store refuse the limit record with this name, and returns a function that lifts the refusal.
+func refuseLimitRecord(t *testing.T, h *harness, record string) func() {
+	t.Helper()
+
+	db := sqlOf(t, h)
+	_, err := db.ExecContext(t.Context(), "CREATE TRIGGER refuse_limit_record BEFORE INSERT ON operation_outputs "+
+		"WHEN NEW.function_name = '"+record+"' BEGIN SELECT RAISE(ABORT, 'the store refused the record'); END")
+	require.NoError(t, err)
+
+	return func() {
+		_, dropErr := db.ExecContext(t.Context(), "DROP TRIGGER refuse_limit_record")
+		require.NoError(t, dropErr)
+	}
+}
+
+func TestRateLimit_AResumeAfterTheStoreRefusedTheLimitRecordRunsTheAgentAgainAndCountsTheCostOnce(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0.2), exited)
+
+	engine := h.engine(t)
+
+	var logged bytes.Buffer
+
+	engine.logger = newLogger(&logged)
+	lift := refuseLimitRecord(t, h, "agent:fix#1/limit1.0")
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "the store refused the record")
+	assert.NotContains(t, logged.String(), "cannot record the cost", "the cost record was written, with the error of the limit step")
+	lift()
+
+	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
+
+	require.NoError(t, err, "the resume cuts the history at the cost record of the limited run, and the replay takes the failure branch again")
+	assert.Len(t, h.agents.seen(), 2, "the limited run, then the run of the resume")
+
+	tree, err := runAndBelowSpend(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.2, tree.Cost, 1e-9, "the resume records the cost of the limited run once")
+}
+
+func TestRateLimit_AResumeAfterTheStoreRefusedTheLimitRecordOfASecondRunCountsEachRunOnce(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0.2), limited(limitReset, 0.7), exited)
+
+	engine := h.engine(t)
+	lift := refuseLimitRecord(t, h, "agent:fix#1/limit1.1")
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "the store refused the record")
+	lift()
+
+	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
+
+	require.NoError(t, err, "the resume runs the second limited run again, and the limit is gone")
+	assert.Len(t, h.agents.seen(), 3, "two limited runs, then the run of the resume")
+
+	tree, err := runAndBelowSpend(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.9, tree.Cost, 1e-9, "each limited run counts once")
 }
 
 func TestRateLimit_TheSleepLastsUntilTheRecordedReset(t *testing.T) {
