@@ -10,6 +10,7 @@ import (
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 
+	"github.com/tobocop2/beehave/internal/batch"
 	"github.com/tobocop2/beehave/internal/config"
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
@@ -46,7 +47,8 @@ type LostJobShown struct {
 }
 
 // LostJob is the host job of a gate whose wait ended as lost: the link to the host stayed down, so nobody can tell where the job stands.
-// Kind is "gate". Host is the host of the HostKey of the call, which is the host the job ran on. Advice is the text of the lost error,
+// Kind is "gate" or "batch_gate". Head is the head that a gate judges, or the union commit of a batch gate.
+// Host is the host of the HostKey of the call, which is the host the job ran on. Advice is the text of the lost error,
 // which ends with the cancel command of the adapter. Required is the list of the gate. Since is the time the wait for a proof started.
 // Proof is the proof that the last look read, and At is the time of that look. Limit is true when the wait reached host.lost_job_wait with no proof,
 // and Wait is the value of host.lost_job_wait that the last look read.
@@ -86,6 +88,11 @@ func lostJobOf(in ExclusiveInput, start gateStart, lost error) *LostJob {
 	}
 }
 
+// batchLostJobOf is the lost job of the batch gate of in, from the job that its first step recorded and the lost error of the wait.
+func batchLostJobOf(in ExclusiveInput, job GateJob, lost error) *LostJob {
+	return &LostJob{Kind: kindBatchGate, Job: job.ID, Host: strings.TrimPrefix(in.HostKey, hostKeyPrefix), Head: in.Commit, Advice: lost.Error()}
+}
+
 // endLost waits for the proof that the lost job of a gate can no longer run, and stores the job in out.
 // A proof gives the void outputs of the gate. A wait that reaches host.lost_job_wait with no proof gives no outputs and a job with Limit set:
 // the run ends, so both slots are free, and the item run asks the owner (askLost). A wait that fails stores the job as far as it got.
@@ -107,40 +114,53 @@ type hostLoss struct {
 	Losses int `json:"host_losses"`
 }
 
-// lostOutputs is the outputs of a gate call from what its exclusive run returned. A run whose wait for the proof reached the limit gives the outputs of askLost,
-// which asks the owner. A lost job with a proof is then recorded in the item run (recordLoss). It runs in the item run, because only the item run receives an answer.
+// lostOutputs is the outputs of a gate call from what its exclusive run returned. A lost job with a proof gives the void outputs of the gate,
+// with the record and the count of provenLoss.
 func (e *Engine) lostOutputs(ctx dbos.Context, in ExclusiveInput, call string, ran ExclusiveOutput) (map[string]any, error) {
 	if ran.Lost == nil {
 		return ran.Outputs, nil
 	}
 
-	outputs := ran.Outputs
-
-	if ran.Lost.Limit {
-		var err error
-		if outputs, err = e.askLost(ctx, in, call, *ran.Lost); err != nil {
-			return nil, err
-		}
-	}
-
-	return e.recordLoss(ctx, in.Item, call, outputs)
-}
-
-// recordLoss writes the lost job of a gate call, which has a proof, as the step <call>/host-loss of the item run, and puts the record and the count
-// in the outputs of the gate. The count walks the item tree inside the step, so a replay reads the recorded count and walks nothing.
-func (e *Engine) recordLoss(ctx dbos.Context, item, call string, outputs map[string]any) (map[string]any, error) {
-	record, err := runStep(e, ctx, call+"/"+hostLossName, func(context.Context) (hostLoss, error) {
-		earlier, err := e.treeHostLosses(ctx, item)
-
-		return hostLoss{Loss: outputs[hostLossKey], Losses: earlier + 1}, err
-	})
+	lost, record, err := e.provenLoss(ctx, in, call, *ran.Lost)
 	if err != nil {
-		return nil, fmt.Errorf("record the lost job of the gate: %w", err)
+		return nil, err
 	}
 
+	outputs := voidOutputs(lost)
 	outputs[hostLossKey], outputs[hostLossesKey] = record.Loss, record.Losses
 
 	return outputs, nil
+}
+
+// provenLoss is the lost job of a call, which the exclusive run returned, once it has a proof, and the record of that loss in the item run.
+// A wait for the proof that reached the limit asks the owner first (askLost). The lost job with its proof is then recorded (recordLoss).
+// It runs in the item run, because only the item run receives an answer. The gate and the batch gate both read a loss through it.
+func (e *Engine) provenLoss(ctx dbos.Context, in ExclusiveInput, call string, lost LostJob) (LostJob, hostLoss, error) {
+	if lost.Limit {
+		var err error
+		if lost, err = e.askLost(ctx, in, call, lost); err != nil {
+			return lost, hostLoss{}, err
+		}
+	}
+
+	record, err := e.recordLoss(ctx, in.Item, call, lost)
+
+	return lost, record, err
+}
+
+// recordLoss writes a lost job that has a proof as the step <call>/host-loss of the item run, with the count of the host losses of the item tree.
+// The count walks the item tree inside the step, so a replay reads the recorded count and walks nothing.
+func (e *Engine) recordLoss(ctx dbos.Context, item, call string, lost LostJob) (hostLoss, error) {
+	record, err := runStep(e, ctx, call+"/"+hostLossName, func(context.Context) (hostLoss, error) {
+		earlier, err := e.treeHostLosses(ctx, item)
+
+		return hostLoss{Loss: lossRecord(lost), Losses: earlier + 1}, err
+	})
+	if err != nil {
+		return hostLoss{}, fmt.Errorf("record the lost job of the gate: %w", err)
+	}
+
+	return record, nil
 }
 
 // treeHostLosses counts the host losses that the item runs of the tree of the run of ctx recorded: their steps <call>/host-loss.
@@ -172,23 +192,23 @@ func hostLossesBelow(ctx dbos.Client, id string) (int, error) {
 }
 
 // askLost asks the owner about a lost gate job and reads the proof once after each answer, in the step <call>/lost-ask.<n>. The read is a new call
-// for each answer, never a replay of an earlier look. A proof gives the void outputs of the gate and clears the lost job from the status.
-// No proof asks again. It starts no gate job: no rerun of the head comes before a proof.
-func (e *Engine) askLost(ctx dbos.Context, in ExclusiveInput, call string, lost LostJob) (map[string]any, error) {
+// for each answer, never a replay of an earlier look. A proof ends the wait with the proof in the lost job and clears the lost job from the status.
+// No proof asks again. It starts no gate job: no rerun of the head or the commit comes before a proof.
+func (e *Engine) askLost(ctx dbos.Context, in ExclusiveInput, call string, lost LostJob) (LostJob, error) {
 	if err := show(ctx, in.Item, lostJobKey, LostJobShown{Job: lost.Job, Host: lost.Host, Since: lost.Since, Limit: lost.Wait.String()}, "the lost gate job"); err != nil {
-		return nil, err
+		return lost, err
 	}
 
 	for answer := 0; ; answer++ {
 		seen, err := e.answerThenRead(ctx, in, call, lost, answer)
 		if err != nil {
-			return nil, err
+			return lost, err
 		}
 
 		if seen.Proof.Kind != "" {
 			lost.Proof, lost.At = seen.Proof, seen.At
 
-			return voidOutputs(lost), show(ctx, in.Item, lostJobKey, LostJobShown{}, "that the lost gate job has a proof")
+			return lost, show(ctx, in.Item, lostJobKey, LostJobShown{}, "that the lost gate job has a proof")
 		}
 	}
 }
@@ -323,11 +343,27 @@ func voidOutputs(lost LostJob) map[string]any {
 		steps[i] = GateStep{Name: name, Status: unknownStatus}
 	}
 
-	report := fmt.Sprintf("the gate job was lost on %s and the proof is %s", lost.Host, lost.Proof.Kind)
-	outputs := gateOutputs(false, lost.Head, "", report, steps, lost.Required, nil)
-	outputs[hostLossKey] = map[string]any{
-		"kind": lost.Kind, "job": lost.Job, "host": lost.Host, "head_or_commit": lost.Head, "proof": lost.Proof.Kind, "note": lost.Proof.Note, "at": lost.At.UTC().Format(time.RFC3339),
-	}
+	outputs := gateOutputs(false, lost.Head, "", lossReport(lost), steps, lost.Required, nil)
+	outputs[hostLossKey] = lossRecord(lost)
 
 	return outputs
+}
+
+// lossReport is the report of a gate whose lost job has a proof: the host and the kind of the proof.
+func lossReport(lost LostJob) string {
+	return fmt.Sprintf("the gate job was lost on %s and the proof is %s", lost.Host, lost.Proof.Kind)
+}
+
+// lossRecord is the record host_loss of a lost job that has a proof. It has one shape for the gate and the batch gate: head_or_commit is the head
+// of a gate and the union commit of a batch gate.
+func lossRecord(lost LostJob) map[string]any {
+	return map[string]any{
+		"kind": lost.Kind, "job": lost.Job, "host": lost.Host, "head_or_commit": lost.Head, "proof": lost.Proof.Kind, "note": lost.Proof.Note, "at": lost.At.UTC().Format(time.RFC3339),
+	}
+}
+
+// lostOutcome is the outcome of a batch gate whose lost job has a proof: a void gate on the tree of the checkout, whose reason names the host and the proof.
+// It is the record of the host job run. The item run reads the lost job next to it and gates the commit again (batchGate.Run).
+func lostOutcome(tree string, lost LostJob) batch.GateOutcome {
+	return batch.GateOutcome{Tree: tree, Report: lossReport(lost), Void: lossReport(lost)}
 }

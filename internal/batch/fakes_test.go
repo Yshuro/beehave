@@ -22,7 +22,9 @@ type world struct {
 	void    string
 	voidFor func(items []string) bool
 
-	gateTrees     []string
+	gateTrees []string
+	// gateSteps are the step names that the runs of the gate were given, in order.
+	gateSteps     []string
 	gateTreeFixed string
 	merges        []string
 	pushAfter     int
@@ -107,6 +109,7 @@ func (w *world) Run(_ context.Context, in GateInput) (GateOutcome, error) {
 	}
 
 	w.gateTrees = append(w.gateTrees, in.Tree)
+	w.gateSteps = append(w.gateSteps, in.Step)
 
 	reported := in.Tree
 	if w.gateTreeFixed != "" {
