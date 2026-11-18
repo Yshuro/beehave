@@ -91,6 +91,8 @@ const (
 	LimitRate LimitKind = "rate"
 	// LimitSpend is a cap on the dollars that the account spends past its plan.
 	LimitSpend LimitKind = "spend"
+	// LimitOverload is a provider that is too busy to serve the request. It has no reset time, and a short wait cures it.
+	LimitOverload LimitKind = "overload"
 )
 
 // Limit is a provider limit that refused more work. Window is the name that the CLI gives the limit, such as five_hour, or empty when it names none.
@@ -102,8 +104,12 @@ type Limit struct {
 	ResetsAt time.Time `json:"resets_at,omitzero"`
 }
 
-// Name names the limit for a message, such as "rate limit five_hour", or "rate limit" when the CLI names no window.
+// Name names the limit for a message, such as "rate limit five_hour", "rate limit" when the CLI names no window, or "overload".
 func (l Limit) Name() string {
+	if l.Kind == LimitOverload {
+		return string(l.Kind)
+	}
+
 	return strings.TrimSpace(string(l.Kind) + " limit " + l.Window)
 }
 

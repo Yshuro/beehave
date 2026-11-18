@@ -466,7 +466,7 @@ func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (step
 
 // runPastLimits runs a new phase of one try after each cap stop and each provider limit, and returns the first run that neither stopped. Each limit rerun starts from base.
 func (s *script) runPastLimits(name string, base PhaseInput, try int) (PhaseOutput, error) {
-	look, run, in := 0, 0, base
+	look, in, counts := 0, base, limitCounts{}
 
 	for {
 		ended, err := s.runOnce(name, in)
@@ -478,8 +478,7 @@ func (s *script) runPastLimits(name string, base PhaseInput, try int) (PhaseOutp
 			err = s.holdAtCap(name, try, look, ended.CapStop)
 			look++
 		default:
-			in, err = s.waitOutLimit(name, base, in, ended, try, run)
-			run++
+			in, err = s.waitOutLimit(name, base, in, ended, try, &counts)
 		}
 
 		if err != nil {
