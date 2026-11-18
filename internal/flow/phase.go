@@ -146,15 +146,24 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 
 	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, lost, saver.name))
 
+	return e.judgePhase(ctx, in, result, err)
+}
+
+// judgePhase returns the output of a phase from the result of its agent, and the error that ends the phase.
+// A limit with no reset time gets the one that the usage read gives. The end of the phase is judged inside the step, so a phase that did not exit with code 0,
+// and that no cap and no provider limit with an end to its wait stopped, is a failed step that beehave resume reruns.
+func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Result, runErr error) (PhaseOutput, error) {
 	out := phaseOutput(result)
 	out.Kind, out.Rounds = workflow.LaneKind(in.Kind, in.Lane), in.Rounds
 
-	if err != nil {
+	if runErr != nil {
+		return out, runErr
+	}
+
+	if err := e.dateLimit(ctx, in, &out); err != nil {
 		return out, err
 	}
 
-	// The end of the phase is judged inside the step, so a phase that did not exit with code 0, and that no cap and no provider limit with an end to its wait stopped,
-	// is a failed step that beehave resume reruns.
 	return out, phaseEnd(in, out, e.deps.Clock.wall())
 }
 
