@@ -166,6 +166,22 @@ func TestBatchGate_AReadOfTheProofAfterTheAnswerThatFailsFailsTheCallAndRerunsNo
 	assert.Empty(t, rig.merger.landed())
 }
 
+func TestBatchGate_AReadOfTheProofThatFailsInTheTimedWaitFailsTheCallAndRecordsNoLoss(t *testing.T) {
+	t.Parallel()
+
+	rig, hosts := lostBatchRig(t, 1)
+	hosts.proofErr = errFake
+	engine := rig.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(rig.lostBatchBody())))
+
+	require.ErrorContains(t, err, "read the proof that the lost job job-1 on host gpu-b can no longer run: ")
+	require.ErrorIs(t, err, errFake)
+	assert.Equal(t, 1, rig.gate.submitted(), "no gate runs on the commit without a proof")
+	assert.Empty(t, rig.merger.landed())
+	assert.NotContains(t, stepNamesOf(t, engine, testRun), "batch:b.gate#1/host-loss", "a wait that failed records no loss")
+}
+
 func TestBatchGate_ACanceledWaitForTheProofReadsTheProofOnceAndNeverCancelsTheJob(t *testing.T) {
 	t.Parallel()
 
