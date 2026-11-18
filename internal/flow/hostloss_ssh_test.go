@@ -82,9 +82,21 @@ func TestHostLoss_TheSshAdapterEndsTheGateVoidAfterTheHostComesBack(t *testing.T
 
 	// The clock of the wait moves by each sleep, so the 10 minutes of the lost read pass at once.
 	clock := jobwait.Clock{
-		Poll:  10 * time.Second,
-		Now:   func() time.Time { mu.Lock(); defer mu.Unlock(); return now },
-		Sleep: func(_ context.Context, d time.Duration) error { mu.Lock(); defer mu.Unlock(); now = now.Add(d); return nil },
+		Poll: 10 * time.Second,
+		Now: func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+
+			return now
+		},
+		Sleep: func(_ context.Context, d time.Duration) error {
+			mu.Lock()
+			defer mu.Unlock()
+
+			now = now.Add(d)
+
+			return nil
+		},
 	}
 
 	host, err := ssh.New("gates", model.HostConfig{
