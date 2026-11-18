@@ -94,7 +94,7 @@ A rate limit or a spend limit of the provider ends a run with the outcome `limit
 - A rejected status with `isUsingOverage` set to true is no limit. Paid overage serves the request, and the CLI keeps working.
 - The limit is a spend limit only when paid overage was available and is now refused: `overageStatus` is `rejected` and `overageDisabledReason` is `out_of_credits` or `org_level_disabled_until` (a spend cap). Any other reason, such as `overage_not_provisioned`, or no reason, means the account had no paid overage to refuse, so the limit is a rate limit with the plan reset time.
 - `rateLimitType` names the window. `resetsAt` is the reset time in Unix seconds. A spend limit resets at the earlier of `resetsAt` and `overageResetsAt`, because either reset lets work start again.
-- An assistant line with `error` set to `rate_limit` is a rate limit. Its reset time is `resetsAt` in the `rate_limit_info` of its `api_error_params`, or none when the line has no such time.
+- An assistant line with `error` set to `rate_limit` is read like a `rate_limit_event`: its kind, window and reset time come from the `rate_limit_info` of its `api_error_params`, by the rules above. A line with no usable `rate_limit_info` is a rate limit with no window and no reset time.
 
 The runner keeps the first limit of the run. The run is limited only if the run did not go on to a result line with no error: a success or a cap after the limit means the CLI took more work. A limited run keeps its session, its message and its violations, whatever the exit code. Its note names the limit and the reset time. A run that timed out or was canceled keeps that outcome.
 
