@@ -399,7 +399,7 @@ func TestRateLimit_AResumeKeepsTheCostOfTheFailedRunInEveryTotal(t *testing.T) {
 	engine := h.engine(t)
 
 	_, err := engine.Run(testItem, testProject)
-	require.ErrorContains(t, err, "gives no reset time")
+	require.ErrorContains(t, err, "neither the agent nor the usage read gives a reset time")
 
 	client := h.client(t, testVersion)
 	_, err = resumeAndJoin(t, engine, client)
@@ -441,7 +441,7 @@ func TestRateLimit_AResumeKeepsTheLimitRecordOfAnEarlierRun(t *testing.T) {
 	engine := h.engine(t)
 
 	_, err := engine.Run(testItem, testProject)
-	require.ErrorContains(t, err, "gives no reset time")
+	require.ErrorContains(t, err, "neither the agent nor the usage read gives a reset time")
 
 	client := h.client(t, testVersion)
 	_, err = resumeAndJoin(t, engine, client)
@@ -459,11 +459,11 @@ func TestRateLimit_TwoResumesKeepTheCostOfBothFailedRuns(t *testing.T) {
 	engine := h.engine(t)
 
 	_, err := engine.Run(testItem, testProject)
-	require.ErrorContains(t, err, "gives no reset time")
+	require.ErrorContains(t, err, "neither the agent nor the usage read gives a reset time")
 
 	client := h.client(t, testVersion)
 	_, err = resumeAndJoin(t, engine, client)
-	require.ErrorContains(t, err, "gives no reset time", "the rerun of the first resume fails at the limit again")
+	require.ErrorContains(t, err, "neither the agent nor the usage read gives a reset time", "the rerun of the first resume fails at the limit again")
 
 	_, err = resumeAndJoin(t, engine, client)
 	require.NoError(t, err, "the rerun of the second resume ends well")
@@ -484,7 +484,7 @@ func TestRateLimit_AStoreThatRefusesTheCostOfAFailedRunKeepsTheErrorOfTheRun(t *
 
 	_, err = engine.Run(testItem, testProject)
 
-	require.ErrorContains(t, err, "gives no reset time", "the error of the failed run is the error of the step")
+	require.ErrorContains(t, err, "neither the agent nor the usage read gives a reset time", "the error of the failed run is the error of the step")
 	assert.NotContains(t, err.Error(), "the store refused the cost")
 }
 
@@ -554,7 +554,7 @@ agent(model = "m", prompt = "prompts/a.md", name = "b")
 	engine := rig.h.engine(t)
 
 	_, err := engine.RunFile(testItem, testProject, file)
-	require.ErrorContains(t, err, "gives no reset time")
+	require.ErrorContains(t, err, "neither the agent nor the usage read gives a reset time")
 
 	client := rig.h.client(t, testVersion)
 	_ = resumeRun(t, engine, client)
