@@ -178,3 +178,59 @@ func TestClient_StepNamesReportsARunThatCannotBeRead(t *testing.T) {
 
 	require.ErrorContains(t, err, "read the steps of "+testRun)
 }
+
+// olderRoundRun leaves an open run of item that a build with the module at version recorded, and returns a client of this build.
+// The project has no repository, so the run records no step that makes a worktree, as a run of the older build did not.
+func olderRoundRun(t *testing.T, item, module string, version int) (*harness, *Client) {
+	t.Helper()
+
+	harness := newHarness(t)
+	harness.repository = func(string) bool { return false }
+	harness.flowIs(t, "def main(item):\n    wait(name = \"ask\", question = \"What now?\")\n")
+
+	runInBackground(harness.engine(t), item)
+	waitForTheOwner(t, harness)
+
+	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?",
+		versionWithModule(testVersion, module, version), runID(item, 1))
+	require.NoError(t, err)
+
+	expireLease(harness)
+
+	return harness, harness.client(t, otherBuild)
+}
+
+func TestClient_ResumeOnThisBuildRefusesARoundRunOfABuildWithAnOlderRoundModuleAndNamesTheStepThatMakesTheWorktree(t *testing.T) {
+	t.Parallel()
+
+	_, other := olderRoundRun(t, testRound, moduleRound, 1)
+
+	err := other.ResumeOnThisBuild(testRound)
+
+	require.ErrorIs(t, err, errStranded)
+	require.ErrorContains(t, err, "round module at version 1, and this build has version 2")
+	require.ErrorContains(t, err, `the step "make worktree"`)
+	require.ErrorContains(t, err, "Finish the run on the build that started it, or start the item again: beehave run "+testRound)
+	require.NotContains(t, err.Error(), "UnexpectedStep")
+
+	row, rowErr := other.row(runID(testRound, 1))
+	require.NoError(t, rowErr)
+	assert.Equal(t, testVersion, buildVersion(row.ApplicationVersion), "a refused run stays where it was")
+}
+
+func TestClient_ResumeOnThisBuildMovesARunOfAnItemThatIsNotARoundWhenOnlyTheRoundModuleChanged(t *testing.T) {
+	t.Parallel()
+
+	_, other := olderRoundRun(t, testItem, moduleRound, 1)
+
+	require.NoError(t, other.ResumeOnThisBuild(testItem), "the run recorded no step of the round module, and it is not a round item")
+}
+
+func TestClient_ResumeOnThisBuildMovesARoundRunWhenOnlyAModuleThatTheRunDidNotUseChanged(t *testing.T) {
+	t.Parallel()
+
+	// The stored gate version must differ from this build, or the lists are equal and the round check never runs.
+	_, other := olderRoundRun(t, testRound, moduleGate, gateVersion-1)
+
+	require.NoError(t, other.ResumeOnThisBuild(testRound), "the round module is the same, and the run recorded no gate step")
+}

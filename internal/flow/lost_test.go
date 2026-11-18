@@ -56,13 +56,20 @@ func awaitSavedSession(t *testing.T, engine *Engine, harness *harness) {
 func loseAgent(t *testing.T, harness *harness, ran time.Duration) {
 	t.Helper()
 
+	loseAgentOn(t, harness, testItem, ran)
+}
+
+// loseAgentOn is loseAgent for the named item.
+func loseAgentOn(t *testing.T, harness *harness, item string, ran time.Duration) {
+	t.Helper()
+
 	harness.agents.gate = make(chan struct{})
 
 	engine, err := NewEngine(t.Context(), harness.opts, harness.deps())
 	require.NoError(t, err)
 	require.NoError(t, engine.Launch())
 
-	_ = runInBackground(engine, testItem)
+	_ = runInBackground(engine, item)
 	eventually(t, func() bool { return harness.agents.running() == 1 })
 	awaitSavedSession(t, engine, harness)
 
@@ -195,12 +202,12 @@ func TestClient_TheLostStepIsListedWithItsRecordAsTheOutput(t *testing.T) {
 func TestLostNote_NamesTheMinutesAndSaysUnderOneMinuteForAShortRun(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(90 * time.Second)}.note(false), "after 1 minute.")
-	assert.Contains(t, LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(5 * time.Second)}.note(false), "after less than a minute.")
+	assert.Contains(t, LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(90 * time.Second)}.note(viewDiff), "after 1 minute.")
+	assert.Contains(t, LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(5 * time.Second)}.note(viewDiff), "after less than a minute.")
 	assert.Equal(t, time.Duration(0), LostStep{Started: time.Unix(100, 0), Lost: time.Unix(0, 0)}.Ran(), "a loss before the start counts as no time")
 	assert.Equal(t, time.Duration(0), LostStep{Started: time.Unix(100, 0)}.Ran(), "a loss with no time counts as no time")
 	assert.False(t, LostStep{Started: time.Unix(100, 0)}.Known())
-	assert.Contains(t, LostStep{Started: time.Unix(100, 0)}.note(false), "ran before for an unknown time and was lost.")
+	assert.Contains(t, LostStep{Started: time.Unix(100, 0)}.note(viewDiff), "ran before for an unknown time and was lost.")
 }
 
 func TestPhase_TheLossTimeIsTheLastRenewalOfTheClaimLeaseInTheStore(t *testing.T) {

@@ -12,7 +12,6 @@ import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 
-	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
@@ -50,6 +49,9 @@ type script struct {
 	ctx   dbos.Context
 	in    ItemInput
 	login string
+	// treeStart is the commit that the recorded step made the worktree of a round item at. A step that finds the worktree removed makes it again there.
+	// It is empty for any other item.
+	treeStart string
 	// severity is the severity that the tracker gave the item, from the recorded fields of the run. It sets the place of the gates and the agent steps of the run in their queues.
 	severity model.Severity
 
@@ -60,9 +62,6 @@ type script struct {
 	counts map[string]int
 	// kinds is the table of step kinds that name accepts. It is nil, and so the table of the registry of the engine, unless a test sets it.
 	kinds []string
-
-	// spent is the sum of the costs that the agent steps of this run recorded so far, marks included. A replay adds the same recorded costs again in the same order.
-	spent agent.Spend
 
 	// merge and sentBack are what a merge builtin reported. They go into the result of the item.
 	mergeState, sentBack, closed string

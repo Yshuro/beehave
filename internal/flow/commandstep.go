@@ -76,7 +76,7 @@ func limitsOf(c commandRaw) (processes int, class string, err error) {
 
 // request makes the request of a call from its program, host and timeout. The caller adds stdin and the environment.
 func (s *script) request(run starlark.Value, host, timeout string) (CommandRequest, error) {
-	request := CommandRequest{Project: s.in.Project, Item: s.in.Item, Host: host, BuildHost: s.hostChosen}
+	request := CommandRequest{Project: s.in.Project, Item: s.in.Item, Host: host, BuildHost: s.hostChosen, TreeStart: s.treeStart}
 
 	var err error
 	if request.Run, err = workflow.Words("run", run); err != nil {
@@ -251,6 +251,10 @@ func (e *Engine) reuseProjectGate(ctx context.Context, request CommandRequest) (
 		return gateStart{}, err
 	}
 
+	if err := e.remakeTree(ctx, request); err != nil {
+		return gateStart{}, err
+	}
+
 	key := e.gateKey(ctx, request)
 
 	// An earlier pass has no checks of a candidate, so a candidate gate reuses none.
@@ -292,6 +296,9 @@ func (e *Engine) requiredOf(job GateJob, project string) []string {
 // A wait that ended as lost while the run still runs gives the lost job and no outputs. A wait that a cancel stopped stays an error.
 func (e *Engine) finishProjectGate(ctx context.Context, in ExclusiveInput, start gateStart) (gateFinish, string, error) {
 	request := in.Request
+	if err := e.remakeTree(ctx, request); err != nil {
+		return gateFinish{}, "", err
+	}
 
 	gated, err := e.deps.Gate.Run(ctx, request.Project, request.Item, request.BuildHost, start.Job)
 	if errors.Is(err, host.ErrLost) && ctx.Err() == nil {
@@ -305,6 +312,20 @@ func (e *Engine) finishProjectGate(ctx context.Context, in ExclusiveInput, start
 	outputs := gateOutputs(gated.Passed, gated.Head, gated.Tree, gated.Report, gated.Steps, start.Required, gated.Checks)
 
 	return gateFinish{Outputs: outputs}, recordedKey(gated, start.Key), nil
+}
+
+// remakeTree makes the worktree of a round item again at its tree start when someone removed it, so the project gate, which reads the folder by its path, finds it.
+// A request with no tree start makes nothing.
+func (e *Engine) remakeTree(ctx context.Context, request CommandRequest) error {
+	if request.TreeStart == "" {
+		return nil
+	}
+
+	if _, err := e.deps.Trees.Ensure(ctx, request.Project, request.Item, request.TreeStart); err != nil {
+		return fmt.Errorf("find the folder of item %s: %w", request.Item, err)
+	}
+
+	return nil
 }
 
 // gateKey reads the key of the project gate. A key that cannot be read is an empty key: the gate then runs and reports the same problem.

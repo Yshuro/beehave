@@ -65,6 +65,10 @@ type PhaseInput struct {
 	// StartHead is the commit of the item folder when the render step of the call ran. The record of a lost start holds the diff summary since that commit.
 	// It is empty for a plain folder.
 	StartHead string `json:"start_head,omitempty"`
+
+	// TreeStart is the commit that the run made the worktree of a round item at. The diff of a lost start makes a removed worktree again there.
+	// It is left out of a recorded phase for any other item.
+	TreeStart string `json:"tree_start,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.

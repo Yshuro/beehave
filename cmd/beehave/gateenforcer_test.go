@@ -55,7 +55,10 @@ func sandboxFor(t *testing.T, e sandbox.Enforcer, err error) gateSandbox {
 	home := t.TempDir()
 	projects := sandboxedProject(model.SandboxOn, config.LocalHost)
 
-	return gateSandbox{projects: projects, enforcer: func(string) (sandbox.Enforcer, error) { return e, err }, home: func() (string, error) { return home, nil }}
+	return gateSandbox{
+		projects: projects, enforcer: func(string) (sandbox.Enforcer, error) { return e, err }, home: func() (string, error) { return home, nil },
+		clones: cloneLock{repos: t.TempDir()},
+	}
 }
 
 func TestGateSandbox_RunsTheCommandUnderTheEnforcerAndRecordsThePlanFirst(t *testing.T) {
@@ -106,8 +109,8 @@ func TestGateSandbox_ASandboxReadPathThatHoldsTheHomeFolderIsRefused(t *testing.
 func TestGateSandbox_AppliesOnlyToAProjectWithTheSandboxOnThatBuildsHere(t *testing.T) {
 	t.Parallel()
 
-	assert.True(t, newGateSandbox(sandboxedProject(model.SandboxOn, config.LocalHost)).applies("p", false))
-	assert.False(t, newGateSandbox(sandboxedProject(model.SandboxOn, "cluster")).applies("p", false))
-	assert.True(t, newGateSandbox(sandboxedProject(model.SandboxOn, "cluster")).applies("p", true))
-	assert.False(t, newGateSandbox(sandboxedProject(model.SandboxOff, config.LocalHost)).applies("p", true))
+	assert.True(t, newGateSandbox(sandboxedProject(model.SandboxOn, config.LocalHost), cloneLock{}).applies("p", false))
+	assert.False(t, newGateSandbox(sandboxedProject(model.SandboxOn, "cluster"), cloneLock{}).applies("p", false))
+	assert.True(t, newGateSandbox(sandboxedProject(model.SandboxOn, "cluster"), cloneLock{}).applies("p", true))
+	assert.False(t, newGateSandbox(sandboxedProject(model.SandboxOff, config.LocalHost), cloneLock{}).applies("p", true))
 }

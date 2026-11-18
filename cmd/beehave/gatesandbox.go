@@ -34,9 +34,11 @@ type gateSandbox struct {
 	home     func() (string, error)
 	// environ is the environment of a gate command whose request holds none.
 	environ []string
+	// clones is the lock of the clone of each project. The gate adds, lists and removes the worktree of its copy under it.
+	clones cloneLock
 }
 
-func newGateSandbox(projects map[string]config.Project) gateSandbox {
+func newGateSandbox(projects map[string]config.Project, clones cloneLock) gateSandbox {
 	choose := func(name string) (sandbox.Enforcer, error) {
 		table := enforcers.Table()
 
@@ -48,7 +50,7 @@ func newGateSandbox(projects map[string]config.Project) gateSandbox {
 		return table[key], nil
 	}
 
-	return gateSandbox{projects: projects, enforcer: choose, home: os.UserHomeDir, environ: model.EnvPairs(config.ProcessEnv())}
+	return gateSandbox{projects: projects, enforcer: choose, home: os.UserHomeDir, environ: model.EnvPairs(config.ProcessEnv()), clones: clones}
 }
 
 // applies says whether a gate of the project runs under the sandbox on this machine: the project has the sandbox on and the gate runs here.
@@ -89,22 +91,48 @@ func (g gateSandbox) runAt(ctx context.Context, project string, at folder, argv,
 		return notStarted(fmt.Sprintf("make the temporary folder: %v", err))
 	}
 
-	defer func() { out += discard(context.WithoutCancel(ctx), tmp, dir) }()
+	locked := g.clones.of(project)
 
-	return g.runIn(ctx, enforcer, found, tmp, at, argv, env, limit)
+	defer func() { out += discard(context.WithoutCancel(ctx), tmp, dir, locked) }()
+
+	return g.runIn(ctx, enforcer, found, tmp, at, locked, argv, env, limit)
+}
+
+// underLock runs fn under the lock of the clone whose worktree a gate copies.
+type underLock func(ctx context.Context, fn func() error) error
+
+// of returns the lock of the clone of the project as an underLock.
+func (l cloneLock) of(project string) underLock {
+	return func(ctx context.Context, fn func() error) error {
+		return l.hold(ctx, project, func(string) error { return fn() })
+	}
 }
 
 // discard removes the copy of a gate, also when the context is done, and then tells the repository in dir to forget the records of gate copies whose folder
 // is gone. That covers the record that the gate could not name. It returns a line for the output when the copy stays.
-func discard(ctx context.Context, tmp, dir string) string {
+func discard(ctx context.Context, tmp, dir string, locked underLock) string {
 	note := ""
 	if err := removeTree(tmp); err != nil {
 		note = fmt.Sprintf("beehave sandbox: the copy of the gate stays at %s: %v\n", tmp, err)
 	}
 
-	forgetCopies(ctx, dir, filepath.Dir(tmp))
+	if isRepository(dir) {
+		//nolint:errcheck // a lock that fails leaves the records, and the next gate tries again
+		_ = locked(ctx, func() error {
+			forgetCopies(ctx, dir, filepath.Dir(tmp))
+
+			return nil
+		})
+	}
 
 	return note
+}
+
+// isRepository says whether dir holds a .git entry, so git commands in dir act on a repository.
+func isRepository(dir string) bool {
+	_, err := os.Lstat(filepath.Join(dir, ".git"))
+
+	return err == nil
 }
 
 // ownerOnly is the mode of the folders that beehave makes for gate copies.
@@ -247,18 +275,15 @@ const forgetLimit = 30 * time.Second
 // and the function that removes the record of the worktree from the repository. The command then writes a copy that beehave throws away: the real git
 // folder (its hooks, its config and the folder that core.hooksPath names) and the real work folder (.husky, .claude) are outside the plan, so a gate
 // cannot plant a hook or an agent setting that runs later as the owner. A folder with no .git holds no hooks and is the work folder itself.
-func disposableTree(ctx context.Context, dir, tmp string) (string, func(), error) {
-	if _, err := os.Lstat(filepath.Join(dir, ".git")); err != nil {
+func disposableTree(ctx context.Context, dir, tmp string, locked underLock) (string, func(), error) {
+	if !isRepository(dir) {
 		return dir, func() {}, nil
 	}
 
 	work := filepath.Join(tmp, "work")
 
-	// Records of copies that an earlier gate left, because it was killed, go before this gate adds one.
-	forgetCopies(ctx, dir, filepath.Dir(tmp))
-
-	if out, err := gitIn(ctx, dir, "worktree", "add", "--detach", "--quiet", work, "HEAD"); err != nil {
-		return "", nil, fmt.Errorf("make the worktree for the gate: %w: %s", err, out)
+	if err := locked(ctx, func() error { return addCopy(ctx, dir, tmp, work) }); err != nil {
+		return "", nil, err
 	}
 
 	// The record of the worktree is forgotten after the removal of the copy, so a rev-parse that fails leaks nothing.
@@ -267,7 +292,21 @@ func disposableTree(ctx context.Context, dir, tmp string) (string, func(), error
 		return "", nil, fmt.Errorf("find the git record of the worktree for the gate: %w: %s", err, record)
 	}
 
-	return work, func() { _ = os.RemoveAll(strings.TrimSpace(record)) }, nil
+	return work, func() {
+		//nolint:errcheck // a record that stays is forgotten by the discard of the copy, or by the next gate
+		_ = locked(context.WithoutCancel(ctx), func() error { return os.RemoveAll(strings.TrimSpace(record)) })
+	}, nil
+}
+
+// addCopy adds the worktree work for a gate in the repository of dir. Records of copies that an earlier gate left, because it was killed, go first.
+func addCopy(ctx context.Context, dir, tmp, work string) error {
+	forgetCopies(ctx, dir, filepath.Dir(tmp))
+
+	if out, err := gitIn(ctx, dir, "worktree", "add", "--detach", "--quiet", work, "HEAD"); err != nil {
+		return fmt.Errorf("make the worktree for the gate: %w: %s", err, out)
+	}
+
+	return nil
 }
 
 // gitIn runs git in dir and returns what it printed. A canceled context kills the process group of git, and a child that holds the output open
@@ -298,10 +337,12 @@ func gitFailure(ctx context.Context, result model.CommandResult) string {
 }
 
 // runIn makes the disposable work folder of dir under the temporary folder tmp, makes the plan for it and runs the command there.
-func (g gateSandbox) runIn(ctx context.Context, enforcer sandbox.Enforcer, project config.Project, tmp string, at folder, argv, env []string, limit time.Duration) (string, int) {
+func (g gateSandbox) runIn(ctx context.Context, enforcer sandbox.Enforcer, project config.Project, tmp string, at folder, locked underLock, argv, env []string,
+	limit time.Duration,
+) (string, int) {
 	dir := at.path
 
-	work, release, err := disposableTree(ctx, dir, tmp)
+	work, release, err := disposableTree(ctx, dir, tmp, locked)
 	if err != nil {
 		return notStarted(err.Error())
 	}

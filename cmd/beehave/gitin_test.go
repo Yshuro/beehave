@@ -30,7 +30,7 @@ func TestDisposableTree_DoesNotRunThePostCheckoutHookOfTheRepository(t *testing.
 	require.NoError(t, os.MkdirAll(filepath.Dir(hook), 0o700))
 	require.NoError(t, exectest.Write(hook, "#!/bin/sh\ntouch '"+marker+"'\n"))
 
-	work, release, err := disposableTree(t.Context(), dir, t.TempDir())
+	work, release, err := disposableTree(t.Context(), dir, t.TempDir(), cloneLock{repos: t.TempDir()}.of("p"))
 	require.NoError(t, err)
 
 	defer release()
@@ -98,7 +98,7 @@ func TestEveryPathToGitRunsWithTheHooksOff(t *testing.T) { //nolint:paralleltest
 			return newWorktrees(nil, flow.Options{StateDir: dir}, nil).git(dir).Run(t.Context(), []string{"status"})
 		},
 		"the batch and gate": func() model.CommandResult {
-			return newPrograms(config.Config{}, nil, adapters{}).local("git", dir, 0).Run(t.Context(), []string{"status"})
+			return newPrograms(config.Config{}, nil, cloneLock{}, adapters{}).local("git", dir, 0).Run(t.Context(), []string{"status"})
 		},
 	}
 

@@ -499,9 +499,13 @@ func (dryWatch) SetDraft(context.Context, string, int, bool) error { return nil 
 
 type dryTrees struct{ dir string }
 
-func (t dryTrees) Path(context.Context, string, string) (string, error) { return t.dir, nil }
+func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {
+	fn(t.dir)
 
-func (t dryTrees) Ensure(context.Context, string, string) (string, error) { return t.dir, nil }
+	return nil
+}
+
+func (t dryTrees) Ensure(context.Context, string, string, string) (string, error) { return t.dir, nil }
 
 // dryCommands runs no program: each command call exits with code 0 and prints nothing.
 type dryCommands struct{}
