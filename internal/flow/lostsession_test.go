@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -253,6 +254,38 @@ func TestPhase_ALostRerunThatNamedNoSessionResumesTheLimitedSessionAndKeepsTheLo
 	assert.Equal(t, "sess-limited", requests[2].Lost.Session)
 	assert.Contains(t, requests[2].Prompt, "This step ran before and was lost after 33 minutes.", "the note of the loss goes into the prompt")
 	assert.Contains(t, requests[2].Lost.Note, limitSentence, "a fresh run gets the note of the limit too")
+}
+
+func TestPhase_ALimitAfterALostStartResumedItsSessionAndNamedNoneResumesTheLostSession(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+
+	var limitedOnce atomic.Bool
+
+	// The replay that resumes the lost session is limited before the agent names a session.
+	h.agents.result = func(request AgentRequest) agent.Result {
+		if request.Lost != nil && request.Lost.Session == "s-lost" && limitedOnce.CompareAndSwap(false, true) {
+			return limitedIn("")
+		}
+
+		return exited
+	}
+
+	nameSession(h, "s-lost")
+	loseAgent(t, h, 33*time.Minute)
+	nameSession(h, "")
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 3)
+	require.NotNil(t, requests[1].Lost)
+	assert.Equal(t, "s-lost", requests[1].Lost.Session)
+	require.NotNil(t, requests[2].Lost, "the limited run was given s-lost to resume and named none: prompt %q", requests[2].Prompt)
+	assert.Equal(t, "s-lost", requests[2].Lost.Session)
+	assert.Equal(t, "Work on the item.\n", requests[2].Prompt)
 }
 
 func TestClient_TheLostRecordHoldsTheSessionAndTheDiffSummary(t *testing.T) {

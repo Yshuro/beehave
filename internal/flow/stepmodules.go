@@ -37,7 +37,7 @@ const coreVersion = 3
 // that an agent call records when a provider limit stops its run. Version 3 added the start_head field to the phase input, the session and diff_stat fields
 // to the record of a lost step, and the resumed field to the phase output. Version 4 added the tree_start field to the phase input.
 // Version 5 writes the cost of a failed run to the stream of failed runs in place of its spent step.
-// Version 8 added the note field to the limit record and the limited field to the phase input, so the rerun after a provider limit resumes the limited session.
+// Version 8 added the note field to the limit record, the limited field to the phase input and the resume_of field to the phase output, so the rerun after a provider limit resumes the limited session.
 const agentVersion = 8
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.

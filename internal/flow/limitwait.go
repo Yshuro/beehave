@@ -36,7 +36,7 @@ func (w LimitWait) note(view lostView, stat string) string {
 type limitRecord struct {
 	LimitWait
 
-	// Session is the session of the step: the one that the limited run named, else the one that the limited run was given to resume.
+	// Session is the session of the step: the one that the limited run named, else the one that it was given to resume (ResumeOf).
 	Session string `json:"session,omitempty"`
 	// Note is the note of a fresh rerun after the reset.
 	Note string `json:"note,omitempty"`
@@ -98,7 +98,7 @@ func (s *script) limitRecordOf(ctx context.Context, in PhaseInput, ended PhaseOu
 	}
 
 	return limitRecord{
-		LimitWait: wait, Session: cmp.Or(ended.Session, in.Limited.session()), Note: wait.note(view, stat), Spend: ended.Spend,
+		LimitWait: wait, Session: cmp.Or(ended.Session, ended.ResumeOf), Note: wait.note(view, stat), Spend: ended.Spend,
 		Passed: !limit.ResetsAt.After(s.e.deps.Clock.wall()),
 	}
 }

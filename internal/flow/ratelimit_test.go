@@ -226,22 +226,11 @@ func TestRateLimit_ALimitWithNoResetTimeWaitsForTheResetThatThePoolReads(t *test
 	steps := recordsOfTestRun(t, engine)
 	assert.Equal(t, 1, sleepsIn(steps))
 
-	for _, step := range steps {
-		if step.StepName != "agent:fix#1/limit1.0" {
-			continue
-		}
-
-		text, ok := step.Output.(string)
-		require.True(t, ok, "the limit record is JSON text")
-
-		var record map[string]any
-
-		require.NoError(t, json.Unmarshal([]byte(text), &record))
-		assert.Equal(t, limitReset.Format(time.RFC3339), record["wait_until"], "the wait ends at the reset that the pool read gave")
-		limit, isObject := record["limit"].(map[string]any) // the decoded JSON object of the limit
-		require.True(t, isObject)
-		assert.Equal(t, limitReset.Format(time.RFC3339), limit["resets_at"], "the recorded limit holds the read reset time, as if the agent gave it")
-	}
+	record := firstLimitRecord(t, steps)
+	assert.Equal(t, limitReset.Format(time.RFC3339), record["wait_until"], "the wait ends at the reset that the pool read gave")
+	limit, isObject := record["limit"].(map[string]any) // the decoded JSON object of the limit
+	require.True(t, isObject)
+	assert.Equal(t, limitReset.Format(time.RFC3339), limit["resets_at"], "the recorded limit holds the read reset time, as if the agent gave it")
 }
 
 func TestRateLimit_TwoLimitsInARowWithAResetInThePastFailTheStep(t *testing.T) {
@@ -875,6 +864,39 @@ func TestRateLimit_ARestartDuringTheWaitResumesTheSameSessionWithTheRecordedNote
 	assert.Equal(t, note, requests[1].Lost.Note, "the rerun gets the note that the limit step recorded")
 }
 
+func TestRateLimit_ACommitDuringTheWaitStaysOutOfTheRecordedNoteOfTheRerun(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-1500*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), exited)
+
+	first := h.engine(t)
+	done := runInBackground(first, testItem)
+
+	waitForTheSleep(t, first)
+	require.NoError(t, first.Shutdown())
+	<-done
+	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
+
+	// A commit lands in the item folder after the limit step recorded the note.
+	commitIn(t, h.trees.dir, "late.txt")
+
+	h.engine(t)
+	client := h.client(t, testVersion)
+
+	eventually(t, func() bool {
+		steps, err := client.Steps(testRun)
+
+		return err == nil && steps.State == runDone
+	})
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[1].Lost)
+	assert.Contains(t, requests[1].Lost.Note, limitSentence)
+	assert.NotContains(t, requests[1].Lost.Note, "late.txt", "the replay reads the note that the limit step recorded and reads no new diff")
+}
+
 func TestRateLimit_ASecondLimitResumesTheSessionOfTheSecondRunWithThePromptOfTheTry(t *testing.T) {
 	t.Parallel()
 
@@ -1008,6 +1030,10 @@ func TestRateLimit_ALimitRecordWithoutANoteDecodesAndAPhaseWithoutLimitedDecodes
 	rerun, err := json.Marshal(PhaseInput{Item: "i", Limited: &LostRun{Session: "s", Note: "n", Continue: "c"}})
 	require.NoError(t, err)
 	assert.Contains(t, string(rerun), `"limited":{"session":"s","note":"n","continue":"c"}`)
+
+	out, err := json.Marshal(PhaseOutput{Outcome: agent.OutcomeExited})
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), `"resume_of"`, "a run that was given no session to resume keeps the form of its phase output")
 }
 
 func TestLimitNote_NamesTheLimitAndTheLoginAndQuotesTheDiffSummary(t *testing.T) {
