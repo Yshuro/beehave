@@ -79,6 +79,77 @@ func TestBatchGate_ASecondProvenLossInOneCallEndsTheCallWithAHostCauseAndBlamesN
 	assert.EqualValues(t, 2, statusJSONOf(t, rig.h, testRun)[hostLossesKey], "the count is read from the status")
 }
 
+// splitLossBatch is a lost batch rig over the members 1, 2 and 3, whose gate loses the waits listed. Item 2 is red, so the gate of the union of
+// the three fails and the runner gates the parts: wait 1 is the union, wait 2 its rerun, and wait 3 the gate of the first part.
+func splitLossBatch(t *testing.T, lose ...int) (*batchRig, *upHosts, string) {
+	t.Helper()
+
+	rig, hosts := lostBatchRig(t, 0)
+	rig.gate.loseAt = lose
+	hosts.proofs = []model.LostProof{{Kind: model.LostStopped}, {Kind: model.LostGone}}
+
+	return rig, hosts, writeFlow(t, bodyFlow("host_up(name = \"start\", host = \"gpu-b\")\n"+rig.call("1 2 3", "")))
+}
+
+// requireTwoLossesOfTheCall checks that a call whose gates lost two jobs with a proof, the first job-1 and the second job-3, ended with a host cause
+// that names both proofs, and that no member was blamed or landed. It reads the text of the error: a run that a restart resumed returns its error as text.
+func requireTwoLossesOfTheCall(t *testing.T, rig *batchRig, err error) {
+	t.Helper()
+
+	require.ErrorContains(t, err, batch.ErrGateVoid.Error())
+	assert.Contains(t, err.Error(), "the host lost two gate jobs of this batch: ", "the cause is the call, not one commit")
+	assert.Contains(t, err.Error(), "the gate job job-1 was lost on gpu-b and the proof is stopped", "the error names the first proof, of the gate of the union")
+	assert.Contains(t, err.Error(), "the gate job job-3 was lost on gpu-b and the proof is gone", "the error names the second proof, of a gate of a part")
+	assert.Contains(t, err.Error(), "No member is blamed")
+	assert.Empty(t, rig.merger.landed(), "no member lands")
+	assert.Empty(t, rig.h.commands.ran(), "the call has no result")
+	assert.Equal(t, 3, rig.gate.submitted(), "the second loss of the call ends it: no rerun of the part")
+}
+
+func TestBatchGate_TwoProvenLossesOnTwoGatesOfOneCallEndTheCallAndBlameNoMember(t *testing.T) {
+	t.Parallel()
+
+	rig, hosts, file := splitLossBatch(t, 1, 3)
+	engine := rig.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, file)
+
+	require.ErrorIs(t, err, batch.ErrGateVoid)
+	requireTwoLossesOfTheCall(t, rig, err)
+	assert.Equal(t, []string{"gpu-b/job-1", "gpu-b/job-3"}, hosts.proved)
+	assert.Subset(t, stepNamesOf(t, engine, testRun), []string{"batch:b.gate#1/host-loss", "batch:b.gate#2/host-loss"}, "each loss is a step of the item run")
+	assert.EqualValues(t, 2, statusJSONOf(t, rig.h, testRun)[hostLossesKey], "the count is read from the status")
+}
+
+func TestBatchGate_ARestartAfterTheFirstProvenLossOfACallKeepsItInTheCount(t *testing.T) {
+	t.Parallel()
+
+	// The first engine stops in wait 3, the gate of the first part, after the loss of the union was proven and recorded.
+	// The restart waits on the recorded job-3 again, as wait 4, which is lost too.
+	rig, hosts, file := splitLossBatch(t, 1, 4)
+	rig.gate.started, rig.gate.blockAt = make(chan struct{}, 1), 3
+
+	stopCtx, stop := context.WithCancel(t.Context())
+	first, err := NewEngine(stopCtx, rig.h.opts, rig.deps())
+	require.NoError(t, err)
+	require.NoError(t, first.Launch())
+
+	ended := runInBackground2(first, file)
+
+	<-rig.gate.started
+	stop()
+	require.NoError(t, first.Shutdown())
+	<-ended
+
+	require.Equal(t, []string{"gpu-b/job-1"}, hosts.proved, "the first engine proved the loss of the union")
+
+	outcome := <-runInBackground2(rig.engine(t), file)
+
+	requireTwoLossesOfTheCall(t, rig, outcome.err)
+	assert.Equal(t, []string{"gpu-b/job-1", "gpu-b/job-3"}, hosts.proved, "the restart reads the recorded first proof and reads only the new one")
+	assert.Equal(t, []GateJob{{ID: "job-1"}, {ID: "job-2"}, {ID: "job-3"}, {ID: "job-3"}}, rig.gate.waitedOn(), "the restart waits on the recorded job of the part")
+}
+
 func TestBatchGate_TheHostJobIsRecordedBeforeTheGateWaits(t *testing.T) {
 	t.Parallel()
 

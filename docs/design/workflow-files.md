@@ -496,7 +496,7 @@ The project gate of the union is two steps in its gate run: `batch_gate:job` che
 
 - When the wait ends as lost, the gate run waits for a proof as the `gate` call does, and a cancel of the run during that wait reads the proof once more. See "The wait for a proof" in [hosts.md](hosts.md). With no proof at `host.lost_job_wait`, the item run asks the owner.
 - After a proof, the item run records the loss as the step `batch:<name>.gate#<n>/host-loss`, then gates the same commit once more. The rerun records its own loss as `batch:<name>.gate#<n>@2/host-loss`. The batch counts one gate in `gates`.
-- A second proven loss in one call fails the call with "the gate gave no result". The error names the host and both proofs. No member is rejected or deferred. The call returns no result, so `beehave status <run id> --json` holds the count.
+- A second proven loss in one call fails the call with "the gate gave no result". The count is over every gate of the call: the rerun of the same commit, or the gate of a part after a split. A restart keeps it, because each loss is a recorded step. The error names the host and both proofs. No member is rejected or deferred. The call returns no result, so `beehave status <run id> --json` holds the count.
 
 #### Checks after the batch lands
 

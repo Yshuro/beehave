@@ -72,15 +72,15 @@ func (s *script) batchMerge(b *starlark.Builtin, args starlark.Tuple, kwargs []s
 		return nil, err
 	}
 
-	losses := []hostLoss{}
-	deps := batch.Deps{Git: git, Gate: batchGate{s: s, run: call.gateRun, losses: &losses}, Base: &batchBase{s: s, call: call}, Steps: stepRecorder{s: s, call: call.name}, Name: call.name}
+	losses := &callLosses{}
+	deps := batch.Deps{Git: git, Gate: batchGate{s: s, run: call.gateRun, losses: losses}, Base: &batchBase{s: s, call: call}, Steps: stepRecorder{s: s, call: call.name}, Name: call.name}
 
 	done, err := batch.Run(s.ctx, deps, call.members)
 	if err != nil {
 		return nil, fmt.Errorf("batch_merge %q: %w", call.name, err)
 	}
 
-	return s.batchOutcome(call, done, losses)
+	return s.batchOutcome(call, done, losses.records)
 }
 
 // batchRefusal asks whether the gate of the call may run on this machine. It is the first recorded step of the call: a fresh call is refused
@@ -337,21 +337,27 @@ func (r stepRecorder) Step(_ context.Context, name string, run func() ([]byte, e
 }
 
 // batchGate gates a union commit: it puts the commit in the worktree of the item, then runs the project gate or the program of gate_run.
-// losses holds the record of each lost job of the call, in order, for the result of batch_merge. A replay rebuilds it from the recorded steps.
+// losses holds the proven losses of the whole call, over every gate of it.
 type batchGate struct {
 	s      *script
 	run    []string
-	losses *[]hostLoss
+	losses *callLosses
+}
+
+// callLosses holds each lost gate job of one batch_merge call that has a proof, in order, and its record for the result of batch_merge.
+// The runner gates one union at a time, and a replay calls the gates again in the same order and reads each recorded <call>/host-loss step,
+// so a restart rebuilds the same list and keeps the count of the call.
+type callLosses struct {
+	jobs    []LostJob
+	records []hostLoss
 }
 
 // Run queues the checkout and the gate on the exclusive queue, so no merge of the repository starts while the batch gate runs.
 // A gate whose job was lost and has a proof is recorded in the item run, then runs once more on the same commit, so the verdict that never came
-// is replaced and the batch counts one gate. A second proven loss in one call is a void outcome on the tree of the union: the runner ends the call
-// with ErrGateVoid and blames no member.
+// is replaced and the batch counts one gate. A second proven loss in one call, on this gate or on an earlier gate of the call, is a void outcome
+// on the tree of the union: the runner ends the call with ErrGateVoid and blames no member.
 func (g batchGate) Run(ctx context.Context, in batch.GateInput) (batch.GateOutcome, error) {
 	queued := ExclusiveInput{Kind: kindBatchGate, Project: g.s.in.Project, Item: g.s.in.Item, BuildHost: g.s.hostChosen, Commit: in.Commit, GateRun: g.run}
-
-	var proven []LostJob
 
 	for run := 1; ; run++ {
 		ran, err := g.s.e.queueExclusive(ctx, queued)
@@ -359,19 +365,18 @@ func (g batchGate) Run(ctx context.Context, in batch.GateInput) (batch.GateOutco
 			return ran.Batch, err
 		}
 
-		lost, err := g.loss(queued, gateRunName(in.Step, run), *ran.Lost)
-		if err != nil {
+		if err := g.loss(queued, gateRunName(in.Step, run), *ran.Lost); err != nil {
 			return batch.GateOutcome{}, err
 		}
 
-		if proven = append(proven, lost); len(proven) == lostGateRuns {
+		if proven := g.losses.jobs; len(proven) == lostJobsOfACall {
 			return batch.GateOutcome{Tree: in.Tree, Void: twoLosses(proven[0], proven[1])}, nil
 		}
 	}
 }
 
-// lostGateRuns is the number of proven losses of one batch gate that end the call: the first loss runs the gate again, and the second ends it.
-const lostGateRuns = 2
+// lostJobsOfACall is the number of proven losses of one batch_merge call that end the call: the first loss runs its gate again, and the second ends the call.
+const lostJobsOfACall = 2
 
 // gateRunName names the records of run number n of the batch gate of the step: the step itself for the first run, and step@n for a rerun.
 func gateRunName(step string, n int) string {
@@ -382,21 +387,23 @@ func gateRunName(step string, n int) string {
 	return step + readSeparator + strconv.Itoa(n)
 }
 
-// loss waits for the proof of a lost job of the batch gate, in the item run, records it as the step <call>/host-loss and keeps the record for the result.
-func (g batchGate) loss(in ExclusiveInput, call string, lost LostJob) (LostJob, error) {
+// loss waits for the proof of a lost job of the batch gate, in the item run, records it as the step <call>/host-loss and keeps the job and the record
+// in the losses of the call.
+func (g batchGate) loss(in ExclusiveInput, call string, lost LostJob) error {
 	proven, record, err := g.s.e.provenLoss(g.s.ctx, in, call, lost)
 	if err != nil {
-		return proven, fmt.Errorf("the batch gate lost its job: %w", err)
+		return fmt.Errorf("the batch gate lost its job: %w", err)
 	}
 
-	*g.losses = append(*g.losses, record)
+	g.losses.jobs = append(g.losses.jobs, proven)
+	g.losses.records = append(g.losses.records, record)
 
-	return proven, nil
+	return nil
 }
 
-// twoLosses is the reason of a batch gate that lost its job twice on one commit. It names the host and the proof of each job.
+// twoLosses is the reason of a batch_merge call whose gates lost two jobs with a proof. It names the host and the proof of each job.
 func twoLosses(first, second LostJob) string {
-	return fmt.Sprintf("the host lost the job of the gate of this commit twice: the gate job %s was lost on %s and the proof is %s; the gate job %s was lost on %s and the proof is %s",
+	return fmt.Sprintf("the host lost two gate jobs of this batch: the gate job %s was lost on %s and the proof is %s; the gate job %s was lost on %s and the proof is %s",
 		first.Job, first.Host, first.Proof.Kind, second.Job, second.Host, second.Proof.Kind)
 }
 

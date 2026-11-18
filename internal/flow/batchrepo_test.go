@@ -284,9 +284,12 @@ type treeGate struct {
 	submits atomic.Int32
 	// lose is the number of the first waits that end as lost. jobs are the host jobs that Run was given, in order.
 	lose int
-	jobs []GateJob
-	// started, when set, gets one signal from the first wait, which then blocks until its context ends.
+	// loseAt lists more waits that end as lost, by their number from 1.
+	loseAt []int
+	jobs   []GateJob
+	// started, when set, gets one signal from wait number blockAt (the first wait when blockAt is 0), which then blocks until its context ends.
 	started chan struct{}
+	blockAt int
 }
 
 func (g *treeGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
@@ -306,6 +309,11 @@ func (g *treeGate) waitedOn() []GateJob {
 	return slices.Clone(g.jobs)
 }
 
+// loses says whether wait number n, from 1, ends as lost.
+func (g *treeGate) loses(n int) bool {
+	return n <= g.lose || slices.Contains(g.loseAt, n)
+}
+
 func (g *treeGate) Run(ctx context.Context, _, _, cluster string, job GateJob) (GateResult, error) {
 	if job.ID == "" {
 		g.submits.Add(1)
@@ -314,10 +322,11 @@ func (g *treeGate) Run(ctx context.Context, _, _, cluster string, job GateJob) (
 	g.mu.Lock()
 	g.hosts = append(g.hosts, cluster)
 	g.jobs = append(g.jobs, job)
-	wait, lost := len(g.jobs), len(g.jobs) <= g.lose
+	wait := len(g.jobs)
+	lost := g.loses(wait)
 	g.mu.Unlock()
 
-	if wait == 1 && g.started != nil {
+	if wait == max(g.blockAt, 1) && g.started != nil {
 		g.started <- struct{}{}
 		<-ctx.Done()
 
