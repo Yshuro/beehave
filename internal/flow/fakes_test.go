@@ -1063,6 +1063,55 @@ func eventually(t *testing.T, check func() bool) {
 	waitOn(t, waiting[struct{}]{what: "a condition of the test", read: func() (struct{}, bool, error) { return struct{}{}, check(), nil }})
 }
 
+// condition is the fact that check returns true. The test reads it with waitOn.
+func condition(check func() bool) waiting[struct{}] {
+	return waiting[struct{}]{what: "a condition of the test", read: func() (struct{}, bool, error) { return struct{}{}, check(), nil }}
+}
+
+// windowsEnded counts the receive windows of the run that have ended: each one is a DBOS.recv step, recorded when its receive ends. A test that expects no answer waits for a count and does not sleep.
+func (r *runRef) windowsEnded() (int, error) {
+	steps, err := dbos.GetWorkflowSteps(r.flow, r.id)
+	if err != nil {
+		return 0, err
+	}
+
+	return len(slices.DeleteFunc(steps, func(s dbos.StepInfo) bool { return s.StepName != "DBOS.recv" })), nil
+}
+
+// windowsEndedBy is the fact that the run has ended at least count receive windows. The run must still be alive: the wait fails when the run ends or parks first.
+func windowsEndedBy(run *runRef, count int) waiting[struct{}] {
+	return waiting[struct{}]{what: fmt.Sprintf("%d receive windows of the run to end", count), run: run, read: func() (struct{}, bool, error) {
+		ended, err := run.windowsEnded()
+
+		return struct{}{}, ended >= count, err
+	}}
+}
+
+// inASleep is the fact that the run has started a durable sleep. The sleep records its step when it starts, so a cancel sent after this lands inside the sleep and not in the step before it.
+func inASleep(t *testing.T, engine *Engine) waiting[struct{}] {
+	t.Helper()
+
+	return waiting[struct{}]{what: "the run to start a durable sleep", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		steps, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
+
+		return struct{}{}, err == nil && slices.ContainsFunc(steps, func(s dbos.StepInfo) bool { return s.StepName == "DBOS.sleep" }), nil
+	}}
+}
+
+// ownerAsks is the fact that the open run shows its question. The last verdict is recorded before the run asks, so a wait on the verdict count alone can read the run in between.
+func ownerAsks(t *testing.T, h *harness) waiting[struct{}] {
+	t.Helper()
+
+	client := h.client(t, testVersion)
+	read := newStatusRead(client)
+
+	return waiting[struct{}]{what: "the open run to show a question", run: runOfClient(t, client), last: read.last, read: func() (struct{}, bool, error) {
+		infos := read.next()
+
+		return struct{}{}, read.err == nil && len(infos) == 1 && infos[0].Question != "", nil
+	}}
+}
+
 // waitForTheSleep waits until the run has started a durable sleep. The sleep records its step when it starts, so a cancel sent after this lands inside the sleep and not in the step before it.
 func waitForTheSleep(t *testing.T, engine *Engine) {
 	t.Helper()
