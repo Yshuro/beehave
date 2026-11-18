@@ -1,7 +1,7 @@
 # The remediation workflow: plan, implement, then review and fix until the gate passes and the review approves.
 # Every method value is in this file, in the review loop it loads, or in a prompt next to it. Go holds none of it.
 
-load("@beehave//review_fix.star", "candidates_spent", "capped", "review_fix")
+load("@beehave//review_fix.star", "HOST_LOSS_LIMIT", "candidates_spent", "capped", "is_host_void", "review_fix")
 
 # A pull request is stale after this many hours with no push, comment, review or answer from the author. The same values are the idle threshold and the grace period that the take-over passes to the tool as flags.
 IDLE_HOURS = "1"
@@ -369,9 +369,10 @@ def land(approved, project, round_settings, n):
     """Lands the approved items of a pass as one batch named round-land-<n>: one gate run on the union of their heads, and a split of the union when the gate is red.
     Each entry of `approved` has an item id, the full SHA that the review approved, and the verdict of the child run (`approved`). Each member of the batch carries that verdict, so our own pull request
     lands only on the approval of its own review, and the approval of one member never reaches another. The setting vars.round.merge, the stops before the work and the guards are those of the pipeline of one item.
-    The branch of each pull request has the id of its item. Each item that the batch merged is recorded with record_merge."""
+    The branch of each pull request has the id of its item. Each item that the batch merged is recorded with record_merge.
+    Returns the host_losses of the batch call, the count of the engine for the tree of the run. It is 0 when the pass lands nothing."""
     if not round_settings["merge"]:
-        return
+        return 0
 
     base = round_settings["base"]
     prs = []
@@ -400,7 +401,7 @@ def land(approved, project, round_settings, n):
         item_status(name = "stop-hold-" + skipped.item, id = skipped.item, status = "hold")
 
     if len(prs) == 0:
-        return
+        return 0
 
     out = batch_merge(
         name = "round-land-%d" % n,
@@ -435,6 +436,8 @@ def land(approved, project, round_settings, n):
 
     if len(out.findings) > 0:
         fail("REFUSE: the batch landed, but the issues are not as they must be. Fix the state of each issue by hand:\n" + "\n".join(out.findings))
+
+    return out.host_losses
 
 def take_over(item, pr, author, project, round_settings):
     """Takes over the pull request `pr` of somebody else, in this order: the review, the notice, the grace period, the take.
@@ -539,7 +542,12 @@ SYNC_REASONS = {
     "sync-refused": "The forge refused the merge for the workflow permission. Merge the trunk into the round branch by hand.",
     "sync-red": "The gate failed on the head of the sync branch. Read the gate of the sync pull request.",
     "sync-review": "The review did not approve the sync pull request. Its findings are in the reply of the step sync-review of the last pass: beehave status with the run id of the round lists the steps.",
+    "host-loss": "The build host lost gate jobs, and no gate gave a verdict about the code. Check the host and its link.",
 }
+
+def sync_end(reason, host_losses = 0):
+    """The end of a sync: the reason that holds the round, or an empty text, and the highest host_losses that a gate of the sync read."""
+    return struct(reason = reason, host_losses = host_losses)
 
 def sync_check(name, run):
     """Runs one check of `remedy sync` as the command step `name` and returns the fields of its line, with the state set.
@@ -562,14 +570,28 @@ def sync_check(name, run):
 
 def sync_land(item, project, round_settings, line, n):
     """Puts the folder of the round at the head of a synced line, runs the gate command on it, reviews the sync pull request and lands it pinned to that head.
-    The gate has no base, so it runs the gate command only: no new-tests check and no mutation step. Returns sync-red or sync-review when the pass must end, else an empty text."""
+    The gate has no base, so it runs the gate command only: no new-tests check and no mutation step.
+    A void gate with a host cause runs again as sync-gate-<n>-host-<k>, until the engine counts HOST_LOSS_LIMIT host losses in the tree of the run.
+    Returns sync_end with the reason sync-red, sync-review or host-loss when the pass must end, else an empty reason."""
     head = line["head"]
     for step, run in [("sync-fetch-%d" % n, ["git", "fetch", "origin", line["branch"]]), ("sync-checkout-%d" % n, ["git", "checkout", "--detach", head])]:
         if command(name = step, run = run).rc != 0:
             fail("REFUSE: the step %s could not put the folder of the round at the head %s of %s. Check the folder of the round, then run beehave resume %s." % (step, head, line["branch"], item.id))
 
-    if not gate(name = "sync-gate-%d" % n, head = head).passed:
-        return "sync-red"
+    check = gate(name = "sync-gate-%d" % n, head = head)
+    losses = check.host_losses
+    for k in range(1, HOST_LOSS_LIMIT + 1):
+        if not is_host_void(check) or check.host_losses >= HOST_LOSS_LIMIT:
+            break
+
+        check = gate(name = "sync-gate-%d-host-%d" % (n, k), head = head)
+        losses = max(losses, check.host_losses)
+
+    if is_host_void(check):
+        return sync_end("host-loss", losses)
+
+    if not check.passed:
+        return sync_end("sync-red", losses)
 
     review = agent(
         name = "sync-review-%d" % n,
@@ -587,16 +609,16 @@ def sync_land(item, project, round_settings, line, n):
     )
     capped(review, "sync-review", item)
     if review.verdict != "approve":
-        return "sync-review"
+        return sync_end("sync-review", losses)
 
     landed = line_fields(command(name = "sync-land-%d" % n, run = ["remedy", "sync", "land", "--pr", line["pr"], "--head", head, "--base-tip", line["base_tip"]]).stdout)
     if landed.get("state", "") not in SYNC_LAND_STATES:
         fail("REFUSE: the landing of the sync pull request %s gave the fields %r. Read the pull request, then run beehave resume %s." % (line["pr"], landed, item.id))
 
-    return ""
+    return sync_end("", losses)
 
 def sync_trunk(item, project, round_settings, n):
-    """Merges a moved trunk into the round branch at the start of pass `n`, before its queue audit. Returns a reason of SYNC_REASONS that ends the pass, or an empty text.
+    """Merges a moved trunk into the round branch at the start of pass `n`, before its queue audit. Returns sync_end: a reason of SYNC_REASONS that ends the pass, or an empty reason, and the host_losses that its gate read.
     A conflict gets one agent step, sync-resolve-<n>, on the sync branch, and then one more check. The tool merges the forge side and writes no checkout."""
     run = ["remedy", "sync", "--base", round_settings["base"], "--trunk", project.base_branch]
     line = sync_check("sync-%d" % n, run)
@@ -616,20 +638,30 @@ def sync_trunk(item, project, round_settings, n):
 
     state = line["state"]
     if state == "conflict":
-        return "sync-conflict"
+        return sync_end("sync-conflict")
 
     if state == "refused":
-        return "sync-refused"
+        return sync_end("sync-refused")
 
     if state == "synced":
         return sync_land(item, project, round_settings, line, n)
 
+    return sync_end("")
+
+def host_hold(seen, acked):
+    """Returns host-loss when the engine counted HOST_LOSS_LIMIT host losses or more in the tree of the run, and a loss came after the last answer of the owner. Else an empty text."""
+    if seen >= HOST_LOSS_LIMIT and seen > acked:
+        return "host-loss"
+
     return ""
 
-def round_question(pr, reason):
-    """The question of round-wait: the integration pull request `pr`, and the reason of a sync that ended the pass when there is one."""
+def round_question(pr, reason, seen):
+    """The question of round-wait: the integration pull request `pr`, the reason that held the round when there is one, and `seen`, the host losses that the round read."""
     if reason == "":
         return "The round has no item it can move. Read the integration pull request %d and answer." % pr
+
+    if reason == "host-loss":
+        return "The engine counted %d host losses in this round. %s Then answer CONTINUE to go on. The round asks again after a newer loss." % (seen, SYNC_REASONS[reason])
 
     return "The round did not merge the trunk into the round branch: %s. %s Then answer CONTINUE to check the trunk again." % (reason, SYNC_REASONS[reason])
 
@@ -693,6 +725,8 @@ def round(item):
     """The round: one entry for the whole round, with one child run (the entry pipeline) for each item. `item` is the round itself, an id that no tracker row uses.
     A pass is sync-<n> (sync_trunk), queue-audit-<n>, round-queue-<n>, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
     A sync that ends with a reason holds the round: the later passes start no sync and no item, and only gather the open runs. With none open, the round waits in round-wait with the reason.
+    The host losses hold it too. `seen` is the highest host_losses that a child result, the landing or the sync gate gave: the count of the engine for the tree of the run, and no count of the round.
+    At HOST_LOSS_LIMIT or more, and above `acked`, the reason is host-loss. CONTINUE sets `acked` to `seen`, so the round asks again only after a newer loss.
     It stops when no ready row can move and no child run is open: then it runs round-integration and waits for the owner in round-wait. CONTINUE starts another pass, which checks the trunk again.
     A STOP or the timeout returns the state waiting with the reason, an empty text when no sync held the round. When the integration pull request is merged and vars.round.next_base is set, the round cuts the next round."""
     project = facts()
@@ -705,10 +739,17 @@ def round(item):
     runs = []
     approved = []
     held = ""
+    seen = 0
+    acked = 0
 
     for n in range(1, MAX_PASSES + 1):
         if held == "":
-            held = sync_trunk(item, project, round_settings, n)
+            held = host_hold(seen, acked)
+
+        if held == "":
+            synced = sync_trunk(item, project, round_settings, n)
+            held = synced.reason
+            seen = max(seen, synced.host_losses)
 
         if held == "":
             queue_audit(item, project, round_settings, n)
@@ -722,11 +763,13 @@ def round(item):
             ended_items = [e.item for e in ended]
             runs = [r for r in runs if r.item not in ended_items]
             for result in ended:
-                if result.ok and result.value != None and result.value["approved"]:
-                    approved.append(struct(item = result.item, head = result.value["head"], approved = result.value["approved"]))
+                if result.ok and result.value != None:
+                    seen = max(seen, result.value["host_losses"])
+                    if result.value["approved"]:
+                        approved.append(struct(item = result.item, head = result.value["head"], approved = result.value["approved"]))
 
             if len(approved) > 0:
-                land(approved, project, round_settings, n)
+                seen = max(seen, land(approved, project, round_settings, n))
                 approved = []
 
             continue
@@ -734,7 +777,7 @@ def round(item):
         # No ready row can move and no child run of this round is open.
         integration = round_integration(project, round_settings)
         answer = wait(
-            round_question(integration.pr, held),
+            round_question(integration.pr, held, seen),
             name = "round-wait",
             timeout = "%dh" % round_settings["wait_hours"],
             to = [round_settings["owner"]],
@@ -742,6 +785,9 @@ def round(item):
         )
         if answer.timed_out or answer.answer == "STOP":
             return {"state": "waiting", "base": round_settings["base"], "pr": integration.pr, "reason": held}
+
+        if held == "host-loss":
+            acked = seen
 
         held = ""
 
@@ -776,9 +822,10 @@ def _move_card(project, stage, issue = 0):
         issue = issue,
     )
 
-def item_value(item, head, approved, reason):
-    """The value that a child run returns to the round: the item, the head it reached, whether the review approved it, and why not when it did not."""
-    return {"item": item.id, "head": head, "approved": approved, "reason": reason}
+def item_value(item, head, approved, reason, host_losses):
+    """The value that a child run returns to the round: the item, the head it reached, whether the review approved it, why not when it did not,
+    and the highest host_losses that a gate of the child read."""
+    return {"item": item.id, "head": head, "approved": approved, "reason": reason, "host_losses": host_losses}
 
 def pipeline(item):
     """The child entry: the pipeline of one item. The round starts one child for each item with spawn(entry = "pipeline"). It calls no host builtin.
@@ -795,7 +842,7 @@ def pipeline(item):
     # An item with no pull request yet passes. An open pull request by a login that is not in `own` claims the item: somebody else is on it, and no agent starts.
     intake = preflight(name = "intake", head = "", base = base, hold = "hold", own = {"logins": [round_settings["owner"]]})
     if not intake.ok:
-        return item_value(item, "", False, "stopped")
+        return item_value(item, "", False, "stopped", 0)
 
     scope = lane_scope(round_settings)
 
@@ -875,14 +922,18 @@ def pipeline(item):
     loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, checks = [mutants])
 
     if loop.stopped:
-        return item_value(item, "", False, "stopped")
+        return item_value(item, "", False, "stopped", loop.host_losses)
+
+    # The limit of host losses stopped the loop. The host is at fault and not the item, so the item gets no comment and no hold status, and a later run starts it again.
+    if loop.host_lost:
+        return item_value(item, loop.head, False, "host-loss", loop.host_losses)
 
     # A reject verdict ends the loop with no fix round. The item gets the text of the review as the reason and the hold status.
     # A scoped review can reject before the first gate, so an item that the loop holds reports loop.head, the commit that the loop judged last.
     if loop.rejected:
         item_comment(name = "rejected", id = item.id, key = "rejected", text = loop.review.text, forbid_text = ATTRIBUTION)
         item_status(name = "hold-rejected", id = item.id, status = "hold")
-        return item_value(item, loop.head, False, "rejected")
+        return item_value(item, loop.head, False, "rejected", loop.host_losses)
 
     # A rise of the regression count, from the report of the plan to the report of any full review, holds the item with the reason. So does a count that is unknown in either report.
     # The loop stops at the review that shows the rise: a held item gets no more fix lane, no owner ruling and no settle step. Nothing merges.
@@ -890,7 +941,7 @@ def pipeline(item):
     if loop.held != "":
         item_comment(name = "regression-rise", id = item.id, key = "regression-rise", text = loop.held, forbid_text = ATTRIBUTION)
         item_status(name = "hold-regression-rise", id = item.id, status = "hold")
-        return item_value(item, loop.head, False, "regression-rise")
+        return item_value(item, loop.head, False, "regression-rise", loop.host_losses)
 
     # After two fixes on one mechanism, a design step decides whether the mechanism should exist. A replace or a delete ends the loop:
     # the item gets the decision and the reason as the comment and the hold status, and a person rules on it.
@@ -903,7 +954,7 @@ def pipeline(item):
             forbid_text = ATTRIBUTION,
         )
         item_status(name = "hold-design", id = item.id, status = "hold")
-        return item_value(item, loop.head, False, "design")
+        return item_value(item, loop.head, False, "design", loop.host_losses)
 
     # After the last round, no fix lane starts. A person rules on each open finding, and the settle step applies the ruling once: it is the only edit after the last round, no review follows it, and nothing merges.
     if loop.exhausted:
@@ -915,7 +966,7 @@ def pipeline(item):
         # The ruling can take days. The settle agent is a dispatch like the others, so the pull request is read again first, with the head that the loop judged last.
         # A run that got no candidate has no gate: its head is the head of the implementer.
         if not preflight(name = "before-settle", id = item.id, head = loop.head, **guard).ok:
-            return item_value(item, loop.head, False, "stopped")
+            return item_value(item, loop.head, False, "stopped", loop.host_losses)
 
         settle = agent(
             name = "settle",
@@ -932,7 +983,7 @@ def pipeline(item):
         # Each finding that the owner parked stays open after the last round: it gets its own issue, so it is not lost with the pull request.
         file_parked(settle.parked)
 
-        return item_value(item, loop.head, False, "settled")
+        return item_value(item, loop.head, False, "settled", loop.host_losses)
 
     # The child never merges. It returns the head that the gate ran on and the verdict of the review, and the round lands every approved head of a pass in one batch (land).
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.
@@ -940,4 +991,4 @@ def pipeline(item):
     if missing != "":
         fail(missing)
 
-    return item_value(item, loop.gate.head, loop.review.verdict == "approve", "" if loop.review.verdict == "approve" else loop.review.verdict)
+    return item_value(item, loop.gate.head, loop.review.verdict == "approve", "" if loop.review.verdict == "approve" else loop.review.verdict, loop.host_losses)
