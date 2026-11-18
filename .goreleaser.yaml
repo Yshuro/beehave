@@ -51,7 +51,9 @@ homebrew_casks:
       owner: tobocop2
       name: homebrew-tap
       branch: main
-      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+      git:
+        url: git@github.com:tobocop2/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_SSH_KEY }}"
     binaries:
       - beehave
       - remedy
