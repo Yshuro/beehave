@@ -128,7 +128,7 @@ func itemsStartOrder(t *testing.T, severities map[string]string) []string {
 
 	assert.True(t, waitUntil(func() bool { return started(4) }))
 	close(release)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 
 	mu.Lock()
 	defer mu.Unlock()

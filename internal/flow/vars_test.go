@@ -23,7 +23,7 @@ func TestFacts_TheProjectVarsComeBackAsWritten(t *testing.T) {
 	h.facts = func(project string) model.Project { return model.Project{Name: project, Vars: projectVars()} }
 	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"V=%r\" % f.vars)\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, `V={"a": 1, "b": ["x"], "c": {"d": True}, "e": 1.5}`)
 }
@@ -34,7 +34,7 @@ func TestFacts_AProjectWithNoVarsGetsAnEmptyDict(t *testing.T) {
 	h := newHarness(t)
 	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"V=%r/%s\" % (f.vars, type(f.vars)))\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "V={}/dict")
 }
@@ -46,7 +46,7 @@ func TestFacts_TheVarsOfTheFactsAreFrozen(t *testing.T) {
 	h.facts = func(project string) model.Project { return model.Project{Name: project, Vars: projectVars()} }
 	h.flowIs(t, "def main(item):\n    f = facts()\n    f.vars[\"b\"].append(\"y\")\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "frozen")
 }
@@ -101,7 +101,7 @@ func TestFacts_TheVarsKeepTheirNumberTypesOnAReplayFromTheRecordedFacts(t *testi
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 	require.Len(t, h.commands.requests, 2)

@@ -260,7 +260,7 @@ func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing
 	})
 
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 
 	assert.Equal(t, []string{
 		"agent:a#1/budget1.0", "agent:b#2/budget1.0",
@@ -308,7 +308,7 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 	handle, err := dbos.RunWorkflow(engine.ctx, hold, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(testRun))
 	require.NoError(t, err)
 
-	cancel := <-ends
+	cancel := receive(t, ends)
 
 	waitForTheSleep(t, engine)
 	cancel()

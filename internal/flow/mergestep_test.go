@@ -191,7 +191,7 @@ func TestMergeStep_StatusShowsOwnerMergeWhileTheStepWaitsAndTheFinalStateAfterIt
 		return err == nil && len(rows) == 1 && rows[0].Merge == "owner_merge"
 	})
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	rows, err := client.Status()
 	require.NoError(t, err)

@@ -98,7 +98,7 @@ func TestClient_StatusListsARunThatAsksNoQuestion(t *testing.T) {
 	assert.Empty(t, infos[0].Question)
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestRunCancelled_SpellsTheWordOfTheAgentOutcome(t *testing.T) {

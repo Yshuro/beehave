@@ -200,7 +200,7 @@ func TestHostLoss_AResumeAfterTheRecordKeepsTheRecordedCountAndWalksNoTree(t *te
 	handle, err := dbos.RunWorkflow(engine.ctx, loss, ItemInput{Item: testItem, Project: testProject}, dbos.WithWorkflowID(id))
 	require.NoError(t, err)
 
-	_, err = handle.GetResult(dbos.WithHandleTimeout(eventTimeout), dbos.WithHandlePollingInterval(storePoll))
+	_, err = resultOfHandle(t, handle)
 	require.ErrorContains(t, err, "the run stopped after the record of the loss")
 
 	steps, err := dbos.GetWorkflowSteps(engine.ctx, id)
@@ -213,7 +213,7 @@ func TestHostLoss_AResumeAfterTheRecordKeepsTheRecordedCountAndWalksNoTree(t *te
 	resumed, err := dbos.RewindWorkflow[int](engine.ctx, id, dbos.WithRewindStartStep(uint(len(steps))))
 	require.NoError(t, err)
 
-	count, err := resumed.GetResult(dbos.WithHandleTimeout(eventTimeout), dbos.WithHandlePollingInterval(storePoll))
+	count, err := resultOfHandle(t, resumed)
 	require.NoError(t, err, "the replay reads the recorded count, so a tree that cannot be read does not fail it")
 	assert.Equal(t, 1, count, "the replay keeps the count that the step recorded")
 	assert.Zero(t, tree.reads.Load(), "the replay walks no tree")

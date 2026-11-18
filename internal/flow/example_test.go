@@ -545,7 +545,7 @@ func TestExample_SixCandidatesAreTheCapAndTheSixthFullReviewIsTheLast(t *testing
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
-	outcome := <-done
+	outcome := receive(t, done)
 	require.NoError(t, outcome.err)
 
 	// plan, implement, the six candidates, and the settle agent.
@@ -771,7 +771,7 @@ func TestExample_AGateThatIsVoidEveryTimeAsksTheOwnerAndRefusesAfterTheLastAnswe
 		eventually(t, func() bool { return client.Answer(testItem, "run it again") == nil })
 	}
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.ErrorContains(t, outcome.err, "the gate gave no result")
 	require.ErrorContains(t, outcome.err, "tests", "the refusal names the step with no result, also when the report is empty")
@@ -795,7 +795,7 @@ func TestExample_AnAnswerToAVoidGateQuestionRunsTheGateAgainAndAPassGoesToTheRev
 
 	eventually(t, func() bool { return client.Answer(testItem, "run it again") == nil })
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, 4, rig.h.gate.calls, "the answer, which the refusal-free question names, ran the gate again")
 	assert.Equal(t, []string{"opus", "sonnet", "opus", "opus"}, rig.models(), "the scoped review, then the full review of the passed gate")
 }
@@ -827,7 +827,7 @@ func TestExample_AGateWithAFailedStepAndAnUnknownStepIsRedAndStillGetsAFixRound(
 	require.NoError(t, client.Cancel(testItem))
 	rig.h.tick(t)
 
-	err := (<-done).err
+	err := receive(t, done).err
 
 	assert.NotContains(t, fmt.Sprint(err), "the gate gave no result")
 }

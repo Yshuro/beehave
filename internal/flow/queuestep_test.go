@@ -430,7 +430,7 @@ func TestQueue_AReplayReturnsTheRecordedRowsNotAFreshRead(t *testing.T) {
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, []string{"seen 21:ready"}, h.commands.ran(), "the rows recorded before the stop come back, whatever the tracker says now")
 }
 

@@ -71,14 +71,7 @@ func (j *slotJobs) order() []string {
 func (j *slotJobs) nextStart(t *testing.T) string {
 	t.Helper()
 
-	select {
-	case program := <-j.started:
-		return program
-	case <-t.Context().Done():
-		require.FailNow(t, "the test ended before another job started")
-
-		return ""
-	}
+	return waitOn(t, waiting[string]{what: "another job to start", ch: j.started})
 }
 
 // slotFlow is the workflow file of one item: one host command of the program, in the slot class when the class is not empty.
@@ -257,7 +250,7 @@ func TestCommand_AHostJobWaitsForAFreeSlotOfItsClass(t *testing.T) {
 	assert.Equal(t, 1, enqueuedJobs(t, engine), "the second mutation job still waits in its queue")
 
 	jobs.let("m1")
-	require.NoError(t, <-first)
+	require.NoError(t, receive(t, first))
 
 	assert.Equal(t, "m2", jobs.nextStart(t), "the second mutation job starts after the first ends")
 
@@ -270,7 +263,7 @@ func TestCommand_AHostJobWaitsForAFreeSlotOfItsClass(t *testing.T) {
 	endPasses()
 
 	for _, ended := range []<-chan error{second, bench, plain} {
-		require.NoError(t, <-ended)
+		require.NoError(t, receive(t, ended))
 	}
 }
 
@@ -302,7 +295,7 @@ func passesOfClassQueue(t *testing.T, engine *Engine, jobs *slotJobs, host *gran
 		}
 
 		for _, end := range ended {
-			require.NoError(t, <-end)
+			require.NoError(t, receive(t, end))
 		}
 	}
 }
@@ -347,12 +340,12 @@ func TestCommand_ACanceledSlotJobFreesItsSlotAndTheReopenWaitsOnTheQueueOfItsCla
 	assert.Equal(t, 1, entriesOf(jobs.order(), "start m1"), "the reopened job waits: the slot is held by the other job")
 
 	jobs.let("m2")
-	require.NoError(t, <-second)
+	require.NoError(t, receive(t, second))
 
 	assert.Equal(t, "m1", jobs.nextStart(t))
 	jobs.let("m1")
 
-	_, err = joinRun(handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 }
 
@@ -382,12 +375,12 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 	eventually(t, func() bool { return enqueuedJobs(t, first) == 1 })
 
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
-	require.Error(t, <-waiting)
+	require.Error(t, receive(t, ended))
+	require.Error(t, receive(t, waiting))
 
 	second := engineOn(t, h, deps)
 
-	assert.Equal(t, "m1", jobs.nextStart(t), "the job that ran is recovered and runs again")
+	require.Equal(t, "m1", jobs.nextStart(t), "the job that ran is recovered and runs again")
 
 	endPasses := passesOfClassQueue(t, second, jobs, &host, "p1", "p2", "p3")
 	host.Store("box")
@@ -396,7 +389,7 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 
 	jobs.let("m1")
 
-	assert.Equal(t, "m2", jobs.nextStart(t))
+	require.Equal(t, "m2", jobs.nextStart(t))
 	jobs.let("m2")
 	endPasses()
 
@@ -408,7 +401,7 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 		handle, rerr := dbos.RetrieveWorkflow[ItemResult](second.ctx, last.Status.ID)
 		require.NoError(t, rerr)
 
-		_, rerr = joinRun(handle)
+		_, rerr = resultOfHandle(t, handle)
 		require.NoError(t, rerr)
 	}
 

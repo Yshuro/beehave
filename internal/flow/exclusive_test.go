@@ -60,7 +60,7 @@ func TestExclusive_AMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositoryEnds
 		ended <- err
 	})
 
-	<-gated.started
+	receive(t, gated.started)
 
 	group.Go(func() {
 		_, err := engine.RunFile("merge-item", testProject, mergeFile)
@@ -82,8 +82,8 @@ func TestExclusive_AMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositoryEnds
 	}
 
 	group.Wait()
-	require.NoError(t, <-ended)
-	require.NoError(t, <-ended)
+	require.NoError(t, receive(t, ended))
+	require.NoError(t, receive(t, ended))
 	require.Len(t, h.merge.asked, 1)
 	assert.Contains(t, h.merge.asked[0], testProject)
 }
@@ -111,7 +111,7 @@ func TestExclusive_AGateOfOneProjectDoesNotHoldTheMergeOfAnotherProject(t *testi
 		ended <- err
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	go func() {
 		_, err := engine.RunFile("merge-item", "project-b", mergeFile)
@@ -125,8 +125,8 @@ func TestExclusive_AGateOfOneProjectDoesNotHoldTheMergeOfAnotherProject(t *testi
 	}
 
 	close(gated.release)
-	require.NoError(t, <-ended)
-	require.NoError(t, <-ended)
+	require.NoError(t, receive(t, ended))
+	require.NoError(t, receive(t, ended))
 }
 
 type cancelGate struct {
@@ -141,7 +141,7 @@ func (cancelGate) Submit(context.Context, string, string, string, string) (GateJ
 func (g cancelGate) Run(ctx context.Context, _, _, _ string, _ GateJob) (GateResult, error) {
 	if g.runs.Add(1) == 1 {
 		g.started <- struct{}{}
-		<-ctx.Done()
+		hang(ctx.Done())
 
 		return GateResult{}, ctx.Err()
 	}
@@ -170,7 +170,7 @@ func TestExclusive_ACancelWhileTheGateRunsThenAResumeEndsTheItemWithOneMerge(t *
 		ended <- err
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	client := h.client(t, testVersion)
 	require.NoError(t, client.Cancel(testItem))
@@ -214,7 +214,7 @@ func TestExclusive_ABatchMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositor
 		ended <- err
 	})
 
-	<-gated.started
+	receive(t, gated.started)
 
 	group.Go(func() {
 		_, err := engine.RunFile("batch-item", testProject, writeFlow(t, bodyFlow(rig.call("1 3", `gate_run = ["check-all"], `))))
@@ -227,7 +227,7 @@ func TestExclusive_ABatchMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositor
 
 	close(gated.release)
 	group.Wait()
-	require.NoError(t, <-ended)
-	require.NoError(t, <-ended)
+	require.NoError(t, receive(t, ended))
+	require.NoError(t, receive(t, ended))
 	assert.Equal(t, []string{"1", "3"}, rig.merger.landed(), "the batch merged after the gate ended")
 }

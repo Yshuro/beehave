@@ -287,7 +287,7 @@ func TestWalk_AReplayBuildsTheSameStdinAndEnvFromTheRecordedResults(t *testing.T
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 	require.Len(t, h.commands.requests, 2, "the command before the wait ran once")

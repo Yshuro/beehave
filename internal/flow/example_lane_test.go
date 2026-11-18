@@ -90,7 +90,7 @@ func TestExampleLane_APapersLaneSettleThatChangesASourcePathFailsAndNamesIt(t *t
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "fix all"))
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.ErrorContains(t, outcome.err, "src/settled.go")
 }

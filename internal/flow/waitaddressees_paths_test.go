@@ -43,7 +43,7 @@ func TestWait_ArgumentsThatOnlyTheRunCanReadAreRefused(t *testing.T) {
 			harness.flowIs(t, "none = []\nzero = 0\ntwo = 2\n\ndef main(item):\n    wait(question = \"q\", "+tc.call+")\n")
 			engine := harness.engine(t)
 
-			outcome := <-runInBackground(engine, testItem)
+			outcome := receive(t, runInBackground(engine, testItem))
 
 			require.ErrorContains(t, outcome.err, tc.want)
 		})
@@ -115,5 +115,5 @@ func TestWait_AVoiceTheWaitRefusesIsDroppedAndAWindowWithNoVoiceReceivesAgain(t 
 	assert.Empty(t, askedOf(t, client).Heard, "a voice from someone not named counts for nothing")
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }

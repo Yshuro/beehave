@@ -176,7 +176,7 @@ func TestExampleLoop_AStopDuringTheRulingOfTheOwnerStartsNoSettleAgent(t *testin
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err, "a stop is a result and not an error")
 	assert.Equal(t, append([]string{"opus", "sonnet"}, capModels(2)...), rig.models(), "the settle agent never starts")

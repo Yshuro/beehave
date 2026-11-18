@@ -32,14 +32,9 @@ func resumeRunOf(t *testing.T, engine *Engine, client *Client, item string) dbos
 	return handle
 }
 
-// joinRun waits for the result of the resumed run under a deadline.
-func joinRun(handle dbos.WorkflowHandle[ItemResult]) (ItemResult, error) {
-	return handle.GetResult(dbos.WithHandleTimeout(eventTimeout), dbos.WithHandlePollingInterval(storePoll))
-}
-
 // resumeAndJoin resumes the latest run of the test item and waits for that run's own result by its id.
 func resumeAndJoin(t *testing.T, engine *Engine, client *Client) (ItemResult, error) {
 	t.Helper()
 
-	return joinRun(resumeRun(t, engine, client))
+	return resultOfHandle(t, resumeRun(t, engine, client))
 }
