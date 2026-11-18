@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -68,11 +69,8 @@ func TestExclusive_AMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositoryEnds
 
 	waitOn(t, condition(waitsInTheQueue(engine, 1)))
 
-	select {
-	case <-merged:
-		t.Fatal("the merge started while the gate of the same repository was running")
-	default:
-	}
+	// The queue has no recorded poll, so the check spans three polls of the queue. It is a listed wall-time site.
+	require.Never(t, func() bool { return len(merged) > 0 }, 3*storePoll, 100*time.Millisecond, "the merge started while the gate of the same repository was running")
 
 	close(gated.release)
 	receive(t, merged)
@@ -209,8 +207,9 @@ func TestExclusive_ABatchMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositor
 	})
 
 	waitOn(t, condition(waitsInTheQueue(engine, 1)))
-	assert.Empty(t, rig.h.commands.ran(), "the gate of the batch did not start while the gate of the repository ran")
-	assert.Empty(t, rig.merger.landed(), "no member was merged while the gate of the repository ran")
+
+	// The queue has no recorded poll, so the check spans three polls of the queue. It is a listed wall-time site.
+	require.Never(t, func() bool { return len(rig.h.commands.ran()) > 0 || len(rig.merger.landed()) > 0 }, 3*storePoll, 100*time.Millisecond, "the batch started or merged while the gate of the repository ran")
 
 	close(gated.release)
 	group.Wait()

@@ -228,7 +228,7 @@ func TestQueueLoop_ReadyItemsStartInFreeSlotsWhileOneItemLoops(t *testing.T) {
 	}()
 
 	// 22, 23 and 24 pass through the one free slot while 21 still loops.
-	waitOn(t, condition(func() bool { return itemEnded(engine, "22") && itemEnded(engine, "23") && itemEnded(engine, "24") }))
+	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool { return itemEnded(engine, "22") && itemEnded(engine, "23") && itemEnded(engine, "24") }))
 	assert.False(t, itemEnded(engine, "21"), "the item that loops keeps its run open")
 
 	close(loops)

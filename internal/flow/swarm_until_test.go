@@ -86,7 +86,7 @@ func TestGatherUntil_TheDefaultAndAllWaitForEveryRun(t *testing.T) {
 				done <- err
 			}()
 
-			waitOn(t, condition(func() bool { return itemEnded(engine, "21") && itemEnded(engine, "22") }))
+			waitOn(t, conditionOf(runOfEngine(t, engine), func() bool { return itemEnded(engine, "21") && itemEnded(engine, "22") }))
 			time.Sleep(10 * tickInterval)
 			assert.Empty(t, h.commands.ranBy(testItem), "the parent still waits for run 23")
 			close(release)
