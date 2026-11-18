@@ -125,7 +125,7 @@ The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `before_rev
 
 ### Loading files and pinning
 
-A file loads another file with `load("//file.star", "name")` for a file in its own folder, or `load("@beehave//review_fix.star", "review_fix")` for a library in the binary. The library `review_fix.star` holds the review and fix loop of the remediation method as a function. A project that wants another policy copies it into its folder.
+A file loads another file with `load("//file.star", "name")` for a file in its own folder, or `load("@beehave//review_fix.star", "review_fix")` for a library in the binary. The library `review_fix.star` holds the review and fix loop of the remediation method as a function. A project that wants another policy copies it into its folder. The function names no model: the argument `steps` gives the model and the runner of each step, and the arguments `design_after`, `void_reruns`, `void_asks` and `escalate_after` give its limits. The remediation example reads them from `vars.round` (see "The steps and the limits" in `durable-loop.md`).
 
 At the start of a run, the engine pins the SHA-256 of the workflow file and of every file it loads.
 
@@ -817,7 +817,7 @@ The report:
 The library `review_fix.star` does not fit this workflow:
 
 - Its fix step needs an implementer agent and resumes that session.
-- It sets its own model tiers and its own forbidden commands for code.
+- It needs a model for each of its steps, and it sets its own forbidden commands for code.
 - Its loop goes back to one fix step, while the notes come from one agent for each sub-question, and a failed check goes back to the research step of each file that failed.
 
 #### `examples/desk/`

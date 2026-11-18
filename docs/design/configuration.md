@@ -80,6 +80,9 @@ The engine has no round settings. The remediation example keeps its own under th
 | `base_reds`, `allow_paths` | Optional lists. |
 | `base_reds_file` | Optional. The default is `base-reds.md`. |
 | `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
+| `steps` | Optional dict from a step name to `{"model": text, "runner": text}`. The steps are `plan`, `implement`, `review`, `fix`, `fix_late`, `design`, `take_review`, `sync_review`, `sync_resolve`, `queue_audit` and `settle`. A step that the dict leaves out keeps its default model and the pool pick. A review on the model of the implementer is refused when two or more models are in use. See "The steps and the limits" in `durable-loop.md`. |
+| `design_after` | Optional. A whole number from 1 to 100. The default is 2. |
+| `void_reruns`, `void_asks`, `escalate_after` | Optional. A whole number from 0 to 100. The defaults are 2, 3 and 3. |
 
 The example refuses any other key under `round`.
 

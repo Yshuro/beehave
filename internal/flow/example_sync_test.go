@@ -257,6 +257,7 @@ func TestRoundSync_AConflictThatTheAgentDoesNotResolveStopsTheRoundInRoundWaitWi
 
 	rig := newRoundRig(t, "")
 	rig.setRound("wait_hours", json.Number("1"))
+	rig.setRound("steps", nil)
 	withSync(t, rig, &syncScript{lines: []string{"state=conflict branch=" + syncBranch + " source=main base_tip=abc"}})
 
 	engine := waitOverEngine(t, rig)
@@ -291,6 +292,7 @@ func TestRoundSync_AConflictThatTheAgentDoesNotResolveStopsTheRoundInRoundWaitWi
 	require.GreaterOrEqual(t, resolve, 0, "the resolve agent ran with the sync prompt")
 	assert.Contains(t, rig.h.agents.requests[resolve].Prompt, syncBranch)
 	assert.Contains(t, rig.h.agents.requests[resolve].Prompt, "origin/main", "the agent merges the source that the line names")
+	assert.Equal(t, "opus", rig.h.agents.requests[resolve].Model, "the project file names no steps: sync_resolve runs on its default model")
 }
 
 func TestRoundSync_ATrunkMergeThatAddsNoTestLandsItsSyncBecauseTheSyncGateRunsNoNewTestsCheck(t *testing.T) {
@@ -520,12 +522,14 @@ func TestRoundSync_TheReviewOfTheSyncReadsOnlyAndRunsOnTheGatedHeadOnly(t *testi
 	t.Parallel()
 
 	rig := newRoundRig(t, "")
+	rig.setRound("steps", nil)
 	withSync(t, rig, &syncScript{lines: []string{"synced", "state=current"}})
 
 	_, _, err := runSync(t, rig, false)
 	require.NoError(t, err)
 
 	review := syncRequest(t, rig, syncReviewMarker)
+	assert.Equal(t, "opus", review.Model, "the project file names no steps: sync_review runs on its default model")
 	assert.True(t, review.NoEdits, "the review cannot edit files")
 	assert.Contains(t, review.Forbid, model.FindingGitWrite, "the review cannot write with git")
 

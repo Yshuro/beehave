@@ -54,6 +54,10 @@ project(
     #     "integration_pr": 0,              # a number pins the integration pull request; 0 lets the round find it
     #     "wait_hours": 24,                 # the hours that the round waits for the owner, 1 or more; the default is 24
     #     "lane_kind": "impl",              # impl, papers or design; papers and design need "allow_paths"
+    #     "steps": {"review": {"model": "your-model", "runner": "opencode-1"}},  # the model and the runner of a step; a step left out keeps its default model and the pool pick
+    #     "design_after": 2,                # the fixes on one mechanism before the design step, 1 to 100
+    #     "void_reruns": 2, "void_asks": 3, # the reruns and the owner questions for a void gate, 0 to 100
+    #     "escalate_after": 3,              # the last fix round on the step "fix"; later rounds start fresh on "fix_late", 0 to 100
     # }},                                 # optional. Also: owner_email, source_checkout, acceptance, base_result, base_reds, base_reds_file, allow_paths
     # schedules = [
     #     schedule(
