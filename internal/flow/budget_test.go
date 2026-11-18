@@ -100,6 +100,7 @@ func TestAgentStep_AStepThatWouldStartPastTheRunCapWaitsBeforeItStartsAndNamesTh
 
 	stop := holdOnCap(t, rig, capFile(t, threeFlow))
 
+	assert.Contains(t, stop.Note, "the agent step agent:c#3 waits", "the phase names the call that it holds")
 	assert.Contains(t, stop.Note, "the cap for one item run is $5")
 	assert.Contains(t, stop.Note, "the agent steps of the item run spent $6")
 	assert.Contains(t, stop.Note, "the last step can pass it by its own cost")

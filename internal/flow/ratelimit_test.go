@@ -452,8 +452,7 @@ func TestClient_AStreamOfFailedRunsThatCannotBeReadFailsEveryTotal(t *testing.T)
 func TestBudget_AResumeKeepsTheCostOfTheFailedRunInTheRunCap(t *testing.T) {
 	t.Parallel()
 
-	// Step a fails at a limit after $0.70, the resume reruns it for $0.30, and the look before step b reads the run cap of $0.50.
-	// The look of a itself stays a recorded pass: the resume cuts at the failed phase, after it.
+	// Step a fails at a limit after $0.70 under a run cap of $0.50. The resume rewinds the phase of a to its look, which counts the failed run and stops a.
 	rig := newAgentRig(t)
 	rig.h.opts.MaxRunBudget = 0.5
 	inTurn(rig.h, limited(time.Time{}, 0.7), costing(0.3))
@@ -470,13 +469,13 @@ agent(model = "m", prompt = "prompts/a.md", name = "b")
 	client := rig.h.client(t, testVersion)
 	_ = resumeRun(t, engine, client)
 
-	eventually(t, func() bool { return stoppedRun(t, client, testRun) != nil || len(rig.h.agents.seen()) > 2 })
+	eventually(t, func() bool { return stoppedRun(t, client, testRun) != nil || len(rig.h.agents.seen()) > 1 })
 
 	stop := stoppedRun(t, client, testRun)
-	require.NotNil(t, stop, "the look before step b stops it at the run cap")
+	require.NotNil(t, stop, "the look of the rerun of a stops it at the run cap")
 	assert.Equal(t, scopeRun, stop.Scope)
-	assert.InDelta(t, 1.0, stop.Spent, 1e-9, "the look counts the cost of the failed run and of its rerun")
-	assert.Len(t, rig.h.agents.seen(), 2, "step b does not start past the cap")
+	assert.InDelta(t, 0.7, stop.Spent, 1e-9, "the look counts the cost of the failed run")
+	assert.Len(t, rig.h.agents.seen(), 1, "the rerun of a does not call the agent past the cap")
 }
 
 func TestRateLimit_AStoreThatRefusesTheLimitRecordFailsTheStepAndTheCostOfTheLimitedRunCounts(t *testing.T) {
@@ -626,7 +625,7 @@ func TestRateLimit_TheStatusOfAWaitingRunNamesTheLoginAndTheReset(t *testing.T) 
 	<-done
 }
 
-func TestRateLimit_TheLookAtTheCapsAfterALimitEndsItsWaitOnTheLine(t *testing.T) {
+func TestRateLimit_ThePhaseThatStartsAfterALimitEndsItsWaitOnTheLine(t *testing.T) {
 	t.Parallel()
 
 	record, err := json.Marshal(limitRecord{LimitWait: LimitWait{Limit: *limited(limitReset, 0).Limit, Login: testLogin, WaitUntil: limitReset}, Spend: agent.Spend{Cost: 2}})
@@ -634,13 +633,35 @@ func TestRateLimit_TheLookAtTheCapsAfterALimitEndsItsWaitOnTheLine(t *testing.T)
 
 	var line StepLine
 
-	require.True(t, line.decodeAgentSub("limit1.0", string(record)))
+	line.absorb(dbos.StepInfo{StepName: "agent:a#1/limit1.0", Output: string(record)})
 	require.NotNil(t, line.LimitWait)
 	assert.InDelta(t, 2.0, line.Cost, 0)
 
-	require.True(t, line.decodeAgentSub("budget1.1", "{}"))
+	// The rerun is a new phase that has not ended, so its record holds no output yet.
+	line.absorb(dbos.StepInfo{StepName: phaseName, ChildWorkflowID: "phase-2"})
 	assert.Nil(t, line.LimitWait, "the rerun has started: the step no longer waits")
 	assert.InDelta(t, 2.0, line.Cost, 0, "the cost of the limited run stays on the line")
+}
+
+func TestCapStop_TheLineKeepsTheStopUntilAPhaseEndsWhoseLookPassed(t *testing.T) {
+	t.Parallel()
+
+	stopped, err := json.Marshal(PhaseOutput{CapStop: &CapStop{Scope: scopeRun, Cap: 0.5, Spent: 0.7}})
+	require.NoError(t, err)
+
+	passed, err := json.Marshal(PhaseOutput{Outcome: agent.OutcomeExited})
+	require.NoError(t, err)
+
+	var line StepLine
+
+	line.absorb(dbos.StepInfo{StepName: phaseName, ChildWorkflowID: "phase-1", Output: string(stopped)})
+	require.NotNil(t, line.CapStop, "the phase whose look stopped shows the stop")
+
+	line.absorb(dbos.StepInfo{StepName: phaseName, ChildWorkflowID: "phase-2"})
+	require.NotNil(t, line.CapStop, "a phase that has not ended may stop at its look again")
+
+	line.absorb(dbos.StepInfo{StepName: phaseName, ChildWorkflowID: "phase-2", Output: string(passed)})
+	assert.Nil(t, line.CapStop, "a phase that ran the agent passed its look")
 }
 
 func TestRateLimit_ALimitRecordThatCannotBeReadMarksTheCostUnknown(t *testing.T) {

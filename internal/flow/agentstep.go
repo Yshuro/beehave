@@ -448,13 +448,13 @@ func (s *script) attempts(name string, a agentArgs, in PhaseInput) (stepResult, 
 // attempt removes the old output file in a recorded step, runs the agent and reads what it left.
 // The removal is recorded, so a replay after the agent finished never removes the file again.
 // A run that a provider limit stopped is followed by a wait for the reset and a rerun inside the same try: a limit spends no output try and no lane.
-// Each run checks the caps first, because the limited run can have spent money before the limit stopped it.
+// Each phase looks at the caps first, because the limited run can have spent money before the limit stopped it.
 func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (stepResult, error) {
 	if err := s.clearOutput(name, a.file, try); err != nil {
 		return stepResult{}, err
 	}
 
-	in.Severity = string(s.severity)
+	in.Severity, in.Call = string(s.severity), name
 
 	ended, err := s.runPastLimits(name, in, try)
 	if err != nil {
@@ -464,23 +464,26 @@ func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (step
 	return s.read(name, a, ended, try)
 }
 
-// runPastLimits runs the agent of one try until a run ends that no provider limit stopped, and returns how that run ended.
+// runPastLimits runs the phase of one try until a run ends that no cap and no provider limit stopped, and returns how that run ended.
+// A phase that a cap stopped is followed by the record of the stop, a wait and a new phase. look counts the stops of the try, and run the limited runs.
 func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput, error) {
-	look := 0
+	look, run := 0, 0
 
-	for run := 0; ; run++ {
-		var err error
-
-		if look, err = s.holdForCaps(name, try, look); err != nil {
-			return PhaseOutput{}, err
-		}
-
+	for {
 		ended, err := s.runOnce(name, in)
-		if err != nil || ended.Limit == nil {
+
+		switch {
+		case err != nil || (ended.CapStop == nil && ended.Limit == nil):
 			return ended, err
+		case ended.CapStop != nil:
+			err = s.holdAtCap(name, try, look, ended.CapStop)
+			look++
+		default:
+			in.ResetPassed, err = s.waitOutLimit(name, in, ended, try, run)
+			run++
 		}
 
-		if in.ResetPassed, err = s.waitOutLimit(name, in, ended, try, run); err != nil {
+		if err != nil {
 			return PhaseOutput{}, err
 		}
 	}

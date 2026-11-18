@@ -151,7 +151,8 @@ For try `t` and run `k` (from 0) inside the try, the call records these steps:
 
 | Step | When |
 |---|---|
-| `…/budget<t>.<look>` | Before each run. The look number continues across the runs of the try. |
+| `agent/caps` | In each phase, before the start marks: the look at the run cap and the tree cap. A stop ends the phase with `cap_stop` and no agent run. |
+| `…/budget<t>.<look>` | After a phase that the caps stopped: the stop. A durable sleep follows, then a new phase. The look number continues across the runs of the try. |
 | `…/limit<t>.<k>` | After a limited run. It holds `limit` (`kind`, `window`, `resets_at`), `login`, `wait_until`, `session` and the cost of the run. |
 | `DBOS.sleep` | After each limit step, until `wait_until`. |
 
@@ -218,10 +219,11 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 - Before an agent step starts, the engine adds the `cost_usd` that the earlier agent steps of the item run recorded, the cost of each run that a provider limit stopped, and the cost of each run that failed.
 - If the sum is at or past the cap, the step waits before it starts. The run stays open and the step is not a failure. The stop names the cap and the spent sum.
 - The check runs only when a step starts, so one step can pass the cap by its own cost. The cap of the step (`max_budget_usd`) or the global cap limits that. With neither set, a step has no limit.
-- Each look at the caps is a recorded step named `budget`, and a stop is followed by a durable sleep before the next look. A step that started under the cap does not stop on a replay after the cap changes.
+- Each look at the caps is the first recorded step of the phase, `agent/caps`, after the claim and before the start marks. A stop ends the phase with no agent run. The item run records the stop in a step named `budget` and sleeps durably before it queues a new phase, which looks again. A step that started under the cap does not stop on a replay after the cap changes.
+- While a cap holds a step, the item run queues one phase with no agent run for each look: at most one a minute. The phase holds a slot of the agents queue only for the look.
 - The check reads the cap from the config of the engine that runs it. To resume a held round, raise the cap (or set it to 0) and restart the engine.
 - A cost that is unknown for an earlier step still fails the step: the cap cannot be checked against it.
-- The sum comes from recorded costs, so a replay gives the same answer. The cost of a failed run goes to the DBOS stream `failed_runs` of the item run. A rewind keeps the entries of a stream, so after `beehave resume` the sum still holds the cost of the failed run. The resume cuts at the failed step, so the rerun of that step does not look at the caps again; the next look counts the cost.
+- The sum comes from recorded costs, so a replay gives the same answer. The cost of a failed run goes to the DBOS stream `failed_runs` of the item run. A rewind keeps the entries of a stream, so after `beehave resume` the sum still holds the cost of the failed run. The resume rewinds a failed phase to its look, so the rerun of the agent step looks at the caps first and counts the cost.
 
 **The cap of an item tree: `agents.max_tree_budget_usd`** (or `BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD`). It caps the sum for the root run and every run it spawns.
 
@@ -524,9 +526,9 @@ The release runs beside the tick, so a slow tracker delays no renewal and no sca
 
 DBOS records a step when it ends, so a step that is lost in the middle leaves no record. The phase writes its own start mark, the step `agent/start<n>`, before it starts the agent. A recovered phase finds the marks of the earlier starts. Each earlier start that has no end was lost.
 
-Every rewind that beehave does goes back to the start mark of the agent step, so the rewind drops the mark with the step. This covers a failed step and a canceled one. So a start with no end exists only after the process was lost, and a cancel followed by `beehave resume` is not a loss.
+Every rewind that beehave does goes back to the look at the caps that opens the phase, before the start marks, so the rewind drops the marks with the step. This covers a failed step and a canceled one. So a start with no end exists only after the process was lost, and a cancel followed by `beehave resume` is not a loss.
 
-A rewind of the phase, after a failure or a cancel, goes back to the first start mark that has no agent step after it. It drops every mark and loss record of that sequence, so a resumed phase starts clean.
+A rewind of the phase, after a failure or a cancel, goes back to the first look or start mark that has no agent step after it. It drops the look and every mark and loss record of that sequence, so a resumed phase looks at the caps again and starts clean.
 
 #### The loss record
 
@@ -658,7 +660,7 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent5.tracker1.forge2.land3.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent6.tracker1.forge2.land3.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
 | The run is a run of a round item, and the version of the round module differs from the version in this build. The version of the round module covers the step that makes the worktree at the start of every round item, so every round run uses the module, even a run that an older build recorded with no such step. | Names the step that makes the worktree, and says to finish the run on the build that started it or to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 

@@ -302,13 +302,13 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 
 	assert.Equal(t, []string{
 		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
-		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1",
-		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
-		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "agent:scoped-review-implement#3/budget1.0", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
+		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "before_review:candidate-before-review#1",
 		"host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-1#3",
-		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "agent:candidate-review#4/budget1.0", "phase", "DBOS.getResult", "agent:candidate-review#4/read1",
+		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "phase", "DBOS.getResult", "agent:candidate-review#4/read1",
 		"worktree", "release",
 	}, remediationStepNames(t))
 }
@@ -318,17 +318,17 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound
 
 	assert.Equal(t, []string{
 		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
-		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1",
-		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
-		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "agent:scoped-review-implement#3/budget1.0", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
+		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "preflight:before-fix-2#3",
-		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "agent:fix-scoped-1#4/budget1.0", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1",
+		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1",
 		"preflight:before-scoped-review-2#4",
-		"agent:scoped-review-1#5/render", "agent:scoped-review-1#5/clear1", "agent:scoped-review-1#5/budget1.0", "phase", "DBOS.getResult", "agent:scoped-review-1#5/read1",
+		"agent:scoped-review-1#5/render", "agent:scoped-review-1#5/clear1", "phase", "DBOS.getResult", "agent:scoped-review-1#5/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:candidate-gate#2", "before_review:candidate-before-review#1",
 		"host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-2#5",
-		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "agent:candidate-review#6/budget1.0", "phase", "DBOS.getResult", "agent:candidate-review#6/read1",
+		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "phase", "DBOS.getResult", "agent:candidate-review#6/read1",
 		"worktree", "release",
 	}, remediationStepNames(t, WithRedGate()))
 }

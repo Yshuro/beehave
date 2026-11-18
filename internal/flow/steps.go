@@ -325,9 +325,14 @@ func callLine(group []dbos.StepInfo, name string) StepLine {
 }
 
 // absorb adds the error and the decoded fields of one record to the line. The kind of the step picks the type that the record decodes into.
+// A child workflow that starts after a provider limit ends the wait: the phase runs the agent again.
 func (l *StepLine) absorb(record dbos.StepInfo) {
 	if record.Error != nil && l.Error == "" {
 		l.Error, l.State = record.Error.Error(), stepFailed
+	}
+
+	if record.ChildWorkflowID != "" {
+		l.LimitWait = nil
 	}
 
 	if record.Output != nil && !l.decode(record) {
@@ -354,9 +359,9 @@ func (l *StepLine) decode(record dbos.StepInfo) bool {
 	return true
 }
 
-// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a look at the caps, the cost record of a run whose limit step failed
+// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a stop at a cap, the cost record of a run whose limit step failed
 // (and of a failed run that agent module 3 or an earlier one recorded),
-// or the limit record of a run that a provider limit stopped. The look that follows a limit ends its wait. Any other sub-step decodes nothing.
+// or the limit record of a run that a provider limit stopped. Any other sub-step decodes nothing.
 func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {
 	case strings.HasPrefix(sub, "read"):
@@ -365,8 +370,6 @@ func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 
 		return decodeThen(output, func(read recorded[agentRead]) { l.fromAgentRead(read.Outputs) })
 	case strings.HasPrefix(sub, "budget"):
-		l.LimitWait = nil
-
 		return decodeThen(output, func(check capCheck) { l.CapStop = check.Stop })
 	case strings.HasPrefix(sub, "spent"):
 		spend := recordedSpend(output)
@@ -434,8 +437,11 @@ func decodeThen[T any](output any, use func(T)) bool {
 	return true
 }
 
-// fromPhase takes the exit code of the agent from the result of its phase, a child workflow. The result of the child workflow of a gate has no outcome.
+// fromPhase takes the stop at a cap and the exit code of the agent from the result of its phase, a child workflow. A phase whose look passed holds no stop.
+// The result of the child workflow of a gate has no outcome.
 func (l *StepLine) fromPhase(phase PhaseOutput) {
+	l.CapStop = phase.CapStop
+
 	if phase.Outcome != "" {
 		l.ExitCode = &phase.ExitCode
 		l.Kind, l.Rounds = phase.Kind, phase.Rounds
