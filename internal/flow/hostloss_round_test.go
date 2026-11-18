@@ -144,4 +144,28 @@ func TestRound_AChildThatStoppedOnTheHostLossLimitHoldsTheRoundAndLandsNothing(t
 	joined := strings.Join(stepNames(t, rig.last), " ")
 	assert.NotContains(t, joined, "hold-", "the item is not at fault: no hold status")
 	assert.NotContains(t, joined, "queue:round-queue-2#")
+
+	// The comment and the hold status of an item are steps of the child run of the item, not of the round run.
+	child := strings.Join(stepNamesOf(t, rig.last, lastRunOf(t, rig.last, "1")), " ")
+	assert.Contains(t, child, "gate:candidate-gate-host-4#", "the steps of the child run are the ones read here: its gate ran again after four losses")
+	assert.NotContains(t, child, "item_comment:", "the item is not at fault: no comment")
+	assert.NotContains(t, child, "item_status:", "the item is not at fault: no hold status")
+}
+
+func TestRound_TwoChildrenThatEachLostTheHostInOnePassAreReadAsTheHighestCountAndNotTheirSum(t *testing.T) {
+	t.Parallel()
+
+	// Item 2 ends alone in pass 1. Items 1 and 3 end while the round reads the queue of pass 2, so one gather returns both.
+	// Each of them loses its gate twice: four losses in the tree, so the highest count that a child read is 4 and their sum is 6 or more.
+	rig := newRoundRig(t, "1 2 3")
+	rig.h.opts.MaxConcurrent = 3
+	rig.endTogether("1", "3")
+
+	runLosing(t, rig, map[string]int{"1": 2, "3": 2})
+
+	assert.EqualValues(t, 4, statusJSONOf(t, rig.h, testRun)[hostLossesKey], "each of the two children lost its gate twice")
+	assert.Equal(t, []string{"1", "3"}, rig.merger.landed(), "both children landed in the pass that gathered them")
+
+	require.Len(t, rig.questions, 1)
+	assert.NotContains(t, rig.questions[0], holdQuestion, "the round took the highest count of the tree, which is below the limit")
 }
