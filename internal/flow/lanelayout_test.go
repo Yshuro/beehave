@@ -87,7 +87,7 @@ func TestLaneLayout_APatchRoundsCapOfTwoGivesThreeCandidatesAndThenAsksTheOwner(
 	rig.setRound("fix_rounds", json.Number("2"))
 	done := pipelineInBackground(rig.h.engine(t), file)
 
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, receive(t, done).err)
 
@@ -102,7 +102,7 @@ func TestLaneLayout_TheDefaultCapIsSixCandidates(t *testing.T) {
 	rig, file := exampleRig(t, func(int) string { return "changes" })
 	done := pipelineInBackground(rig.h.engine(t), file)
 
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, receive(t, done).err)
 
@@ -246,7 +246,7 @@ func TestLaneLayout_TheSettleLaneIsTheOnlyEditAfterTheLastReviewAndRunsOnce(t *t
 	rig.setRound("fix_rounds", json.Number("2"))
 	done := pipelineInBackground(rig.h.engine(t), file)
 
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "fix all"))
 	require.NoError(t, receive(t, done).err)
 
@@ -298,7 +298,7 @@ func TestLaneLayout_AResumeKeepsTheCapOfTheFirstStartWhenTheFixRoundsChange(t *t
 	rig.setRound("fix_rounds", json.Number("1"))
 
 	handle := resumeRun(t, engine, rig.h.client(t, testVersion))
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)

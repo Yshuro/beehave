@@ -28,11 +28,11 @@ func interruptedAfterTheDeadlineIsRecorded(t *testing.T, h *harness, file string
 		ended <- runErr
 	}()
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the wait to record its deadline", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		steps, stepsErr := dbos.GetWorkflowSteps(engine.ctx, testRun)
 
-		return stepsErr == nil && hasStep(steps, "DBOS.sleep")
-	})
+		return struct{}{}, stepsErr == nil && hasStep(steps, "DBOS.sleep"), nil
+	}})
 
 	stop()
 	require.NoError(t, engine.Shutdown())
@@ -70,14 +70,7 @@ func resumedWithDeadlineAt(t *testing.T, offset time.Duration) error {
 		done <- runErr
 	}()
 
-	select {
-	case runErr := <-done:
-		return runErr
-	case <-time.After(5 * time.Minute):
-		require.FailNow(t, "the resumed wait did not end at the recorded deadline")
-	}
-
-	return nil
+	return waitOn(t, waiting[error]{what: "the resumed wait to end at the recorded deadline", ch: done})
 }
 
 func formatWaitFlow(timeout string) string {
@@ -112,7 +105,7 @@ func TestWait_ARecordedWaitWithoutTimedOutReplays(t *testing.T) {
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 	require.NoError(t, client.Answer(testItem, "go on"))
 	require.ErrorContains(t, receive(t, done).err, "release")
 

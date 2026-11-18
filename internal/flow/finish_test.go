@@ -60,7 +60,7 @@ func TestFinish_DoesNotRunWhenTheRunIsCanceled(t *testing.T) {
 	file := writeFlow(t, "def main(item):\n    wait(name = \"ask\", question = \"go?\")\n\n"+finishCall)
 	done := runInBackground2(engine, file)
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 	require.NoError(t, h.client(t, testVersion).Cancel(testItem))
 	h.tick(t) // the engine of the run learns of the cancel from its tick, which the harness sends
 

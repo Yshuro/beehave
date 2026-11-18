@@ -39,7 +39,7 @@ func TestRun_ListsTheOtherOrchestratorsAtTheStartAndStatusShowsThem(t *testing.T
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	infos, err := client.Status()
 	require.NoError(t, err)
@@ -99,11 +99,11 @@ func TestClient_StatusReportsOtherOrchestratorsThatAreNotText(t *testing.T) {
 
 	client := harness.client(t, testVersion)
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		_, err := client.Status()
 
 		return err != nil
-	})
+	}))
 
 	_, err = client.Status()
 	require.ErrorContains(t, err, "read the other orchestrators of "+stuckItemID)

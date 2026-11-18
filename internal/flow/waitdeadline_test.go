@@ -30,7 +30,7 @@ func TestWait_AnAnswerBeforeTheTimeoutIsNotTimedOut(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	require.NoError(t, client.Answer(testItem, "go on"))
 
 	outcome := receive(t, done)
@@ -91,7 +91,7 @@ func TestWait_NoTimeoutKeywordStillWaitsForTheAnswer(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	require.NoError(t, client.Answer(testItem, "go on"))
 
 	require.NoError(t, receive(t, done).err)

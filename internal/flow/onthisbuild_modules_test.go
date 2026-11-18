@@ -79,7 +79,7 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAGateStepWhenTheGateModu
 	harness.gate.results = []GateResult{{Passed: true, Head: gatedHead}}
 
 	runInBackground(harness.engine(t), testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	expireLease(harness)
 
 	other := buildWithModule(harness.client(t, otherBuild), moduleGate, gateVersion+1)
@@ -114,7 +114,7 @@ func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionOfTheStep
 	harness.flowIs(t, factsWaitFlow)
 
 	runInBackground(harness.engine(t), testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	other := harness.client(t, otherBuild)
 	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+"+stepsVersion, testRun)
@@ -205,7 +205,7 @@ func olderRoundRun(t *testing.T, item, module string, version int) (*harness, *C
 	harness.flowIs(t, "def main(item):\n    wait(name = \"ask\", question = \"What now?\")\n")
 
 	runInBackground(harness.engine(t), item)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?",
 		versionWithModule(testVersion, module, version), runID(item, 1))

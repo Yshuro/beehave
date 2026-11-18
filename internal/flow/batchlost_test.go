@@ -137,14 +137,14 @@ func TestBatchGate_ARestartAfterTheFirstProvenLossOfACallKeepsItInTheCount(t *te
 
 	ended := runInBackground2(first, file)
 
-	<-rig.gate.started
+	receive(t, rig.gate.started)
 	stop()
 	require.NoError(t, first.Shutdown())
-	<-ended
+	receive(t, ended)
 
 	require.Equal(t, []string{"gpu-b/job-1"}, hosts.proved, "the first engine proved the loss of the union")
 
-	outcome := <-runInBackground2(rig.engine(t), file)
+	outcome := receive(t, runInBackground2(rig.engine(t), file))
 
 	requireTwoLossesOfTheCall(t, rig, outcome.err)
 	assert.Equal(t, []string{"gpu-b/job-1", "gpu-b/job-3"}, hosts.proved, "the restart reads the recorded first proof and reads only the new one")
@@ -166,15 +166,15 @@ func TestBatchGate_TheHostJobIsRecordedBeforeTheGateWaits(t *testing.T) {
 
 	ended := runInBackground2(first, file)
 
-	<-rig.gate.started
+	receive(t, rig.gate.started)
 	stop()
 	require.NoError(t, first.Shutdown())
-	<-ended
+	receive(t, ended)
 
 	require.Equal(t, 1, rig.gate.submitted(), "the first engine started the host job")
 
 	next := rig.engine(t)
-	outcome := <-runInBackground2(next, file)
+	outcome := receive(t, runInBackground2(next, file))
 
 	require.NoError(t, outcome.err)
 	assert.Equal(t, 1, rig.gate.submitted(), "the restart waits on the recorded job and submits none")
@@ -201,12 +201,12 @@ func TestBatchGate_NoProofAtTheLimitAsksTheOwnerAndRerunsAfterTheProof(t *testin
 	client := rig.h.client(t, testVersion)
 
 	done := runInBackground2(engine, writeFlow(t, bodyFlow(rig.lostBatchBody())))
-	waitForTheLostJob(t, rig.h, testItem)
+	waitOn(t, theLostJobShows(t, rig.h, testItem))
 
 	hosts.prove(model.LostProof{Kind: model.LostEnded})
-	eventually(t, func() bool { return client.Answer(testItem, "CONTINUE") == nil })
+	waitOn(t, condition(func() bool { return client.Answer(testItem, "CONTINUE") == nil }))
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 	assert.Equal(t, []string{"1", "3"}, rig.merger.landed(), "the proof after the answer reruns the gate, and the batch lands")
@@ -223,14 +223,14 @@ func TestBatchGate_AReadOfTheProofAfterTheAnswerThatFailsFailsTheCallAndRerunsNo
 	client := rig.h.client(t, testVersion)
 
 	done := runInBackground2(engine, writeFlow(t, bodyFlow(rig.lostBatchBody())))
-	waitForTheLostJob(t, rig.h, testItem)
+	waitOn(t, theLostJobShows(t, rig.h, testItem))
 
 	hosts.mu.Lock()
 	hosts.proofErr = errFake
 	hosts.mu.Unlock()
-	eventually(t, func() bool { return client.Answer(testItem, "CONTINUE") == nil })
+	waitOn(t, condition(func() bool { return client.Answer(testItem, "CONTINUE") == nil }))
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.ErrorContains(t, outcome.err, "the batch gate lost its job: ")
 	require.ErrorIs(t, outcome.err, errFake)
@@ -264,7 +264,7 @@ func TestBatchGate_ACanceledWaitForTheProofReadsTheProofOnceAndNeverCancelsTheJo
 	done := runInBackground2(engine, writeFlow(t, bodyFlow(rig.lostBatchBody())))
 
 	// The first look gives no proof, and the wait sleeps for an hour before the next.
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		ids := exclusiveRunsOf(t, engine, kindBatchGate)
 		if len(ids) != 1 {
 			return false
@@ -273,17 +273,17 @@ func TestBatchGate_ACanceledWaitForTheProofReadsTheProofOnceAndNeverCancelsTheJo
 		steps, err := dbos.GetWorkflowSteps(engine.ctx, ids[0])
 
 		return err == nil && slices.ContainsFunc(steps, func(s dbos.StepInfo) bool { return s.StepName == "DBOS.sleep" })
-	})
+	}))
 	require.Equal(t, 1, hosts.proofReads())
 
 	require.NoError(t, dbos.CancelWorkflow(engine.ctx, testRun, dbos.WithCancelChildren()))
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		rig.h.tick(t)
 
 		return hosts.proofReads() == 2
-	})
+	}))
 
-	require.Error(t, (<-done).err, "the canceled run has no result")
+	require.Error(t, receive(t, done).err, "the canceled run has no result")
 	assert.Equal(t, 2, hosts.proofReads(), "the canceled wait reads the proof once more, and never again")
 	assert.Equal(t, []string{"gpu-b/job-1", "gpu-b/job-1"}, hosts.proved)
 	assert.Zero(t, hosts.teardownCount(), "the wait never banks or stops the host")

@@ -21,7 +21,7 @@ func strandedHarness(t *testing.T) (*harness, *Engine, *Client) {
 	engine := harness.engine(t)
 
 	runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	return harness, engine, harness.client(t, otherBuild)
 }
@@ -112,7 +112,7 @@ func TestClient_AResumedRunRestartsUnderItsPinnedBytesAndFailsOnAChangedFile(t *
 	client := harness.client(t, testVersion)
 
 	runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	require.NoError(t, client.Cancel(testItem))
 
 	file := filepath.Join(filepath.Dir(harness.opts.StateDir), defaultFlowName)
