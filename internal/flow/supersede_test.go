@@ -162,15 +162,20 @@ func waitsInTheQueue(engine *Engine, want int) func() bool {
 	}
 }
 
-// endsAfterTicks ticks the engine until the gate ends, and returns how it ended.
+// endsAfterTicks ticks the engine until the gate ends, and returns how it ended. It ticks once more after the end: DBOS ends the run when the store marks the cancel,
+// which can come before any tick that follows the mark, and only a tick after the mark cancels the context of a gate that runs.
 func endsAfterTicks(t *testing.T, h *harness, ended <-chan gateEnd) gateEnd {
 	t.Helper()
 
-	return waitOn(t, waiting[gateEnd]{what: "the gate to end", ch: ended, read: func() (gateEnd, bool, error) {
+	end := waitOn(t, waiting[gateEnd]{what: "the gate to end", ch: ended, read: func() (gateEnd, bool, error) {
 		h.tick(t)
 
 		return gateEnd{}, false, nil
 	}})
+
+	h.tick(t)
+
+	return end
 }
 
 func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueued(t *testing.T) {
@@ -192,7 +197,7 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueue
 	end := endsAfterTicks(t, h, old)
 	require.ErrorIs(t, end.err, errSuperseded)
 	require.EqualError(t, end.err, "superseded by B")
-	// The run that waited ends when DBOS marks the gate canceled. The gate counts its stop when the tick cancels its context, a moment later.
+	// The tick after the end has canceled the context of the gate. The gate counts its stop a moment later.
 	waitOn(t, condition(func() bool { return gated.stopped.Load() == 1 }))
 
 	waitOn(t, condition(startedCount(gated, 2)))
@@ -201,6 +206,34 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueue
 	newer := receive(t, fresh)
 	require.NoError(t, newer.err)
 	assert.Equal(t, true, newer.out.Outputs["passed"])
+}
+
+func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenItsRunEndedBeforeTheFirstTick(t *testing.T) {
+	t.Parallel()
+
+	gated := newSupersedeGate("")
+	h, engine := supersedeEngine(t, gated, "A")
+
+	old := queueGate(engine, "A")
+
+	waitOn(t, condition(startedCount(gated, 1)))
+
+	h.forge.mu.Lock()
+	h.forge.state.Head = "B"
+	h.forge.mu.Unlock()
+
+	fresh := queueGate(engine, "B")
+
+	// Nothing ticks here, so the run of the old gate ends with no tick after the store marked its cancel, as it does on a host that is slow to tick.
+	ended := make(chan gateEnd, 1)
+	ended <- receive(t, old)
+
+	require.ErrorIs(t, endsAfterTicks(t, h, ended).err, errSuperseded)
+	waitOn(t, condition(func() bool { return gated.stopped.Load() == 1 }))
+	waitOn(t, condition(startedCount(gated, 2)))
+	close(gated.release)
+
+	require.NoError(t, receive(t, fresh).err)
 }
 
 func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T) {
