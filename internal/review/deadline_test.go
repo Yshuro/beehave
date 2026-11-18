@@ -29,7 +29,7 @@ func followUp(reviewTime *string) *world {
 func pollAt(t *testing.T, w *world, now time.Time) ([]review.Row, error) {
 	t.Helper()
 
-	return review.Poll(context.Background(), w, w, me, now)
+	return review.Poll(context.Background(), w, w, me, now, lookbackDays)
 }
 
 func TestPoll_AFollowUpRowIsDueAtReviewTimePlus24HoursAndFailsClosedOnAnUnreadableTime(t *testing.T) {

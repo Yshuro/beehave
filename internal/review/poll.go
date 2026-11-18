@@ -10,9 +10,9 @@ import (
 )
 
 // Poll returns the rows of the poll: pull requests to review, our own pull requests that need a fix, replies to answer and failed checks.
-// The clock is a parameter. The search for replies looks back RecentDays days from now.
-func Poll(ctx context.Context, f Reader, own Own, me string, now time.Time) ([]Row, error) {
-	since := now.UTC().AddDate(0, 0, -RecentDays).Format(time.DateOnly)
+// The clock is a parameter. The search for replies looks back lookbackDays days from now.
+func Poll(ctx context.Context, f Reader, own Own, me string, now time.Time, lookbackDays int) ([]Row, error) {
+	since := now.UTC().AddDate(0, 0, -lookbackDays).Format(time.DateOnly)
 	steps := []func() ([]Row, error){
 		func() ([]Row, error) { return reviewRows(ctx, f, me, now) },
 		func() ([]Row, error) { return ownRows(ctx, own, me) },

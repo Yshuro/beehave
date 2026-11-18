@@ -24,6 +24,8 @@ var pollTick = time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 type fakeSource struct {
 	own    []model.OwnPull
 	ownErr error
+	// asked, when set, collects the searches that the poll makes.
+	asked *[]model.SearchRequest
 }
 
 func (s fakeSource) PRList(context.Context, int, ...string) ([]model.PullRequest, error) {
@@ -40,7 +42,13 @@ func (s fakeSource) Comments(context.Context, int) ([]model.Comment, error) { re
 
 func (s fakeSource) ReviewComments(context.Context, int) ([]model.Comment, error) { return nil, nil }
 
-func (s fakeSource) Search(context.Context, model.SearchRequest) ([]int, error) { return nil, nil }
+func (s fakeSource) Search(_ context.Context, req model.SearchRequest) ([]int, error) {
+	if s.asked != nil {
+		*s.asked = append(*s.asked, req)
+	}
+
+	return nil, nil
+}
 
 func (s fakeSource) PRChecks(context.Context, int) ([]model.Check, error) { return nil, nil }
 
@@ -117,6 +125,29 @@ func pollOnce(t *testing.T, engine *Engine) PollOutput {
 	require.NoError(t, err)
 
 	return out
+}
+
+func TestPoll_TheSearchForRepliesLooksBackTheDaysOfTheOptionsAndThreeByDefault(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		days  int
+		since string
+	}{{0, "2026-10-28"}, {10, "2026-10-21"}} {
+		var asked []model.SearchRequest
+
+		harness := newHarness(t)
+		harness.poll = fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {asked: &asked}}}
+		harness.opts.ReviewLookbackDays = test.days
+
+		pollOnce(t, launchedWith(t, harness, func(*Deps) {}))
+
+		require.Len(t, asked, 2, "an issue search and a pull request search")
+
+		for _, req := range asked {
+			assert.Equal(t, test.since, req.Since, "%d days", test.days)
+		}
+	}
 }
 
 func TestPoll_ATickRecordsTheRowsOfEachProjectAndSkipsAProjectWithNoForge(t *testing.T) {

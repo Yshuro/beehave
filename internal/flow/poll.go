@@ -123,7 +123,7 @@ func (e *Engine) pollProject(ctx context.Context, project string, now time.Time)
 		return PollProject{}, err
 	}
 
-	rows, err := review.Poll(ctx, source, source, me, now)
+	rows, err := review.Poll(ctx, source, source, me, now, e.reviewLookbackDays)
 	if err != nil {
 		return PollProject{}, err
 	}
