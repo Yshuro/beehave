@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -77,8 +78,7 @@ func runRefusedFlow(t *testing.T, f refusedFlow, name string) refusedOutcome {
 		_, out.first = engine.RunFile(testItem, testProject, file)
 	}
 
-	_, err := db.ExecContext(t.Context(), "DROP TRIGGER refuse_outcome")
-	require.NoError(t, err)
+	liftRefusal(t, h)
 
 	_, out.resumed = resumeAndJoin(t, engine, h.client(t, testVersion))
 
@@ -334,6 +334,54 @@ func TestRunStep_ARunCanceledDuringAStepRecordsNoFailureOfTheStep(t *testing.T) 
 	require.ErrorIs(t, err, dbos.ErrWorkflowCancelled)
 	assert.Empty(t, rig.steps(t, "canceled"), "a canceled run records no step, so a resume runs the step again")
 	assert.NotContains(t, rig.logged.String(), "cannot record the failure", "the step tried no failure record")
+}
+
+func TestRunStep_AResumeThatReplaysAFailedStepTheRunToleratesRecordsNoSecondFailure(t *testing.T) {
+	t.Parallel()
+
+	var (
+		flow    dbos.Workflow[int, int]
+		runs    atomic.Int32
+		started = make(chan struct{})
+	)
+
+	rig := newRefusalRig(t, func(e *Engine) dbos.Workflow[int, int] {
+		flow = func(ctx dbos.Context, _ int) (int, error) {
+			if _, err := runStep(e, ctx, "first", func(context.Context) (int, error) { return 0, errStepFails }); err != nil {
+				e.logger.Info("the run goes on after a failed step", "error", err)
+			}
+
+			return runStep(e, ctx, "after", func(c context.Context) (int, error) {
+				if runs.Add(1) == 1 {
+					close(started)
+					<-c.Done()
+				}
+
+				return 1, nil
+			})
+		}
+
+		return flow
+	})
+
+	runCtx, cancel := dbos.WithCancelCause(rig.ctx)
+
+	handle, err := dbos.RunWorkflow(runCtx, flow, 0, dbos.WithWorkflowID("replayed"))
+	require.NoError(t, err)
+
+	<-started
+	cancel(errStepFails)
+
+	_, err = resultWithin(t, handle)
+	require.ErrorIs(t, err, dbos.ErrWorkflowCancelled)
+	require.Equal(t, "0:first!E", rig.steps(t, "replayed"), "the canceled run keeps the failure of the first step only")
+
+	again, err := dbos.ResumeWorkflow[int](rig.ctx, "replayed")
+	require.NoError(t, err)
+
+	_, err = resultWithin(t, again)
+	require.NoError(t, err)
+	assert.Equal(t, "0:first!E 1:after", rig.steps(t, "replayed"), "the replay of the failed step writes no record, so the next step keeps its id")
 }
 
 func TestRunStep_AFailureRecordThatTheStoreRefusesTooIsLoggedAndTheRefusalReturns(t *testing.T) {
