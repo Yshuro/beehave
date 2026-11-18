@@ -39,7 +39,7 @@ func TestSuperseded_AGateOfAnotherItemOfTheProjectIsNotStopped(t *testing.T) {
 
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
 
-	// The cancel ends the run before the gate code sees its context end, so the count is read once the stop arrives.
+	// The tick after the end has canceled the context of the gate. The gate counts its stop a moment later.
 	waitOn(t, condition(func() bool { return gated.stopped.Load() >= 1 }))
 
 	close(gated.release)
