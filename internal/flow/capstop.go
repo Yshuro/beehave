@@ -49,24 +49,26 @@ type capLimit struct {
 	limit             float64
 }
 
-// holdForCaps holds an agent step back while the run cap or the tree cap stops it. Each look is a recorded step, and a stop is followed by a durable sleep,
-// so the run stays open and a restart replays the earlier looks. The look that follows reads the caps of the config of the engine that runs it,
-// so a raised cap plus a restart lets the step start. A look that passed stays a pass on replay.
-// The looks of one try go on from look, the number of the first look of this hold, so every run of the try records looks under new names.
-// It returns the number of the next look.
-func (s *script) holdForCaps(name string, try, look int) (int, error) {
-	for ; ; look++ {
-		check, err := runStep(s.e, s.ctx, name+"/budget"+strconv.Itoa(try)+"."+strconv.Itoa(look), func(context.Context) (capCheck, error) {
-			return s.checkCaps(name)
-		})
-		if err != nil || check.Stop == nil {
-			return look + 1, err
-		}
+// capLookStepName is the step of a phase that looks at the run cap and the tree cap before the agent starts.
+const capLookStepName = "agent/caps"
 
-		if err := s.waitForCap(); err != nil {
-			return look + 1, err
-		}
+// lookAtCaps is the look at the caps that opens a phase, as a recorded step. A rerun of the phase rewinds to it, so every agent run looks first.
+func (e *Engine) lookAtCaps(ctx dbos.Context, in PhaseInput) (capCheck, error) {
+	return runStep(e, ctx, capLookStepName, func(context.Context) (capCheck, error) {
+		return e.checkCaps(in.Call, in.Run)
+	})
+}
+
+// holdAtCap records the stop that the look of a phase returned, as look number look of the try, and sleeps before the next phase looks again.
+func (s *script) holdAtCap(name string, try, look int, stop *CapStop) error {
+	_, err := runStep(s.e, s.ctx, name+"/budget"+strconv.Itoa(try)+"."+strconv.Itoa(look), func(context.Context) (capCheck, error) {
+		return capCheck{Stop: stop}, nil
+	})
+	if err != nil {
+		return err
 	}
+
+	return s.waitForCap()
 }
 
 // waitForCap is the durable sleep between two looks at a cap that stopped a step.
@@ -88,20 +90,10 @@ func (e *Engine) treeCap() capLimit {
 	return capLimit{scopeTree, "the item tree", "agents.max_tree_budget_usd", "BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD", e.maxTreeBudget}
 }
 
-// checkCaps reads both caps and the sums they count. A cap of 0 is not read. Both sums read the records of the runs, so a resume keeps them.
-func (s *script) checkCaps(name string) (capCheck, error) {
-	set := s.capsSet()
-	if len(set) == 0 {
-		return capCheck{}, nil
-	}
-
-	id, err := s.runID()
-	if err != nil {
-		return capCheck{}, err
-	}
-
-	for _, c := range set {
-		if stop, err := underCap(name, c.cap, id, c.sum); err != nil || stop != nil {
+// checkCaps reads both caps and the sums they count for the item run run. A cap of 0 is not read. Both sums read the records of the runs, so a resume keeps them.
+func (e *Engine) checkCaps(name, run string) (capCheck, error) {
+	for _, c := range e.capsSet() {
+		if stop, err := underCap(name, c.cap, run, c.sum); err != nil || stop != nil {
 			return capCheck{Stop: stop}, err
 		}
 	}
@@ -116,15 +108,15 @@ type cappedSum struct {
 }
 
 // capsSet lists the caps that are set, the run cap first.
-func (s *script) capsSet() []cappedSum {
+func (e *Engine) capsSet() []cappedSum {
 	var set []cappedSum
 
-	if run := s.e.runCap(); run.limit > 0 {
-		set = append(set, cappedSum{run, s.ownSpend})
+	if run := e.runCap(); run.limit > 0 {
+		set = append(set, cappedSum{run, e.ownSpend})
 	}
 
-	if tree := s.e.treeCap(); tree.limit > 0 {
-		set = append(set, cappedSum{tree, s.treeSpend})
+	if tree := e.treeCap(); tree.limit > 0 {
+		set = append(set, cappedSum{tree, e.treeSpend})
 	}
 
 	return set
@@ -140,20 +132,10 @@ func underCap(name string, c capLimit, id string, sum func(id string) (agent.Spe
 	return overCap(name, c, spent)
 }
 
-// runID reads the id of the run of the script.
-func (s *script) runID() (string, error) {
-	id, err := dbos.GetWorkflowID(s.ctx)
-	if err != nil {
-		return "", fmt.Errorf("read the id of the run of item %s: %w", s.in.Item, err)
-	}
-
-	return id, nil
-}
-
-// ownSpend sums the recorded cost of this run, the failed runs that a resume kept included.
-func (s *script) ownSpend(id string) (agent.Spend, error) {
+// ownSpend sums the recorded cost of the item run id, the failed runs that a resume kept included.
+func (e *Engine) ownSpend(id string) (agent.Spend, error) {
 	// The read goes through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
-	return runSpend(s.e.ctx, id)
+	return runSpend(e.ctx, id)
 }
 
 // overCap is the stop of an agent step that may not start under a cap, or nil when it may. A sum that holds an unknown cost fails the step instead:
@@ -177,14 +159,14 @@ func overCap(name string, c capLimit, spent agent.Spend) (*CapStop, error) {
 }
 
 // treeSpend sums the recorded cost of the root run of the item tree and of every run below it. It reads the step records and the stream of failed agent runs of each run, so a resume keeps the sum.
-func (s *script) treeSpend(id string) (agent.Spend, error) {
+func (e *Engine) treeSpend(id string) (agent.Spend, error) {
 	// The reads go through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
-	root, err := rootRun(s.e.ctx, id)
+	root, err := rootRun(e.ctx, id)
 	if err != nil {
 		return agent.Spend{}, err
 	}
 
-	return runAndBelowSpend(s.e.ctx, root)
+	return runAndBelowSpend(e.ctx, root)
 }
 
 // treeRoot is the root run of the item tree of the run of ctx.
