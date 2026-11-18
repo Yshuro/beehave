@@ -45,6 +45,9 @@ type Param struct {
 	// AsValue is true when the run reads the keyword as a Starlark value and not into a Go text, number or flag. A None then reaches Rule,
 	// and the run does not refuse it at unpack.
 	AsValue bool
+	// Members is true when Rule reads each member of the list as a struct. The check then builds each struct(...) member from its literal fields and
+	// leaves a field that is not a literal to the run.
+	Members bool
 }
 
 // StatusValues lists the values of the status argument of an item_status call.
@@ -364,7 +367,7 @@ func swarmSignatures() map[string][]Param {
 
 	return map[string][]Param{
 		batchMergeName: {
-			{Name: "prs", Kind: KindList, Required: true, Rule: prsRule},
+			{Name: "prs", Kind: KindList, Required: true, Rule: prsRule, Members: true},
 			filled("base"), filled("repo"), opt("hold", KindText), ruled("own", KindDict, ownRule),
 			forbidText(), words("gate_run"), opt("integration", KindInt),
 			{Name: nameKeyword, Kind: KindText, Required: true, Why: "The name makes the step names of the call unique, so use one for each call of the run."},
@@ -854,7 +857,12 @@ func (g *graph) rule(builtin string, value syntax.Expr, param Param) {
 		return
 	}
 
-	v, ok := literalPart(value)
+	read := literalPart
+	if param.Members {
+		read = memberList
+	}
+
+	v, ok := read(value)
 	if !ok {
 		return
 	}
