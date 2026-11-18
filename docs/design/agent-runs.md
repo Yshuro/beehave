@@ -32,6 +32,7 @@ A step author must know these limits:
 - **The guard needs a POSIX shell.** A step with `forbid_commands` does not start on Windows. If the plugin does not load, OpenCode runs every shell command with no check. The plugin writes a marker file when it loads, and a run that ends with no marker gets a violation line.
 - **A run with no timeout ends after one hour.** A model over its usage quota prints nothing and retries. The note of the timed-out run names that cause.
 - **The pool never picks OpenCode.** OpenCode has no usage report, so the pool reads an unknown usage for it and skips it, and the doctor makes no login check for it. A step runs on OpenCode only when it names the runner with `runner = "<name>"`.
+- **The record names the runner and the model.** The recorded phase of an agent step holds `login` (the named runner, or the login that the pool picked) and `model` (the model that the step set). `beehave status <run id>` and `beehave status <run id> --json` show both on the step line, and the dry run prints them in the phase record. A record that an older version wrote has neither field and replays as before, because the engine reads both fields for display only.
 
 ### The process of the CLI
 

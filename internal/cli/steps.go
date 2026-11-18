@@ -94,6 +94,8 @@ func stepFields(step flow.StepLine) []string {
 	}
 
 	fields = appendText(fields, "kind", step.Kind)
+	fields = appendText(fields, "login", step.Login)
+	fields = appendText(fields, "model", step.Model)
 	fields = appendText(fields, "stop", step.Stop)
 
 	fields = appendText(fields, "verdict", step.Verdict)
