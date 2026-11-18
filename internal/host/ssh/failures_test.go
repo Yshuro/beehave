@@ -2,6 +2,7 @@ package ssh_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -162,6 +163,27 @@ func TestWait_APollThatFailsEndsAsUnknownWithTheError(t *testing.T) {
 
 	require.ErrorIs(t, err, link.ErrCommand)
 	assert.Equal(t, model.JobUnknown, state)
+}
+
+func TestWait_TheLostAfterOfTheHostConfigSetsWhenADroppedLinkEndsTheWait(t *testing.T) {
+	t.Parallel()
+
+	m := machineWith(nil, nil)
+	cfg := config()
+	cfg.LostAfter = time.Minute
+	h, _, clock := newHost(t, m, cfg)
+
+	id, err := h.Submit(t.Context(), model.JobSpec{Name: "x", Command: "x"})
+	require.NoError(t, err)
+
+	m.Fail = map[string]int{"sh": dropped}
+	start := clock.now
+
+	state, err := h.Wait(t.Context(), id)
+
+	require.ErrorIs(t, err, host.ErrLost)
+	assert.Equal(t, model.JobLost, state)
+	assert.Less(t, clock.now.Sub(start), 2*time.Minute, "the wait ended at the one minute of the config and not at the default of five")
 }
 
 func TestCancel_AStepThatFailsIsAnError(t *testing.T) {

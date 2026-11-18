@@ -78,7 +78,9 @@ project(
     #     slots = {"mutation": 1}, # at most this many host jobs of a class at once, for a command call with slots = "<class>" (default: no class)
     #     bank_budget = "20s",     # the bank scan gives each repository this long for all its git calls; a repository that is slower counts as unbanked (default "20s")
     #     lost_job_wait = "60m",   # how long a job that lost its link waits for the proof that it no longer runs; from "1m" to "24h" (default "60m")
-    #     private_remote = "git@example.com:your-org/your-repo-private.git",  # where beehave pushes unbanked work before the host goes down
+    #     lost_after = "5m",       # how long a job gets no answer to a read before the wait ends as lost; above zero (default "5m")
+    #     stop_limit = "5m",       # how long a job may take to end after a cancel; above zero (default "5m")
+    #     private_remote ="git@example.com:your-org/your-repo-private.git",  # where beehave pushes unbanked work before the host goes down
     #     skypilot = skypilot(
     #         cloud = "gcp",       # empty leaves the choice to SkyPilot
     #         region = "us-central1",
