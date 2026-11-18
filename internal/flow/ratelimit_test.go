@@ -2,6 +2,8 @@ package flow
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -57,6 +59,36 @@ func recordsOfTestRun(t *testing.T, engine *Engine) []dbos.StepInfo {
 
 	return steps
 }
+
+// firstLimitRecord decodes the record of the first limited run of the fix lane from the step records.
+func firstLimitRecord(t *testing.T, steps []dbos.StepInfo) map[string]any {
+	t.Helper()
+
+	var record map[string]any
+
+	for _, step := range steps {
+		if step.StepName == "agent:fix#1/limit1.0" {
+			text, ok := step.Output.(string)
+			require.True(t, ok, "the limit record is JSON text")
+			require.NoError(t, json.Unmarshal([]byte(text), &record))
+		}
+	}
+
+	require.NotNil(t, record, "the limited run left a limit record")
+
+	return record
+}
+
+// limitedIn is a limited run that named the session, or none for an empty session.
+func limitedIn(session string) agent.Result {
+	result := limited(limitReset, 0)
+	result.Session = session
+
+	return result
+}
+
+// limitSentence is the first sentence of the note of a rerun after the limit of the tests.
+const limitSentence = "This step ran before, and the rate limit five_hour of login " + testLogin + " stopped it."
 
 // sleepsIn counts the durable sleeps among the step records.
 func sleepsIn(steps []dbos.StepInfo) int {
@@ -129,17 +161,7 @@ func TestRateLimit_TheWaitIsOneDurableSleepUntilTheRecordedReset(t *testing.T) {
 	steps := recordsOfTestRun(t, engine)
 	assert.Equal(t, 1, sleepsIn(steps))
 
-	var record map[string]any
-
-	for _, step := range steps {
-		if step.StepName == "agent:fix#1/limit1.0" {
-			text, ok := step.Output.(string)
-			require.True(t, ok, "the limit record is JSON text")
-			require.NoError(t, json.Unmarshal([]byte(text), &record))
-		}
-	}
-
-	require.NotNil(t, record, "the limited run left a limit record")
+	record := firstLimitRecord(t, steps)
 	assert.Equal(t, limitReset.Format(time.RFC3339), record["wait_until"])
 	assert.Equal(t, map[string]any{"kind": "rate", "window": "five_hour", "resets_at": limitReset.Format(time.RFC3339)}, record["limit"])
 	assert.Equal(t, testLogin, record["login"])
@@ -204,22 +226,11 @@ func TestRateLimit_ALimitWithNoResetTimeWaitsForTheResetThatThePoolReads(t *test
 	steps := recordsOfTestRun(t, engine)
 	assert.Equal(t, 1, sleepsIn(steps))
 
-	for _, step := range steps {
-		if step.StepName != "agent:fix#1/limit1.0" {
-			continue
-		}
-
-		text, ok := step.Output.(string)
-		require.True(t, ok, "the limit record is JSON text")
-
-		var record map[string]any
-
-		require.NoError(t, json.Unmarshal([]byte(text), &record))
-		assert.Equal(t, limitReset.Format(time.RFC3339), record["wait_until"], "the wait ends at the reset that the pool read gave")
-		limit, isObject := record["limit"].(map[string]any) // the decoded JSON object of the limit
-		require.True(t, isObject)
-		assert.Equal(t, limitReset.Format(time.RFC3339), limit["resets_at"], "the recorded limit holds the read reset time, as if the agent gave it")
-	}
+	record := firstLimitRecord(t, steps)
+	assert.Equal(t, limitReset.Format(time.RFC3339), record["wait_until"], "the wait ends at the reset that the pool read gave")
+	limit, isObject := record["limit"].(map[string]any) // the decoded JSON object of the limit
+	require.True(t, isObject)
+	assert.Equal(t, limitReset.Format(time.RFC3339), limit["resets_at"], "the recorded limit holds the read reset time, as if the agent gave it")
 }
 
 func TestRateLimit_TwoLimitsInARowWithAResetInThePastFailTheStep(t *testing.T) {
@@ -788,4 +799,276 @@ func TestRateLimit_AStoredPhaseWithoutALimitDecodesAsBefore(t *testing.T) {
 	withLimit, err := json.Marshal(PhaseOutput{Outcome: agent.OutcomeLimited, Limit: limited(limitReset, 0).Limit})
 	require.NoError(t, err)
 	assert.Contains(t, string(withLimit), `"limit":{"kind":"rate","window":"five_hour","resets_at":"2026-11-01T05:00:00Z"}`)
+}
+
+func TestRateLimit_TheRerunResumesTheSessionOfTheLimitedRun(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), exited)
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 2)
+	assert.Nil(t, requests[0].Lost, "the first run follows no limit")
+	require.NotNil(t, requests[1].Lost, "the rerun resumes the session of the limited run")
+	assert.Equal(t, "sess-limited", requests[1].Lost.Session)
+	assert.Contains(t, requests[1].Lost.Continue, "The rate limit five_hour of login "+testLogin+" stopped you")
+	assert.Contains(t, requests[1].Lost.Continue, "Continue the step from where you stopped.")
+	assert.Contains(t, requests[1].Lost.Note, limitSentence)
+	assert.Contains(t, requests[1].Lost.Note, "Read `git status`")
+	assert.Equal(t, "Work on the item.\n", requests[1].Prompt, "the note goes with the limited run, not into the prompt")
+}
+
+func TestRateLimit_ARerunAfterALimitedRunWithNoSessionGetsTheNoteAndTheDiffSummaryInThePrompt(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+
+	var calls atomic.Int32
+
+	h.agents.result = func(AgentRequest) agent.Result {
+		if calls.Add(1) > 1 {
+			return exited
+		}
+
+		// The limited agent committed one file before the limit stopped it.
+		commitIn(t, h.trees.dir, "done.txt")
+
+		return limitedIn("")
+	}
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 2)
+	assert.Nil(t, requests[1].Lost, "a limited run that named no session has no session to resume")
+	assert.Contains(t, requests[1].Prompt, limitSentence)
+	assert.Contains(t, requests[1].Prompt, "done.txt")
+	assert.Contains(t, requests[1].Prompt, "1 file changed")
+}
+
+func TestRateLimit_ARestartDuringTheWaitResumesTheSameSessionWithTheRecordedNote(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-1500*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), exited)
+
+	first := h.engine(t)
+	done := runInBackground(first, testItem)
+
+	waitForTheSleep(t, first)
+	require.NoError(t, first.Shutdown())
+	<-done
+	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
+
+	second := h.engine(t)
+	client := h.client(t, testVersion)
+
+	eventually(t, func() bool {
+		steps, err := client.Steps(testRun)
+
+		return err == nil && steps.State == runDone
+	})
+
+	record := firstLimitRecord(t, recordsOfTestRun(t, second))
+	note, ok := record["note"].(string)
+	require.True(t, ok, "the limit record holds the note")
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[1].Lost, "the replay builds the rerun from the limit record")
+	assert.Equal(t, "sess-limited", requests[1].Lost.Session)
+	assert.Equal(t, note, requests[1].Lost.Note, "the rerun gets the note that the limit step recorded")
+}
+
+func TestRateLimit_ACommitDuringTheWaitStaysOutOfTheRecordedNoteOfTheRerun(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-1500*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), exited)
+
+	first := h.engine(t)
+	done := runInBackground(first, testItem)
+
+	waitForTheSleep(t, first)
+	require.NoError(t, first.Shutdown())
+	<-done
+	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
+
+	// A commit lands in the item folder after the limit step recorded the note.
+	commitIn(t, h.trees.dir, "late.txt")
+
+	h.engine(t)
+	client := h.client(t, testVersion)
+
+	eventually(t, func() bool {
+		steps, err := client.Steps(testRun)
+
+		return err == nil && steps.State == runDone
+	})
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[1].Lost)
+	assert.Contains(t, requests[1].Lost.Note, limitSentence)
+	assert.NotContains(t, requests[1].Lost.Note, "late.txt", "the replay reads the note that the limit step recorded and reads no new diff")
+}
+
+func TestRateLimit_ASecondLimitResumesTheSessionOfTheSecondRunWithThePromptOfTheTry(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limitedIn("S1"), limitedIn("S2"), exited)
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 3)
+	require.NotNil(t, requests[1].Lost)
+	assert.Equal(t, "S1", requests[1].Lost.Session)
+	require.NotNil(t, requests[2].Lost)
+	assert.Equal(t, "S2", requests[2].Lost.Session, "the second rerun resumes the session of the second limited run")
+	assert.Equal(t, requests[1].Lost.Note, requests[2].Lost.Note, "each rerun gets one note")
+
+	for i, request := range requests {
+		assert.Equal(t, "Work on the item.\n", request.Prompt, "the prompt of run %d", i)
+	}
+}
+
+func TestRateLimit_ASecondLimitedRunThatNamedNoSessionResumesTheFirstSession(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), limitedIn(""), exited)
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 3)
+	require.NotNil(t, requests[2].Lost, "the second limited run named no session, so the first one is still the session of the step")
+	assert.Equal(t, "sess-limited", requests[2].Lost.Session)
+	assert.Equal(t, "Work on the item.\n", requests[2].Prompt)
+}
+
+func TestRateLimit_TwoLimitedRunsThatNamedNoSessionPutOneNoteInThePrompt(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limitedIn(""), limitedIn(""), exited)
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 3)
+	assert.Nil(t, requests[2].Lost)
+	assert.Equal(t, 1, strings.Count(requests[2].Prompt, limitSentence), "each rerun starts from the input of the try: %q", requests[2].Prompt)
+}
+
+func TestRateLimit_AResumeAfterAFailedRerunResumesTheLimitedSession(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), agent.Result{Outcome: agent.OutcomeExited, ExitCode: 3, Note: "bad exit"}, exited)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, "(exit 3)")
+
+	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 3)
+	require.NotNil(t, requests[2].Lost, "the reopen keeps the input of the rerun, which names the limited session")
+	assert.Equal(t, "sess-limited", requests[2].Lost.Session)
+}
+
+func TestRateLimit_ALimitedRunWhoseDiffCannotBeReadStillResumesItsSession(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+
+	var calls atomic.Int32
+
+	h.agents.result = func(AgentRequest) agent.Result {
+		if calls.Add(1) > 1 {
+			// read-tree writes a new index from HEAD and does not read the broken one.
+			gitIn(t, h.trees.dir, "read-tree", "HEAD")
+
+			return exited
+		}
+
+		// The limited agent committed one file and left a broken index, so git refuses the diff.
+		commitIn(t, h.trees.dir, "done.txt")
+		require.NoError(t, os.WriteFile(filepath.Join(h.trees.dir, ".git", "index"), []byte("not an index"), 0o600))
+
+		return limited(limitReset, 0)
+	}
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 2)
+	require.NotNil(t, requests[1].Lost, "the diff serves only the note, so its failure keeps the resume")
+	assert.Equal(t, "sess-limited", requests[1].Lost.Session)
+	assert.Contains(t, requests[1].Lost.Note, "The engine could not read the diff summary of the changes since the step started.")
+
+	log, err := os.ReadFile(filepath.Join(h.opts.StateDir, logFileName))
+	require.NoError(t, err)
+	assert.Contains(t, string(log), "cannot read the diff summary of the limited agent run", "the log holds the reason")
+}
+
+func TestRateLimit_ALimitRecordWithoutANoteDecodesAndAPhaseWithoutLimitedDecodesAsBefore(t *testing.T) {
+	t.Parallel()
+
+	old := `{"limit":{"kind":"rate","window":"five_hour","resets_at":"2026-11-01T05:00:00Z"},"login":"alice","wait_until":"2026-11-01T05:00:00Z","session":"s","cost_usd":0.5}`
+
+	var line StepLine
+
+	require.True(t, line.fromLimit(old), "a limit record with no note decodes for the status view")
+	require.NotNil(t, line.LimitWait)
+	assert.Equal(t, limitReset, line.LimitWait.WaitUntil.UTC())
+	assert.InDelta(t, 0.5, line.Cost, 0)
+
+	var in PhaseInput
+
+	require.NoError(t, json.Unmarshal([]byte(`{"run":"r","item":"i","project":"p","login":"alice"}`), &in))
+	assert.Nil(t, in.Limited, "a stored phase with no limited field decodes with none")
+
+	plain, err := json.Marshal(PhaseInput{Item: "i"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(plain), `"limited"`, "a phase with no limited run keeps its form")
+
+	rerun, err := json.Marshal(PhaseInput{Item: "i", Limited: &LostRun{Session: "s", Note: "n", Continue: "c"}})
+	require.NoError(t, err)
+	assert.Contains(t, string(rerun), `"limited":{"session":"s","note":"n","continue":"c"}`)
+
+	out, err := json.Marshal(PhaseOutput{Outcome: agent.OutcomeExited})
+	require.NoError(t, err)
+	assert.NotContains(t, string(out), `"resume_of"`, "a run that was given no session to resume keeps the form of its phase output")
+}
+
+func TestLimitNote_NamesTheLimitAndTheLoginAndQuotesTheDiffSummary(t *testing.T) {
+	t.Parallel()
+
+	stat := " a.txt | 1 +\n 1 file changed, 1 insertion(+)"
+	record := limitRecord{LimitWait: LimitWait{Limit: *limited(limitReset, 0).Limit, Login: testLogin}}
+
+	note := record.note(viewDiff, stat)
+	_, lostTail, found := strings.Cut(LostStep{DiffStat: stat}.note(viewDiff), ". ")
+	require.True(t, found)
+
+	assert.Equal(t, limitSentence+" "+lostTail, note, "the note names the limit and the login, then shares the part about the work tree with the note of a lost step")
+	assert.Contains(t, note, stat)
+	assert.Equal(t, "The rate limit five_hour of login "+testLogin+" stopped you while you worked on this step, and it has reset. "+
+		"Continue the step from where you stopped. Your brief and the output file are earlier in this session.", record.continued())
 }

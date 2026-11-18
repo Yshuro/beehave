@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -64,6 +65,9 @@ type PhaseInput struct {
 	// It is left out of a recorded phase for any other run.
 	ResetPassed bool `json:"reset_passed,omitempty"`
 
+	// Limited is the run that a provider limit stopped, for the rerun after the reset, and is left out of a recorded phase for any other run.
+	Limited *LostRun `json:"limited,omitempty"`
+
 	// StartHead is the commit of the item folder when the render step of the call ran. The record of a lost start holds the diff summary since that commit.
 	// It is empty for a plain folder.
 	StartHead string `json:"start_head,omitempty"`
@@ -92,10 +96,12 @@ type PhaseOutput struct {
 	Rounds int `json:"rounds,omitempty"`
 	// Limit is the provider limit that stopped a run that ended as limited. It is left out of a recorded phase for any other run, so a stored phase keeps its form.
 	Limit *agent.Limit `json:"limit,omitempty"`
-	// Resumed is true for a run that resumed the session of a lost start. It is left out of a recorded phase for any other run.
+	// Resumed is true for a run that resumed the session of a lost start or of a run that a provider limit stopped. It is left out of a recorded phase for any other run.
 	Resumed bool `json:"resumed,omitempty"`
 	// CapStop is the run cap or the tree cap that stopped the look of the phase, so no agent ran. It is left out of a recorded phase for any other run.
 	CapStop *CapStop `json:"cap_stop,omitempty"`
+	// ResumeOf is the session of the lost start or the limited run that this run was given to resume, and is left out of a recorded phase for any other run.
+	ResumeOf string `json:"resume_of,omitempty"`
 }
 
 // phase waits for a trusted claim of its run, looks at the caps, then runs the agent as a step; a cap stop ends it with the stop and no agent run.
@@ -114,11 +120,11 @@ func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 		return PhaseOutput{}, err
 	}
 
-	return e.agentStep(ctx, claim, in, lost)
+	return e.agentStep(ctx, claim, in, cmp.Or(lost, in.Limited))
 }
 
 // agentStep runs the agent of the phase as a step. A failed step returns no output, so it leaves the cost of the failed run in an event that the queuing run reads.
-// lost is the lost run that the start follows, or nil.
+// lost is the lost or limited run that the start follows, or nil.
 func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
 	var spent agent.Spend
 
@@ -152,7 +158,10 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 
 	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, lost, saver.name))
 
-	return e.judgePhase(ctx, in, result, err)
+	out, err := e.judgePhase(ctx, in, result, err)
+	out.ResumeOf = lost.session()
+
+	return out, err
 }
 
 // judgePhase returns the output of a phase from the result of its agent, and the error that ends the phase.
