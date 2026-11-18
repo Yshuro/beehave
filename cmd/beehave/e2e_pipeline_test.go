@@ -3,7 +3,6 @@ package main
 import (
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/rogpeppe/go-internal/testscript"
 )
@@ -67,7 +66,7 @@ func cmdPipelineFakes(ts *testscript.TestScript, _ bool, args []string) {
 			ts.Fatalf("pipefakes: %v", err)
 		}
 
-		if err := work.WriteFile(filepath.Join("fake", name), []byte(strings.ReplaceAll(string(text), e2eWorkMarker, ts.Getenv("WORK"))), e2eToolMode); err != nil {
+		if err := writeFake(ts, filepath.Join("fake", name), text); err != nil {
 			ts.Fatalf("pipefakes: %v", err)
 		}
 	}

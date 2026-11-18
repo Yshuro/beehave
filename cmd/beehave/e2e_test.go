@@ -21,6 +21,7 @@ import (
 	"github.com/tobocop2/beehave/internal/agent/claude"
 	"github.com/tobocop2/beehave/internal/cli"
 	"github.com/tobocop2/beehave/internal/config"
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
@@ -40,7 +41,6 @@ const (
 	e2eWait        = 120 * time.Second
 	e2ePoll        = 100 * time.Millisecond
 	e2eFileMode    = 0o600
-	e2eScriptMode  = 0o700
 	e2eFolderMode  = 0o700
 )
 
@@ -499,10 +499,10 @@ func exampleSkill() (string, error) {
 	return skills[0], nil
 }
 
-// e2eFile is a file of the work folder of a script.
+// e2eFile is a file of the work folder of a script; a program is a file that the script starts.
 type e2eFile struct {
-	text string
-	mode os.FileMode
+	text    string
+	program bool
 }
 
 // writeE2EFiles writes each file below work, with the folders it needs.
@@ -513,12 +513,20 @@ func writeE2EFiles(work string, files map[string]e2eFile) error {
 			return err
 		}
 
-		if err := os.WriteFile(path, []byte(file.text), file.mode); err != nil {
+		if err := writeE2EFile(path, file); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func writeE2EFile(path string, file e2eFile) error {
+	if file.program {
+		return exectest.Write(path, file.text)
+	}
+
+	return os.WriteFile(path, []byte(file.text), e2eFileMode)
 }
 
 // e2eSetup writes the config folder and the fake claude into the work folder of a script.
@@ -534,9 +542,9 @@ func e2eSetup(env *testscript.Env) error {
 	fake := strings.NewReplacer("%SKILL%", skill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
 
 	files := map[string]e2eFile{
-		"bin/claude":                {fake, e2eScriptMode},
-		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), e2eFileMode},
-		"config/projects/shop.star": {e2eProject, e2eFileMode},
+		"bin/claude":                {fake, true},
+		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), false},
+		"config/projects/shop.star": {e2eProject, false},
 	}
 
 	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
@@ -549,10 +557,10 @@ func e2eSetup(env *testscript.Env) error {
 		return err
 	}
 
-	files["flow/workflow.star"] = e2eFile{copied, e2eFileMode}
+	files["flow/workflow.star"] = e2eFile{copied, false}
 
 	for name, text := range e2ePrompts {
-		files["flow/prompts/"+name+".md"] = e2eFile{text, e2eFileMode}
+		files["flow/prompts/"+name+".md"] = e2eFile{text, false}
 	}
 
 	if err := writeE2EFiles(work, files); err != nil {

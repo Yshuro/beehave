@@ -21,6 +21,7 @@ Each file is Starlark with the step limit of the workflow files. The limits and 
 | --- | --- | --- | --- |
 | `max_concurrent` | The global limit on agent processes. | | |
 | `max_review_concurrent` | The same limit for the agent steps of the kind review. | | |
+| `per_login` | The most agent steps that one login runs at once, in each of the two agent queues. The gate and merge queues keep one run for each repository. | Default 1. The least is 1. The most is the lower of `max_concurrent` and `max_review_concurrent`. | `BEEHAVE_AGENTS_PER_LOGIN` |
 | `max_turns` | The cap of turns for one agent run. | 0 means no cap. | |
 | `max_budget_usd` | The cap of dollars for one agent run. | 0 means no cap. | |
 | `max_run_budget_usd` | The cap of dollars for the agent steps of one run in all. | 0 means no cap. | `BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD` |
@@ -36,7 +37,7 @@ The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_
 
 The project also takes the config block of the adapter that it chooses. The adapter declares the keys of its block, and the config passes the block to the adapter unread. The beads adapter declares the `beads` block with one key: `beads = beads(prefix = "proj")`. A project that chooses the beads tracker or the beads claim store must give the block. The config refuses a block of an adapter that the project does not choose, and the refusal names the adapters that the project does choose.
 
-The `host` call takes the block of the host adapter in the same way. The `skypilot`, `ssh` and `slurm` adapters each declare their own block, for example `host = host(provider = "ssh", disk_floor_gb = 50, ssh = ssh(user = "ci"))`. The `host` call also takes `lost_job_wait`, a duration from `"1m"` to `"24h"` with the default `"60m"`; see `docs/design/hosts.md`. The config refuses the block of a host adapter that `provider` does not name, and the refusal names the block and the provider. The adapter reads and checks its keys when it builds the host.
+The `host` call takes the block of the host adapter in the same way. The `skypilot`, `ssh` and `slurm` adapters each declare their own block, for example `host = host(provider = "ssh", disk_floor_gb = 50, ssh = ssh(user = "ci"))`. The `host` call also takes `lost_job_wait`, a duration from `"1m"` to `"24h"` with the default `"60m"`; see `docs/design/hosts.md`. It takes `lost_after` and `stop_limit` too, two durations above zero with the default `"5m"`; see `docs/design/hosts.md`. The config refuses the block of a host adapter that `provider` does not name, and the refusal names the block and the provider. The adapter reads and checks its keys when it builds the host.
 
 The project also takes facts. All facts are optional and are empty when left out.
 

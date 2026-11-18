@@ -94,7 +94,7 @@ Each agent step runs as a child workflow named `phase`. The phase starts the age
 
 The queue holds only phases. Phases run on the queue `agents`, or on the queue `reviews` for an agent call with `kind = "review"`.
 
-- The partition key of a phase is the login. Each partition of a queue runs one phase at a time.
+- The partition key of a phase is the login. Each partition of a queue runs at most `agents.per_login` phases at once. The default is 1.
 - Each queue has a global limit: `agents.max_concurrent` for `agents` and `agents.max_review_concurrent` for `reviews`.
 - The queues do not lend slots. The host never runs more than the sum of the two limits.
 - One login can run one review phase and one implement phase at once.
@@ -144,7 +144,7 @@ When a provider limit (a rate limit or a spend limit) stops an agent run, the st
 
 - The wait is in the item run, after the phase, so it holds no slot of the agents queue.
 - The rerun is part of the same call. It uses no try of `output_tries`, and `earlier_calls` counts the call as one lane.
-- The rerun keeps the login of the limited run, because the session of the run lives in the config folder of that login. It uses the `resume` keyword of the call, as the first run did.
+- The rerun keeps the login of the limited run, because the session of the run lives in the config folder of that login. It resumes the session of the limited run, as a start after a lost step does (see [Resume or start again](#resume-or-start-again)). The saved session wins over the `resume` keyword of the call. A limited run that named no session is followed by a fresh rerun with the note of the limit in the prompt.
 - Before the rerun, the run cap and the tree cap are checked again. The limited run can spend money before the limit stops it, and that cost is in the sum.
 
 For try `t` and run `k` (from 0) inside the try, the call records these steps:
@@ -152,7 +152,7 @@ For try `t` and run `k` (from 0) inside the try, the call records these steps:
 | Step | When |
 |---|---|
 | `…/budget<t>.<look>` | Before each run. The look number continues across the runs of the try. |
-| `…/limit<t>.<k>` | After a limited run. It holds `limit` (`kind`, `window`, `resets_at`), `login`, `wait_until`, `session` and the cost of the run. |
+| `…/limit<t>.<k>` | After a limited run. It holds `limit` (`kind`, `window`, `resets_at`), `login`, `wait_until`, `session`, `note` and the cost of the run. The `session` is the one that the limited run named, or the session that the run was given to resume when it named none: the session of a lost start, or of the limited run before it. The phase output records that session as `resume_of`. |
 | `DBOS.sleep` | After each limit step, until `wait_until`. |
 
 `wait_until` is fixed inside the limit step, so a restart during the wait sleeps only the time that is left and starts the agent once after the reset.
@@ -552,6 +552,8 @@ The render step also writes the start commit to the per-worktree ref `refs/workt
 
 When the loss record holds a session, the agents layer decides once, before the start, whether the session can resume. It cannot resume when the CLI of the runner has no resume option, or when the transcript file of the session is missing (a moved worktree, a cleaned login folder, another login). A session that can resume starts with `--resume <id>` and a short prompt: the engine stopped after N minutes, continue the step, the brief and the output file are earlier in the session. The phase output records `resumed`. The saved session wins over the `resume` keyword of the call.
 
+The rerun after a provider limit uses the same decision. The phase input of the rerun holds `limited`: the session of the limit record, the note of the limit and the prompt of the resumed session (the limit of the login stopped you, it has reset, continue the step). The note of the limit says that the limit of the login stopped the step, then holds the same diff summary and the same request to read `git status` and `git diff` as the note of a lost step. Each rerun of a try starts from the input of the try, so two limits in a row give one note. If the rerun itself is lost after it named a session, that newer session wins. If it is lost before it named one, the note of the loss goes into the prompt and the rerun resumes the limited session. `beehave resume` of a rerun that failed keeps the phase input, so it resumes the limited session again. A run that recorded an agent step under an earlier agent module does not move to this build: `resume --on-this-build` refuses it, as it refuses any run that recorded a step of a module whose version changed. Start such an item again.
+
 A session that cannot resume, and a loss before the agent named a session, start the agent again with the prompt and the note. OpenCode never resumes a lost run: it keeps no file for one session, so the check finds none. A start that the CLI refuses at run time fails the step as any failed run does.
 
 #### The note in the prompt
@@ -659,7 +661,7 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent5.tracker1.forge2.land4.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent8.tracker1.forge2.land4.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
 | The run is a run of a round item, and the version of the round module differs from the version in this build. The version of the round module covers the step that makes the worktree at the start of every round item, so every round run uses the module, even a run that an older build recorded with no such step. | Names the step that makes the worktree, and says to finish the run on the build that started it or to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 
@@ -825,6 +827,8 @@ The line shows no next due time. The library counts the first tick of a fixed de
 #### `beehave resume <item>`
 
 `resume` reopens the cancelled or the failed run. Then `beehave run <item>` continues it from the last finished step.
+
+When the store refuses the record of a step, the step records its failure at once, under the same name at the next step id. The resume goes back to the first failed record, so the refused step runs again and no record after it stays. `beehave status <run id>` shows such a step as failed. A canceled run records no failure, and a step whose error DBOS has already recorded, also after its retries, records nothing more. If the store refuses the failure record too, the engine logs a warning. The records that DBOS writes itself (the start of a child run, `DBOS.sleep`) are outside this rule.
 
 `beehave resume <item>` first takes a fresh claim on the item, because the release of the old run gave the old claim back.
 

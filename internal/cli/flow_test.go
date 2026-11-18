@@ -754,6 +754,23 @@ func TestOptions_TheCapsOfTheRunAndOfTheTreeReachTheEngine(t *testing.T) {
 	assert.InDelta(t, 60.0, rig.options.MaxTreeBudget, 0)
 }
 
+func TestOptions_PerLoginIsTheOneOfTheConfigByDefaultAndTheWrittenValueOtherwise(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+
+	code, _, stderr := rig.execute(t.Context(), "run", "12")
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, 1, rig.options.PerLogin)
+
+	rig = newRig(t)
+	writeConfig(t, rig.dir, "runners.star", "agents(per_login = 2)\n"+validRunners)
+
+	code, _, stderr = rig.execute(t.Context(), "run", "12")
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, 2, rig.options.PerLogin)
+}
+
 func TestOptions_TheRetentionDaysBecomeTheAgeOfTheEngineAndZeroKeepsTheRuns(t *testing.T) {
 	t.Parallel()
 

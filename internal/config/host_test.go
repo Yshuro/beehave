@@ -27,7 +27,7 @@ func TestLoadFolder_SSHAndSlurmHostsKeepTheirBlockUnread(t *testing.T) {
 
 	project, problems := loadProjectText(t, call(clusterProject+", host = "+sshCall("")))
 	require.Empty(t, problems)
-	require.Equal(t, &model.HostConfig{Provider: "ssh", StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, LostJobWait: time.Hour, DiskFloorGB: 50}, project.Host, "a host with no block holds none")
+	require.Equal(t, &model.HostConfig{Provider: "ssh", StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, LostJobWait: time.Hour, LostAfter: 5 * time.Minute, StopLimit: 5 * time.Minute, DiskFloorGB: 50}, project.Host, "a host with no block holds none")
 
 	project, problems = loadProjectText(t, call(clusterProject+", host = "+sshCall(`, ssh = ssh(user = "ci")`)))
 	require.Empty(t, problems)
@@ -49,15 +49,15 @@ func TestLoadFolder_HostTableDefaultsAndKeys(t *testing.T) {
 	project, problems := loadProjectText(t, call(clusterProject+", host = "+hostCall("")))
 
 	require.Empty(t, problems)
-	require.Equal(t, &model.HostConfig{Provider: "skypilot", IdleMinutes: 60, StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, LostJobWait: time.Hour, DiskFloorGB: 50}, project.Host)
+	require.Equal(t, &model.HostConfig{Provider: "skypilot", IdleMinutes: 60, StaleMinutes: 20, MaxRun: 24 * time.Hour, BankBudget: 20 * time.Second, LostJobWait: time.Hour, LostAfter: 5 * time.Minute, StopLimit: 5 * time.Minute, DiskFloorGB: 50}, project.Host)
 
-	project, problems = loadProjectText(t, call(clusterProject+`, host = host(provider = "skypilot", idle_minutes = 30, stale_minutes = 5, max_run = "12h", bank_budget = "45s", lost_job_wait = "2h", disk_floor_gb = 20, disk_wait_minutes = 15,
+	project, problems = loadProjectText(t, call(clusterProject+`, host = host(provider = "skypilot", idle_minutes = 30, stale_minutes = 5, max_run = "12h", bank_budget = "45s", lost_job_wait = "2h", lost_after = "3m", stop_limit = "4m", disk_floor_gb = 20, disk_wait_minutes = 15,
   private_remote = "git@example.com:org/repo.git",
   skypilot = skypilot(cloud = "gcp", region = "us-central1", instance_type = "n2-standard-8"))`))
 
 	require.Empty(t, problems)
 	require.Equal(t, &model.HostConfig{
-		Provider: "skypilot", IdleMinutes: 30, StaleMinutes: 5, MaxRun: 12 * time.Hour, BankBudget: 45 * time.Second, LostJobWait: 2 * time.Hour, DiskFloorGB: 20, DiskWaitMinutes: 15, PrivateRemote: "git@example.com:org/repo.git",
+		Provider: "skypilot", IdleMinutes: 30, StaleMinutes: 5, MaxRun: 12 * time.Hour, BankBudget: 45 * time.Second, LostJobWait: 2 * time.Hour, LostAfter: 3 * time.Minute, StopLimit: 4 * time.Minute, DiskFloorGB: 20, DiskWaitMinutes: 15, PrivateRemote: "git@example.com:org/repo.git",
 		Block: project.Host.Block,
 	}, project.Host)
 	require.Equal(t, `{cloud="gcp" instance_type="n2-standard-8" region="us-central1"}`, project.Host.Block.String())
@@ -169,6 +169,42 @@ func TestHostConfig_LostJobWaitDefaultsToSixtyMinutes(t *testing.T) {
 		project, problems := loadProjectText(t, call(clusterProject+", host = "+sshCall(`, lost_job_wait = "`+tc.text+`"`)))
 		require.Empty(t, problems, tc.text)
 		require.Equal(t, tc.want, project.Host.LostJobWait, tc.text)
+	}
+}
+
+func TestHostConfig_TheLostAndStopLimitsDefaultToFiveMinutesAndAreDistinctFromLostJobWait(t *testing.T) {
+	t.Parallel()
+
+	for name, text := range map[string]string{"skypilot": hostCall(""), "ssh": sshCall(""), "slurm": `host(provider = "slurm", disk_floor_gb = 50)`} {
+		project, problems := loadProjectText(t, call(clusterProject+", host = "+text))
+		require.Empty(t, problems, name)
+		require.Equal(t, 5*time.Minute, project.Host.LostAfter, name)
+		require.Equal(t, 5*time.Minute, project.Host.StopLimit, name)
+	}
+
+	project, problems := loadProjectText(t, call(clusterProject+", host = "+sshCall(`, lost_after = "90s"`)))
+	require.Empty(t, problems)
+	require.Equal(t, 90*time.Second, project.Host.LostAfter)
+	require.Equal(t, 5*time.Minute, project.Host.StopLimit, "the stop limit keeps its default when only lost_after is written")
+	require.Equal(t, time.Hour, project.Host.LostJobWait, "lost_job_wait is a separate key")
+
+	project, problems = loadProjectText(t, call(clusterProject+", host = "+sshCall(`, stop_limit = "2m"`)))
+	require.Empty(t, problems)
+	require.Equal(t, 2*time.Minute, project.Host.StopLimit)
+	require.Equal(t, 5*time.Minute, project.Host.LostAfter, "lost_after keeps its default when only stop_limit is written")
+}
+
+func TestHostConfig_ALostAfterOrStopLimitThatIsNegativeOrNotADurationIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range []string{"lost_after", "stop_limit"} {
+		for _, text := range []string{"-1m", "0s", "soon", ""} {
+			_, problems := loadProjectText(t, call(clusterProject+", host = "+hostCall(", "+key+` = "`+text+`"`)))
+
+			require.Len(t, problems, 1, key+" "+text)
+			require.ErrorIs(t, problems[0], config.ErrRefused, key+" "+text)
+			require.ErrorContains(t, problems[0], "`host."+key+"` must be a duration above zero, such as \"5m\"; got `"+text+"`. Fix the value.", key+" "+text)
+		}
 	}
 }
 

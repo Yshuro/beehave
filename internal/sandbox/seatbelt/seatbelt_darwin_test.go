@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/sandbox"
 )
 
@@ -23,7 +24,7 @@ func writeScript(t *testing.T, text string) string {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "script")
-	require.NoError(t, os.WriteFile(path, []byte(text), 0o700)) //nolint:gosec // a test script must be executable
+	require.NoError(t, exectest.Write(path, text))
 
 	return path
 }

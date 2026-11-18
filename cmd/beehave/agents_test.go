@@ -17,6 +17,7 @@ import (
 	"github.com/tobocop2/beehave/internal/agent/claude"
 	"github.com/tobocop2/beehave/internal/agent/opencode"
 	"github.com/tobocop2/beehave/internal/config"
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/pool"
@@ -1249,7 +1250,7 @@ func usageFixture(t *testing.T) (config.Config, flow.Options) {
 	t.Helper()
 
 	tools := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tools, "claude"), []byte("#!/bin/sh\necho fake-claude-ran >&2\nexit 7\n"), e2eToolMode))
+	require.NoError(t, exectest.Write(filepath.Join(tools, "claude"), "#!/bin/sh\necho fake-claude-ran >&2\nexit 7\n"))
 
 	cfg := config.Config{
 		Pool:    config.Pool{FiveHourMax: 90, SevenDayMax: 95},

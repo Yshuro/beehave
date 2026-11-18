@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/store/beads/beadstest"
 )
@@ -343,7 +344,7 @@ func TestStartDoltWithin_StopsTheTestWhenALiveServerNeverPrintsTheReadyLine(t *t
 
 func TestRealBd_ReturnsTheBinaryWhenDoltIsOnThePath(t *testing.T) {
 	dir := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "dolt"), []byte("#!/bin/sh\n"), 0o700)) //nolint:gosec // G306: the file stands for the dolt binary
+	require.NoError(t, exectest.Write(filepath.Join(dir, "dolt"), "#!/bin/sh\n"))
 	t.Setenv("PATH", dir)
 
 	assert.Equal(t, "/bin/bd", beadstest.RealBd(t, map[string]string{beadstest.BinaryVariable: "/bin/bd", "CI": "true"}))
