@@ -16,7 +16,7 @@ import (
 	"github.com/tobocop2/beehave/internal/agent"
 )
 
-const privateMode = os.FileMode(0o600)
+const privateMode = 0o600
 
 func TestOptions_RefuseEachDBOSVariableTheRuleNames(t *testing.T) {
 	t.Parallel()

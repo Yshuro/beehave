@@ -144,7 +144,7 @@ func TestGateSandbox_AFolderOfGatesThatAnotherUserCanWriteRunsNoCommand(t *testi
 	require.NoError(t, os.MkdirAll(root, 0o700))
 
 	for _, mode := range []os.FileMode{0o770, 0o707, 0o777} {
-		require.NoError(t, os.Chmod(root, mode))
+		require.NoError(t, os.Chmod(root, mode)) // a test folder
 
 		enforcer := &fakeEnforcer{}
 		out, code := sandboxFor(t, enforcer, nil).run(t.Context(), "p", t.TempDir(), []string{"true"}, nil, 0)
@@ -190,7 +190,7 @@ func TestGateSandbox_AFolderOfGatesThatCannotBeListedOrWrittenRunsNoCommand(t *t
 	for name, mode := range map[string]os.FileMode{"list": 0o300, "write": 0o500} {
 		root := ownTemp(t)
 		require.NoError(t, os.MkdirAll(root, 0o700))
-		require.NoError(t, os.Chmod(root, mode))
+		require.NoError(t, os.Chmod(root, mode))                       // a test folder
 		t.Cleanup(func() { assert.NoError(t, os.Chmod(root, 0o700)) }) //nolint:gosec // a test folder
 
 		out, code := sandboxFor(t, &fakeEnforcer{}, nil).run(t.Context(), "p", t.TempDir(), []string{"true"}, nil, 0)

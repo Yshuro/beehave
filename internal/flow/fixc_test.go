@@ -382,8 +382,8 @@ func TestMarkCancel_LeavesNoTemporaryFileAndAFolderThatCannotBeWrittenIsAnError(
 
 	folder := filepath.Join(dir, cancelsDir)
 
-	require.NoError(t, os.Chmod(folder, 0o500)) //nolint:gosec // the test makes its own folder read-only
-	t.Cleanup(func() { require.NoError(t, os.Chmod(folder, ownersMode)) })
+	require.NoError(t, os.Chmod(folder, 0o500))                            //nolint:gosec // the test makes its own folder read-only
+	t.Cleanup(func() { require.NoError(t, os.Chmod(folder, ownersMode)) }) // a test folder
 
 	require.ErrorContains(t, markCancel(dir, "item-13-r1", ItemInput{}), "mark the cancel of run item-13-r1")
 }

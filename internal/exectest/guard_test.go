@@ -16,19 +16,22 @@ import (
 )
 
 const (
-	execBits   = 0o111
-	repoRoot   = "../.."
-	modeArgOf  = 2
-	openModeAt = 2
+	execBits = 0o111
+	repoRoot = "../.."
+	modeArg  = 2
+	argCount = 3
+
+	chmodArgs = 2
+	folder    = "folder"
 )
 
-// bypasses returns "file:line" for each call in the Go files of root that writes a file with an executable mode and does not use exectest.Write.
+// bypasses returns "file:line" for each call in the test files of root that can write a program without exectest.Write.
 func bypasses(t *testing.T, root string) []string {
 	t.Helper()
 
 	var found []string
 
-	consts := map[string]map[string]int64{}
+	consts := map[string]map[string]bool{}
 
 	require.NoError(t, filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -39,7 +42,7 @@ func bypasses(t *testing.T, root string) []string {
 			return filepath.SkipDir
 		}
 
-		if entry.IsDir() || !strings.HasSuffix(path, "_test.go") {
+		if entry.IsDir() || !strings.HasSuffix(path, "_test.go") || filepath.Base(filepath.Dir(path)) == "exectest" {
 			return nil
 		}
 
@@ -56,22 +59,38 @@ func bypasses(t *testing.T, root string) []string {
 	return found
 }
 
-func bypassesIn(t *testing.T, path string, consts map[string]int64) []string {
+// packageConsts returns the plain mode constants that the Go files of one folder declare.
+func packageConsts(t *testing.T, dir string) map[string]bool {
+	t.Helper()
+
+	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
+	require.NoError(t, err)
+
+	plain := map[string]bool{}
+
+	for _, path := range files {
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		require.NoError(t, err)
+		plainConsts(file, plain)
+	}
+
+	return plain
+}
+
+func bypassesIn(t *testing.T, path string, consts map[string]bool) []string {
 	t.Helper()
 
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, 0)
+	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	require.NoError(t, err)
+
+	folders := folderLines(fset, file)
 
 	var found []string
 
 	ast.Inspect(file, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-
-		if mode, ok := writeMode(call, consts); ok && mode&execBits != 0 {
+		if ok && bypasses1(call, consts, folders[fset.Position(call.Pos()).Line]) {
 			found = append(found, fset.Position(call.Pos()).String())
 		}
 
@@ -81,84 +100,85 @@ func bypassesIn(t *testing.T, path string, consts map[string]int64) []string {
 	return found
 }
 
-// writeMode returns the file mode that a WriteFile or OpenFile call creates a file with, when the mode is a literal or a constant of the package.
-func writeMode(call *ast.CallExpr, consts map[string]int64) (int64, bool) {
+// bypasses1 reports whether one call writes or changes a file in a way that can make a program; onFolder is true when its line says it changes a folder.
+func bypasses1(call *ast.CallExpr, consts map[string]bool, onFolder bool) bool {
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
-		return 0, false
+		return false
 	}
 
 	switch selector.Sel.Name {
-	case "WriteFile":
-		if len(call.Args) == modeArgOf+1 {
-			return constant(call.Args[modeArgOf], consts)
-		}
-	case "OpenFile":
-		if len(call.Args) == openModeAt+1 {
-			return constant(call.Args[openModeAt], consts)
-		}
+	case "WriteFile", "OpenFile":
+		return len(call.Args) == argCount && !plainMode(call.Args[modeArg], consts)
+	case "Chmod":
+		return !onFolder && (len(call.Args) != chmodArgs || !plainMode(call.Args[1], consts))
 	}
 
-	return 0, false
+	return false
 }
 
-func constant(expr ast.Expr, consts map[string]int64) (int64, bool) {
+// plainMode reports whether a mode is an integer literal with no execute bit, or the name of a constant that the package declares as one.
+func plainMode(expr ast.Expr, consts map[string]bool) bool {
 	switch value := expr.(type) {
 	case *ast.BasicLit:
-		number, err := strconv.ParseInt(value.Value, 0, 64)
-
-		return number, err == nil
+		return plainLiteral(value)
 	case *ast.Ident:
-		number, ok := consts[value.Name]
-
-		return number, ok
-	case *ast.ParenExpr:
-		return constant(value.X, consts)
+		return consts[value.Name]
 	}
 
-	return 0, false
+	return false
 }
 
-// packageConsts returns the integer constants that the test files of one folder declare at the top level.
-func packageConsts(t *testing.T, dir string) map[string]int64 {
-	t.Helper()
-
-	files, err := filepath.Glob(filepath.Join(dir, "*.go"))
-	require.NoError(t, err)
-
-	consts := map[string]int64{}
-
-	for _, path := range files {
-		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
-		require.NoError(t, err)
-
-		for _, decl := range file.Decls {
-			if gen, ok := decl.(*ast.GenDecl); ok && gen.Tok == token.CONST {
-				addConsts(gen, consts)
-			}
-		}
+func plainLiteral(lit *ast.BasicLit) bool {
+	if lit.Kind != token.INT {
+		return false
 	}
 
-	return consts
+	number, err := strconv.ParseInt(lit.Value, 0, 64)
+
+	return err == nil && number&execBits == 0
 }
 
-func addConsts(gen *ast.GenDecl, consts map[string]int64) {
-	for _, spec := range gen.Specs {
-		values, ok := spec.(*ast.ValueSpec)
-		if !ok {
+// plainConsts returns the names of the constants that a file declares as an integer literal with no execute bit.
+func plainConsts(file *ast.File, into map[string]bool) {
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
 			continue
 		}
 
-		for i, name := range values.Names {
-			if i >= len(values.Values) {
-				continue
-			}
+		for _, spec := range gen.Specs {
+			plainSpec(spec, into)
+		}
+	}
+}
 
-			if number, ok := constant(values.Values[i], consts); ok {
-				consts[name.Name] = number
+func plainSpec(spec ast.Spec, into map[string]bool) {
+	values, ok := spec.(*ast.ValueSpec)
+	if !ok || len(values.Names) != len(values.Values) {
+		return
+	}
+
+	for i, name := range values.Names {
+		if lit, ok := values.Values[i].(*ast.BasicLit); ok && plainLiteral(lit) {
+			into[name.Name] = true
+		}
+	}
+}
+
+// folderLines returns the lines whose comment says that the call changes a folder, which needs the execute bit.
+func folderLines(fset *token.FileSet, file *ast.File) map[int]bool {
+	lines := map[int]bool{}
+
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			if strings.Contains(comment.Text, folder) {
+				lines[fset.Position(comment.Pos()).Line] = true
 			}
 		}
 	}
+
+	return lines
 }
 
 func TestTests_NeverWriteAProgramWithoutTheForkLock(t *testing.T) {
@@ -167,18 +187,33 @@ func TestTests_NeverWriteAProgramWithoutTheForkLock(t *testing.T) {
 	assert.Empty(t, bypasses(t, repoRoot), "a test that writes a file it starts uses exectest.Write: a plain write fails with text file busy when another test forks")
 }
 
-func TestGuard_FlagsAPlainWriteOfAnExecutableFile(t *testing.T) {
+func TestGuard_FlagsEveryWayToWriteAProgramWithoutTheHelper(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	source := "package x\n\nconst toolMode = 0o700\n\nfunc f() {\n\tos.WriteFile(\"a\", nil, 0o755)\n\tos.WriteFile(\"b\", nil, toolMode)\n\troot.WriteFile(\"c\", nil, 0o500)\n\tos.OpenFile(\"d\", 0, 0o700)\n\tos.WriteFile(\"e\", nil, 0o600)\n\tos.OpenFile(\"f\", 0, 0o644)\n\tos.WriteFile(\"g\", nil, mode)\n\texectest.Write(\"h\", \"\")\n}\n"
+	source := `package x
+
+func f() {
+	os.WriteFile("a", nil, 0o755)
+	os.WriteFile("b", nil, mode)
+	root.WriteFile("c", nil, os.FileMode(0o700))
+	os.OpenFile("d", 0, 0o600|0o100)
+	os.Chmod("e", 0o700)
+	root.Chmod("f", mode)
+	os.WriteFile("g", nil, 0o600)
+	os.OpenFile("h", 0, 0o644)
+	os.Chmod("i", 0o600)
+	os.Chmod("j", 0o500) // a folder
+	exectest.Write("k", "")
+}
+`
 	writeSource(t, filepath.Join(dir, "x_test.go"), source)
 
 	found := bypasses(t, dir)
 
-	require.Len(t, found, 4)
+	require.Len(t, found, 6)
 
-	for i, line := range []string{"6:", "7:", "8:", "9:"} {
+	for i, line := range []string{"4:", "5:", "6:", "7:", "8:", "9:"} {
 		assert.Contains(t, found[i], "x_test.go:"+line)
 	}
 }

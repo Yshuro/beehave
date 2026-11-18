@@ -58,5 +58,5 @@ func writeFile(t *testing.T, path string, content string) string {
 
 func chmod(t *testing.T, path string, mode os.FileMode) {
 	t.Helper()
-	require.NoError(t, os.Chmod(path, mode))
+	require.NoError(t, os.Chmod(path, mode)) // a test folder
 }
