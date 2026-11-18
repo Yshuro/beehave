@@ -152,15 +152,24 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 
 	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, lost, saver.name))
 
+	return e.judgePhase(ctx, in, result, err)
+}
+
+// judgePhase returns the output of a phase from the result of its agent, and the error that ends the phase.
+// A limit with no reset time gets the one that the usage read gives. The end of the phase is judged inside the step, so a phase that did not exit with code 0,
+// and that no cap and no provider limit with an end to its wait stopped, is a failed step that beehave resume reruns.
+func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Result, runErr error) (PhaseOutput, error) {
 	out := phaseOutput(result)
 	out.Kind, out.Rounds = workflow.LaneKind(in.Kind, in.Lane), in.Rounds
 
-	if err != nil {
+	if runErr != nil {
+		return out, runErr
+	}
+
+	if err := e.dateLimit(ctx, in, &out); err != nil {
 		return out, err
 	}
 
-	// The end of the phase is judged inside the step, so a phase that did not exit with code 0, and that no cap and no provider limit with an end to its wait stopped,
-	// is a failed step that beehave resume reruns.
 	return out, phaseEnd(in, out, e.deps.Clock.wall())
 }
 
@@ -357,13 +366,22 @@ type childResult[T any] struct {
 // settle returns the result of a child. The child run sees the stop of the engine before the context of the waiting run is canceled, and its error can arrive first.
 // An error that arrives after the engine stopped is the stop, not a failure of the phase: the run stays open for the next start.
 func (r childResult[T]) settle(engine dbos.Context) (T, error) { //nolint:ireturn // the result is the type of the child workflow
-	if r.err != nil && engine.Err() != nil {
+	if stop := engineStop(engine, r.err); stop != nil {
 		var none T
 
-		return none, stopError(engine)
+		return none, stop
 	}
 
 	return r.out, r.err
+}
+
+// engineStop is the stop error when err is set and the engine has stopped, and nil otherwise. It reads the context of the engine, which the library cancels before the context of any run.
+func engineStop(engine context.Context, err error) error {
+	if err != nil && engine.Err() != nil {
+		return stopError(engine)
+	}
+
+	return nil
 }
 
 // awaitResult waits for the result of a child workflow. A stop of the engine (its context) ends the wait without a failure, even when the error of the child comes first. A cancel of ctx ends the wait at once:

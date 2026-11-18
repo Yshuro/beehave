@@ -278,6 +278,40 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 	assert.Equal(t, "wait for a cap of item 1 to be raised: context canceled", words)
 }
 
+func TestCapStop_ACapCheckWhoseRunReadFailsReturnsTheErrorAndNoStop(t *testing.T) {
+	t.Parallel()
+
+	engine := newAgentRig(t).h.opened(t)
+
+	// The run is a real workflow, so its own id reads fine. The run cap is set and the read of its steps fails.
+	check := func(ctx dbos.Context, in ItemInput) (string, error) {
+		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}, maxRunBudget: 5}
+		s := &script{e: failing, ctx: ctx, in: in}
+
+		got, err := s.checkCaps("q")
+		if err == nil {
+			return "", errors.New("the check did not fail")
+		}
+
+		if got.Stop != nil {
+			return "", errors.New("the check returned a stop with its error")
+		}
+
+		return err.Error(), nil
+	}
+
+	dbos.RegisterWorkflow(engine.ctx, check, dbos.WithWorkflowName(itemName))
+	require.NoError(t, dbos.Launch(engine.ctx))
+
+	handle, err := dbos.RunWorkflow(engine.ctx, check, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(runID("1", 1)))
+	require.NoError(t, err)
+
+	words, err := handle.GetResult()
+	require.NoError(t, err)
+	assert.Contains(t, words, "read the steps of "+runID("1", 1))
+	assert.Contains(t, words, "the store failed")
+}
+
 func TestCapStop_AReadThatFailsReachesTheCallerWithItsWords(t *testing.T) {
 	t.Parallel()
 

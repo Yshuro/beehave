@@ -295,6 +295,47 @@ func TestCalls_AnAssistantRateLimitErrorIsALimitWithNoTime(t *testing.T) {
 	assert.Equal(t, agent.Limit{Kind: agent.LimitRate}, *seen.Limit)
 }
 
+func TestCalls_AnAssistantUsageLimitReachedLineIsReadLikeARateLimitEvent(t *testing.T) {
+	t.Parallel()
+
+	// The line is the usage_limit_reached line of the paused fixture with the pause flag off: the person's own spend cap (org_level_disabled_until).
+	pausedLine := fixtureLines(t, "rate-limited-paused.jsonl")[1]
+	line := strings.Replace(pausedLine, `"dailyCapPaused":true`, `"dailyCapPaused":false`, 1)
+	require.NotEqual(t, pausedLine, line, "the control: the pause flag is the one thing that changes")
+
+	seen := claude.Adapter{}.Calls(line)
+
+	require.NotNil(t, seen.Limit)
+	assert.Equal(t, agent.Limit{Kind: agent.LimitSpend, Window: "five_hour", ResetsAt: time.Unix(1795006800, 0).UTC()}, *seen.Limit)
+	assert.Empty(t, seen.Denied)
+}
+
+func TestCalls_AnAssistantUsageLimitReachedLineWithAnEarlierSpendResetResetsAtTheSpendReset(t *testing.T) {
+	t.Parallel()
+
+	line := `{"type":"assistant","message":{"content":[]},"error":"rate_limit","api_error":"usage_limit_reached","api_error_params":{"rate_limit_info":` +
+		`{"status":"rejected","resetsAt":1795100000,"overageResetsAt":1795000000,"rateLimitType":"five_hour","overageStatus":"rejected",` +
+		`"overageDisabledReason":"org_level_disabled_until","isUsingOverage":false}}}`
+
+	seen := claude.Adapter{}.Calls(line)
+
+	require.NotNil(t, seen.Limit)
+	assert.Equal(t, agent.Limit{Kind: agent.LimitSpend, Window: "five_hour", ResetsAt: time.Unix(1795000000, 0).UTC()}, *seen.Limit)
+}
+
+func TestCalls_AnAssistantUsageLimitReachedLineOfAPlanLimitKeepsItsWindowAndPlanReset(t *testing.T) {
+	t.Parallel()
+
+	line := `{"type":"assistant","message":{"content":[]},"error":"rate_limit","api_error":"usage_limit_reached","api_error_params":{"rate_limit_info":` +
+		`{"status":"rejected","resetsAt":1795000000,"overageResetsAt":1795100000,"rateLimitType":"seven_day","overageStatus":"rejected",` +
+		`"overageDisabledReason":"overage_not_provisioned","isUsingOverage":false}}}`
+
+	seen := claude.Adapter{}.Calls(line)
+
+	require.NotNil(t, seen.Limit)
+	assert.Equal(t, agent.Limit{Kind: agent.LimitRate, Window: "seven_day", ResetsAt: time.Unix(1795000000, 0).UTC()}, *seen.Limit)
+}
+
 func TestCalls_AnAssistantLineWithAnotherErrorOrOnARejectedLineOfAnotherTypeIsNoLimit(t *testing.T) {
 	t.Parallel()
 
