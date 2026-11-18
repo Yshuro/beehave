@@ -217,9 +217,12 @@ func TestMergePR_EndsItsBarrierWithItsOwnContext(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), swarmBarrierBound/6)
 	defer cancel()
 
-	err := swarmForgeAt{remote: remote, dir: dir}.MergePR(ctx, 1, hostGit(t, work, "rev-parse", "HEAD"))
+	sha := hostGit(t, work, "rev-parse", "HEAD")
+	start := time.Now()
+	err := swarmForgeAt{remote: remote, dir: dir}.MergePR(ctx, 1, sha)
 
 	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.Less(t, time.Since(start), swarmBarrierBound/2, "the barrier ends with the context, not at its bound")
 	assert.FileExists(t, filepath.Join(dir, "merged-1"), "the merge is recorded before the barrier")
 }
 
@@ -231,7 +234,11 @@ func TestPauseAfterMerge_EndsAtOnceWhenTheContextIsDone(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	require.ErrorIs(t, forge.pauseAfterMerge(ctx, time.Minute), context.Canceled)
+	start := time.Now()
+	err := forge.pauseAfterMerge(ctx, time.Minute)
+
+	require.ErrorIs(t, err, context.Canceled)
+	assert.Less(t, time.Since(start), 10*time.Second, "the wait ends with the context, not at its bound of a minute")
 }
 
 func TestPauseAfterMerge_FailsAtTheBoundWhenNothingOpensTheBarrier(t *testing.T) {
