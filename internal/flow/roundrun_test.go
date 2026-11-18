@@ -50,7 +50,7 @@ func TestRoundRun_ARoundItemKeepsItsSlashesOutOfTheRunIdAndTheCancelMarkerFolder
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testRound)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	assert.Equal(t, runRunning, stateOfRun(t, client, "item-round/integration/s1-r1"), "the run id holds the round id as it is")
 	require.NoError(t, client.Cancel(testRound))
@@ -74,7 +74,7 @@ func TestRoundRun_CancelRunStopsTheOlderRunOfAnItemAndLeavesTheNewerOpen(t *test
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	startUnder(t, harness, engine, testItem, "item-12-r2")
 
 	older, newer := "item-12-r1", "item-12-r2"
@@ -99,7 +99,7 @@ func TestRoundRun_CancelRunStopsARunUnderAPassId(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testRound)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	startUnder(t, harness, engine, testRound, testPassID)
 
 	pollRunState(t, client, testPassID, runRunning)
@@ -121,7 +121,7 @@ func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBui
 	same := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	pollRunState(t, same, "item-12-r1", runRunning)
 
 	require.ErrorIs(t, other.CancelRun("item-12-r1"), errStranded, "an open run of another build is not stopped")
@@ -170,7 +170,7 @@ func TestRoundRun_CancelRunRefusesAnIdOfNoFormTheEngineMakes(t *testing.T) {
 func pollRunState(t *testing.T, client *Client, id string, want RunState) {
 	t.Helper()
 
-	eventually(t, func() bool { return stateOfRun(t, client, id) == want })
+	waitOn(t, condition(func() bool { return stateOfRun(t, client, id) == want }))
 }
 
 // roundNamed is a workflow that registers under the pass workflow name and ends at once, as a pass run of a round does.
@@ -207,7 +207,7 @@ func TestRoundRun_CancelRunRefusesARunOfAnotherBuildAndARunThatHasEnded(t *testi
 	other := harness.client(t, "v-other")
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	require.ErrorIs(t, other.CancelRun("item-12-r1"), errStranded)
 

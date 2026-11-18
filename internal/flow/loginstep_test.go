@@ -114,7 +114,7 @@ func TestLoginStep_ACanceledRunEndsTheWaitForAReset(t *testing.T) {
 	engine := harness.engine(t)
 	done := runInBackground(engine, testItem)
 
-	waitForTheSleep(t, engine)
+	waitOn(t, inASleep(t, engine))
 	require.NoError(t, harness.client(t, testVersion).Cancel(testItem))
 	harness.tick(t)
 

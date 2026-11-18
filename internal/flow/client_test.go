@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -89,7 +88,7 @@ func TestClient_StatusListsARunThatAsksNoQuestion(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	infos, err := client.Status()
 	require.NoError(t, err, "a run in its agent step has no question and is not an error")
@@ -116,7 +115,7 @@ func TestClient_CancelStopsTheRunAndResumeReopensIt(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	infos, err := client.Status()
 	require.NoError(t, err)
@@ -134,20 +133,15 @@ func TestClient_CancelStopsTheRunAndResumeReopensIt(t *testing.T) {
 	// The tick of the running copy sees the cancel and wakes the owner wait.
 	harness.tick(t)
 
-	select {
-	case outcome := <-done:
-		require.Error(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run kept waiting for the owner after another process canceled it")
-	}
+	require.Error(t, receive(t, done).err, "the run ends after another process canceled it")
 
 	require.NoError(t, client.Resume(testItem))
 	require.NoError(t, client.Answer(testItem, "go on"))
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the resumed run to end done", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
 		rows, statusErr := client.Status()
 
-		return statusErr == nil && rows[0].State == runDone
-	})
+		return struct{}{}, statusErr == nil && rows[0].State == runDone, nil
+	}})
 }
 
 func TestLatestRun_SkipsRunsWhoseNameEndsInNoAttemptNumber(t *testing.T) {

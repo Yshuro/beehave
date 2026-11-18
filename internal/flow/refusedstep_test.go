@@ -327,7 +327,7 @@ func TestRunStep_ARunCanceledDuringAStepRecordsNoFailureOfTheStep(t *testing.T) 
 	rig := newRefusalRig(t, func(e *Engine) dbos.Workflow[int, int] {
 		flow = twoSteps(func(c context.Context) (int, error) {
 			close(started)
-			<-c.Done()
+			hang(c.Done())
 
 			return 1, nil
 		})(e)
@@ -341,7 +341,7 @@ func TestRunStep_ARunCanceledDuringAStepRecordsNoFailureOfTheStep(t *testing.T) 
 	handle, err := dbos.RunWorkflow(runCtx, flow, 0, dbos.WithWorkflowID("canceled"))
 	require.NoError(t, err)
 
-	<-started
+	receive(t, started)
 	cancel(errStepFails)
 
 	_, err = resultWithin(t, handle)
@@ -369,7 +369,7 @@ func TestRunStep_AResumeThatReplaysAFailedStepTheRunToleratesRecordsNoSecondFail
 			return runStep(e, ctx, "after", func(c context.Context) (int, error) {
 				if runs.Add(1) == 1 {
 					close(started)
-					<-c.Done()
+					hang(c.Done())
 				}
 
 				return 1, nil
@@ -384,7 +384,7 @@ func TestRunStep_AResumeThatReplaysAFailedStepTheRunToleratesRecordsNoSecondFail
 	handle, err := dbos.RunWorkflow(runCtx, flow, 0, dbos.WithWorkflowID("replayed"))
 	require.NoError(t, err)
 
-	<-started
+	receive(t, started)
 	cancel(errStepFails)
 
 	_, err = resultWithin(t, handle)

@@ -39,16 +39,16 @@ func awaitSavedSession(t *testing.T, engine *Engine, harness *harness) {
 		return
 	}
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the session of the agent to be saved", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		phases, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(phaseName))
 		if err != nil || len(phases) != 1 {
-			return false
+			return struct{}{}, false, nil
 		}
 
 		session, err := dbos.GetEvent[string](engine.ctx, phases[0].ID, sessionEvent, 0)
 
-		return err == nil && session == named
-	})
+		return struct{}{}, err == nil && session == named, nil
+	}})
 }
 
 // loseAgent starts an engine on the harness, waits until its agent is in flight, stops the engine while the agent runs,
@@ -70,7 +70,7 @@ func loseAgentOn(t *testing.T, harness *harness, item string, ran time.Duration)
 	require.NoError(t, engine.Launch())
 
 	_ = runInBackground(engine, item)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 	awaitSavedSession(t, engine, harness)
 
 	// The start mark is recorded before the agent starts, so a time after the agent started is after the mark.
@@ -271,7 +271,7 @@ func TestPhase_ACanceledAgentStepThatResumesInTheSameEngineGetsNoNoteAndNoLostRe
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 	require.NoError(t, client.Cancel(testItem))
 	harness.tick(t)
 	receive(t, done)

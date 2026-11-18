@@ -185,11 +185,11 @@ func TestMergeStep_StatusShowsOwnerMergeWhileTheStepWaitsAndTheFinalStateAfterIt
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the run to show that it waits for the owner merge", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		rows, err := client.Status()
 
-		return err == nil && len(rows) == 1 && rows[0].Merge == "owner_merge"
-	})
+		return struct{}{}, err == nil && len(rows) == 1 && rows[0].Merge == "owner_merge", nil
+	}})
 
 	require.NoError(t, receive(t, done).err)
 
@@ -216,21 +216,15 @@ func TestMergeStep_AStepThatMergesNeverShowsThatItWaitsForTheOwner(t *testing.T)
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	for finished := false; !finished; {
-		select {
-		case outcome := <-done:
-			require.NoError(t, outcome.err)
-
-			finished = true
-		case <-time.After(20 * time.Millisecond):
-			rows, err := client.Status()
-			require.NoError(t, err)
-
-			for _, row := range rows {
-				assert.NotEqual(t, "owner_merge", row.Merge)
-			}
+	outcome := waitOn(t, waiting[runOutcome]{what: "the run to end", ch: done, read: func() (runOutcome, bool, error) {
+		rows, err := client.Status()
+		for _, row := range rows {
+			assert.NotEqual(t, "owner_merge", row.Merge)
 		}
-	}
+
+		return runOutcome{}, false, err
+	}})
+	require.NoError(t, outcome.err)
 
 	assert.Len(t, h.merge.asked, 1)
 }

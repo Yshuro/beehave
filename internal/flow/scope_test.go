@@ -26,7 +26,7 @@ func TestScope_ANewClosedIssueWithoutAnOwnerLineRefusesTheMergeAndNamesTheIssueA
 	engine := h.engine(t)
 	done := runInBackground(engine, testItem)
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "no"))
 
 	err := receive(t, done).err
@@ -45,7 +45,7 @@ func TestScope_AnOwnerLineThatNamesTheNewIssueLetsTheMergeGo(t *testing.T) {
 	h.flowIs(t, gateThenMerge(1))
 	done := runInBackground(h.engine(t), testItem)
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "keep #13"))
 
 	require.NoError(t, receive(t, done).err)
@@ -60,7 +60,7 @@ func TestScope_TheIssuesTheOwnerKeptGoToTheMergeAsKept(t *testing.T) {
 	h.flowIs(t, gateThenMerge(1))
 	done := runInBackground(h.engine(t), testItem)
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "keep #13"))
 
 	require.NoError(t, receive(t, done).err)
@@ -214,7 +214,7 @@ func answerTheScopeQuestion(t *testing.T, closing [][]int, gates int, answer str
 	h.flowIs(t, gateThenMerge(gates))
 	done := runInBackground(h.engine(t), testItem)
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, answer))
 
 	return h, receive(t, done).err
@@ -287,11 +287,11 @@ func TestScope_ANewRunOfTheItemKeepsTheScopeOfItsFirstReview(t *testing.T) {
 	done := runInBackground(engine, testItem)
 
 	client := h.client(t, testVersion)
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		infos, statusErr := client.Status()
 
 		return statusErr == nil && slices.ContainsFunc(infos, func(info RunInfo) bool { return info.Question != "" })
-	})
+	}))
 	require.NoError(t, client.Answer(testItem, "no"))
 
 	err = receive(t, done).err
@@ -334,11 +334,11 @@ func TestScope_AnEarlierRunThatFixedNoScopeLeavesTheNewRunToReadTheForge(t *test
 	done := runInBackground(engine, testItem)
 
 	client := h.client(t, testVersion)
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		infos, statusErr := client.Status()
 
 		return statusErr == nil && slices.ContainsFunc(infos, func(info RunInfo) bool { return info.Question != "" })
-	})
+	}))
 	require.NoError(t, client.Answer(testItem, "keep #13"))
 
 	require.NoError(t, receive(t, done).err)
@@ -362,23 +362,15 @@ func TestScope_AnItemWhoseNameEndsInAnAttemptMarkerLendsNoScopeToAnItemWithTheSh
 	// A question is the failure under test, so a poll for one ends the wait at once. A slow host only delays the end of the run.
 	read := newStatusRead(h.client(t, testVersion))
 
-	var out runOutcome
-
-	pollUntil(t, "the run to end without a question", read.last, func() (bool, error) {
-		select {
-		case out = <-done:
-			return true, nil
-		default:
-		}
-
+	out := waitOn(t, waiting[runOutcome]{what: "the run to end without a question", last: read.last, ch: done, read: func() (runOutcome, bool, error) {
 		for _, info := range read.next() {
 			if info.Question != "" {
-				return false, fmt.Errorf("the run asked the owner about an issue of another item: %s", info.Question)
+				return runOutcome{}, false, fmt.Errorf("the run asked the owner about an issue of another item: %s", info.Question)
 			}
 		}
 
-		return false, nil
-	})
+		return runOutcome{}, false, nil
+	}})
 
 	require.NoError(t, out.err, "the item has its own scope and merges without a question")
 	assert.Len(t, h.merge.asked, 1)

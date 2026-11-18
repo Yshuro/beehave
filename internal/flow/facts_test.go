@@ -4,7 +4,6 @@ import (
 	"context"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -122,7 +121,7 @@ func TestFacts_AReplayKeepsTheFactsOfTheFirstRead(t *testing.T) {
 		ended <- runErr
 	}()
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
 	steps, err := dbos.GetWorkflowSteps(first.ctx, testRun)
 	require.NoError(t, err)
@@ -143,10 +142,6 @@ func TestFacts_AReplayKeepsTheFactsOfTheFirstRead(t *testing.T) {
 
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "yes"))
 
-	select {
-	case outcome := <-done:
-		require.ErrorContains(t, outcome.err, "OWNER ann")
-	case <-time.After(30 * time.Second):
-		t.Fatal("the resumed run did not end")
-	}
+	outcome := receive(t, done)
+	require.ErrorContains(t, outcome.err, "OWNER ann")
 }

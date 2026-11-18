@@ -559,7 +559,7 @@ func TestBatchMerge_ACanceledRunStopsTheWaitBetweenReadsOfAnUnknownMergeableStat
 	engine := rig.engine(t)
 	done := runInBackground2(engine, writeFlow(t, bodyFlow(rig.call("1 3", ""))))
 
-	waitForTheSleep(t, engine)
+	waitOn(t, inASleep(t, engine))
 	require.NoError(t, rig.h.client(t, testVersion).Cancel(testItem))
 	rig.h.tick(t)
 

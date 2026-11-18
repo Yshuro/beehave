@@ -63,19 +63,12 @@ func TestResume_ARunThatFailedAtTheClaimStepTakesOneClaim(t *testing.T) {
 	harness.life.onClaim = func() {
 		reached()
 
-		select {
-		case <-release:
-		case <-time.After(eventTimeout):
-		}
+		hang(release)
 	}
 
 	handle := resumeRun(t, engine, client)
 
-	select {
-	case <-atClaim:
-	case <-time.After(eventTimeout):
-		t.Fatal("the resumed run did not reach its claim step")
-	}
+	receive(t, atClaim)
 
 	assert.Equal(t, 1, countOf(harness.life.seen(), "claim"), "the resume takes no claim: the claim step of the run runs again")
 	unblock()
@@ -138,12 +131,7 @@ func TestClient_DropClaimStopsWaitingForATrackerThatHangs(t *testing.T) {
 
 	go func() { done <- client.dropClaim(testProject, testItem, "run-12", "owner-12") }()
 
-	select {
-	case err := <-done:
-		require.ErrorContains(t, err, "deadline exceeded")
-	case <-time.After(eventTimeout):
-		t.Fatal("the release of the claim has no timeout")
-	}
+	require.ErrorContains(t, receive(t, done), "deadline exceeded")
 }
 
 func TestFinish_TheTokenFileEndsWithTheRun(t *testing.T) {
@@ -177,6 +165,15 @@ func TestFinish_TheTokenFileEndsWithTheRun(t *testing.T) {
 	assert.NoFileExists(t, ownerPath(harness.opts.StateDir, testRun), "the release ends the token file")
 }
 
+// finishedBeforeNow is the fact that the run finished before the clock of now, so a retention of one nanosecond finds it old.
+func finishedBeforeNow(client *Client) waiting[struct{}] {
+	return waiting[struct{}]{what: "the finished run to be older than the clock", read: func() (struct{}, bool, error) {
+		rows, err := dbos.ListWorkflows(client.flow, dbos.WithFilterWorkflowIDs(testRun), dbos.WithFilterCompletedBefore(time.Now().Add(-time.Nanosecond)))
+
+		return struct{}{}, len(rows) == 1, err
+	}}
+}
+
 func TestLaunch_DeletesTheTokenFileOfAFinishedRunWithTheRun(t *testing.T) {
 	t.Parallel()
 
@@ -190,7 +187,7 @@ func TestLaunch_DeletesTheTokenFileOfAFinishedRunWithTheRun(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, first.Shutdown())
 	require.NoError(t, saveOwner(harness.opts.StateDir, testRun, "owner-12#2"))
-	time.Sleep(10 * time.Millisecond)
+	waitOn(t, finishedBeforeNow(harness.client(t, testVersion)))
 
 	deps := harness.deps()
 	deps.Clock.Retain = time.Nanosecond
@@ -220,7 +217,7 @@ func TestLaunch_AReusedRunIdTakesItsOwnClaim(t *testing.T) {
 	_, err = resumeAndJoin(t, first, client)
 	require.NoError(t, err)
 	require.NoError(t, first.Shutdown())
-	time.Sleep(10 * time.Millisecond)
+	waitOn(t, finishedBeforeNow(client))
 
 	deps := harness.deps()
 	deps.Clock.Retain = time.Nanosecond
@@ -245,7 +242,7 @@ func cancelAndStop(t *testing.T, harness *harness, item string) {
 
 	client := harness.client(t, testVersion)
 	_ = runInBackground(engine, item)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, condition(func() bool { return harness.agents.running() == 1 }))
 
 	require.NoError(t, client.Cancel(item))
 	require.FileExists(t, cancelPath(harness.opts.StateDir, runID(item, 1)), "the cancel leaves a marker for the release")
@@ -262,8 +259,8 @@ func TestLaunch_GivesBackARunThatWasCancelledWhileAnEngineStopped(t *testing.T) 
 
 	harness.engine(t)
 
-	eventually(t, func() bool { return len(harness.life.releasedBy()) == 1 })
-	eventually(t, func() bool { return !fileExists(cancelPath(harness.opts.StateDir, testRun)) })
+	waitOn(t, condition(func() bool { return len(harness.life.releasedBy()) == 1 }))
+	waitOn(t, condition(func() bool { return !fileExists(cancelPath(harness.opts.StateDir, testRun)) }))
 	assert.Equal(t, []string{"owner-12"}, harness.life.releasedBy())
 }
 
@@ -319,8 +316,8 @@ func TestLaunch_AnUnreadableMarkerDoesNotStopTheSweepOfOtherRuns(t *testing.T) {
 
 	harness.engine(t)
 
-	eventually(t, func() bool { return len(harness.life.releasedBy()) == 1 })
-	eventually(t, func() bool { return !fileExists(cancelPath(harness.opts.StateDir, testRun)) })
+	waitOn(t, condition(func() bool { return len(harness.life.releasedBy()) == 1 }))
+	waitOn(t, condition(func() bool { return !fileExists(cancelPath(harness.opts.StateDir, testRun)) }))
 	assert.FileExists(t, cancelPath(harness.opts.StateDir, "aaa-corrupt"), "the unreadable marker stays for the owner to see")
 }
 
@@ -397,13 +394,13 @@ func TestSweepCancels_DropsTheMarkerOfARunWhenTheItemHasANewerRun(t *testing.T) 
 	cancelAndStop(t, harness, testItem)
 
 	engine := harness.engine(t)
-	eventually(t, func() bool { return len(harness.life.releasedBy()) == 1 })
+	waitOn(t, condition(func() bool { return len(harness.life.releasedBy()) == 1 }))
 
 	harness.agents.gate = make(chan struct{})
 	t.Cleanup(func() { close(harness.agents.gate) })
 
 	_ = runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, condition(func() bool { return harness.agents.running() == 1 }))
 
 	require.NoError(t, markCancel(harness.opts.StateDir, testRun, ItemInput{Item: testItem, Project: testProject}))
 
@@ -435,7 +432,7 @@ func TestSweepCancels_AllTheMarkersShareOneReleaseTimeout(t *testing.T) {
 	deps.Clock.Release = limit
 	engine := engineOn(t, harness, deps)
 
-	eventually(t, func() bool { return len(harness.life.releasedBy()) == markers })
+	waitOn(t, condition(func() bool { return len(harness.life.releasedBy()) == markers }))
 
 	for _, item := range items {
 		require.NoError(t, markCancel(harness.opts.StateDir, runID(item, 1), ItemInput{Item: item, Project: testProject}))
@@ -500,7 +497,7 @@ func TestCancel_RefusesToCancelWhenItCannotWriteTheMarker(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	_ = runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agents of the run to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 	require.NoError(t, os.WriteFile(filepath.Join(harness.opts.StateDir, cancelsDir), nil, ownerMode))
 
 	require.ErrorContains(t, client.Cancel(testItem), "mark the cancel")
@@ -553,7 +550,7 @@ func TestTick_AHungReleaseDelaysNeitherTheTickNorTheShutdown(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	_ = runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agents of the run to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 	require.NoError(t, client.Cancel(testItem))
 
 	ticked := make(chan struct{})
@@ -563,13 +560,8 @@ func TestTick_AHungReleaseDelaysNeitherTheTickNorTheShutdown(t *testing.T) {
 		close(ticked)
 	}()
 
-	select {
-	case <-ticked:
-	case <-time.After(tickLimit):
-		t.Fatal("a release that hangs blocked the tick")
-	}
-
-	eventually(t, func() bool { return harness.life.expiries() == 1 })
+	receive(t, ticked)
+	waitOn(t, condition(func() bool { return harness.life.expiries() == 1 }))
 }
 
 func TestRun_AReleaseThatHangsEndsTheRunWithAnError(t *testing.T) {
@@ -583,12 +575,7 @@ func TestRun_AReleaseThatHangsEndsTheRunWithAnError(t *testing.T) {
 
 	done := runInBackground(engine, testItem)
 
-	select {
-	case outcome := <-done:
-		require.ErrorContains(t, outcome.err, "deadline exceeded")
-	case <-time.After(eventTimeout):
-		t.Fatal("the release step has no timeout")
-	}
+	require.ErrorContains(t, receive(t, done).err, "deadline exceeded")
 }
 
 func TestShutdown_ASecondCallReturnsTheFirstResult(t *testing.T) {

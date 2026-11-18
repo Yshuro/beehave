@@ -217,7 +217,7 @@ func heldInTheWait(t *testing.T) (*harness, *Engine, <-chan runOutcome) {
 	require.NoError(t, engine.Launch())
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.merge.askedCount() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the merge to be asked once", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.merge.askedCount() == 1, nil }})
 
 	return harness, engine, done
 }
@@ -251,16 +251,12 @@ func TestMergeStep_ACancelInTheWaitOfAQueuedMergePutsThePullRequestBackToDraft(t
 	harness, engine, done := heldInTheWait(t)
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
-	waitForTheSleep(t, engine)
+	waitOn(t, inASleep(t, engine))
 	require.NoError(t, harness.client(t, testVersion).Cancel(testItem))
 	harness.tick(t)
 
-	select {
-	case outcome := <-done:
-		require.Error(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the cancel")
-	}
+	outcome := receive(t, done)
+	require.Error(t, outcome.err)
 
 	_, drafts := harness.watch.seen()
 	assert.Equal(t, []int{testPull}, drafts, "the owner canceled the run, so nothing resumes the merge and the pull request goes back to draft")
