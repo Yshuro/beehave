@@ -89,6 +89,30 @@ func TestStatus_AnAgentLineOfARunNamesItsKindAsTheLaneLedger(t *testing.T) {
 	assert.Contains(t, stdout, `"kind":"review"`)
 }
 
+func TestStatus_AnAgentLineShowsItsLoginAndItsModelInTextAndJSON(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
+		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Kind: "review", Login: "oc", Model: "m-seen", ExitCode: intPtr(0)},
+		{Name: "agent:work#1", State: "done", Started: start, Ended: start, Login: "pool-1", ExitCode: intPtr(0)},
+	}}
+
+	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
+
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "agent:look#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 kind=review login=oc model=m-seen\n"+
+		"agent:work#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 login=pool-1\n"+
+		"run\tdone\n", stdout)
+
+	code, stdout, stderr = rig.execute(t.Context(), "status", "item-14-r1", "--json")
+
+	require.Equal(t, 0, code, stderr)
+	assert.Contains(t, stdout, `"login":"oc","model":"m-seen"`)
+	assert.Contains(t, stdout, `"login":"pool-1"}`)
+}
+
 func TestStatus_AnItemListsItsLanesAcrossItsRunsOneLineEach(t *testing.T) {
 	t.Parallel()
 

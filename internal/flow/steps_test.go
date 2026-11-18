@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -588,4 +590,50 @@ func TestStepLine_AnAgentLineNamesTheKindOfItsPhase(t *testing.T) {
 
 	gate := callLine([]dbos.StepInfo{withChild(record("gate:stop", map[string]any{"holder": "x"}))}, "gate:g#1")
 	assert.Empty(t, gate.Kind, "a gate is not a lane, so its line has no kind")
+}
+
+// loginFlow is an agent call that names the model and the runner that its test fills in.
+const loginFlow = "def main(item):\n" +
+	"    agent(%s prompt = \"prompts/a.md\", outputs = [\"verdict\"], name = \"a\")\n"
+
+func TestStatus_AnAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, keywords, login, model string
+	}{
+		{name: "the_pool_pick_and_the_model_of_the_step", keywords: `model = "m-seen",`, login: testLogin, model: "m-seen"},
+		{name: "the_named_runner_and_the_model", keywords: `runner = "oc", model = "m-seen",`, login: "oc", model: "m-seen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			rig.reply(`{"verdict":"approve"}`, exited)
+
+			_, err := rig.run(t, fmt.Sprintf(loginFlow, tc.keywords), "Write to {{ .output_file }}\n")
+			require.NoError(t, err)
+
+			view, err := rig.h.client(t, testVersion).Steps(testRun)
+			require.NoError(t, err)
+
+			line := view.Steps[slices.IndexFunc(view.Steps, func(l StepLine) bool { return strings.HasPrefix(l.Name, "agent:a") })]
+			assert.Equal(t, tc.login, line.Login)
+			assert.Equal(t, tc.model, line.Model)
+		})
+	}
+}
+
+func TestStepLine_AnAgentRecordThatHasNoLoginAndNoModelLeavesThemOutOfTheLine(t *testing.T) {
+	t.Parallel()
+
+	data, err := json.Marshal(PhaseOutput{Outcome: "exited"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "login", "a record with no login stays as an older version wrote it")
+	assert.NotContains(t, string(data), "model")
+
+	line := callLine([]dbos.StepInfo{withChild(dbos.StepInfo{StepName: "any-name", Output: string(data)})}, "agent:a#1")
+	assert.Empty(t, line.Login)
+	assert.Empty(t, line.Model)
+	assert.False(t, line.OutputUnreadable)
 }

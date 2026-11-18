@@ -774,6 +774,8 @@ The line then shows the fields that decide the flow, when the step has them:
 
 - `exit_code`
 - `kind`: the kind of the lane of an agent step (`fix`, `rework`, `relay`, `review` or `design`)
+- `login`: the runner that an agent step ran on. It is the runner that the call names with `runner`, or the login that the pool picked when the call names none.
+- `model`: the model that an agent step set. A record that an older version wrote has no `login` and no `model`, and its line shows neither.
 - `stop`
 - `verdict`
 - `head`
@@ -787,7 +789,7 @@ A failed step shows its error. The last line is `run`: the state of the run (run
 - A step that runs shows as running with its elapsed time.
 - A command records its row when it ends. While a command runs, the last line is `step in progress`, with the time since the last row.
 
-`--json` prints one object for scripts. Its fields are `run`, `state`, `error` (left out when empty) and `steps`. Each step has `name`, `state`, `duration_seconds` and, when it has them, `started`, `ended`, `error`, `exit_code`, `kind`, `stop`, `verdict`, `head`, `passed` and `gate` (a list of `name` and `status`).
+`--json` prints one object for scripts. Its fields are `run`, `state`, `error` (left out when empty) and `steps`. Each step has `name`, `state`, `duration_seconds` and, when it has them, `started`, `ended`, `error`, `exit_code`, `kind`, `login`, `model`, `stop`, `verdict`, `head`, `passed` and `gate` (a list of `name` and `status`).
 
 #### `beehave status --item <item>`: the lanes of one item
 

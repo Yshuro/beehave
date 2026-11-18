@@ -58,6 +58,10 @@ type StepLine struct {
 	Kind string `json:"kind,omitempty"`
 	// Rounds is the cap of the loop that an agent step named with its rounds keyword. It is 0 for a step that named none.
 	Rounds int `json:"rounds,omitempty"`
+	// Login is the runner that an agent step ran on: the pool pick, or the runner that the call named. An agent that an older version recorded has none.
+	Login string `json:"login,omitempty"`
+	// Model is the model that an agent step set. It is empty for a step that sets none.
+	Model string `json:"model,omitempty"`
 	// Spend is the cost of the agent runs of the call, failed runs included, with the marks of an estimate and of an unknown cost. It is empty for a step that is not an agent.
 	agent.Spend
 	Stop string `json:"stop,omitempty"`
@@ -471,6 +475,7 @@ func (l *StepLine) fromPhase(phase PhaseOutput) {
 	if phase.Outcome != "" {
 		l.ExitCode = &phase.ExitCode
 		l.Kind, l.Rounds = phase.Kind, phase.Rounds
+		l.Login, l.Model = phase.Login, phase.Model
 	}
 }
 
