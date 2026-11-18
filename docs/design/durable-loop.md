@@ -837,6 +837,8 @@ No engine renews the fresh claim between `beehave resume` and the next `beehave 
 
 After a crash, or after Ctrl-C of `beehave run`, the run stays open. `beehave run <item>` continues it without `resume`. A second Ctrl-C during the stop exits at once with code 130.
 
+If the run has already ended when the stop begins, the next Ctrl-C exits at once with the exit code of the run: 0 for a finished run, 1 for a failed or stopped run. The line on stderr says the run had ended before the stop.
+
 The shutdown of the engine and the start of a run do not overlap. The shutdown waits for a start in flight to hand its run to DBOS, and only then stops DBOS. A start that comes after the shutdown began stores no run and fails with `the engine has shut down`. DBOS v1.8.0 does not give this order itself: its wait for the open runs races with a direct `RunWorkflow`.
 
 #### When `beehave run` starts a new run
