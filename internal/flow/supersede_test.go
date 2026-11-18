@@ -3,8 +3,12 @@ package flow
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -153,6 +157,95 @@ func startedCount(g supersedeGate, want int32) func() bool {
 	return func() bool { return g.started.Load() == want }
 }
 
+// logLinesInDump is the number of warnings and errors of the engine log that a dump keeps.
+const logLinesInDump = 20
+
+// errGateStartedTwice is the failure of a wait for the start of a gate when more gates started than the test expects.
+var errGateStartedTwice = errors.New("a gate started more than once")
+
+// gateDump is the state that a failed wait prints: the counts of the gate, each workflow of the engine with its status, queue and partition,
+// the steps recorded for each workflow, and the last warnings and errors of the engine log. It reads the store of the engine, as the engine does.
+func gateDump(engine *Engine, g supersedeGate) string {
+	var out strings.Builder
+
+	fmt.Fprintf(&out, "gates started %d, stopped %d\n", g.started.Load(), g.stopped.Load())
+
+	rows, err := dbos.ListWorkflows(engine.ctx)
+	if err != nil {
+		fmt.Fprintf(&out, "cannot list the workflows: %v\n", err)
+	}
+
+	for _, row := range rows {
+		fmt.Fprintf(&out, "workflow %s name=%s status=%s queue=%q partition=%q\n", row.ID, row.Name, row.Status, row.QueueName, row.QueuePartitionKey)
+
+		steps, err := dbos.GetWorkflowSteps(engine.ctx, row.ID)
+		if err != nil {
+			fmt.Fprintf(&out, "  cannot read the steps: %v\n", err)
+		}
+
+		for _, step := range steps {
+			fmt.Fprintf(&out, "  step %d %s error=%v\n", step.StepID, step.StepName, step.Error)
+		}
+	}
+
+	text, err := os.ReadFile(filepath.Join(engine.dir, logFileName))
+	if err != nil {
+		fmt.Fprintf(&out, "cannot read the engine log: %v\n", err)
+	}
+
+	var problems []string
+
+	for line := range strings.Lines(string(text)) {
+		if strings.Contains(line, "level=WARN") || strings.Contains(line, "level=ERROR") {
+			problems = append(problems, line)
+		}
+	}
+
+	fmt.Fprintf(&out, "engine log, %d warnings and errors, the last %d:\n%s", len(problems), min(len(problems), logLinesInDump), strings.Join(problems[max(0, len(problems)-logLinesInDump):], ""))
+
+	return out.String()
+}
+
+// startsReach waits until want gates have started. A count above want fails the wait at once: a gate that starts twice is a defect, and a wait for an exact count would hang on it.
+// A wait that fails prints the dump of the engine.
+func startsReach(t *testing.T, engine *Engine, g supersedeGate, want int32) waiting[struct{}] {
+	t.Helper()
+
+	return waiting[struct{}]{
+		what: fmt.Sprintf("%d gates to have started", want),
+		read: func() (struct{}, bool, error) {
+			started := g.started.Load()
+			if started > want {
+				t.Log(gateDump(engine, g))
+
+				return struct{}{}, false, fmt.Errorf("%w: %d started, want %d", errGateStartedTwice, started, want)
+			}
+
+			return struct{}{}, started == want, nil
+		},
+		last: func() string {
+			t.Log(gateDump(engine, g))
+
+			return fmt.Sprintf("%d of %d gates started", g.started.Load(), want)
+		},
+	}
+}
+
+// stopsReach waits until the context of want gates has stopped them. A wait that fails prints the dump of the engine.
+func stopsReach(t *testing.T, engine *Engine, g supersedeGate, want int32) waiting[struct{}] {
+	t.Helper()
+
+	return waiting[struct{}]{
+		what: fmt.Sprintf("%d gates to have stopped", want),
+		read: func() (struct{}, bool, error) { return struct{}{}, g.stopped.Load() == want, nil },
+		last: func() string {
+			t.Log(gateDump(engine, g))
+
+			return fmt.Sprintf("%d of %d gates stopped", g.stopped.Load(), want)
+		},
+	}
+}
+
 // waitsInTheQueue is true when the queue holds want gates that wait for the gate that runs. A gate that is not yet queued cannot be stopped by a later gate.
 func waitsInTheQueue(engine *Engine, want int) func() bool {
 	return func() bool {
@@ -186,7 +279,7 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueue
 
 	old := queueGate(engine, "A")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	h.forge.mu.Lock()
 	h.forge.state.Head = "B"
@@ -198,9 +291,9 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueue
 	require.ErrorIs(t, end.err, errSuperseded)
 	require.EqualError(t, end.err, "superseded by B")
 	// The tick after the end has canceled the context of the gate. The gate counts its stop a moment later.
-	waitOn(t, condition(func() bool { return gated.stopped.Load() == 1 }))
+	waitOn(t, stopsReach(t, engine, gated, 1))
 
-	waitOn(t, condition(startedCount(gated, 2)))
+	waitOn(t, startsReach(t, engine, gated, 2))
 	close(gated.release)
 
 	newer := receive(t, fresh)
@@ -216,7 +309,7 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenItsRunEndedBeforeTheFirstT
 
 	old := queueGate(engine, "A")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	h.forge.mu.Lock()
 	h.forge.state.Head = "B"
@@ -229,11 +322,57 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenItsRunEndedBeforeTheFirstT
 	ended <- receive(t, old)
 
 	require.ErrorIs(t, endsAfterTicks(t, h, ended).err, errSuperseded)
-	waitOn(t, condition(func() bool { return gated.stopped.Load() == 1 }))
-	waitOn(t, condition(startedCount(gated, 2)))
+	waitOn(t, stopsReach(t, engine, gated, 1))
+	waitOn(t, startsReach(t, engine, gated, 2))
 	close(gated.release)
 
 	require.NoError(t, receive(t, fresh).err)
+}
+
+func TestGateDump_ShowsTheCountsTheWorkflowsAndTheStepsOfARunningGate(t *testing.T) {
+	t.Parallel()
+
+	gated := newSupersedeGate("")
+	_, engine := supersedeEngine(t, gated, "A")
+
+	ended := queueGate(engine, "A")
+
+	waitOn(t, startsReach(t, engine, gated, 1))
+
+	dump := gateDump(engine, gated)
+
+	for _, want := range []string{
+		"gates started 1, stopped 0",
+		fmt.Sprintf("name=%s status=PENDING queue=%q partition=%q", exclusiveName, exclusiveQueueName, testProject),
+		"step 0 " + gateTipName,
+		"step 0 " + gateJobName,
+		"engine log, ",
+	} {
+		assert.Contains(t, dump, want)
+	}
+
+	close(gated.release)
+	require.NoError(t, receive(t, ended).err)
+}
+
+func TestStartsReach_AGateThatStartsTwiceFailsTheWaitAtOnce(t *testing.T) {
+	t.Parallel()
+
+	gated := newSupersedeGate("")
+	_, engine := supersedeEngine(t, gated, "A")
+
+	first := queueGate(engine, "A")
+	second := queueGateOf(engine, "other-project", testItem, "X")
+
+	waitOn(t, startsReach(t, engine, gated, 2))
+
+	_, _, err := startsReach(t, engine, gated, 1).read()
+	require.ErrorIs(t, err, errGateStartedTwice)
+	require.EqualError(t, err, "a gate started more than once: 2 started, want 1")
+
+	close(gated.release)
+	require.NoError(t, receive(t, first).err)
+	require.NoError(t, receive(t, second).err)
 }
 
 func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T) {
@@ -244,7 +383,7 @@ func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T
 
 	first := queueGate(engine, "A")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	// The pull request already has head C, so the gate of head B that queues now is late: it stops no gate and waits behind the gate of head A.
 	h.forge.mu.Lock()
@@ -262,7 +401,7 @@ func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T
 	require.EqualError(t, skipped.err, "superseded by C")
 
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
-	waitOn(t, condition(startedCount(gated, 2)))
+	waitOn(t, startsReach(t, engine, gated, 2))
 	close(gated.release)
 	require.NoError(t, receive(t, last).err)
 	assert.EqualValues(t, 2, gated.started.Load(), "the gate of head B never started")
@@ -276,7 +415,7 @@ func TestSuperseded_AGateOfTheSameHeadIsNotStopped(t *testing.T) {
 
 	first := queueGate(engine, "A")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	secondRun, second := queueGateRun(engine, "A")
 
@@ -298,7 +437,7 @@ func TestSuperseded_AGateOfAnOldHeadThatQueuesLateStopsNoGateOfTheCurrentHead(t 
 	run, current := queueGateRun(engine, "B")
 
 	// The gate of head B runs before the run that queued it records its stop of the old gates. A gate of head A that queues in between is an old gate to it.
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 	waitOn(t, condition(stopRecorded(engine, run)))
 
 	lateRun, late := queueGateRun(engine, "A")
@@ -334,7 +473,7 @@ func TestSuperseded_AGateThatAPersonCancelsKeepsTheErrorOfTheCancel(t *testing.T
 
 	only := queueGate(engine, "A")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterStatus(dbos.WorkflowStatusPending))
 	require.NoError(t, err)
@@ -387,7 +526,7 @@ func TestSuperseded_ACancelledGateIsNeverReusedAsAPass(t *testing.T) {
 
 	old := queueGate(engine, "A")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	h.forge.mu.Lock()
 	h.forge.state.Head = "B"

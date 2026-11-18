@@ -88,7 +88,7 @@ func TestExclusiveHost_TwoProjectsOnOneHostRunOneGateAtATime(t *testing.T) {
 
 	first := queueHostGate(engine, "project-one", "1", "A", "box")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	second := queueHostGate(engine, "project-two", "2", "A", "box")
 
@@ -113,7 +113,7 @@ func TestExclusiveHost_TwoHostsRunTheirGatesTogether(t *testing.T) {
 	first := queueHostGate(engine, "project-one", "1", "A", "box-one")
 	second := queueHostGate(engine, "project-two", "2", "A", "box-two")
 
-	waitOn(t, condition(startedCount(gated, 2)))
+	waitOn(t, startsReach(t, engine, gated, 2))
 	assert.True(t, waitsOnHost(engine, 0)(), "no gate waits when each host has one")
 
 	close(gated.release)
@@ -131,7 +131,7 @@ func TestExclusiveHost_AGateWithNoHostKeepsTheQueueOfItsProject(t *testing.T) {
 	first := queueHostGate(engine, "project-one", "1", "A", "")
 	second := queueHostGate(engine, "project-two", "2", "A", "")
 
-	waitOn(t, condition(startedCount(gated, 2)))
+	waitOn(t, startsReach(t, engine, gated, 2))
 
 	third := queueHostGate(engine, "project-one", "3", "A", "")
 
@@ -193,7 +193,7 @@ func TestExclusiveHost_ANewHeadStopsTheOldGateOnTheSameHost(t *testing.T) {
 
 	old := queueHostGate(engine, testProject, testItem, "A", "box")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 	setHead(h, "B")
 
 	current := queueHostGate(engine, testProject, testItem, "B", "box")
@@ -260,7 +260,7 @@ func TestExclusiveHost_ANewHeadCancelsTheBuildJobOfTheOldGateWithTheGate(t *test
 
 	old := queueHostGate(engine, testProject, testItem, "A", "box")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 	setHead(h, "B")
 
 	current := queueHostGate(engine, testProject, testItem, "B", "box")
@@ -558,7 +558,7 @@ func TestExclusiveHost_AMergeWaitsForAGateOfItsProjectThatRunsOnAHost(t *testing
 
 	gate := queueHostGate(engine, testProject, "1", "A", "box")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	merged := make(chan gateEnd, 1)
 	id := "queue-host-merge"
@@ -598,7 +598,7 @@ func TestExclusiveHost_AProjectThatNamesNoHostRunsOnItsDefaultHost(t *testing.T)
 
 	first := queueHostGate(engine, "project-one", "1", "A", "")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	second := queueHostGate(engine, "project-two", "2", "A", "")
 
