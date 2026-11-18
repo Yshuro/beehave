@@ -19,7 +19,7 @@ func TestWaitDeadline_ReadsTheDeadlineOfTheLastReceiveRecordOnlyForAWaitWithATim
 
 	start := time.Now()
 	hour := start.Add(time.Hour).UnixMilli()
-	window := start.Add(ownerWaitLimit).UnixMilli()
+	window := start.Add(receiveWindow).UnixMilli()
 	sleep := func(output any) []dbos.StepInfo {
 		return []dbos.StepInfo{{StepName: "login#1"}, {StepName: sleepStep, StartedAt: start, Output: output}}
 	}
