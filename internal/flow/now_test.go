@@ -86,7 +86,7 @@ func TestNow_AReplayKeepsTheFirstReading(t *testing.T) {
 	require.NoError(t, first.Shutdown())
 	require.Error(t, receive(t, ended))
 
-	waitOn(t, condition(func() bool { return time.Since(recorded) > time.Second }))
+	h.reading = func() time.Time { return recorded.Add(time.Hour) }
 
 	next := h.engine(t)
 	done := make(chan runOutcome, 1)

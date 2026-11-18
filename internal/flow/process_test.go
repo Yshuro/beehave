@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -158,14 +157,14 @@ func TestSpawnGather_AParentKilledMidGatherIsRecoveredByANewProcessAndEachOutput
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(stateDir), swarmFlow), []byte(stopSwarm), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(stateDir, goFile), nil, 0o600))
 
-	var output bytes.Buffer
+	var output safeBuffer
 
 	first := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestHelperProcess$", "--", swarmFirst, stateDir, "0") //nolint:gosec // the test starts its own binary
 	first.Stdout, first.Stderr = &output, &output
 	require.NoError(t, first.Start())
 
 	midGather := filepath.Join(stateDir, swarmMid)
-	waitOn(t, waiting[struct{}]{what: "the first process to reach the gather", read: func() (struct{}, bool, error) {
+	waitOn(t, waiting[struct{}]{what: "the first process to reach the gather", last: func() string { return "the output of the process:\n" + output.String() }, read: func() (struct{}, bool, error) {
 		_, err := os.Stat(midGather)
 
 		return struct{}{}, err == nil, nil

@@ -1058,6 +1058,14 @@ func condition(check func() bool) waiting[struct{}] {
 	return waiting[struct{}]{what: "a condition of the test", read: func() (struct{}, bool, error) { return struct{}{}, check(), nil }}
 }
 
+// conditionOf is the fact that check returns true, for a test that has a run under test. The wait fails at once when the run ends or parks without the fact.
+func conditionOf(run *runRef, check func() bool) waiting[struct{}] {
+	fact := condition(check)
+	fact.run = run
+
+	return fact
+}
+
 // windowsEnded counts the receive windows of the run that have ended: each one is a DBOS.recv step, recorded when its receive ends. A test that expects no answer waits for a count and does not sleep.
 func (r *runRef) windowsEnded() (int, error) {
 	steps, err := dbos.GetWorkflowSteps(r.flow, r.id)

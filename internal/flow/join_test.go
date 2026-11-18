@@ -123,7 +123,7 @@ func TestJoinRun_ACancelledCallerLeavesNoPollerBehind(t *testing.T) {
 		done <- err
 	}()
 
-	waitOn(t, condition(func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
+	waitOn(t, conditionOf(runOfClient(t, client), func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
 	stop()
 
 	require.ErrorIs(t, receive(t, done), context.Canceled)
@@ -176,7 +176,7 @@ func TestJoinRun_AnOpenRunIsJoinedAndNotEnqueuedAgain(t *testing.T) {
 		started <- err
 	}()
 
-	waitOn(t, condition(func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
+	waitOn(t, conditionOf(runOfClient(t, client), func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
 
 	joined := make(chan error, 1)
 
@@ -266,7 +266,7 @@ func TestJoinRun_AnOpenRunOfAnotherProjectIsRefused(t *testing.T) {
 		ended <- err
 	}()
 
-	waitOn(t, condition(func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
+	waitOn(t, conditionOf(runOfClient(t, client), func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
 
 	_, err := client.JoinRun(t.Context(), testItem, "other", file)
 
@@ -312,7 +312,7 @@ func TestJoinRun_ACancelledCallerStopsWaitingAndTheRunStays(t *testing.T) {
 		done <- err
 	}()
 
-	waitOn(t, condition(func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
+	waitOn(t, conditionOf(runOfClient(t, client), func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
 	stop()
 
 	require.ErrorIs(t, receive(t, done), context.Canceled)

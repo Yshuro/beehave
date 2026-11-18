@@ -14,13 +14,24 @@ type leaseClock struct {
 	mu     sync.Mutex
 	now    time.Time
 	asleep time.Duration
+	reads  int
 }
 
 func (c *leaseClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.reads++
+
 	return c.now
+}
+
+// readCount is the number of times that the monotonic reading was read, so a test that expects no change waits for a count of reads and does not sleep.
+func (c *leaseClock) readCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.reads
 }
 
 // Wall reads the wall clock: the monotonic reading and the time of the sleeps.

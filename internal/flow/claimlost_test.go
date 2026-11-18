@@ -541,20 +541,24 @@ func TestAwaitClaim_TheGraceTimeCountsOnTheClockOfTheEngine(t *testing.T) {
 	engine := idleEngine(t, newHarness(t))
 	clk := &leaseClock{now: time.Unix(1_000_000, 0)}
 	clk.install(&engine.deps.Clock)
-	engine.deps.Clock.Poll = storePoll
+	engine.deps.Clock.Poll = time.Millisecond
 	engine.deps.Clock.Grace = time.Minute
 
 	done := make(chan error, 1)
+	reads := clk.readCount()
 
 	go func() {
 		_, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})
 		done <- err
 	}()
 
+	// Each pass of the wait reads the clock, so five reads show five passes that did not end the wait.
+	waitOn(t, condition(func() bool { return clk.readCount() >= reads+5 }))
+
 	select {
 	case err := <-done:
 		t.Fatalf("the wait ended before the grace time passed on the clock of the engine: %v", err)
-	case <-time.After(3 * time.Second):
+	default:
 	}
 
 	clk.advance(time.Minute)

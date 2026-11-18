@@ -540,7 +540,7 @@ func TestLostJob_ContinueWithNoProofWaitsAgainAndStartsNoGateJob(t *testing.T) {
 	before := hosts.proofReads()
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "CONTINUE"))
 
-	waitOn(t, condition(func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.0") }))
+	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.0") }))
 
 	again := waitOn(t, theLostJobShows(t, h, testItem))
 
@@ -565,11 +565,11 @@ func TestLostJob_EachAnswerReadsTheProofInTheNextNumberedStep(t *testing.T) {
 	client := h.client(t, testVersion)
 
 	require.NoError(t, client.Answer(testItem, "CONTINUE"))
-	waitOn(t, condition(func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.0") }))
+	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.0") }))
 	waitOn(t, theLostJobShows(t, h, testItem))
 
 	require.NoError(t, client.Answer(testItem, "CONTINUE"))
-	waitOn(t, condition(func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.1") }))
+	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.1") }))
 
 	steps := stepNamesOf(t, engine, testRun)
 

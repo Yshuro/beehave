@@ -146,7 +146,7 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 	}
 
 	// The winner holds its agent in flight, so the one result that arrives first is the stop of the run that lost.
-	loser := receive(t, results)
+	loser := waitOn(t, waiting[raceOutcome]{what: "a run to stop, since both runs hold the claim", ch: results})
 
 	release()
 

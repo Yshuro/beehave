@@ -387,7 +387,9 @@ func TestWait_ALateVoiceOfAnEarlierWaitIsNotCounted(t *testing.T) {
 		return struct{}{}, !pending, err
 	}})
 
-	assert.Empty(t, askedOf(t, client).Heard, "the vote of the first wait is not a vote of the second")
+	asked := askedOf(t, client)
+	require.NotNil(t, asked, "the second wait is still open")
+	assert.Empty(t, asked.Heard, "the vote of the first wait is not a vote of the second")
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "second"))
 	require.NoError(t, receive(t, done).err)

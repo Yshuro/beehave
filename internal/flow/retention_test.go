@@ -19,10 +19,6 @@ func finishedRun(t *testing.T, harness *harness) {
 	_, err = first.Run(testItem, testProject)
 	require.NoError(t, err)
 	require.NoError(t, first.Shutdown())
-
-	ended := time.Now().UnixMilli()
-
-	waitOn(t, condition(func() bool { return time.Now().UnixMilli() > ended }))
 }
 
 func TestLaunch_TheRetentionOfTheOptionsSetsTheAgeAtWhichAFinishedRunIsDeleted(t *testing.T) {
@@ -32,7 +28,9 @@ func TestLaunch_TheRetentionOfTheOptionsSetsTheAgeAtWhichAFinishedRunIsDeleted(t
 	finishedRun(t, harness)
 
 	harness.opts.Retention = time.Nanosecond
-	launchOn(t, harness, harness.deps())
+	later := harness.deps()
+	later.Clock.Wall = func() time.Time { return time.Now().Add(time.Hour) }
+	launchOn(t, harness, later)
 
 	rows, err := harness.client(t, testVersion).Status()
 	require.NoError(t, err)
@@ -76,6 +74,7 @@ func TestLaunch_KeepRunsDeletesNothingWhateverTheAge(t *testing.T) {
 	harness.opts.KeepRuns = true
 	deps := harness.deps()
 	deps.Clock.Retain = time.Nanosecond
+	deps.Clock.Wall = func() time.Time { return time.Now().Add(time.Hour) }
 	launchOn(t, harness, deps)
 
 	rows, err := harness.client(t, testVersion).Status()
