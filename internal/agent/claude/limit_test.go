@@ -288,11 +288,46 @@ func TestCalls_AnAllowedOrWarningRateLimitEventIsNoLimit(t *testing.T) {
 func TestCalls_AnAssistantRateLimitErrorIsALimitWithNoTime(t *testing.T) {
 	t.Parallel()
 
-	seen := claude.Adapter{}.Calls(fixtureLines(t, "rate-limited-assistant-error.jsonl")[0])
+	overload := fixtureLines(t, "rate-limited-assistant-error.jsonl")[0]
+	line := strings.Replace(overload, "Opus is experiencing high load, please use /model to switch to Sonnet", "API Error: Request rejected (429)", 1)
+	require.NotEqual(t, overload, line, "the control: the text is the one thing that changes")
+
+	seen := claude.Adapter{}.Calls(line)
 
 	assert.NotEqual(t, agent.Seen{}, seen, "the adapter reads nothing from an assistant rate_limit error")
 	require.NotNil(t, seen.Limit)
-	assert.Equal(t, agent.Limit{Kind: agent.LimitRate}, *seen.Limit)
+	assert.Equal(t, agent.Limit{Kind: agent.LimitRate}, *seen.Limit, "an assistant rate_limit line that does not say overload is a rate limit")
+}
+
+func TestCalls_AnAssistantRateLimitLineThatSaysOverloadIsAnOverloadWithNoTime(t *testing.T) {
+	t.Parallel()
+
+	highLoad := fixtureLines(t, "rate-limited-assistant-error.jsonl")[0]
+	apiError := strings.Replace(strings.Replace(highLoad, "Opus is experiencing high load, please use /model to switch to Sonnet", "API Error: 529", 1),
+		`"is_api_error_message":true`, `"is_api_error_message":true,"api_error":"overloaded"`, 1)
+	require.NotEqual(t, highLoad, apiError, "the control: the text and the api_error change")
+
+	for name, line := range map[string]string{"the high load text of the CLI": highLoad, "the overloaded api_error": apiError} {
+		seen := claude.Adapter{}.Calls(line)
+
+		require.NotNil(t, seen.Limit, name)
+		assert.Equal(t, agent.Limit{Kind: agent.LimitOverload}, *seen.Limit, name)
+		assert.Equal(t, "overload", seen.Limit.Name())
+		assert.Empty(t, seen.Denied, name)
+	}
+}
+
+func TestCalls_ARefusalThatAsksForCreditsIsNoOverloadEvenWithTheHighLoadText(t *testing.T) {
+	t.Parallel()
+
+	credits := fixtureLines(t, "rate-limited-credits-required.jsonl")[0]
+	line := strings.Replace(credits, `"text":"`, `"text":"The model is experiencing high load. `, 1)
+	require.NotEqual(t, credits, line, "the control: the text is the one thing that changes")
+
+	seen := claude.Adapter{}.Calls(line)
+
+	assert.Nil(t, seen.Limit, "no wait cures a refusal that asks for credits")
+	assert.Equal(t, deniedCredits, seen.Denied)
 }
 
 func TestCalls_AnAssistantUsageLimitReachedLineIsReadLikeARateLimitEvent(t *testing.T) {

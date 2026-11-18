@@ -34,6 +34,7 @@ func TestLimit_NameNamesTheKindAndTheWindowOnlyWhenTheCLIGivesOne(t *testing.T) 
 
 	assert.Equal(t, "rate limit five_hour", agent.Limit{Kind: agent.LimitRate, Window: "five_hour"}.Name())
 	assert.Equal(t, "spend limit", agent.Limit{Kind: agent.LimitSpend}.Name(), "no window, no trailing space")
+	assert.Equal(t, "overload", agent.Limit{Kind: agent.LimitOverload}.Name(), "an overload is no limit of a window")
 }
 
 func TestTokens_AddSumsEveryCount(t *testing.T) {
