@@ -464,9 +464,9 @@ func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (step
 	return s.read(name, a, ended, try)
 }
 
-// runPastLimits runs the agent of one try until a run ends that no provider limit stopped, and returns how that run ended.
-func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput, error) {
-	look := 0
+// runPastLimits runs the agent of one try until a run ends that no provider limit stopped, and returns how that run ended. Each rerun starts from base.
+func (s *script) runPastLimits(name string, base PhaseInput, try int) (PhaseOutput, error) {
+	look, in := 0, base
 
 	for run := 0; ; run++ {
 		var err error
@@ -480,7 +480,7 @@ func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput
 			return ended, err
 		}
 
-		if in.ResetPassed, err = s.waitOutLimit(name, in, ended, try, run); err != nil {
+		if in, err = s.waitOutLimit(name, base, in, ended, try, run); err != nil {
 			return PhaseOutput{}, err
 		}
 	}

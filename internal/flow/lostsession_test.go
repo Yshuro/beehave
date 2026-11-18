@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -173,6 +174,118 @@ func TestPhase_AFailedStepThatResumesStartsAFreshSession(t *testing.T) {
 	assert.Nil(t, requests[1].Lost, "a failed step was not lost, so its session is not resumed")
 	assert.Empty(t, requests[1].Resume)
 	assert.Equal(t, "Work on the item.\n", requests[1].Prompt)
+}
+
+// loseTheRerun runs a limited run, stops the engine in the wait for the reset, then stops the next engine while the rerun runs.
+// The rerun names session, or none for an empty session, and the claim store reports a last renewal ran after the start of the rerun.
+func loseTheRerun(t *testing.T, h *harness, session string, ran time.Duration) {
+	t.Helper()
+
+	first := h.engine(t)
+	done := runInBackground(first, testItem)
+
+	waitForTheSleep(t, first)
+	require.NoError(t, first.Shutdown())
+	<-done
+	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
+
+	h.agents.gate = make(chan struct{})
+	nameSession(h, session)
+
+	second, err := NewEngine(t.Context(), h.opts, h.deps())
+	require.NoError(t, err)
+	require.NoError(t, second.Launch())
+	eventually(t, func() bool { return h.agents.running() == 1 })
+
+	if session != "" {
+		eventually(t, func() bool {
+			phases, err := dbos.ListWorkflows(second.ctx, dbos.WithFilterName(phaseName))
+			if err != nil {
+				return false
+			}
+
+			for _, phase := range phases {
+				if saved, err := dbos.GetEvent[string](second.ctx, phase.ID, sessionEvent, 0); err == nil && saved == session {
+					return true
+				}
+			}
+
+			return false
+		})
+	}
+
+	// The start mark of the rerun reads the wall clock of the harness.
+	h.beats.setRenewed(h.wall().Add(ran))
+	shutdownOpeningGate(t, second, h.agents.gate)
+	nameSession(h, "")
+}
+
+func TestPhase_ALostRerunThatNamedASessionResumesItsOwnSession(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-1500*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), exited)
+	loseTheRerun(t, h, "s-rerun", 33*time.Minute)
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 3)
+	require.NotNil(t, requests[2].Lost)
+	assert.Equal(t, "s-rerun", requests[2].Lost.Session, "the session of the lost rerun is newer than the limited one")
+	assert.Contains(t, requests[2].Lost.Continue, "after 33 minutes")
+	assert.Equal(t, "Work on the item.\n", requests[2].Prompt)
+}
+
+func TestPhase_ALostRerunThatNamedNoSessionResumesTheLimitedSessionAndKeepsTheLossNote(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-1500*time.Millisecond))
+	inTurn(h, limited(limitReset, 0), exited)
+	loseTheRerun(t, h, "", 33*time.Minute)
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 3)
+	require.NotNil(t, requests[2].Lost, "the lost rerun named no session, so the limited session is still the session of the step")
+	assert.Equal(t, "sess-limited", requests[2].Lost.Session)
+	assert.Contains(t, requests[2].Prompt, "This step ran before and was lost after 33 minutes.", "the note of the loss goes into the prompt")
+	assert.Contains(t, requests[2].Lost.Note, limitSentence, "a fresh run gets the note of the limit too")
+}
+
+func TestPhase_ALimitAfterALostStartResumedItsSessionAndNamedNoneResumesTheLostSession(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+
+	var limitedOnce atomic.Bool
+
+	// The replay that resumes the lost session is limited before the agent names a session.
+	h.agents.result = func(request AgentRequest) agent.Result {
+		if request.Lost != nil && request.Lost.Session == "s-lost" && limitedOnce.CompareAndSwap(false, true) {
+			return limitedIn("")
+		}
+
+		return exited
+	}
+
+	nameSession(h, "s-lost")
+	loseAgent(t, h, 33*time.Minute)
+	nameSession(h, "")
+
+	_, err := h.engine(t).Run(testItem, testProject)
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 3)
+	require.NotNil(t, requests[1].Lost)
+	assert.Equal(t, "s-lost", requests[1].Lost.Session)
+	require.NotNil(t, requests[2].Lost, "the limited run was given s-lost to resume and named none: prompt %q", requests[2].Prompt)
+	assert.Equal(t, "s-lost", requests[2].Lost.Session)
+	assert.Equal(t, "Work on the item.\n", requests[2].Prompt)
 }
 
 func TestClient_TheLostRecordHoldsTheSessionAndTheDiffSummary(t *testing.T) {
