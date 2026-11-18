@@ -14,9 +14,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
-const privateMode = 0o600
+const privateMode = os.FileMode(0o600)
 
 func TestOptions_RefuseEachDBOSVariableTheRuleNames(t *testing.T) {
 	t.Parallel()
@@ -78,7 +79,7 @@ func TestOpenStore_RefusesAFolderOthersCanUse(t *testing.T) {
 	harness := newHarness(t)
 	harness.fresh(t)
 	require.NoError(t, os.Mkdir(harness.opts.StateDir, 0o700))
-	require.NoError(t, os.Chmod(harness.opts.StateDir, 0o777)) //nolint:gosec // the test needs an open folder to prove the refusal
+	require.NoError(t, exectest.ChmodFolder(harness.opts.StateDir, 0o777)) // the test needs an open folder to prove the refusal
 
 	_, err := NewEngine(t.Context(), harness.opts, harness.deps())
 	require.Error(t, err)

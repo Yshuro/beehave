@@ -481,7 +481,7 @@ func TestHostSetup_RefusesAWorkRootThatIsNotTheLoginUsers(t *testing.T) {
 			case "a_folder_of_another_user":
 				h.owns("0", h.workRoot)
 			case "a_folder_the_login_user_cannot_write":
-				require.NoError(t, h.root.Chmod(h.rel(h.workRoot), 0o500)) // a test folder
+				require.NoError(t, exectest.ChmodFolder(h.workRoot, 0o500))
 			case "a_missing_folder_whose_parent_is_owned_by_root":
 				require.NoError(t, h.root.Mkdir("theirs", 0o755))
 				h.owns("0", filepath.Dir(workRoot))

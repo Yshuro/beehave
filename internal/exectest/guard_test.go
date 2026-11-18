@@ -22,7 +22,6 @@ const (
 	argCount = 3
 
 	chmodArgs = 2
-	folder    = "folder"
 )
 
 // bypasses returns "file:line" for each call in the test files of root that can write a program without exectest.Write.
@@ -84,13 +83,11 @@ func bypassesIn(t *testing.T, path string, consts map[string]bool) []string {
 	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments)
 	require.NoError(t, err)
 
-	folders := folderLines(fset, file)
-
 	var found []string
 
 	ast.Inspect(file, func(node ast.Node) bool {
 		call, ok := node.(*ast.CallExpr)
-		if ok && bypasses1(call, consts, folders[fset.Position(call.Pos()).Line]) {
+		if ok && bypasses1(call, consts) {
 			found = append(found, fset.Position(call.Pos()).String())
 		}
 
@@ -100,8 +97,8 @@ func bypassesIn(t *testing.T, path string, consts map[string]bool) []string {
 	return found
 }
 
-// bypasses1 reports whether one call writes or changes a file in a way that can make a program; onFolder is true when its line says it changes a folder.
-func bypasses1(call *ast.CallExpr, consts map[string]bool, onFolder bool) bool {
+// bypasses1 reports whether one call writes or changes a file in a way that can make a program.
+func bypasses1(call *ast.CallExpr, consts map[string]bool) bool {
 	selector, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -111,32 +108,35 @@ func bypasses1(call *ast.CallExpr, consts map[string]bool, onFolder bool) bool {
 	case "WriteFile", "OpenFile":
 		return len(call.Args) == argCount && !plainMode(call.Args[modeArg], consts)
 	case "Chmod":
-		return !onFolder && (len(call.Args) != chmodArgs || !plainMode(call.Args[1], consts))
+		return len(call.Args) != chmodArgs || !plainMode(call.Args[1], consts)
 	}
 
 	return false
 }
 
-// plainMode reports whether a mode is an integer literal with no execute bit, or the name of a constant that the package declares as one.
+// plainMode reports whether a mode is a plain literal, or the name of a constant that the package declares as one.
 func plainMode(expr ast.Expr, consts map[string]bool) bool {
+	if ident, ok := expr.(*ast.Ident); ok {
+		return consts[ident.Name]
+	}
+
+	return plainLiteral(expr)
+}
+
+// plainLiteral reports whether an expression is an integer literal with no execute bit, alone or in a FileMode conversion.
+func plainLiteral(expr ast.Expr) bool {
 	switch value := expr.(type) {
 	case *ast.BasicLit:
-		return plainLiteral(value)
-	case *ast.Ident:
-		return consts[value.Name]
+		number, err := strconv.ParseInt(value.Value, 0, 64)
+
+		return value.Kind == token.INT && err == nil && number&execBits == 0
+	case *ast.CallExpr:
+		selector, ok := value.Fun.(*ast.SelectorExpr)
+
+		return ok && selector.Sel.Name == "FileMode" && len(value.Args) == 1 && plainLiteral(value.Args[0])
 	}
 
 	return false
-}
-
-func plainLiteral(lit *ast.BasicLit) bool {
-	if lit.Kind != token.INT {
-		return false
-	}
-
-	number, err := strconv.ParseInt(lit.Value, 0, 64)
-
-	return err == nil && number&execBits == 0
 }
 
 // plainConsts returns the names of the constants that a file declares as an integer literal with no execute bit.
@@ -160,25 +160,10 @@ func plainSpec(spec ast.Spec, into map[string]bool) {
 	}
 
 	for i, name := range values.Names {
-		if lit, ok := values.Values[i].(*ast.BasicLit); ok && plainLiteral(lit) {
+		if plainLiteral(values.Values[i]) {
 			into[name.Name] = true
 		}
 	}
-}
-
-// folderLines returns the lines whose comment says that the call changes a folder, which needs the execute bit.
-func folderLines(fset *token.FileSet, file *ast.File) map[int]bool {
-	lines := map[int]bool{}
-
-	for _, group := range file.Comments {
-		for _, comment := range group.List {
-			if strings.Contains(comment.Text, folder) {
-				lines[fset.Position(comment.Pos()).Line] = true
-			}
-		}
-	}
-
-	return lines
 }
 
 func TestTests_NeverWriteAProgramWithoutTheForkLock(t *testing.T) {
@@ -193,6 +178,11 @@ func TestGuard_FlagsEveryWayToWriteAProgramWithoutTheHelper(t *testing.T) {
 	dir := t.TempDir()
 	source := `package x
 
+const (
+	plain = os.FileMode(0o600)
+	exec  = os.FileMode(0o700)
+)
+
 func f() {
 	os.WriteFile("a", nil, 0o755)
 	os.WriteFile("b", nil, mode)
@@ -200,20 +190,25 @@ func f() {
 	os.OpenFile("d", 0, 0o600|0o100)
 	os.Chmod("e", 0o700)
 	root.Chmod("f", mode)
-	os.WriteFile("g", nil, 0o600)
-	os.OpenFile("h", 0, 0o644)
-	os.Chmod("i", 0o600)
-	os.Chmod("j", 0o500) // a folder
-	exectest.Write("k", "")
+	os.Chmod("g", 0o700) // folder
+	os.WriteFile("h", nil, exec)
+	os.Chmod("i", os.FileMode(0o500))
+	os.WriteFile("j", nil, 0o600)
+	os.OpenFile("k", 0, 0o644)
+	os.Chmod("l", 0o600)
+	os.WriteFile("m", nil, os.FileMode(0o600))
+	os.WriteFile("n", nil, plain)
+	exectest.Write("o", "")
+	exectest.ChmodFolder("p", 0o700)
 }
 `
 	writeSource(t, filepath.Join(dir, "x_test.go"), source)
 
 	found := bypasses(t, dir)
 
-	require.Len(t, found, 6)
+	require.Len(t, found, 9)
 
-	for i, line := range []string{"4:", "5:", "6:", "7:", "8:", "9:"} {
+	for i, line := range []string{"9:", "10:", "11:", "12:", "13:", "14:", "15:", "16:", "17:"} {
 		assert.Contains(t, found[i], "x_test.go:"+line)
 	}
 }
