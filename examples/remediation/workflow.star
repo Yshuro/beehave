@@ -177,7 +177,7 @@ def _round_value(block, key):
 
     value = block[key]
     if type(value) != kind:
-        _round_refuse(key, "is %r, of type %s. Write %s, of type %s." % (value, type(value), fix, kind))
+        _round_refuse(key, "is %r, of type %s. Write %s." % (value, type(value), fix))
 
     return value
 

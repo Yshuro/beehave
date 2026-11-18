@@ -156,14 +156,70 @@ func TestReviewFix_TheLimitsOfTheProjectFileReachTheLoopOfTheExample(t *testing.
 
 	assert.Equal(t, []string{"m-late", "m-late"}, fixes, "escalate_after 0 of the project file reaches the loop: the two fixes of candidate 1 start on fix_late")
 
-	// void_reruns 0 and void_asks 0: the first void gate ends the item at once.
+	// void_reruns 0 and void_asks 0: the first void gate ends the item at once, with no question to the owner.
+	// A loop that asks the owner parks the run, and the wait fails at that event, not at a bound.
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	rig.setRound("void_reruns", json.Number("0"))
 	rig.setRound("void_asks", json.Number("0"))
 	rig.h.gate.results = []GateResult{voidResult(rig, "")}
 
-	_, err := runPipeline(rig.h.engine(t), file)
-	require.ErrorContains(t, err, "after 0 reruns and 0 questions")
+	client := rig.h.client(t, testVersion)
+	done := pipelineInBackground(rig.h.engine(t), file)
+	outcome := waitOn(t, waiting[runOutcome]{what: "the run to end with the void gate and no question to the owner", ch: done, run: runOfClient(t, client)})
+
+	require.ErrorContains(t, outcome.err, "after 0 reruns and 0 questions")
+	assert.Equal(t, 1, rig.h.gate.calls, "no rerun")
+}
+
+func TestReviewFix_ARoundAfterTheEscalationRunsFreshOnFixWhenTheProjectNamesNoFixLate(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, alwaysChanges)
+	rig.setRound("steps", projectSteps([3]string{"implement", "m-impl", ""}, [3]string{"review", "m-review", ""}, [3]string{"fix", "m-fix", ""}))
+
+	loop := strings.Replace(libraryLoop(rig.head, ", rounds = 4, escalate_after = 1"), `session = ""`, `session = "implement-session"`, 1)
+	require.NoError(t, os.WriteFile(file, []byte(loop), 0o600))
+
+	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	require.NoError(t, err)
+
+	seen := map[string]string{}
+
+	for _, request := range rig.h.agents.seen() {
+		for _, round := range []string{"1", "2", "3"} {
+			if strings.Contains(request.Prompt, "This is round "+round+".") {
+				seen[round] = request.Model + "/" + request.Resume
+			}
+		}
+	}
+
+	assert.Equal(t, map[string]string{"1": "m-fix/implement-session", "2": "m-fix/", "3": "m-fix/"}, seen, "the rounds after escalate_after start fresh on fix, as no fix_late entry exists")
+}
+
+func TestRunners_AProjectWithNoStepsRunsEveryStepOnItsDefaultModelAndThePool(t *testing.T) {
+	t.Parallel()
+
+	shown, err := settingsOf(t, roundVars(roundSettings()))
+	require.NoError(t, err)
+
+	for step, model := range map[string]string{
+		"plan": "opus", "implement": "sonnet", "review": "opus", "fix": "sonnet", "fix_late": "opus", "design": "opus",
+		"take_review": "opus", "sync_review": "opus", "sync_resolve": "opus", "queue_audit": "sonnet", "settle": "sonnet",
+	} {
+		assert.Contains(t, shown, `"`+step+`": {"model": "`+model+`", "runner": ""}`, step)
+	}
+
+	// The run: the plan, the implement step, the loop and the settle step read the defaults. take_review, sync_review and sync_resolve do the same in their tests.
+	rig, file, _ := stopLoopRig(t, 15, map[string]any{"state": "MERGED"}, false)
+	rig.setRound("fix_rounds", oneFixRound)
+	rig.setRound("steps", nil)
+	done := pipelineInBackground(rig.h.engine(t), file)
+
+	waitOn(t, ownerAsks(t, rig.h))
+	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
+	require.NoError(t, receive(t, done).err)
+
+	assert.Equal(t, append([]string{"opus", "sonnet"}, capModels(2)...), rig.models(), "plan opus, implement sonnet, then the loop on review opus and fix sonnet")
 }
 
 func TestReviewFix_TheEscalationRoundComesFromTheProjectFile(t *testing.T) {
@@ -301,7 +357,7 @@ func TestRunners_TheStepsOfTheProjectFileAreCheckedWithTheKeyAndTheFix(t *testin
 		"a number as model":  {map[string]any{"review": map[string]any{"model": json.Number("3")}}, "vars.round.steps.review.model is"},
 		"a blank model":      {map[string]any{"review": map[string]any{"model": " "}}, "vars.round.steps.review.model is \" \". Write the name of a model"},
 		"a number as runner": {map[string]any{"review": map[string]any{"runner": json.Number("3")}}, "vars.round.steps.review.runner is"},
-		"steps of a number":  {json.Number("3"), "vars.round.steps is"},
+		"steps of a number":  {json.Number("3"), "for example {\"review\": {\"model\": \"your-model\"}}."},
 		"an entry of text":   {map[string]any{"review": "m1"}, "vars.round.steps.review is \"m1\", of type string"},
 	} {
 		assert.Contains(t, refusalOf(t, roundVars(with(roundSettings(), map[string]any{"steps": test.steps}))), test.want, name)
@@ -335,7 +391,10 @@ func TestRunners_TheLimitsOfTheLoopAreWholeNumbersInTheirRange(t *testing.T) {
 		}
 
 		for _, wrong := range []any{"2", true} {
-			assert.Contains(t, refusalOf(t, roundVars(with(roundSettings(), map[string]any{key: wrong}))), "vars.round."+key+" is", key)
+			got := refusalOf(t, roundVars(with(roundSettings(), map[string]any{key: wrong})))
+
+			assert.Contains(t, got, "vars.round."+key+" is", key)
+			assert.Contains(t, got, " to 100.", key+": the text ends with the fix, and no type name follows it")
 		}
 	}
 }

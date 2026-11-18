@@ -151,7 +151,7 @@ def check_gate(loop):
 
     # A gate that is still void after the reruns and the asks gave no verdict about the code. No fix agent reads its report.
     if is_void(check):
-        fail("REFUSE: the gate gave no result for %s after %d reruns and %d questions (steps with no result: %s). %s" % (loop.item.id, loop.void_reruns, loop.void_asks,void_names(check), check.report))
+        fail("REFUSE: the gate gave no result for %s after %d reruns and %d questions (steps with no result: %s). %s" % (loop.item.id, loop.void_reruns, loop.void_asks, void_names(check), check.report))
 
     return check
 
