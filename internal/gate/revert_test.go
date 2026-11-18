@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -156,7 +157,7 @@ func TestBeforeReview_ARevertRunThatFailsBesideAPassingHeadGateRecordsBothExitsA
 
 	repo, head := revertRepo(t, baseCode, baseTests, "add 3\ndouble 4\nenv skip\n", baseTests+"calc TestDouble double 4\n")
 	bin := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "gitleaks"), []byte("#!/bin/sh\nexit 0\n"), 0o700)) //nolint:gosec // a stub program
+	require.NoError(t, exectest.Write(filepath.Join(bin, "gitleaks"), "#!/bin/sh\nexit 0\n"))
 
 	command := hostCommand(revertProject(), nil, repo, head, t.TempDir()+"/beehave-gate-demo-"+head, "main")
 	job := exec.CommandContext(t.Context(), "sh", "-c", command) //nolint:gosec // the job text under test

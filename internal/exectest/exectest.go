@@ -1,12 +1,27 @@
-// Package exectest writes the executable files that tests start.
+// Package exectest writes the executable files that tests start and changes the mode of test folders.
 package exectest
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 )
 
 const mode = 0o700
+
+// ChmodFolder changes the mode of a folder and returns an error when the path is not a folder.
+func ChmodFolder(path string, folderMode os.FileMode) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+
+	if !info.IsDir() {
+		return fmt.Errorf("%s is not a folder", path)
+	}
+
+	return os.Chmod(path, folderMode)
+}
 
 // Write writes a program that the test starts later and returns the error of the write.
 //

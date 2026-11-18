@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/model"
 	trackerstore "github.com/tobocop2/beehave/internal/store"
 )
@@ -437,7 +438,7 @@ func TestDryRun_TheUsersGitConfigDoesNotRunInTheDryRepository(t *testing.T) {
 	home := t.TempDir()
 	hooks := filepath.Join(home, "hooks")
 	require.NoError(t, os.MkdirAll(hooks, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o700)) //nolint:gosec // a test hook must run
+	require.NoError(t, exectest.Write(filepath.Join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n"))
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[core]\n\thooksPath = "+hooks+"\n[commit]\n\tgpgsign = true\n[init]\n\ttemplateDir = "+filepath.Join(home, "missing")+"\n"), 0o600))
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -451,7 +452,7 @@ func TestDryRun_TheTemplateDirOfTheEnvironmentCopiesNothingIntoTheDryRepository(
 	template := t.TempDir()
 	hooks := filepath.Join(template, "hooks")
 	require.NoError(t, os.MkdirAll(hooks, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o700)) //nolint:gosec // a test hook must run
+	require.NoError(t, exectest.Write(filepath.Join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n"))
 	t.Setenv("GIT_TEMPLATE_DIR", template)
 
 	var out bytes.Buffer

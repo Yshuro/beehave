@@ -5,7 +5,6 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/rogpeppe/go-internal/testscript"
 )
@@ -32,7 +31,7 @@ func cmdFakeClaude(ts *testscript.TestScript, _ bool, args []string) {
 		ts.Fatalf("fakeclaude: %v", err)
 	}
 
-	if err := work.WriteFile("fake/claude", []byte(strings.ReplaceAll(string(text), e2eWorkMarker, ts.Getenv("WORK"))), e2eToolMode); err != nil {
+	if err := writeFake(ts, "fake/claude", text); err != nil {
 		ts.Fatalf("fakeclaude: %v", err)
 	}
 }
