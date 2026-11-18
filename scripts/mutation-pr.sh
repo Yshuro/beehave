@@ -10,6 +10,13 @@
 #   A run that exceeds the limit fails. The script needs git, go, gremlins, jq and timeout (or gtimeout) on the path.
 #   The "not applicable" result needs git only.
 #
+# Gremlins reports LIVED for exit 0, for a kill by a signal and for every exit code other than 1 and 2 of its test run,
+# so LIVED does not prove a weak test. The script sets GOFLAGS so that each mutant test run goes through
+# scripts/mutation-exec.sh, which records the exit code and the first failing line of the run. A lived mutant whose run
+# exited 0 is a finding. A lived mutant whose run did not exit 0, or left no record, prints "mutation-pr: run error
+# path:line TYPE: <reason>", is not counted in the end marker, and fails the run. A run that stops with no report
+# prints the recorded runs as "mutation-pr: test run of path:line exited with N: <first failing line>".
+#
 # The script changes to the module root and runs gremlins on the path ".". Gremlins matches the lines of the
 # diff to mutants by file path. The diff has paths relative to the module root. Gremlins gives mutants paths
 # relative to the folder that it was started on. The two forms match only when that folder is the module
@@ -92,7 +99,33 @@ else
 fi
 
 report=$(mktemp "${TMPDIR:-/tmp}/mutation-pr.XXXXXX")
-trap 'rm -f "$report"' EXIT INT TERM
+exitdir=$(mktemp -d "${TMPDIR:-/tmp}/mutation-pr-exits.XXXXXX")
+exits=$exitdir/exits
+trap 'rm -f "$report"; rm -rf "$exitdir"' EXIT INT TERM
+
+# Gremlins keeps only a status for each mutant. Go reads GOFLAGS in every "go test" that gremlins starts, so the flag
+# -exec runs each test binary through scripts/mutation-exec.sh, which records the exit code of the mutant it runs in.
+# The flag -count=1 makes every mutant run its tests, so that a cached pass leaves no record. GOFLAGS splits on
+# spaces and has no quoting, so a path with a space cannot name the script.
+case $root in
+*[[:space:]]*)
+	echo "mutation-pr: $root has a space in its path, and GOFLAGS cannot name a script there"
+	exit 1
+	;;
+esac
+[ -x "$root/scripts/mutation-exec.sh" ] || { echo "mutation-pr: $root/scripts/mutation-exec.sh is not an executable file"; exit 1; }
+export MUTATION_ROOT="$root" MUTATION_EXIT_LOG="$exits"
+export GOFLAGS="${GOFLAGS:+$GOFLAGS }-count=1 -exec=$root/scripts/mutation-exec.sh"
+: >"$exits"
+
+# Print each recorded test run: the evidence that a run which ended with no report still leaves.
+print_exits() {
+	if [ ! -s "$exits" ]; then
+		echo "mutation-pr: no mutant test run left an exit code record"
+		return 0
+	fi
+	head -n 200 "$exits" | awk -F '\t' '{ printf "mutation-pr: test run of %s:%s exited with %s%s\n", $1, $2, $3, ($4 == "" ? "" : ": " $4) }'
+}
 
 # gremlins runs its own "git diff" and drops the first part of each path, which it expects to be "a/" or "b/".
 # With diff.noprefix that part is a folder of the path, and gremlins skips the mutants of each file in a subfolder.
@@ -107,10 +140,12 @@ status=0
 "$limiter" -k 30 "$limit" gremlins unleash --diff "$base" --output "$report" . || status=$?
 if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
 	echo "mutation-pr: the run exceeded MUTATION_TIMEOUT=${limit}s"
+	print_exits
 	exit 1
 fi
 if [ "$status" -ne 0 ]; then
 	echo "mutation-pr: gremlins exited with status $status"
+	print_exits
 	exit "$status"
 fi
 
@@ -219,10 +254,38 @@ fi
 # Each lived mutant, at most 50, gives two lines. The remediation workflow keeps the lines with the prefix "finding: ",
 # as "finding: path:line: text". The engine step reads the marker lines, as "mutation-pr: lived path:line TYPE".
 # The check above proved that every mutant that gremlins did not skip is on a changed line, so each lived mutant is in the diff.
-jq -r '[.files[]? | .file_name as $file | .mutations[]? | select(.status == "LIVED") | {at: "\($file):\(.line)", type}] | .[:50]
-	| (.[] | "finding: \(.at): a mutant lived: \(.type)"), (.[] | "mutation-pr: lived \(.at) \(.type)")' "$report" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
-printed=$lived
+#
+# Gremlins reads LIVED for exit 0, for a kill by a signal and for every exit code other than 1 and 2. A lived mutant is a
+# weak test only when its test run exited 0. The records of scripts/mutation-exec.sh hold the exit code of each run, by
+# path and line. A location with N lived mutants and Z records of exit 0 has Z weak mutants. Each other lived mutant
+# there takes one of the records that did not exit 0, in order, or has no record: its test run is an error of the run.
+classified=$exitdir/lived.json
+jq -c --rawfile log "$exits" '
+	($log | split("\n") | map(select(. != "") | split("\t") | {at: "\(.[0]):\(.[1])", rc: (.[2] | tonumber), text: (.[3] // "")})) as $records
+	| [.files[]? | .file_name as $file | .mutations[]? | select(.status == "LIVED") | {at: "\($file):\(.line)", type}]
+	| to_entries | group_by(.value.at)
+	| map(. as $group | ($group[0].value.at) as $at
+		| ($records | map(select(.at == $at and .rc == 0)) | length) as $zero
+		| ($records | map(select(.at == $at and .rc != 0))) as $failed
+		| [range(0; $group | length)] | map(. as $i | {key: $group[$i].key} + $group[$i].value
+			+ (if $i < $zero then {weak: true} else {weak: false} + ($failed[$i - $zero] // {}) end)))
+	| add | sort_by(.key)' "$report" >"$classified" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
+weak=$(jq 'map(select(.weak)) | length' "$classified")
+errors=$((lived - weak))
+
+# Each weak mutant, at most 50, gives two lines. The mutants with a failed test run give one line each, at most 50.
+jq -r 'map(select(.weak)) | .[:50] | (.[] | "finding: \(.at): a mutant lived: \(.type)"), (.[] | "mutation-pr: lived \(.at) \(.type)")' "$classified"
+jq -r 'map(select(.weak | not)) | .[:50] | .[]
+	| "mutation-pr: run error \(.at) \(.type): " + (if .rc == null then "no exit code was recorded for the test run of this mutant"
+		elif .rc > 128 and .rc <= 192 then "the test run ended with exit code \(.rc), a kill by signal \(.rc - 128)"
+		else "the test run exited with code \(.rc): \(.text)" end)' "$classified"
+printed=$weak
 [ "$printed" -le 50 ] || printed=50
-echo "mutation-pr: $lived mutant(s) lived, $printed finding line(s) printed. Kill each one with a test."
-echo "mutation-pr: end count=$lived printed=$printed"
+if [ "$weak" -gt 0 ]; then
+	echo "mutation-pr: $weak mutant(s) lived, $printed finding line(s) printed. Kill each one with a test."
+fi
+if [ "$errors" -gt 0 ]; then
+	echo "mutation-pr: $errors mutant(s) lived with a test run that did not exit 0. That is an error of the run, not a weak test: read the run error lines."
+fi
+echo "mutation-pr: end count=$weak printed=$printed"
 exit 1
