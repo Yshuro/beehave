@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/batch"
+	"github.com/tobocop2/beehave/internal/host"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -300,6 +301,48 @@ func TestBatchGate_AProgramGateWhoseCheckoutFailsFailsTheCall(t *testing.T) {
 
 	require.ErrorIs(t, err, errFake)
 	assert.Empty(t, rig.h.commands.ran(), "the program does not run on a commit that is not checked out")
+}
+
+func TestBatchGate_AWaitThatEndedAsLostGivesTheLostJobOnlyWhileTheRunStillRuns(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.gate.lose = 2
+	engine := rig.engine(t)
+	in := ExclusiveInput{Kind: kindBatchGate, Project: testProject, Item: testItem, BuildHost: "gpu-b"}
+	start := batchStart{Job: GateJob{ID: "job-1"}}
+
+	finished, err := engine.finishBatchGate(t.Context(), in, start)
+
+	require.NoError(t, err, "a run that still runs reads the loss as a value")
+	require.NotNil(t, finished.Lost)
+	assert.Equal(t, "job-1", finished.Lost.Job)
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	finished, err = engine.finishBatchGate(canceled, in, start)
+
+	require.ErrorIs(t, err, host.ErrLost, "a run that was canceled returns the error of the wait and no lost job")
+	assert.Nil(t, finished.Lost)
+}
+
+func TestProvenLoss_ALossThatCannotBeRecordedFailsTheGateCallAndGivesNoOutputs(t *testing.T) {
+	t.Parallel()
+
+	engine := newHarness(t).opened(t)
+	in := ExclusiveInput{Kind: kindGate, Project: testProject, Item: testItem}
+
+	// Outside a run the record of the loss is no step, so it fails at once.
+	outputs, err := engine.lostOutputs(engine.ctx, in, "gate", ExclusiveOutput{Lost: &LostJob{Job: "job-1", Host: "gpu-b", Proof: model.LostProof{Kind: model.LostStopped}}})
+
+	require.ErrorContains(t, err, "record the lost job of the gate: ")
+	assert.Nil(t, outputs)
+
+	outputs, err = engine.lostOutputs(engine.ctx, in, "gate", ExclusiveOutput{Outputs: map[string]any{"passed": true}})
+
+	require.NoError(t, err, "a call with no lost job has nothing to record")
+	assert.Equal(t, map[string]any{"passed": true}, outputs)
 }
 
 func TestBatchResult_ALossRecordThatAWorkflowCannotHoldFailsTheResult(t *testing.T) {

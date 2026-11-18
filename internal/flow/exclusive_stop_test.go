@@ -149,6 +149,22 @@ func TestExclusiveStop_ABatchGateCallThatFailsEndsAsTheStopOnlyWhenTheEngineStop
 	}
 }
 
+func TestTrackGate_OnlyAGateAndABatchGateGetAContextThatTheEndOfTheRunCancels(t *testing.T) {
+	t.Parallel()
+
+	engine := newHarness(t).opened(t)
+
+	for kind, tracked := range map[string]bool{kindGate: true, kindBatchGate: true, kindMerge: false, kindCommand: false} {
+		run, end := engine.trackGate(engine.ctx, ExclusiveInput{Kind: kind})
+
+		require.NoError(t, run.Err(), "the run of kind %s runs until its end", kind)
+
+		end()
+
+		assert.Equal(t, tracked, run.Err() != nil, "the end of a run of kind %s cancels its context only when the kind is tracked", kind)
+	}
+}
+
 func TestExclusiveStop_ACallThatSucceedsIsSavedAsASuccessAfterTheEngineStopped(t *testing.T) {
 	t.Parallel()
 
