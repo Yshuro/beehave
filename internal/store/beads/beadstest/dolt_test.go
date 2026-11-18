@@ -8,12 +8,15 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/rogpeppe/go-internal/testscript"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/store/beads/beadstest"
 )
@@ -21,13 +24,44 @@ import (
 const (
 	fakeServerName  = "fakedolt"
 	clashServerName = "clashdolt"
+	squatServerName = "squatdolt"
+	chattyName      = "chattydolt"
+	silentName      = "silentdolt"
+	wroteFile       = "wrote"
+
+	squatLife = time.Second
 )
 
 // TestMain lets the test binary play the dolt server. StartDolt runs `<binary> sql-server --host H --port P`.
 // The tests pass a link to the test binary named fakedolt, and testscript runs the command of that name: it listens on P until it is killed.
 // The command clashdolt ends at its first start, like a server whose port another process took, and listens from its second start.
 func TestMain(m *testing.M) {
-	testscript.Main(m, map[string]func(){fakeServerName: serveFake, clashServerName: serveAfterClash})
+	testscript.Main(m, map[string]func(){fakeServerName: serveFake, clashServerName: serveAfterClash, squatServerName: serveAsSquatter, chattyName: serveChatty, silentName: serveSilent})
+}
+
+// serveAsSquatter plays a process that holds the port at the first start and is not the server: it listens, answers one connection, and ends without the ready line.
+// Its second start is the real fake server.
+func serveAsSquatter() {
+	if os.Mkdir("clashed", 0o700) != nil {
+		serveFake()
+
+		return
+	}
+
+	args := os.Args[2:]
+
+	listener, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", net.JoinHostPort(args[1], args[3]))
+	if err != nil {
+		return
+	}
+
+	defer func() { _ = listener.Close() }()
+
+	time.AfterFunc(squatLife, func() { _ = listener.Close() }) // a start that waits for the ready line never connects
+
+	if conn, err := listener.Accept(); err == nil {
+		_ = conn.Close()
+	}
 }
 
 func serveAfterClash() {
@@ -39,6 +73,43 @@ func serveAfterClash() {
 }
 
 func serveFake() {
+	serve(func() error { return say(beadstest.ReadyLine + "\n") }) // the server prints its ready line like dolt does
+}
+
+// serveChatty plays a server that prints other output in several writes before the ready line, splits the line across two writes,
+// and writes again after it, like a real server that logs while it starts. It creates the file wrote when its last write is done.
+func serveChatty() {
+	const (
+		head  = "Server ready. Acc"
+		pause = 50 * time.Millisecond // a pause keeps the writes from merging into one read
+	)
+
+	serve(func() error {
+		for _, text := range []string{"starting\n", "loading the databases\n", head, beadstest.ReadyLine[len(head):] + "\n", "serving\n", "still serving\n"} {
+			if err := say(text); err != nil {
+				return err
+			}
+
+			time.Sleep(pause)
+		}
+
+		return os.WriteFile(wroteFile, nil, 0o600)
+	})
+}
+
+// serveSilent plays a server that lives and prints nothing: it listens like serveFake and never announces.
+func serveSilent() {
+	serve(func() error { return nil })
+}
+
+func say(text string) error {
+	_, err := syscall.Write(syscall.Stderr, []byte(text))
+
+	return err
+}
+
+// serve listens on the host and port of its arguments, calls announce, and accepts connections until it is killed.
+func serve(announce func() error) {
 	args := os.Args[2:]
 
 	var host, port string
@@ -58,6 +129,10 @@ func serveFake() {
 	}
 
 	defer func() { _ = listener.Close() }()
+
+	if announce() != nil {
+		return
+	}
 
 	for {
 		conn, err := listener.Accept()
@@ -97,6 +172,12 @@ type stubTB struct {
 
 func (s *stubTB) Fatalf(format string, args ...any) {
 	s.message = fmt.Sprintf(format, args...)
+
+	runtime.Goexit()
+}
+
+func (s *stubTB) Skip(args ...any) {
+	s.message = "skipped: " + fmt.Sprint(args...)
 
 	runtime.Goexit()
 }
@@ -216,6 +297,84 @@ func TestStartDolt_StartsAgainOnANewPortWhenTheServerEndsAtOnce(t *testing.T) {
 	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	require.NoError(t, err)
 	require.NoError(t, conn.Close())
+}
+
+// The squatter answers the first connection and ends. A start that counts a connection as ready returns its port, and the next dial is refused.
+func TestStartDolt_DoesNotTakeAnAnsweringPortForItsOwnServer(t *testing.T) {
+	t.Parallel()
+
+	port := beadstest.StartDolt(t, t.TempDir(), serverLink(t, squatServerName))
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+}
+
+// The server prints other output in several writes, splits the ready line across two writes, and writes after it.
+// StartDolt returns the port of the server, and the file wrote shows that the writes after the line were made before the server stopped.
+func TestStartDolt_FindsTheReadyLineInTheOutputOfAServerThatLogsWhileItStarts(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	port := beadstest.StartDolt(t, root, serverLink(t, chattyName))
+
+	conn, err := (&net.Dialer{}).DialContext(t.Context(), "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+
+	assert.Eventually(t, func() bool {
+		_, err := os.Stat(filepath.Join(root, "server", wroteFile))
+
+		return err == nil
+	}, 10*time.Second, 20*time.Millisecond, "the server writes after the ready line")
+}
+
+// The server stays alive and prints nothing. Only the bound of the start ends the wait, so the test fails if the bound is missing.
+func TestStartDoltWithin_StopsTheTestWhenALiveServerNeverPrintsTheReadyLine(t *testing.T) {
+	t.Parallel()
+
+	message := failure(t, func(tb testing.TB) {
+		tb.Helper()
+		beadstest.StartDoltWithin(tb, t.TempDir(), serverLink(t, silentName), 200*time.Millisecond)
+	})
+
+	assert.Contains(t, message, "did not start")
+	assert.Contains(t, message, beadstest.ReadyLine)
+}
+
+func TestRealBd_ReturnsTheBinaryWhenDoltIsOnThePath(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, exectest.Write(filepath.Join(dir, "dolt"), "#!/bin/sh\n"))
+	t.Setenv("PATH", dir)
+
+	assert.Equal(t, "/bin/bd", beadstest.RealBd(t, map[string]string{beadstest.BinaryVariable: "/bin/bd", "CI": "true"}))
+}
+
+func TestRealBd_StopsTheTestWhenDoltIsNotOnThePath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	assert.Contains(t, failure(t, func(tb testing.TB) {
+		tb.Helper()
+		beadstest.RealBd(tb, map[string]string{beadstest.BinaryVariable: "/bin/bd"})
+	}), "dolt is not on PATH")
+}
+
+func TestRealBd_SkipsOnAMachineWithoutTheBinary(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, failure(t, func(tb testing.TB) {
+		tb.Helper()
+		beadstest.RealBd(tb, map[string]string{})
+	}), "skipped: BEEHAVE_BD_132 is not set")
+}
+
+func TestRealBd_StopsTheTestInCIWithoutTheBinary(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, failure(t, func(tb testing.TB) {
+		tb.Helper()
+		beadstest.RealBd(tb, map[string]string{"CI": "true"})
+	}), "is not set in CI")
 }
 
 func TestStartDolt_StopsTheTestWhenTheServerEndsOnEveryAttempt(t *testing.T) {

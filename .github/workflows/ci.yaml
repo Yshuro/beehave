@@ -43,10 +43,65 @@ jobs:
       - name: Agent rules
         run: make governance-verify
 
-  test:
+  # The race tests need more CPU time than one 4-core runner gives in the 30 minute limit of a job, so four jobs run them. The slice of a job
+  # (make GO_TEST_SLICE) is its share of the go test runs. Each run starts when its job starts to test, and it ends at the go test timeout of
+  # 18 minutes (GO_TEST_TIMEOUT) at the latest. The job limit of 35 minutes is that timeout plus 17 minutes for the setup and the build, so
+  # a hung run is stopped by its own timeout, which prints the goroutines, and not by the job limit.
+  test-shards:
+    name: test-shards (${{ matrix.slice }})
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        slice: ["1/4", "2/4", "3/4", "4/4"]
     steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Install gotestsum
+        run: go install gotest.tools/gotestsum@v1.13.0
+
+      - name: Install gitleaks
+        run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
+
+      # The contract tests against a real bd need dolt and bd 1.3.2. With CI set, they fail when BEEHAVE_BD_132 is missing.
+      # They run in slice 1, with the other packages.
+      - name: Install dolt and bd
+        if: startsWith(matrix.slice, '1/')
+        run: |
+          make contract-tools-install CONTRACT_TOOLS_DIR="$RUNNER_TEMP/contract-tools"
+          echo "$RUNNER_TEMP/contract-tools" >> "$GITHUB_PATH"
+          echo "BEEHAVE_BD_132=$RUNNER_TEMP/contract-tools/bd" >> "$GITHUB_ENV"
+
+      - name: Race tests
+        run: make test GO_TEST_SLICE=${{ matrix.slice }}
+        env:
+          GOTELEMETRY: "off"
+
+      - name: Keep the coverage profiles and the JUnit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ strategy.job-index }}
+          path: |
+            coverage*.out
+            reports/junit-*.xml
+          if-no-files-found: error
+
+  # The check that the pull request needs. It merges the profiles of the four jobs and runs the coverage gate and the smoke test.
+  test:
+    needs: test-shards
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Stop when a test job failed
+        run: test "${{ needs.test-shards.result }}" = success
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
@@ -56,21 +111,23 @@ jobs:
       - name: Install go-test-coverage
         run: go install github.com/vladopajic/go-test-coverage/v2@v2.20.1
 
-      - name: Install gotestsum
-        run: go install gotest.tools/gotestsum@v1.13.0
-
       - name: Install gitleaks
         run: go install github.com/zricethezav/gitleaks/v8@v8.30.1
 
-      - name: Race tests, coverage gate, smoke
-        run: make test coverage smoke
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: test-results-*
+          merge-multiple: true
+
+      - name: Coverage gate, smoke
+        run: make coverage smoke
         env:
           GOTELEMETRY: "off"
 
       # make test runs without -v, so its log has no PASS line. This step prints the PASS line of each proof test by name.
       # A name with no test prints no PASS line, so a missing test never reads as a pass.
       - name: Proof tests
-        if: always()
+        if: always() && needs.test-shards.result == 'success'
         run: |
           status=0
           go test -run '^TestBeforeReview_ASecretScanFailsAPlantedKeyInTheCandidateDiffAndPassesACleanOne$' -count=1 -v ./internal/gate/ || status=1

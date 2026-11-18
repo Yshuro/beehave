@@ -338,6 +338,7 @@ linters:
           allow:
             - github.com/tobocop2/beehave/internal/model
             - github.com/tobocop2/beehave/internal/config
+            - github.com/tobocop2/beehave/internal/lockfile
             - github.com/tobocop2/beehave/internal/exectest
             - github.com/tobocop2/beehave/internal/store
             - github.com/tobocop2/beehave/internal/forge
@@ -440,6 +441,7 @@ linters:
           files:
             - "!**/cmd/beehave/**"
             - "!**/examples/**"
+            - "!**/scripts/**"
             - "!**/internal/model/**"
             - "!**/internal/config/**"
             - "!**/internal/lockfile/**"

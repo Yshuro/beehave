@@ -42,13 +42,13 @@ func resultShape(t *testing.T) []string {
 var goldenShapes = map[string][]string{
 	"star30": {
 		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,stop,text,transcript,violations",
-		"batch_merge: deferred,findings,gates,merged,note,rejected,tip,tree,unproven",
-		"before_review: base,findings,keywords,new_tests,ok",
+		"batch_merge: deferred,findings,gates,host_loss,host_losses,merged,note,rejected,tip,tree,unproven",
+		"before_review: base,findings,keywords,new_tests,ok,revert",
 		"board_sync: number,status",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
-		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,round_acceptance,round_allow_paths,round_base,round_base_reds,round_base_reds_file,round_base_result,round_fix_rounds,round_integration_pr,round_lane_cap,round_lane_kind,round_merge,round_next_base,round_owner,round_owner_email,round_source_checkout,round_wait_hours,source,stacked_rules,token_rules,tracker,traps",
-		"gate: checks,head,new_tests,passed,report,required,steps,tree",
+		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,source,stacked_rules,token_rules,tracker,traps,vars",
+		"gate: checks,head,host_loss,host_losses,new_tests,passed,report,required,revert,steps,tree",
 		"gather: results",
 		"host_teardown: down,reason",
 		"host_up: host,started",
@@ -61,6 +61,7 @@ var goldenShapes = map[string][]string{
 		"pr_assign: issues,number",
 		"pr_comment: number",
 		"pr_open: created,number,stack",
+		"pr_state: state",
 		"preflight: author,code,foreign,head,ok,pr,reason,stop",
 		"queue: free,rows",
 		"spawn: runs",
@@ -84,7 +85,7 @@ var goldenKinds = map[string][]string{
 	"star30": {
 		"agent", "before_review", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
 		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "merge", "now",
-		"pr_assign", "pr_comment", "pr_open", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
+		"pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
 	},
 }
 
@@ -167,4 +168,36 @@ func TestStepsVersion_TheStepNamesOfABatchMergeMatchTheGoldenListOfTheStepsVersi
 	}
 
 	assert.Equal(t, goldenBatchSteps, batch, "the steps of batch_merge changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
+	assert.Equal(t, goldenBatchGateSteps, batchGateSteps(t, engine), "the steps of the batch gate changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
+}
+
+// goldenBatchGateSteps are the steps of the run of the project gate of a batch. The step batch_gate:job holds the checkout and the host job,
+// and a replay that finds it waits on that job.
+var goldenBatchGateSteps = []string{"batch_gate:job", "batch_gate"}
+
+// goldenLostBatchSteps are the steps of batch_merge in the item run when the first gate of the union loses its job and the rerun passes:
+// the record of the loss comes after the first gate and before the members merge.
+var goldenLostBatchSteps = []string{
+	"batch:b.refuse", "batch:b.heads#1", "batch:b.tip#1", "batch:b.union#1", "batch:b.gate#1/host-loss", "batch:b.tip#2", "batch:b.intent#1",
+	"batch:b.tip#3", "batch:b.intent#3", "batch:b.tip#4", "batch:b.prove", "batch:b.issues",
+}
+
+func TestStepsVersion_TheStepNamesOfABatchMergeWhoseGateLostItsJobMatchTheGoldenList(t *testing.T) {
+	t.Parallel()
+
+	rig, _ := lostBatchRig(t, 1)
+	engine := rig.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow("host_up(name = \"start\", host = \"gpu-b\")\n"+rig.call("1 3", ""))))
+	require.NoError(t, err)
+
+	var batch []string
+
+	for _, name := range stepNamesOf(t, engine, testRun) {
+		if strings.HasPrefix(name, "batch:") {
+			batch = append(batch, name)
+		}
+	}
+
+	assert.Equal(t, goldenLostBatchSteps, batch, "the steps of batch_merge changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
 }

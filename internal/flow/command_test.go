@@ -285,9 +285,9 @@ func TestWalk_AReplayBuildsTheSameStdinAndEnvFromTheRecordedResults(t *testing.T
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the open run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 	require.Len(t, h.commands.requests, 2, "the command before the wait ran once")

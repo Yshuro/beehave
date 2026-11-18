@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -42,6 +43,28 @@ func TestMergeStep_AWorkflowThatDoesNotSetMergeMarksReadyAndLeavesTheMergeToTheO
 	assert.Equal(t, []int{testPull}, h.watch.reads)
 	assert.Equal(t, "merged", result.Merge)
 	assert.Empty(t, result.SentBack)
+}
+
+func TestMergeStep_ACrashInsideTheMergeStepCallsTheMergeAgainWithTheRecordedIntent(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Done})
+	host := &repoHost{}
+	h.batch = host
+	crash := newCrash(t, h)
+	h.merge.over = func(_ context.Context, _ string, _ MergeSettings) (merge.Result, error) {
+		crash.after()
+
+		return merge.Result{Stop: merge.Done}, nil
+	}
+
+	result := crashAndResume(t, h, h.deps(), shipCall("merge = True, "))
+
+	require.Len(t, h.merge.given, 2, "the cut-off merge step ran its call again")
+	require.NotNil(t, h.merge.given[0].Intent)
+	require.NotNil(t, h.merge.given[1].Intent, "the second call carries an intent")
+	assert.Equal(t, []string{testItem}, host.intents, "the intent was read once: the recorded step answered the rerun, so both calls carry the one recorded intent")
+	assert.Equal(t, "merged", result.Merge)
 }
 
 func TestMergeStep_AnEnvNameThatTheEnvironmentLacksFailsTheStepAndNamesTheVariable(t *testing.T) {
@@ -162,13 +185,13 @@ func TestMergeStep_StatusShowsOwnerMergeWhileTheStepWaitsAndTheFinalStateAfterIt
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the run to show that it waits for the owner merge", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		rows, err := client.Status()
 
-		return err == nil && len(rows) == 1 && rows[0].Merge == "owner_merge"
-	})
+		return struct{}{}, err == nil && len(rows) == 1 && rows[0].Merge == "owner_merge", nil
+	}})
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	rows, err := client.Status()
 	require.NoError(t, err)
@@ -193,21 +216,15 @@ func TestMergeStep_AStepThatMergesNeverShowsThatItWaitsForTheOwner(t *testing.T)
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	for finished := false; !finished; {
-		select {
-		case outcome := <-done:
-			require.NoError(t, outcome.err)
-
-			finished = true
-		case <-time.After(20 * time.Millisecond):
-			rows, err := client.Status()
-			require.NoError(t, err)
-
-			for _, row := range rows {
-				assert.NotEqual(t, "owner_merge", row.Merge)
-			}
+	outcome := waitOn(t, waiting[runOutcome]{what: "the run to end", ch: done, read: func() (runOutcome, bool, error) {
+		rows, err := client.Status()
+		for _, row := range rows {
+			assert.NotEqual(t, "owner_merge", row.Merge)
 		}
-	}
+
+		return runOutcome{}, false, err
+	}})
+	require.NoError(t, outcome.err)
 
 	assert.Len(t, h.merge.asked, 1)
 }

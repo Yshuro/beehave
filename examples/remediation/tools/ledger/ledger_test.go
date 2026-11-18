@@ -500,9 +500,7 @@ func TestAdd_TwoHundredConcurrentAddsWriteEachLaneOnce(t *testing.T) {
 		inFlight = 8
 	)
 
-	// An Add waits at most 30 seconds for the lock, then returns the locked error. SQLite polls the lock with a sleep, so 400 Adds
-	// that all wait at once starve each other, and the last ones come close to the 30 seconds on a loaded machine.
-	// The semaphore bounds the Adds in flight; every lane still gets both of its writers.
+	// The semaphore bounds the goroutines in flight, so the test checks that each lane gets both of its writers and not how fast the ledger takes 400 writes.
 	slots := make(chan struct{}, inFlight)
 
 	var group sync.WaitGroup

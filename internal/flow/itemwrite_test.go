@@ -2,10 +2,15 @@ package flow
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"os"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -102,6 +107,84 @@ command(run = [made.id, str(made.created), str(again.created), again.id, closed.
 	assert.Equal(t, []string{"n-1 True False n-1 closed"}, h.commands.ran())
 }
 
+func TestItemWrite_ASharedKeyIsTheKeyOfTheCallInEveryRun(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	w := newFakeWriter()
+	h.writer = w
+	engine := h.engine(t)
+	file := writeFlow(t, "def main(item):\n    made = item_create(title = \"t\", key = \"o/r:41\", shared = True)\n    command(run = [made.id, str(made.created)])\n")
+
+	for range 2 {
+		_, err := engine.RunFile(testItem, testProject, file)
+		require.NoError(t, err)
+	}
+
+	assert.Equal(t, []string{testProject + "|o/r:41|t||"}, w.created, "two runs give the same key, so the tracker files one item")
+	assert.Equal(t, []string{"n-1 True", "n-1 False"}, h.commands.ran(), "the second run gets the first item")
+}
+
+// lockProbeWriter is a fakeWriter that, inside each Create, tries the key lock of the project and the key in the state folder dir.
+// held records whether another holder had the lock, as project|key|held.
+type lockProbeWriter struct {
+	*fakeWriter
+
+	dir  string
+	held []string
+}
+
+func (w *lockProbeWriter) Create(ctx context.Context, project, key string, item trackerstore.NewItem) (string, bool, error) {
+	short, cancel := context.WithTimeout(ctx, 60*time.Millisecond)
+	defer cancel()
+
+	unlock, err := trackerstore.LockKey(short, w.dir, project+"\n"+key)
+	if err != nil {
+		w.held = append(w.held, project+"|"+key+"|held")
+
+		return w.fakeWriter.Create(ctx, project, key, item)
+	}
+
+	if err := unlock(); err != nil {
+		return "", false, err
+	}
+
+	return w.fakeWriter.Create(ctx, project, key, item)
+}
+
+func TestItemWrite_ASharedCreateHoldsTheLockOfItsKeyAndARunScopedCreateDoesNot(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	w := &lockProbeWriter{fakeWriter: newFakeWriter()}
+	h.writer = w
+	engine := h.engine(t)
+	w.dir = engine.dir
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, "def main(item):\n    item_create(title = \"t\", key = \"o/r:41\", shared = True)\n    item_create(title = \"t\", key = \"plan\")\n"))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{testProject + "|o/r:41|held"}, w.held, "only the shared create holds the lock of its key")
+	assert.Len(t, w.created, 2)
+}
+
+func TestItemWrite_ASharedCreateWhoseLockCannotBeTakenFailsAndFilesNothing(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	w := newFakeWriter()
+	h.writer = w
+	engine := h.engine(t)
+
+	sum := sha256.Sum256([]byte(testProject + "\no/r:41"))
+	require.NoError(t, os.Mkdir(filepath.Join(engine.dir, "item-"+hex.EncodeToString(sum[:16])+".lock"), 0o700), "a folder in place of the lock file")
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, "def main(item):\n    item_create(title = \"t\", key = \"o/r:41\", shared = True)\n"))
+
+	require.ErrorContains(t, err, "take the lock of a shared item key")
+	assert.Empty(t, w.created)
+}
+
 func TestItemWrite_AReplayWritesNothingTwiceAndKeepsTheStepNames(t *testing.T) {
 	t.Parallel()
 
@@ -127,12 +210,37 @@ func TestItemWrite_AReplayWritesNothingTwiceAndKeepsTheStepNames(t *testing.T) {
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
-	require.NoError(t, (<-done).err)
+	waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
+	require.NoError(t, receive(t, done).err)
 
 	assert.Len(t, w.created, 1, "the create before the wait ran once")
 	assert.Equal(t, []string{testProject + "|n-1|" + testRun + ":n1|yes"}, w.notes)
 	assert.Equal(t, []string{"item_create:c1#1", "wait:ask#1", "item_comment:n1#1", "item_status:hold#1"}, stepNames(t, next))
+}
+
+func TestItemWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct{ call, method, want string }{
+		"item_create":  {`item_create(title = "t", key = "k", name = "c")`, "create", "create|" + testProject + "|" + testRun + ":k|t"},
+		"item_comment": {`item_comment(id = "n-1", text = "hi", key = "k", name = "c")`, "comment", "comment|" + testProject + "|n-1|" + testRun + ":k|hi"},
+		"item_status":  {`item_status(id = "n-1", status = "closed", name = "c")`, "status", "status|" + testProject + "|n-1|closed"},
+		"item_assign":  {`item_assign(id = "n-1", assignee = "alice", name = "c")`, "assign", "assign|" + testProject + "|n-1|alice"},
+	}
+
+	for name, tt := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			w := &crashWriter{writer: newFakeWriter(), crash: newCrash(t, h), on: tt.method}
+			h.writer = w
+
+			crashAndResume(t, h, h.deps(), tt.call+"\n")
+
+			assert.Equal(t, []string{tt.want, tt.want}, w.calls, "the rerun reached the tracker with the key and the arguments of the first call")
+		})
+	}
 }
 
 func TestItemWrite_ABadStatusFailsBeforeAnyWrite(t *testing.T) {

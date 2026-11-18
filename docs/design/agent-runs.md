@@ -10,9 +10,29 @@ An `agent` step starts one AI coding CLI through an adapter, feeds it the prompt
 
 - `agent` holds the runner and the `Adapter` contract.
 - An adapter supplies the profile of one CLI (binary, fixed arguments, login variables) and reads its output stream.
-- `agent/claude` is the only adapter. Other agents return later as their own packages.
+- `agent/claude` and `agent/opencode` are the adapters. Each other agent is its own package. OpenCode has no sandbox, so a sandboxed step with it is refused. Its guard is a plugin file that beehave writes into the run folder and that OpenCode loads. beehave runs no JavaScript.
 - `cmd/beehave` holds the table that maps an agent name to the constructor of its adapter. It puts the adapter in the `Spec` of each run. A run with no adapter does not start.
 - `agent/agenttest` is the conformance suite. It starts a fake CLI and checks the profile, the arguments and the call reader of an adapter. Every new adapter calls it from its tests.
+
+### The OpenCode adapter and its limits
+
+The adapter starts `opencode run --format json` and reads its event stream. The prompt goes on stdin; no message argument follows `run`. The adapter never passes `--auto`, so a file tool that reaches outside the work folder stays refused.
+
+A step author must know these limits:
+
+- **Supported versions.** The adapter supports OpenCode from 1.19.5 up to but not including 3.0.0. The tests hold a recording of 1.19.5 and one of 2.2.5. The runner reads `opencode --version` before every run. A version outside the range, or one that it cannot read, stops the step before it starts, and the note names the range.
+- **OpenCode 2.x runs with a private server.** From 2.0.0 the runner adds `--standalone`. Without it, OpenCode 2.x sends the run to a shared background service, and a service that another process holds on its port makes the run fail. The 2.x line names the shell tool `shell`.
+- **No `forbid_commands` on OpenCode 2.x.** In a real step on 2.2.5 the guard plugin did not refuse a command that the check forbids: the command ran and wrote its file. A step with `forbid_commands` does not start on 2.0.0 or later, and the note says so. Remove `forbid_commands` from the step, or use OpenCode 1.x.
+- **No sandbox.** A step with a sandbox does not start. Set `sandbox = None` on the step.
+- **No skill proof.** OpenCode reports no skill calls, so a step with `require_skills` does not start.
+- **A lost run starts again.** OpenCode keeps all sessions in one database and has no file for one session. The transcript path in the step output names a path that no file holds. The check before a resume finds no file, so a lost OpenCode step starts again from its note and never resumes.
+- **Subagent sessions are not counted.** The calls and the cost of a subagent session of OpenCode do not reach the output stream of the parent run, so the turn cap and the cost cap do not count them. This is from a read of the source of OpenCode 1.19.5.
+- **The turn cap is one call late.** OpenCode shows a tool call on its output when the call ends, so the runner counts a shell call after it ran.
+- **The cost cap is checked on finished steps.** A run can pass the cap by the cost of one step.
+- **The guard needs a POSIX shell.** A step with `forbid_commands` does not start on Windows. If the plugin does not load, OpenCode runs every shell command with no check. The plugin writes a marker file when it loads, and a run that ends with no marker gets a violation line.
+- **A run with no timeout ends after one hour.** A model over its usage quota prints nothing and retries. The note of the timed-out run names that cause.
+- **The pool never picks OpenCode.** OpenCode has no usage report, so the pool reads an unknown usage for it and skips it, and the doctor makes no login check for it. A step runs on OpenCode only when it names the runner with `runner = "<name>"`.
+- **The record names the runner and the model.** The recorded phase of an agent step holds `login` (the named runner, or the login that the pool picked) and `model` (the model that the step set). `beehave status <run id>` and `beehave status <run id> --json` show both on the step line, and the dry run prints them in the phase record. A record that an older version wrote has neither field and replays as before, because the engine reads both fields for display only.
 
 ### The process of the CLI
 
@@ -57,13 +77,38 @@ Not verified here: that a real Claude Code still runs the hook for a call that `
 
 ### How the adapter reads the calls
 
-The adapter reads the calls from the stream-json lines on stdout, which the runner already reads. It does not read the session file on disk. The session path stays in the result as a reference, and no code reads it.
+The adapter reads the calls from the stream-json lines on stdout, which the runner already reads. It does not read the session file on disk. The session path stays in the result as a reference. The only check on the file is whether it exists, before a lost step resumes its session (see "The saved session" in durable-loop.md).
+
+The tap gives each new session id to the request at the line that holds it, so the engine saves the id while the run goes on.
 
 - A Skill call counts in a `tool_use` block of an assistant line.
 - A Bash call counts at any depth of a line.
 - A call of a sub-agent counts too. Claude Code forwards the `tool_use` blocks of sub-agents in the stream; they carry `parent_tool_use_id`.
 
 The shape is the one of the Claude Code headless page (https://code.claude.com/docs/en/headless). The shell rules live in `check/shell` (see [Shell rules and the job check](#shell-rules-and-the-job-check)).
+
+### How the adapter reads a provider limit
+
+A rate limit or a spend limit of the provider ends a run with the outcome `limited`, not as a failed run. The adapter reads the limit from the stream, as the CLI reports it:
+
+- A `rate_limit_event` line with `rate_limit_info.status` set to `rejected` is a limit. The status `allowed` or `allowed_warning` is no limit.
+- A rejected status with `isUsingOverage` set to true is no limit. Paid overage serves the request, and the CLI keeps working.
+- The limit is a spend limit only when paid overage was available and is now refused: `overageStatus` is `rejected` and `overageDisabledReason` is `out_of_credits` or `org_level_disabled_until` (a spend cap). Any other reason, such as `overage_not_provisioned`, or no reason, means the account had no paid overage to refuse, so the limit is a rate limit with the plan reset time.
+- `rateLimitType` names the window. `resetsAt` is the reset time in Unix seconds. A spend limit resets at the earlier of `resetsAt` and `overageResetsAt`, because either reset lets work start again.
+- An assistant line with `error` set to `rate_limit` is read like a `rate_limit_event`: its kind, window and reset time come from the `rate_limit_info` of its `api_error_params`, by the rules above. A line with no usable `rate_limit_info` is a rate limit with no window and no reset time, unless it says that the provider is overloaded: its `api_error` is `overloaded`, or its text says that the model "is experiencing high load". That line is an overload, a limit of the kind `overload` with no reset time, and the step waits a backoff for it (see [Provider limits](durable-loop.md#provider-limits)).
+
+The runner keeps the first limit of the run. The run is limited only if the run did not go on to a result line with no error: a success or a cap after the limit means the CLI took more work. A limited run keeps its session, its message and its violations, whatever the exit code. Its note names the limit and the reset time. A run that timed out or was canceled keeps that outcome.
+
+#### A refusal that no wait cures
+
+Some refusals do not end at a reset time. The adapter reports such a line as a denial with a reason, not as a limit. The adapter tests the pause before the credits, as the CLI does.
+
+- A pause of the organization: `dailyCapPaused` is true on a rejected `rate_limit_event`, or in `api_error_params.rate_limit_info` of an assistant `rate_limit` line (the CLI writes that line with `api_error` set to `usage_limit_reached`). A pause carries the `overageDisabledReason` of a spend cap, so the flag is what tells the two apart. The CLI tells the user to contact support.
+- Usage credits are required: a rejected `rate_limit_event` has `errorCode` set to `credits_required` and `rateLimitType` missing or set to `overage`. This is the test of the CLI. The same holds for an assistant `rate_limit` line whose `api_error` is `long_context_credits_required` or `model_requires_usage_credits`. A wait buys no credits.
+
+The runner keeps the first denial of the run. A denied run fails, even when an earlier line reported a limit, and it waits for no reset. The reason is a note of the result, after the note of the runner. A run that exited with code 0 fails with an error that names the reason. As for a limit, a denial counts only if the run did not go on to a result line with no error, and a run that timed out or was canceled keeps that outcome.
+
+The engine still fails a limited agent step. The wait for the reset is a later change.
 
 ### The setting forbid_commands
 
@@ -150,7 +195,7 @@ The kind refuses each git command that changes a repository: add, commit, push, 
 
 `worktree add` and `worktree list` pass. A reviewer builds its own copy of the tree with `worktree add`, not with `apply`.
 
-`git-write` is for a read-only step. `review_fix.star` lists it for the `review` call, so a reviewer cannot fix, commit or push. It is opt-in, like the other kinds that a step lists. The default `--forbid` list of `beehave check command` holds every kind except `git-write`, so a bare hook does not refuse every commit.
+`git-write` is for a read-only step. `review_fix.star` lists it for each review call (the scoped reviews, the full review `candidate-review` and the design step), so a reviewer cannot fix, commit or push. It is opt-in, like the other kinds that a step lists. The default `--forbid` list of `beehave check command` holds every kind except `git-write`, so a bare hook does not refuse every commit.
 
 #### Check of the workflow
 

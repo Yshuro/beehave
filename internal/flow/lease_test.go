@@ -14,13 +14,24 @@ type leaseClock struct {
 	mu     sync.Mutex
 	now    time.Time
 	asleep time.Duration
+	reads  int
 }
 
 func (c *leaseClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	c.reads++
+
 	return c.now
+}
+
+// readCount is the number of times that the monotonic reading was read, so a test that expects no change waits for a count of reads and does not sleep.
+func (c *leaseClock) readCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	return c.reads
 }
 
 // Wall reads the wall clock: the monotonic reading and the time of the sleeps.
@@ -67,7 +78,7 @@ func runWithAgentInFlight(t *testing.T) inFlight {
 	engine := launchedWith(t, harness, func(deps *Deps) { clk.install(&deps.Clock) })
 	done := runInBackground(engine, testItem)
 
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	return inFlight{harness: harness, engine: engine, clock: clk, done: done, agent: harness.agents.pid, finish: finish}
 }
@@ -95,7 +106,7 @@ func TestBeat_AFailedRenewalKeepsTheRunWhileTheLeaseCanStillBeLive(t *testing.T)
 	assert.True(t, alive(run.agent))
 
 	run.finish()
-	require.NoError(t, (<-run.done).err)
+	require.NoError(t, receive(t, run.done).err)
 }
 
 func TestBeat_RenewalsThatFailUntilTheLeaseEndsCancelTheStepWithinOneTick(t *testing.T) {
@@ -114,7 +125,7 @@ func TestBeat_RenewalsThatFailUntilTheLeaseEndsCancelTheStepWithinOneTick(t *tes
 	assert.Empty(t, run.engine.holds.snapshot())
 	requireDies(t, run.agent)
 
-	outcome := <-run.done
+	outcome := receive(t, run.done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	require.ErrorContains(t, outcome.err, errFake.Error())
 	assert.Zero(t, countOf(run.harness.life.seen(), "release"), "the claim is not ours to release")
@@ -130,7 +141,7 @@ func TestBeat_ATrackerThatNamesAnotherHolderCancelsTheStepAtOnce(t *testing.T) {
 
 	requireDies(t, run.agent)
 
-	outcome := <-run.done
+	outcome := receive(t, run.done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	require.ErrorContains(t, outcome.err, "it holds no claim row")
 }

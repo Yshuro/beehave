@@ -28,7 +28,7 @@ make setup             # install the tools and generate the agent files
 make check             # the full gate: format, lint, vet, govulncheck, race tests, coverage gate, smoke, agent rules
 make format            # gofumpt and goimports through golangci-lint
 make lint              # golangci-lint
-make test              # go test -race, writes coverage.out
+make test              # go test -race through gotestsum; writes coverage.out, the flow profiles and the JUnit reports in reports/
 make coverage          # the 100% coverage gate on coverage.out
 make vuln              # govulncheck
 make build             # build bin/beehave

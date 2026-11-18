@@ -58,9 +58,11 @@ type Machine struct {
 	DropAll     string // the first word of a command whose call always drops
 	NoStop      bool   // systemctl stop fails
 	NoRun       bool   // systemd-run fails
-	Options     [][]string
-	Fail        map[string]int    // the exit status of every command whose words start with the key
-	Say         map[string]string // the stdout of every command whose words start with the key
+	// StrictFolders makes touch fail, as on a real machine, when the folder of the file was not made by a mkdir.
+	StrictFolders bool
+	Options       [][]string
+	Fail          map[string]int    // the exit status of every command whose words start with the key
+	Say           map[string]string // the stdout of every command whose words start with the key
 }
 
 // New returns a machine. A test builds the link over SSH().
@@ -225,6 +227,10 @@ func (m *Machine) files(words []string) model.CommandResult {
 
 		return ok("")
 	case "touch":
+		if m.StrictFolders && !m.Files[path.Dir(words[1])+"/"] {
+			return failure(1, "touch: cannot touch '"+words[1]+"': No such file or directory")
+		}
+
 		m.Files[words[1]] = true
 
 		return ok("")

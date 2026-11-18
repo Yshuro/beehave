@@ -49,7 +49,7 @@ type Queue struct {
 	bank   func(ctx context.Context) error
 }
 
-// settings are the production values that an Option replaces. They are for tests.
+// settings are the values that an Option replaces. The clock, the bank and the nonce are for tests.
 type settings struct {
 	clock jobwait.Clock
 	bank  func(ctx context.Context) error
@@ -65,6 +65,9 @@ func WithBank(bank func(context.Context) error) Option { return func(s *settings
 
 func WithNonce(nonce func() string) Option { return func(s *settings) { s.nonce = nonce } }
 
+// WithLimit makes sbatch end every job at the run limit, with `--time`. Without it the queue sends no limit.
+func WithLimit(limit time.Duration) Option { return func(s *settings) { s.limit = limit } }
+
 // New returns the queue of the cluster that the link reaches.
 func New(l *link.Link, config model.HostConfig, slot Slot, opts ...Option) *Queue {
 	q := &Queue{link: l, config: config, slot: slot}
@@ -75,7 +78,7 @@ func New(l *link.Link, config model.HostConfig, slot Slot, opts ...Option) *Queu
 	}
 
 	q.nonce, q.limit, q.bank = s.nonce, s.limit, s.bank
-	q.engine = jobwait.New(scheduler{l}, slot.Release, s.clock, s.bank, time.Duration(config.StaleMinutes)*time.Minute)
+	q.engine = jobwait.New(scheduler{l}, slot.Release, s.clock, s.bank, time.Duration(config.StaleMinutes)*time.Minute, jobwait.Limits{LostAfter: config.LostAfter, StopLimit: config.StopLimit})
 
 	return q
 }
@@ -213,6 +216,37 @@ func (q *Queue) Cancel(ctx context.Context, id model.JobID) error {
 	}
 
 	return q.engine.Cancel(ctx, job)
+}
+
+// LostProof runs scancel and then reads the state of the job. A final state that the scheduler named (succeeded, failed, canceled or timed out) is the proof
+// that the job no longer runs. A state that is not final, a read that fails and a link that is down are no proof, and the note says which.
+// The result of scancel is not read: it fails for a job that already ended, and the state read owns that fact.
+// An empty record (died) is no proof either: the accounting record can come late.
+func (q *Queue) LostProof(ctx context.Context, id model.JobID) (model.LostProof, error) {
+	job, err := parseJobID(id)
+	if err != nil {
+		return model.LostProof{}, err
+	}
+
+	q.link.Exec(ctx, "scancel", job.ID)
+
+	state, err := scheduler{q.link}.state(ctx, job)
+
+	switch {
+	case err != nil:
+		return model.LostProof{Note: fmt.Sprintf("job %s: the state cannot be read, so it may still run (%v)", job, err)}, nil
+	case ended(state):
+		return model.LostProof{Kind: model.LostEnded, Note: fmt.Sprintf("job %s: Slurm reads the state %s", job, state)}, nil
+	case state == model.JobDied:
+		return model.LostProof{Note: fmt.Sprintf("job %s: Slurm holds no record of the job yet, and the accounting record can come late", job)}, nil
+	}
+
+	return model.LostProof{Note: fmt.Sprintf("job %s: Slurm reads the state %s, so it may still run", job, state)}, nil
+}
+
+// ended reports whether the state is one that Slurm names for a job that no longer runs. The empty record (died) is not.
+func ended(state model.JobState) bool {
+	return state == model.JobSucceeded || state == model.JobFailed || state == model.JobCanceled || state == model.JobTimedOut
 }
 
 type scheduler struct{ link *link.Link }

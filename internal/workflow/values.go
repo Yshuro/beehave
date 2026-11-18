@@ -181,6 +181,25 @@ func ProcessCap(v starlark.Value, host string) (int, error) {
 	return int(limit), nil
 }
 
+// SlotClass reads the slots keyword of a command call: the name of a slot class, or empty for a call that sets none. Only a host job takes a slot,
+// so a call with no host cannot set it.
+func SlotClass(v starlark.Value, host string) (string, error) {
+	if v == nil {
+		return "", nil
+	}
+
+	class, isText := starlark.AsString(v)
+	if !isText || strings.TrimSpace(class) == "" {
+		return "", errors.New("slots must be the name of a slot class. Write slots = \"heavy\"")
+	}
+
+	if host == "" {
+		return "", errors.New("slots cannot be used without host. Only a host job takes a slot. Add host or remove slots")
+	}
+
+	return class, nil
+}
+
 // AllowPaths reads the allow_paths argument: a list of globs in the doublestar dialect. A leading `./` is dropped from each glob, because the
 // paths that git lists have none. It returns the patterns as written and the clean globs. A missing argument gives none. An empty list is refused.
 func AllowPaths(v starlark.Value) (patterns, globs []string, err error) {

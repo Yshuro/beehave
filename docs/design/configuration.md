@@ -21,20 +21,24 @@ Each file is Starlark with the step limit of the workflow files. The limits and 
 | --- | --- | --- | --- |
 | `max_concurrent` | The global limit on agent processes. | | |
 | `max_review_concurrent` | The same limit for the agent steps of the kind review. | | |
+| `per_login` | The most agent steps that one login runs at once, in each of the two agent queues. The gate and merge queues keep one run for each repository. | Default 1. The least is 1. The most is the lower of `max_concurrent` and `max_review_concurrent`. | `BEEHAVE_AGENTS_PER_LOGIN` |
 | `max_turns` | The cap of turns for one agent run. | 0 means no cap. | |
 | `max_budget_usd` | The cap of dollars for one agent run. | 0 means no cap. | |
 | `max_run_budget_usd` | The cap of dollars for the agent steps of one run in all. | 0 means no cap. | `BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD` |
 | `max_tree_budget_usd` | The cap of dollars for the agent steps of an item tree in all: the root run and every run it spawns. A spawned run uses the cap of its root. | 0 means no cap. | `BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD` |
 | `review_poll_minutes` | The minutes between two review polls. | 0 means no poll. | `BEEHAVE_REVIEW_POLL_MINUTES` |
+| `review_lookback_days` | The days that the review poll looks back for replies. | Default 3. The least is 1. The most is 365. | `BEEHAVE_REVIEW_LOOKBACK_DAYS` |
 | `retention_days` | The age in days at which `beehave run` deletes a finished run. | Default 7. 0 keeps every finished run. The most is 36500. | `BEEHAVE_AGENTS_RETENTION_DAYS` |
 
 ### `project(...)`
 
-The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
+The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `test_paths`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
+
+`test_paths` is a list of globs for the test files, for example `["**/*_test.go", "**/testdata/**"]` or `["tests/**"]`. The revert run copies the added and changed test files of a candidate onto the base code, so a new test that needs a changed helper in a test file still builds there. A project with new tests and no `test_paths` gets a refusal from `before_review`.
 
 The project also takes the config block of the adapter that it chooses. The adapter declares the keys of its block, and the config passes the block to the adapter unread. The beads adapter declares the `beads` block with one key: `beads = beads(prefix = "proj")`. A project that chooses the beads tracker or the beads claim store must give the block. The config refuses a block of an adapter that the project does not choose, and the refusal names the adapters that the project does choose.
 
-The `host` call takes the block of the host adapter in the same way. The `skypilot`, `ssh` and `slurm` adapters each declare their own block, for example `host = host(provider = "ssh", disk_floor_gb = 50, ssh = ssh(user = "ci"))`. The config refuses the block of a host adapter that `provider` does not name, and the refusal names the block and the provider. The adapter reads and checks its keys when it builds the host.
+The `host` call takes the block of the host adapter in the same way. The `skypilot`, `ssh` and `slurm` adapters each declare their own block, for example `host = host(provider = "ssh", disk_floor_gb = 50, ssh = ssh(user = "ci"))`. The `host` call also takes `lost_job_wait`, a duration from `"1m"` to `"24h"` with the default `"60m"`; see `docs/design/hosts.md`. It takes `lost_after` and `stop_limit` too, two durations above zero with the default `"5m"`; see `docs/design/hosts.md`. The config refuses the block of a host adapter that `provider` does not name, and the refusal names the block and the provider. The adapter reads and checks its keys when it builds the host.
 
 The project also takes facts. All facts are optional and are empty when left out.
 
@@ -43,8 +47,11 @@ The project also takes facts. All facts are optional and are empty when left out
 | `people`, `epics` | A dict of strings. |
 | `gate_files`, `conventions`, `brief_rules`, `stacked_rules`, `limits`, `traps`, `token_rules` | A list of strings. |
 | `changelog` | One relative path inside the work tree. The example workflow checks it before a merge. |
+| `vars` | A dict of the settings of one workflow. The engine reads no key and no value. |
 
 The loader refuses a blank item, and a blank dict key or value.
+
+The `vars` keys must be strings. The values must be `None`, a bool, a string, a number, a list, a tuple or a dict, nested to any depth. The loader refuses a function, a non-finite number and a key that is not a string, because a run records the facts as JSON. A workflow reads `vars` with `facts().vars`.
 
 #### `board`
 
@@ -56,23 +63,28 @@ The optional `board = board(number, started, merged, owner)` value is the GitHub
 | `started`, `merged` | The Status columns that a workflow sets. |
 | `owner` | The login that owns the board. It defaults to the owner of the repository. |
 
-#### `rounds`
+#### The round settings
 
-The optional `rounds = rounds(...)` value holds the settings of one round. With no `rounds` value, the project has no round settings and the queue lists every open item. The workflow reads each key as the fact `round_<key>`.
+The engine has no round settings. The remediation example keeps its own under the key `round` of `vars`: `vars = {"round": {...}}`. With no `round` key, the example queues every open item. The function `settings` in `examples/remediation/workflow.star` reads `facts().vars` and refuses a missing or wrong setting with a message that names the key and the fix. The loader checks none of them.
 
-| Argument | Rule |
+| Key | Rule |
 | --- | --- |
 | `base` | Required. The branch of the round, such as `integration/r2`. The round id is `round/<base>`. |
 | `owner` | Required. The login of the owner. |
 | `lane_cap`, `fix_rounds` | Required. A whole number of 1 or more. |
-| `label`, `items` | Required: set exactly one. `label` is the tracker label that marks the items of the round. `items` is a list of item ids. The loader refuses a block with neither, with both, or with a blank label or an id that is not an item. |
+| `label`, `items` | Required: set exactly one. `label` is the tracker label that marks the items of the round. `items` is a list of item ids. The example refuses neither, both, a blank label and an id that is not an item. |
 | `next_base`, `owner_email`, `source_checkout`, `acceptance`, `base_result` | Optional text. Empty when left out. |
 | `integration_pr` | Optional. A whole number of 0 or more. 0 means the round finds the pull request. |
-| `wait_hours` | Optional. A whole number of 1 or more when set. |
+| `wait_hours` | Optional. A whole number of 1 or more. The default is 24. |
 | `merge` | Optional bool. The default is false. |
 | `base_reds`, `allow_paths` | Optional lists. |
 | `base_reds_file` | Optional. The default is `base-reds.md`. |
 | `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
+| `steps` | Optional dict from a step name to `{"model": text, "runner": text}`. The steps are `plan`, `implement`, `review`, `fix`, `fix_late`, `design`, `take_review`, `sync_review`, `sync_resolve`, `queue_audit` and `settle`. A step that the dict leaves out keeps its default model and the pool pick. A review on the model of the implementer is refused when two or more models are in use. See "The steps and the limits" in `durable-loop.md`. |
+| `design_after` | Optional. A whole number from 1 to 100. The default is 2. |
+| `void_reruns`, `void_asks`, `escalate_after` | Optional. A whole number from 0 to 100. The defaults are 2, 3 and 3. |
+
+The example refuses any other key under `round`.
 
 #### `schedules`
 

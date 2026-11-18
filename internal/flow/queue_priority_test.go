@@ -117,18 +117,18 @@ func itemsStartOrder(t *testing.T, severities map[string]string) []string {
 
 	// Two started and two enqueued mean that all four runs exist and that both slots are full. A count of two enqueued runs alone also holds while 24 is not yet queued.
 	// The queue picks the first two runs it sees, so a P0 run that is already queued can be one of them. In every case the run 24 starts before the run 23.
-	assert.True(t, waitUntil(func() bool { return started(2) && countEnqueued(engine, items) == 2 }), "two runs wait while two run")
+	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool { return started(2) && countEnqueued(engine, items) == 2 }))
 
 	// One slot frees at a time, so the third and the fourth start are in the order that the queue picked them.
 	tokens <- struct{}{}
 
-	assert.True(t, waitUntil(func() bool { return started(3) }))
+	waitOn(t, condition(func() bool { return started(3) }))
 
 	tokens <- struct{}{}
 
-	assert.True(t, waitUntil(func() bool { return started(4) }))
+	waitOn(t, condition(func() bool { return started(4) }))
 	close(release)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -189,13 +189,13 @@ func agentStartOrder(t *testing.T, severities map[string]string) []string {
 	}
 
 	start("21")
-	require.True(t, waitUntil(func() bool { return h.agents.running() == 1 }), "the first agent never started")
+	waitOn(t, condition(func() bool { return h.agents.running() == 1 }))
 
 	start("22")
-	require.True(t, waitUntil(func() bool { return enqueued() == 1 }))
+	waitOn(t, condition(func() bool { return enqueued() == 1 }))
 
 	start("23")
-	require.True(t, waitUntil(func() bool { return enqueued() == 2 }))
+	waitOn(t, condition(func() bool { return enqueued() == 2 }))
 
 	close(h.agents.gate)
 	wg.Wait()

@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -40,7 +39,7 @@ func TestClient_ResumeOnThisBuildFinishesARunWithSwarmChildren(t *testing.T) {
 		}
 
 		if request.Item == "22" {
-			<-started
+			receive(t, started)
 
 			return errFake
 		}
@@ -50,7 +49,7 @@ func TestClient_ResumeOnThisBuildFinishesARunWithSwarmChildren(t *testing.T) {
 				close(started)
 			}
 
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -70,10 +69,5 @@ func TestClient_ResumeOnThisBuildFinishesARunWithSwarmChildren(t *testing.T) {
 	h.opts.Version = otherBuild
 	done := runInBackground(h.engine(t), testItem)
 
-	select {
-	case out := <-done:
-		require.NoError(t, out.err)
-	case <-time.After(45 * time.Second):
-		t.Fatal("the run did not finish on the new build")
-	}
+	require.NoError(t, receive(t, done).err)
 }

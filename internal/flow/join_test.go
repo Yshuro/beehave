@@ -65,11 +65,11 @@ func TestJoinRun_TwoJoinsOfOneItemMakeOneRun(t *testing.T) {
 
 	require.Equal(t, first.GetWorkflowID(), second.GetWorkflowID(), "an open run is joined, so no second attempt starts")
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the open run to show a question", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
 		infos, statusErr := client.Status()
 
-		return statusErr == nil && len(infos) == 1 && infos[0].Question != ""
-	})
+		return struct{}{}, statusErr == nil && len(infos) == 1 && infos[0].Question != "", nil
+	}})
 	require.NoError(t, client.Answer(testItem, "go on"))
 
 	firstResult, err := first.GetResult()
@@ -123,17 +123,17 @@ func TestJoinRun_ACancelledCallerLeavesNoPollerBehind(t *testing.T) {
 		done <- err
 	}()
 
-	eventually(t, func() bool { return len(rowsOf(t, client, testItem)) == 1 })
+	waitOn(t, conditionOf(runOfClient(t, client), func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
 	stop()
 
-	require.ErrorIs(t, <-done, context.Canceled)
+	require.ErrorIs(t, receive(t, done), context.Canceled)
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		stacks := make([]byte, 1<<20)
 		stacks = stacks[:runtime.Stack(stacks, true)]
 
 		return !bytes.Contains(stacks, []byte("GetResult"))
-	})
+	}))
 }
 
 func TestJoinRun_TheCheckReadsTheVersionOfTheLiveEngineNotTheNewestRegistered(t *testing.T) {
@@ -176,7 +176,7 @@ func TestJoinRun_AnOpenRunIsJoinedAndNotEnqueuedAgain(t *testing.T) {
 		started <- err
 	}()
 
-	eventually(t, func() bool { return len(rowsOf(t, client, testItem)) == 1 })
+	waitOn(t, conditionOf(runOfClient(t, client), func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
 
 	joined := make(chan error, 1)
 
@@ -185,15 +185,15 @@ func TestJoinRun_AnOpenRunIsJoinedAndNotEnqueuedAgain(t *testing.T) {
 		joined <- err
 	}()
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the open run to show a question", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
 		infos, err := client.Status()
 
-		return err == nil && len(infos) == 1 && infos[0].Question != ""
-	})
+		return struct{}{}, err == nil && len(infos) == 1 && infos[0].Question != "", nil
+	}})
 	require.NoError(t, client.Answer(testItem, "go on"))
 
-	require.NoError(t, <-started)
-	require.NoError(t, <-joined)
+	require.NoError(t, receive(t, started))
+	require.NoError(t, receive(t, joined))
 
 	rows := rowsOf(t, client, testItem)
 	require.Len(t, rows, 1)
@@ -266,7 +266,7 @@ func TestJoinRun_AnOpenRunOfAnotherProjectIsRefused(t *testing.T) {
 		ended <- err
 	}()
 
-	eventually(t, func() bool { return len(rowsOf(t, client, testItem)) == 1 })
+	waitOn(t, conditionOf(runOfClient(t, client), func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
 
 	_, err := client.JoinRun(t.Context(), testItem, "other", file)
 
@@ -312,10 +312,10 @@ func TestJoinRun_ACancelledCallerStopsWaitingAndTheRunStays(t *testing.T) {
 		done <- err
 	}()
 
-	eventually(t, func() bool { return len(rowsOf(t, client, testItem)) == 1 })
+	waitOn(t, conditionOf(runOfClient(t, client), func() bool { return len(rowsOf(t, client, testItem)) == 1 }))
 	stop()
 
-	require.ErrorIs(t, <-done, context.Canceled)
+	require.ErrorIs(t, receive(t, done), context.Canceled)
 	assert.Len(t, rowsOf(t, client, testItem), 1)
 }
 

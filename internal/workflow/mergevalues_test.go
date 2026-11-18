@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"maps"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -102,7 +103,7 @@ func TestPullRequests_RefusesWhatTheRunRefuses(t *testing.T) {
 	}{
 		{"not a list", starlark.String("x"), "`prs` must be a list"},
 		{"empty", starlark.NewList(nil), "`prs` is empty"},
-		{"not a struct", starlark.NewList([]starlark.Value{starlark.MakeInt(1)}), "`prs` holds a int"},
+		{"not a struct", starlark.NewList([]starlark.Value{starlark.MakeInt(1)}), "prs[0]: the member has the type int, not struct"},
 		{"no item", starlark.NewList([]starlark.Value{pr(starlark.StringDict{"head": text("h")})}), "has no `item`"},
 		{"no head", starlark.NewList([]starlark.Value{pr(starlark.StringDict{"item": text("i")})}), "has no `head`"},
 		{"empty head", starlark.NewList([]starlark.Value{pr(starlark.StringDict{"item": text("i"), "head": text("")})}), "`head` of a member of `prs` must be text that is not empty"},
@@ -120,6 +121,44 @@ func TestPullRequests_RefusesWhatTheRunRefuses(t *testing.T) {
 	got, err := workflow.PullRequests(starlark.NewList([]starlark.Value{pr(starlark.StringDict{"item": text("i"), "head": text("h")})}))
 	require.NoError(t, err)
 	assert.Equal(t, []workflow.PullRequest{{Item: "i", Head: "h"}}, got)
+}
+
+func TestPullRequests_ApprovedIsABoolThatDefaultsToFalse(t *testing.T) {
+	t.Parallel()
+
+	member := func(extra starlark.StringDict) starlark.Value {
+		fields := starlark.StringDict{"item": starlark.String("i"), "head": starlark.String("h")}
+		maps.Copy(fields, extra)
+
+		return starlark.NewList([]starlark.Value{pr(fields)})
+	}
+
+	cases := []struct {
+		name         string
+		extra        starlark.StringDict
+		wantApproved bool
+		wantErr      string
+	}{
+		{"absent is not approved", nil, false, ""},
+		{"a bool true is approved", starlark.StringDict{"approved": starlark.True}, true, ""},
+		{"a non-bool is refused", starlark.StringDict{"approved": starlark.String("yes")}, false, "`approved` of a member of `prs` must be a bool, not string. Use approved = True or approved = False"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := workflow.PullRequests(member(tc.extra))
+			if tc.wantErr != "" {
+				require.ErrorContains(t, err, tc.wantErr)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, []workflow.PullRequest{{Item: "i", Head: "h", Approved: tc.wantApproved}}, got)
+		})
+	}
 }
 
 func TestOwnerIdentity_RefusesWhatTheRunRefuses(t *testing.T) {

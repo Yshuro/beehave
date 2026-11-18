@@ -1,10 +1,7 @@
 // Package model holds the domain types and enums every other package shares.
 package model
 
-import (
-	"slices"
-	"strings"
-)
+import "strings"
 
 // Agent names an agent CLI that beehave can start. The agent package of each CLI exports its name.
 type Agent string
@@ -38,7 +35,9 @@ type Project struct {
 	TestReport string
 	// TestCommand is the command that runs the test suite alone. The new-tests check runs it on the base commit. Empty means the project sets none.
 	TestCommand string
-	PinFile     string
+	// TestPaths are the globs of the test files. The revert run copies the added and changed ones of the head onto the base commit.
+	TestPaths []string
+	PinFile   string
 	// Changelog is the path of the changelog file of the repository, or empty when the project declares none. It is a fact for the workflow, which refuses a merge that leaves it unchanged.
 	Changelog string
 	BuildHost string
@@ -72,44 +71,13 @@ type Project struct {
 	Limits       []string
 	Traps        []string
 	TokenRules   []string
+	// Vars are the free settings of the workflow of the project, as the file wrote them. The engine reads no key and no value. The values are JSON values:
+	// nil, bool, string, json.Number, []any and map[string]any. A project that sets none has nil.
+	Vars map[string]any
 	// Board is the GitHub Project that a workflow keeps in step with the item. The zero value means the project has no board.
 	Board Board
 	// Schedules are the cron schedules that start an item run. The file order is kept.
 	Schedules []Schedule
-	// Rounds are the settings of a round of the project. The zero value means the project has no rounds block.
-	Rounds Rounds
-}
-
-// The lane kinds of a round.
-const (
-	LaneImpl   = "impl"
-	LanePapers = "papers"
-	LaneDesign = "design"
-)
-
-// Rounds are the settings that one round of a project reads. A round takes the items that carry Label, or the items listed in Items: exactly one of the two is set.
-// A key that the file leaves out is empty text, an empty list, 0 or false, except LaneKind and BaseRedsFile, which have defaults.
-type Rounds struct {
-	Base, NextBase, Owner, OwnerEmail, SourceCheckout string
-	LaneCap, FixRounds, IntegrationPR, WaitHours      int
-	Merge                                             bool
-	Acceptance, BaseResult, BaseRedsFile, LaneKind    string
-	BaseReds, AllowPaths                              []string
-	// Label is the tracker label that selects the items of the round. Items is the explicit list of item ids.
-	Label string
-	Items []string
-}
-
-// Configured reports whether the project file has a rounds block.
-func (r Rounds) Configured() bool { return r.Base != "" }
-
-// Selects reports whether the round takes the item: it carries the label, or its id is in the list.
-func (r Rounds) Selects(item Item) bool {
-	if r.Label != "" {
-		return slices.Contains(item.Labels, r.Label)
-	}
-
-	return slices.Contains(r.Items, item.ID)
 }
 
 // Schedule starts a run of Workflow on a new item each time Cron fires. Cron has seconds, or is a descriptor such as @weekly.

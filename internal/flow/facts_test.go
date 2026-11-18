@@ -2,8 +2,8 @@ package flow
 
 import (
 	"context"
+	"math"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -45,17 +45,19 @@ func TestFacts_TheBoardOfTheProjectIsReadAsFourFieldsAndIsEmptyWhenTheProjectHas
 	t.Parallel()
 
 	h := newHarness(t)
-	h.facts = withBoard("acme")
+	h.facts = func(project string) model.Project {
+		return model.Project{Name: project, Board: model.Board{Owner: "acme", Number: 3, Started: "In Progress", Merged: "Done"}}
+	}
 	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"B=%d/%s/%s/%s\" % (f.board_number, f.board_owner, f.board_started, f.board_merged))\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "B=3/acme/In Progress/Done")
 
 	none := newHarness(t)
 	none.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"B=%d/%r\" % (f.board_number, f.board_owner))\n")
 
-	outcome = <-runInBackground(none.engine(t), testItem)
+	outcome = receive(t, runInBackground(none.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "B=0/\"\"")
 }
@@ -66,7 +68,7 @@ func TestFacts_AProjectThatTheConfigDoesNotHoldHasEmptyFacts(t *testing.T) {
 	h := newHarness(t)
 	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"N=%d/%d/%r\" % (len(f.limits), len(f.people), f.base_branch))\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "N=0/0/\"\"")
 }
@@ -77,9 +79,26 @@ func TestFacts_TheRunRefusesAnArgument(t *testing.T) {
 	h := newHarness(t)
 	h.flowIs(t, "def main(item):\n    facts(\"owner\")\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "facts")
+}
+
+// A step that cannot record the facts fails the call, and the file gets no facts. The config loader refuses NaN, so a real project never holds it; here a NaN that JSON cannot encode stands in for a failed write of the record.
+func TestFacts_AVarThatTheRecordCannotHoldFailsTheCall(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"GOT FACTS\")\n")
+	h.facts = func(project string) model.Project {
+		return model.Project{Name: project, Vars: map[string]any{"ratio": math.NaN()}}
+	}
+
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
+
+	require.Error(t, outcome.err)
+	assert.NotContains(t, outcome.err.Error(), "GOT FACTS", "the call failed before the file used the facts")
+	assert.Contains(t, outcome.err.Error(), "NaN", "the error names the value that the record cannot hold")
 }
 
 // A crash after facts() and before the answer, then a resume under a config that changed: the replay returns the facts the run started with.
@@ -102,7 +121,7 @@ func TestFacts_AReplayKeepsTheFactsOfTheFirstRead(t *testing.T) {
 		ended <- runErr
 	}()
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
 	steps, err := dbos.GetWorkflowSteps(first.ctx, testRun)
 	require.NoError(t, err)
@@ -110,7 +129,7 @@ func TestFacts_AReplayKeepsTheFactsOfTheFirstRead(t *testing.T) {
 
 	stop()
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
+	require.Error(t, receive(t, ended))
 
 	h.facts = ownedBy("bob")
 	next := h.engine(t)
@@ -123,10 +142,6 @@ func TestFacts_AReplayKeepsTheFactsOfTheFirstRead(t *testing.T) {
 
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "yes"))
 
-	select {
-	case outcome := <-done:
-		require.ErrorContains(t, outcome.err, "OWNER ann")
-	case <-time.After(30 * time.Second):
-		t.Fatal("the resumed run did not end")
-	}
+	outcome := receive(t, done)
+	require.ErrorContains(t, outcome.err, "OWNER ann")
 }

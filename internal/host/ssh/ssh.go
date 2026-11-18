@@ -96,7 +96,7 @@ func New(target string, config model.HostConfig, ssh proc.Runner, opts ...Option
 	set := h.settingsOf(opts)
 
 	h.nonce, h.bank = set.nonce, set.bank
-	h.engine = jobwait.New(scheduler{h}, h.release, set.clock, set.bank, time.Duration(config.StaleMinutes)*time.Minute)
+	h.engine = jobwait.New(scheduler{h}, h.release, set.clock, set.bank, time.Duration(config.StaleMinutes)*time.Minute, jobwait.Limits{LostAfter: config.LostAfter, StopLimit: config.StopLimit})
 
 	return h, nil
 }
@@ -113,7 +113,7 @@ func (h *Host) settingsOf(opts []Option) settings {
 }
 
 func linkOptions(s block) link.Options {
-	return link.Options{Block: string(Name), Address: s.address, User: s.user, Identity: s.identity, KnownHosts: s.knownHosts, Port: s.port}
+	return link.Options{Block: string(Name), At: s.at, Address: s.address, User: s.user, Identity: s.identity, KnownHosts: s.knownHosts, Port: s.port}
 }
 
 // checkConfig reads the block of the config and returns it. It refuses a work root that systemd or the shell would change: systemd expands a percent sign in a path, and a dollar sign is no path.
@@ -128,7 +128,7 @@ func checkConfig(config model.HostConfig) (block, error) {
 	case config.MaxRun < time.Second:
 		return block{}, fmt.Errorf("%w: `host.max_run` must be at least one second", link.ErrConfig)
 	case strings.ContainsAny(values.workRoot, "%$"):
-		return block{}, fmt.Errorf("%w: `host.ssh.work_root` %q must not hold a percent or dollar sign, which systemd and the shell would expand", link.ErrConfig, values.workRoot)
+		return block{}, link.Refusal(values.at, "`host.ssh.work_root` %q must not hold a percent or dollar sign, which systemd and the shell would expand", values.workRoot)
 	}
 
 	return values, nil
@@ -425,7 +425,7 @@ func (h *Host) start(ctx context.Context, root, dir, command string) (model.JobI
 	encoded := base64.StdEncoding.EncodeToString([]byte(command))
 
 	_, err := h.run(ctx, "systemd-run", "systemd-run", "--user", "--quiet", "--unit="+unit, "--remain-after-exit",
-		"-p", "RuntimeMaxSec="+strconv.FormatInt(int64(h.config.MaxRun/time.Second), 10), "-p", "TimeoutStopSec="+strconv.Itoa(stopTimeout),
+		"-p", "RuntimeMaxSec="+strconv.FormatInt(h.config.RunLimitSeconds(), 10), "-p", "TimeoutStopSec="+strconv.Itoa(stopTimeout),
 		"-p", "WorkingDirectory="+root, "-p", "StandardOutput=append:"+path.Join(dir, unit+logSuffix), "-p", "StandardError=inherit",
 		"--", "sh", "-c", `eval "$(printf %s `+encoded+` | base64 -d)"`)
 	if err != nil {
@@ -457,6 +457,29 @@ func (h *Host) Cancel(ctx context.Context, id model.JobID) error {
 	}
 
 	return h.engine.Cancel(ctx, job)
+}
+
+// LostProof writes the marker of the cancel and stops the unit, as Cancel does, but it never waits, banks or reads the log: a host that came back
+// at the same alias may hold none of the work. A stop that answers (exit 0, or 5 for a unit that is not loaded) is the proof that the job no longer runs.
+// A step that fails, such as a link that is down, is no proof, and the note says which one. After the stop it releases the unit, so no failed unit stays;
+// a release that fails does not undo the stop, and the note names it.
+func (h *Host) LostProof(ctx context.Context, id model.JobID) (model.LostProof, error) {
+	job, err := parseJobID(id)
+	if err != nil {
+		return model.LostProof{}, err
+	}
+
+	if err = (scheduler{h}).Stop(ctx, job); err != nil {
+		return model.LostProof{Note: fmt.Sprintf("job %s: no stop answered, so it may still run (%v)", job.ID, err)}, nil
+	}
+
+	proof := model.LostProof{Kind: model.LostStopped, Note: fmt.Sprintf("job %s: the stop answered", job.ID)}
+
+	if err = h.release(ctx, job); err != nil {
+		proof.Note += fmt.Sprintf(", but the unit is not released (%v)", err)
+	}
+
+	return proof, nil
 }
 
 // Log returns the end of the log of a job, at most logTailBytes bytes.
@@ -577,13 +600,14 @@ func (s scheduler) record(ctx context.Context, base string, r reading, state mod
 }
 
 // Stop writes the marker of the cancel and then stops the unit. The marker comes first, so a stopped unit is never read as a success.
+// It makes the state folder first: a machine that never ran a job of beehave has none, and the marker cannot be written without it.
 func (s scheduler) Stop(ctx context.Context, job jobwait.Job) error {
-	base, err := s.h.base(ctx, job)
+	dir, err := s.h.stateDir(ctx)
 	if err != nil {
 		return err
 	}
 
-	if _, err = s.h.run(ctx, "touch", "touch", base+canceledSuffix); err != nil {
+	if _, err = s.h.run(ctx, "touch", "touch", path.Join(dir, job.ID+canceledSuffix)); err != nil {
 		return err
 	}
 

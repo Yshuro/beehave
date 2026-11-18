@@ -383,7 +383,7 @@ func (e *Engine) receiveVoice(ctx dbos.Context, end time.Time) (voice, error) {
 
 // waitWindow is the time of one receive of a wait with no deadline.
 func (e *Engine) waitWindow() time.Duration {
-	return cmp.Or(e.deps.Clock.OwnerWait, ownerWaitLimit)
+	return cmp.Or(e.deps.Clock.OwnerWait, receiveWindow)
 }
 
 // withZeros adds the fields of a result that a record from before a change does not hold, each as its zero value.

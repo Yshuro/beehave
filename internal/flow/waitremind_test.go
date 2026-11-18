@@ -78,7 +78,11 @@ func TestWaitRemind_StatusShowsTheNextReminderAndMovesItWhenOneIsSent(t *testing
 
 	done := runInBackground(engine, testItem)
 
-	eventually(t, func() bool { a := askedNow(t, client); return a != nil && !a.NextRemind.IsZero() })
+	waitOn(t, waiting[struct{}]{what: "the run to show its next reminder", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		a := askedNow(t, client)
+
+		return struct{}{}, a != nil && !a.NextRemind.IsZero(), nil
+	}})
 	first := askedNow(t, client)
 	assert.WithinDuration(t, start.Add(30*time.Minute), first.NextRemind, time.Second)
 	assert.Equal(t, 0, first.Reminded)
@@ -86,11 +90,11 @@ func TestWaitRemind_StatusShowsTheNextReminderAndMovesItWhenOneIsSent(t *testing
 
 	clk.advance(35 * time.Minute)
 
-	eventually(t, func() bool { return remindedIs(t, client, 1) })
+	waitOn(t, waiting[struct{}]{what: "the run to send one reminder", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, remindedIs(t, client, 1), nil }})
 	assert.WithinDuration(t, start.Add(54*time.Minute), askedNow(t, client).NextRemind, time.Second)
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestWaitRemind_ALateWakeSendsEachOwedReminderOnceInOrder(t *testing.T) {
@@ -103,15 +107,19 @@ func TestWaitRemind_ALateWakeSendsEachOwedReminderOnceInOrder(t *testing.T) {
 	client := h.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { a := askedNow(t, client); return a != nil && !a.NextRemind.IsZero() })
+	waitOn(t, waiting[struct{}]{what: "the run to show its next reminder", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		a := askedNow(t, client)
+
+		return struct{}{}, a != nil && !a.NextRemind.IsZero(), nil
+	}})
 
 	clk.advance(59 * time.Minute)
 
-	eventually(t, func() bool { return remindedIs(t, client, 2) })
+	waitOn(t, waiting[struct{}]{what: "the run to send two reminders", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, remindedIs(t, client, 2), nil }})
 	assert.True(t, askedNow(t, client).NextRemind.IsZero(), "no reminder is left")
 
 	require.NoError(t, client.AnswerAs(testItem, "bo", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.Equal(t, []string{remindStepPrefix + "1", remindStepPrefix + "2"}, remindSteps(t, client))
 }
@@ -126,11 +134,15 @@ func TestWaitRemind_TheExpiryActsAfterTheOwedReminders(t *testing.T) {
 	client := h.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { a := askedNow(t, client); return a != nil && !a.NextRemind.IsZero() })
+	waitOn(t, waiting[struct{}]{what: "the run to show its next reminder", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		a := askedNow(t, client)
+
+		return struct{}{}, a != nil && !a.NextRemind.IsZero(), nil
+	}})
 
 	clk.advance(2 * time.Hour)
 
-	require.NoError(t, (<-done).err, "the wait times out")
+	require.NoError(t, receive(t, done).err, "the wait times out")
 
 	records, err := client.records(onlyRun(t, client).ID)
 	require.NoError(t, err)

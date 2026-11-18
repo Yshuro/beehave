@@ -36,17 +36,20 @@ func TestItemKind_AMalformedRoundIdIsNoItem(t *testing.T) {
 	}
 }
 
-func TestRounds_SelectsTheItemsThatTheLabelOrTheListNames(t *testing.T) {
+func TestRoundBase_ReturnsTheBaseOfARoundIdAndNothingForAnyOtherItem(t *testing.T) {
 	t.Parallel()
 
-	byLabel := model.Rounds{Base: "b", Label: "beehave-round"}
-	byList := model.Rounds{Base: "b", Items: []string{"12"}}
-	tagged := model.Item{ID: "1", Labels: []string{"x", "beehave-round"}}
+	tests := map[string]struct {
+		base  string
+		round bool
+	}{
+		"round/main": {"main", true}, "round/integration/s1": {"integration/s1", true},
+		"12": {"", false}, "bb-1": {"", false}, "round/": {"", false}, "round/a b": {"", false},
+	}
+	for item, want := range tests {
+		base, round := model.RoundBase(item)
 
-	assert.True(t, byLabel.Selects(tagged))
-	assert.False(t, byLabel.Selects(model.Item{ID: "12"}), "an id in no list is not selected by a label round")
-	assert.True(t, byList.Selects(model.Item{ID: "12"}))
-	assert.False(t, byList.Selects(tagged), "a label does not select in a list round")
-	assert.True(t, byLabel.Configured())
-	assert.False(t, model.Rounds{}.Configured())
+		assert.Equal(t, want.base, base, item)
+		assert.Equal(t, want.round, round, item)
+	}
 }

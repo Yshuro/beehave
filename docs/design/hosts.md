@@ -8,7 +8,9 @@ This part describes the build host contract, the three providers, the guards tha
 
 ### The Host contract
 
-`host` holds the `Host` contract: `Up`, `Status`, `Down`, `Submit`, `Wait`, `Cancel`, `Drain` and `Resume`. An adapter is a child package.
+`host` holds the `Host` contract: `Up`, `Status`, `Down`, `Submit`, `Wait`, `Cancel`, `WorkRoot`, `LostProof` and `Log`. An adapter is a child package.
+
+Every provider also has `Drain` and `Resume`. They are not part of the contract, because no run calls them. The conformance suite asserts them on each adapter, and a host without them fails the suite. The disk-floor wrapper does not keep them.
 
 The config names three providers, and each one runs:
 
@@ -32,7 +34,7 @@ The job id, job state, disk reading and host status types live in `model`, so la
 
 ### The Slurm adapter
 
-`host/slurm` is the Slurm adapter. It holds the job half of the contract: `Submit`, `Wait`, `Cancel`, `Log`, `Drain`, `Resume`, the job states and the parsers. It runs over a `proc.Runner` that reaches the head node, which is ssh. It works for any Slurm cluster that beehave can reach, and it creates and deletes no machine.
+`host/slurm` is the Slurm adapter. It holds the job half of the contract (`Submit`, `Wait`, `Cancel`, `LostProof`, `Log`), the `Drain` and `Resume` of a provider, the job states and the parsers. It runs over a `proc.Runner` that reaches the head node, which is ssh. It works for any Slurm cluster that beehave can reach, and it creates and deletes no machine.
 
 | Method | Runs over ssh |
 |---|---|
@@ -50,7 +52,7 @@ The job id, job state, disk reading and host status types live in `model`, so la
 | `Up` | Checks that the head node answers and that `sinfo` lists its nodes. It changes nothing. |
 | `Status` | Absent when ssh cannot connect. Draining when Slurm drains a node. Otherwise up, with the free disk. |
 | `Down` | Sends nothing: beehave did not create the cluster. |
-| `Drain`, `Resume` | Run `scontrol update` on every node, which changes node state on a cluster that beehave does not own. They belong to the `Host` contract. Only the conformance suite calls them; the run never does. |
+| `Drain`, `Resume` | Run `scontrol update` on every node, which changes node state on a cluster that beehave does not own. They are not part of the `Host` contract. Only the conformance suite calls them; the run never does. |
 | `Teardown` | Banks the work and leaves the cluster up. |
 
 - No slot job holds the cluster, because nothing deletes an idle cluster.
@@ -82,6 +84,24 @@ The unit is stopped and reset after the bank. So the poll that first reads a fin
 
 `host/sshtest` is the fake machine, and the adapter runs `host/hosttest` against it.
 
+#### Make a build host
+
+`scripts/host-setup.sh` makes a linux amd64 machine ready for the ssh provider, then proves it. Run it on the machine, as the login user of the jobs, from a clone of the repository at the commit under test:
+
+```sh
+sh scripts/host-setup.sh --work-root /home/jobs/dogfood --watchdog idle-selfdestruct.service
+```
+
+- **Refusals.** Before any change, it refuses the root user, a machine that is not linux amd64, sudo that asks for a password, and a work root that the adapter refuses. It also refuses a work root that holds a single quote, a work root that is not its canonical path (a `.` or `..` part, a doubled or trailing slash, or a link), a system folder such as `/` or `/home`, and an existing work root that the login user does not own or cannot write. A missing work root needs a parent folder that exists and that the login user owns. The script makes only that last folder, as the login user, with `mkdir` and no `-p`. It uses no `sudo` and no `chown` for the work root, and it never changes the owner or the mode of a folder. If another user or root owns the parent, the script refuses and prints the command that makes the work root by hand. In an existing work root the script writes two things only: the folder `.beehave` and the record in it. It changes neither the owner nor the mode of the work root.
+- **The watchdog.** The machine needs a self-delete watchdog unit. The script refuses to start, and refuses to finish, unless that unit is active, enabled and `Restart=always`. The host maker installs the watchdog. The script installs none, and it names no cloud.
+- **Tools.** `scripts/host-tools.sh` installs the apt packages, the Go toolchain that `go.mod` names (checked against the sha256 that go.dev lists), uv and actionlint. For a new Go, the old Go moves to `/usr/local/go.old`. The script deletes that folder only when the Go in `/usr/local/go` prints the pinned version. If both folders hold a Go and the one in place is not the pinned one, the script stops, names both folders and deletes neither. A host maker with its own idle delete can run it alone. `make setup` and `make contract-tools-install` install the other tools at their pins.
+- **The PATH of a job.** A job runs with the PATH of the user manager, not the login PATH. The script writes `~/.config/environment.d/zz-beehave.conf`, which puts the Go folders on that PATH and sets `BEEHAVE_BD_132`. systemd reads the environment.d files in file name order and the last `PATH` line wins. The name `zz-` sorts after every file with a number prefix, such as the `99-environment.conf` that Ubuntu ships. The script then reads `systemctl --user show-environment` and fails with the cause if the Go folders are not first. So a gate is plain `make check`.
+- **The proof.** The script runs each tool once as a transient user unit, the way the adapter runs a job. A tool that does not run, or that is not at the pin in `go.mod`, the `Makefile` or `host-tools.sh`, fails the script. A tool that `go install` builds shows no version in its own output, so the script reads the `mod` line of `go version -m` and compares its version with the pin exactly. Then it runs the reads of `Up`: linger, the user manager, the systemd version and the work root.
+- **The record.** The script writes `<work_root>/.beehave/host-setup.record` and prints it: the time, the commit, the kernel, systemd, the Landlock result, the watchdog state and the version of each tool. A kernel older than 6.7, or one without the Landlock module, is a warning only, because only an agent run on the host needs the sandbox.
+- **A second run.** Go, uv, actionlint, linger, the environment file and the work root are read first and changed only when they differ. `apt-get` runs each time and changes no package that is installed. A second run gives the same record except the time.
+
+The last line of a pass is `HOST-SETUP-DONE`. No other path prints it.
+
 ### The SkyPilot provider
 
 `host/skypilot` is the SkyPilot adapter. It runs the `sky` and `ssh` command lines through `proc.Runner`, links no cloud library and opens no listener. The `sky` command starts its own local API server; only a project that selects this provider gets it. A project with no `host` block builds no adapter and needs neither `sky` nor Slurm.
@@ -93,6 +113,7 @@ It composes the Slurm adapter: SkyPilot creates and deletes the cluster, and the
 - `Status` reads `sky status -o json`, then `sinfo` and `df` through the Slurm adapter.
 - The Slurm adapter calls the SkyPilot slot: `Hold` after the job is queued, `Release` once the work is banked.
 - The `skypilot` provider keeps its own slot and its own run limit (the `timeout` in the slot command).
+- The Slurm queue of the `skypilot` provider sends `--time` with `host.max_run`, rounded up to whole minutes, as the `slurm` provider does. This ends the whole gate job at the run limit.
 - Every parser refuses an answer it does not recognise.
 
 ### Teardown
@@ -173,6 +194,49 @@ A Slurm or ssh `Wait` can also end with one of these states:
 
 A dropped link never submits the job again.
 
+#### Proof of a lost job
+
+`LostProof` stops a job whose wait ended as `lost`, and then reads whether the job can no longer run. It never waits for the job, never banks, and is safe to call again.
+
+- `Kind` is empty (no proof), `stopped`, `ended` or `gone`.
+- No proof is not an error. A link that is down gives an empty `Kind`, a nil error, and a `Note` that says why.
+- An error is a fault that no later call fixes, such as a job id that `Submit` did not return.
+- The proof comes from the owner of the fact: `systemctl stop`, `scancel` with `sacct` and `squeue`. A list of machines in a cloud console is never a proof.
+
+| Provider | Proof |
+|---|---|
+| `ssh` | `stopped`, when `systemctl --user stop` answers: exit 0, or exit 5 for a unit that is not loaded. The call writes the cancel marker first, and it makes the state folder if the machine has none. After the stop it resets the unit, so no failed unit stays. |
+| `slurm` | `ended`, when `squeue` or `sacct` names a final state after `scancel`: `succeeded`, `failed`, `canceled` or `timed_out`. A state that is not final is no proof. An empty record (`died`) is no proof, because the accounting record can come late. The exit status of `scancel` is not read. |
+| `skypilot` | No proof. The read of the cluster state is issue #401. |
+
+The key `host.lost_job_wait` is the time that the engine waits for a proof. See the host block below.
+
+#### The wait for a proof
+
+When the wait of a project gate ends as `lost`, the gate keeps its host slot and waits for a proof. It submits no second job.
+
+- The step `gate:lost-start` records the time that the wait starts.
+- Each look is one step, `gate:lost-look.<k>` from 0. A look calls `LostProof` once, then reads the clock.
+- A durable sleep of one minute comes between two looks, so a restart replays the earlier looks.
+- Each look reads `host.lost_job_wait` from the config of the engine that runs it. A project with no host block waits for the default.
+- A proof ends the wait as a void gate. `passed` is false, every step of the list is `unknown`, and the report says "the gate job was lost on <host> and the proof is <kind>". The field `host_loss` holds the job, the host, the head, the proof and the time of the look. The item run records the loss as the step `<call>/host-loss`, and the field `host_losses` counts the losses of the item tree. See "The host loss fields" in [workflow-files.md](workflow-files.md).
+- A look with no proof at or after the limit ends the wait, and the host slot and the exclusive slot are free. See "The owner wait for a lost job" below.
+- A look whose read of the proof fails fails the gate with that error.
+- If the run is canceled during the wait, the engine calls `LostProof` once more under a context that the cancel does not reach. A call with no proof is logged, because the job can still run. The wait never cancels the job: a cancel waits for the job and banks its work.
+- A build with no host reader has no proof, and the wait runs to the limit.
+
+#### The owner wait for a lost job
+
+When the wait for a proof reaches the limit, the item run asks the owner. Only the item run receives an answer, so this wait is never in a child run.
+
+- The run reads `running`, and no step fails. A parent that gathers the run keeps it.
+- `beehave status <run id> --json` shows `lost_job` with `job`, `host`, `since` and `limit`. The question names the job, the host and the cancel command of the provider.
+- After each answer, the step `<call>/lost-ask.<n>` from 0 calls `LostProof` once. The documented answer is `CONTINUE`, and any answer reads the proof.
+- A proof gives the void gate of the wait above, and clears `lost_job`.
+- No proof asks the owner again.
+- The owner wait starts no gate job. No rerun of the head comes before a proof.
+- A read of the proof that fails fails the gate with that error.
+
 ### Host config
 
 A project selects a host with `build_host` and the `host` block.
@@ -185,6 +249,23 @@ A project selects a host with `build_host` and the `host` block.
 - A block of another provider is refused, and the refusal names the block and the provider.
 - `idle_minutes` is refused for `ssh` and `slurm`, because beehave does not delete a machine it does not own.
 - An unknown key or block is refused.
+- `lost_job_wait` is a duration with the default `"60m"`, from `"1m"` to `"24h"`. It is the time that the engine waits for a proof that a lost job no longer runs. It is allowed for all three providers. A value outside the range, or text that is not a duration, is refused, and the refusal names the key and the range.
+- `lost_after` is a duration above zero with the default `"5m"`. It is the time without an answered read of a job before the wait for the job ends as lost. It is not `lost_job_wait`: that key is the time the engine waits for a proof after the loss. It is allowed for all three providers.
+- `stop_limit` is a duration above zero with the default `"5m"`. It is the time that a job may take to end after a cancel. When the job is not final by then, the cancel ends with an error. It is allowed for all three providers.
+- A value of `lost_after` or `stop_limit` that is zero, negative or not a duration is refused, and the refusal names the key.
+- `slots` is an optional dict from a slot class name to a count, such as `{"mutation": 1, "bench": 2}`. See the next section.
+
+#### Slot classes
+
+A slot class limits the host jobs of one kind. The engine runs at most the stated count of jobs of one class on one host at once. It knows a class by its name only. The limit holds for one state folder, which has one `dbos.db`, like the `hosts` queue. Two beehave processes with separate state folders each run the count.
+
+- A class name holds letters, digits, dot, underscore and hyphen, and starts with a letter or a digit.
+- A count is a whole number from 1 to 1048576. A count below 1, or a value that is not a whole number, is refused, and the refusal names the class.
+- A `command` call joins a class with `slots = "<class>"`. See `command` in the workflow file reference.
+- The jobs of a class share one durable queue with one partition for each host, so a job of another class, and a job of no class, never waits for it.
+- A call names a class that the `host` block of its project lists. Any other class is refused when the workflow calls it, and the refusal names the class and the host.
+- Projects share a host by name. If two projects declare the same host and give different counts for one class, the config load is refused, and the refusal names the host, the class, both projects and both counts. Equal counts are fine.
+- A call with no `slots` has no limit from the engine. A gate keeps its own rule: one build job for each host.
 
 `cmd/beehave/adapters.go` picks the provider from its host block by `provider`, like the tracker and the forge. `beehave check config` builds the host of each project.
 

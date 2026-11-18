@@ -2,7 +2,6 @@ package merge_test
 
 import (
 	"fmt"
-	"regexp"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -233,7 +232,8 @@ func TestAttribution_RefusesWhereverItHides(t *testing.T) {
 
 				assert.Equal(t, merge.Refused, result.Stop)
 				assert.Equal(t, "REFUSE: forbidden text on #5. Offending lines:", result.Lines[len(result.Lines)-2])
-				assert.Regexp(t, ":"+regexp.QuoteMeta(text)+"$", last(result))
+				assert.Regexp(t, `^  line \d+ matches pattern \d of forbid_text$`, last(result))
+				assert.NotContains(t, all(result), text)
 				assert.Empty(t, w.writes)
 			})
 		}
@@ -245,7 +245,7 @@ func TestAttribution_LineNumbersCountFromTheBody(t *testing.T) {
 
 	result := newWorld(t).set(t, map[string]any{"body": "a\nb\nGenerated with [Claude Code]", "commits": []any{commitJSON("dev@x", dev, "fix", "")}}).run(request())
 
-	assert.Equal(t, "  3:Generated with [Claude Code]", last(result))
+	assert.Equal(t, "  line 3 matches pattern 4 of forbid_text", last(result))
 }
 
 func TestAttribution_AnEmptyBodyAndEmptyMessagesPass(t *testing.T) {

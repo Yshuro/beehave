@@ -32,20 +32,21 @@ func (a *attempt) orphans() *refusal {
 	return a.block(hashed(kids))
 }
 
-// block says why the children stop the merge. It refuses unless --allow-orphans is set.
+// block says why the children stop the merge. It refuses unless --allow-orphans is set, and the lines are then the lines of the refusal.
 func (a *attempt) block(blocking []string) *refusal {
-	a.say(
+	why := []string{
 		fmt.Sprintf("REFUSE: #%d is the base of %s. A squash merge orphans them.", a.req.PR, strings.Join(blocking, " ")),
 		fmt.Sprintf("        Link them into the stack of #%d, or rebase each child onto %s,", a.req.PR, a.req.Base),
 		"        or merge the children before the parent, or use a merge commit so their base survives.",
 		"        Then run the merge again.",
 		"        To merge anyway, pass --allow-orphans, and say in the verdict what happens to each child.",
-	)
-
-	if !a.req.AllowOrphans {
-		return refuse()
 	}
 
+	if !a.req.AllowOrphans {
+		return refuse(why...)
+	}
+
+	a.say(why...)
 	a.say(fmt.Sprintf("        --allow-orphans is set; merging and orphaning %s is now a stated decision.", strings.Join(blocking, " ")))
 
 	return nil

@@ -174,6 +174,46 @@ func TestLedger_ARefusedRowIsExitCodeTwoAndWritesNothing(t *testing.T) {
 	}
 }
 
+// unfreedBook is a ledger whose add writes the row and returns the issues of the row with the refusal that the lock could not be freed.
+type unfreedBook struct{ fakeBook }
+
+func (unfreedBook) Add(ledger.Request) (ledger.Added, error) {
+	return ledger.Added{Closes: []string{"13", "14"}}, errDown
+}
+
+func TestLedger_ARowThatIsWrittenButNotReleasedPrintsItsIssuesAndIsExitCodeTwo(t *testing.T) {
+	t.Parallel()
+
+	deps := ledgerDeps(&bodyWorld{})
+	deps.Book = func(string) remedy.Book { return unfreedBook{} }
+
+	code, out, errOut := run(t, deps, "ledger", "add", "7", "rev-1", "review", "--state", "/state")
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Equal(t, "13\n14\n", out)
+	assert.Contains(t, errOut, "remedy ledger add:")
+	assert.Contains(t, errOut, errDown.Error())
+}
+
+// partialBook is a ledger whose closes read gives some issues with an error.
+type partialBook struct{ fakeBook }
+
+func (partialBook) Closes(string) ([]string, error) { return []string{"13", ""}, errDown }
+
+func TestLedger_ClosesThatFailsPrintsNothingAndIsExitCodeTwo(t *testing.T) {
+	t.Parallel()
+
+	deps := ledgerDeps(&bodyWorld{})
+	deps.Book = func(string) remedy.Book { return partialBook{} }
+
+	code, out, errOut := run(t, deps, "ledger", "closes", "7", "--state", "/state")
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Empty(t, out)
+	assert.Contains(t, errOut, "remedy ledger closes:")
+	assert.Contains(t, errOut, errDown.Error())
+}
+
 func TestLedger_APullRequestThatCannotBeReadIsExitCodeTwo(t *testing.T) {
 	t.Parallel()
 
@@ -223,6 +263,7 @@ func TestLedger_ArgumentsThatAreMissingOrUnknownAreARefusal(t *testing.T) {
 		"add with two arguments":     {"ledger", "add", "7", "fix-1", "--state", "/s"},
 		"count with no kinds":        {"ledger", "count", "7", "--state", "/s"},
 		"closes with no key":         {"ledger", "closes", "--state", "/s"},
+		"count with one argument":    {"ledger", "count", "7"},
 		"no state folder":            {"ledger", "count", "7", "fix"},
 		"an argument after flags":    {"ledger", "count", "7", "fix", "--state", "/s", "extra"},
 		"a flag that does not exist": {"ledger", "count", "7", "fix", "--bogus"},
@@ -234,6 +275,17 @@ func TestLedger_ArgumentsThatAreMissingOrUnknownAreARefusal(t *testing.T) {
 		assert.Empty(t, out, name)
 		assert.NotEmpty(t, errOut, name)
 	}
+}
+
+func TestLedger_AnUnknownVerbIsRefusedByName(t *testing.T) {
+	t.Parallel()
+
+	code, out, errOut := run(t, ledgerDeps(&bodyWorld{}), "ledger", "bake", "7", "--state", "/s")
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Empty(t, out)
+	assert.Contains(t, errOut, "remedy ledger: 'bake' is not a ledger verb.")
+	assert.Contains(t, errOut, "usage: remedy ledger add")
 }
 
 func TestLedger_HelpListsTheLedgerAndScopeCommands(t *testing.T) {

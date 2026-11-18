@@ -1,11 +1,26 @@
-# The review loop of the remediation method: a gate, a review, and a fix, until the head is approved or the rounds are used up.
-# Rounds 1 to 3 resume the implementer on a cheaper model. Later rounds start a fresh session one tier up.
+# The review loop of the remediation method: scoped fixes and scoped reviews until a candidate, then the full checks of that candidate once.
+# A candidate goes through the gate on the base, the checks before review, the checks of the caller and a full review. A finding returns it to the scoped loop.
 # A project that wants another policy copies this file into its workflow folder and loads it with load("//review_fix.star", "review_fix").
 
 FORBID = ["bulk-staging", "local-delete", "remote-delete", "opaque-command", "git-author", "git-bypass", "env-override", "config-read", "zsh-expansion", "laptop-copy"]
 
 # A reviewer is read-only: it must not fix, commit or push. The kind git-write refuses every git command that changes a repository.
 REVIEW_FORBID = FORBID + ["git-write"]
+
+# The most scoped reviews of one candidate. After the last one the candidate goes to the full checks with its findings still open.
+MAX_INNER = 3
+
+# The first agent of a candidate is its first scoped fix. A candidate with no findings due, the first one after a clean implementer, starts at a scoped
+# review of the diff of the implementer instead, under its own name. Each candidate makes one of these two calls once, and no other call has these names.
+FIRST_FIX = "fix-scoped-1"
+FIRST_REVIEW = "scoped-review-implement"
+
+def candidates_spent():
+    """The candidates that the other runs of the item started. A candidate counts when its first agent starts, so a run that stops before the scoped review still counts it."""
+    spent = 0
+    for call in [FIRST_FIX, FIRST_REVIEW]:
+        spent += earlier_calls(call = call, name = "spent-" + call).count
+    return spent
 
 def capped(step, name, item):
     """Stops the item when a cap ended the agent step. The output `stop` is "turns" or "budget", and the work of a capped run may be half done."""
@@ -19,12 +34,47 @@ def kept_history(step, name, item):
 
 DECISIONS = ["keep", "replace", "delete"]
 
-# The fix rounds on one mechanism after which the next round decides whether the mechanism should exist.
+# The fixes on one mechanism after which the next fix of it is a design step that decides whether the mechanism should exist.
 DESIGN_AFTER = 2
+
+# The last fix round that resumes the session of the implementer. Later rounds start a fresh agent on the step fix_late, or on fix when there is no fix_late.
+FIX_ESCALATE_AFTER = 3
+
+# The steps of the loop that need a model, and the optional steps. design is needed only when the loop has a design prompt.
+STEPS_NEEDED = ["implement", "review", "fix"]
+STEPS_OPTIONAL = ["fix_late", "design"]
+
+def checked_steps(steps, design_prompt):
+    """Returns the steps with a runner in each entry. The library holds no model: a missing or blank model of a needed step is a refusal that names the step."""
+    if type(steps) != "dict":
+        fail("REFUSE: review_fix got steps %r, of type %s. Pass a dict from a step name to {\"model\": <model>, \"runner\": <runner>}." % (steps, type(steps)))
+
+    needed = STEPS_NEEDED + (["design"] if design_prompt != "" else [])
+    for name in needed:
+        if name not in steps:
+            fail("REFUSE: review_fix has no entry for the %s step. Add steps[%r] = {\"model\": <model>}." % (name, name))
+
+    result = {}
+    for name in steps:
+        if name not in STEPS_NEEDED + STEPS_OPTIONAL:
+            fail("REFUSE: review_fix has no step %s. The steps are: %s." % (name, ", ".join(STEPS_NEEDED + STEPS_OPTIONAL)))
+
+        entry = steps[name]
+        model = entry.get("model") if type(entry) == "dict" else None
+        if type(model) != "string" or model.strip() == "":
+            fail("REFUSE: the %s step of review_fix has no model. Set steps[%r][\"model\"] to the name of a model." % (name, name))
+
+        runner = entry.get("runner", "")
+        if type(runner) != "string":
+            fail("REFUSE: the runner of the %s step of review_fix is %r, of type %s. Write a runner name, or an empty text for the pool." % (name, runner, type(runner)))
+
+        result[name] = {"model": model, "runner": runner}
+
+    return result
 
 def stopped_before(item, name, head, guard):
     """Asks the forge about the pull request of the item right before an agent of the loop starts.
-    The head is the one the gate ran on, which the caller read from the worktree. A pull request that is merged, closed, held, a draft,
+    The head is the head of the worktree that the agent works on. A pull request that is merged, closed, held, a draft,
     on another base, without its branch or at another head is a stop: it returns the result of the call, and the loop starts no agent."""
     if not guard:
         return None
@@ -33,10 +83,14 @@ def stopped_before(item, name, head, guard):
     return None if check.ok else check
 
 # A gate with no failed step and an unknown step gave no verdict about the code: it is void, not red. The loop reruns a void gate
-# VOID_RERUNS times at once. Each rerun is a new gate step, so the engine records each, and a replay never reads an old void as the answer.
-# Then it asks the owner up to VOID_ASKS times; an answer reruns the gate. The wait is the way back: a resume would replay the recorded void.
+# void_reruns times at once (default VOID_RERUNS). Each rerun is a new gate step, so the engine records each, and a replay never reads an old void as the answer.
+# Then it asks the owner up to void_asks times (default VOID_ASKS); an answer reruns the gate. The wait is the way back: a resume would replay the recorded void.
 VOID_RERUNS = 2
 VOID_ASKS = 3
+
+# A void gate with a host cause is a lost host job that the engine proved. The loop reruns it with no cost to the item, and stops the item
+# when the engine counts HOST_LOSS_LIMIT host losses in the tree of the run. The count is the host_losses field of the gate result; the loop keeps none of its own.
+HOST_LOSS_LIMIT = 5
 
 def is_void(check):
     return not check.passed and not [s for s in check.steps if s["status"] == "fail"] and [s for s in check.steps if s["status"] == "unknown"] != []
@@ -45,186 +99,303 @@ def void_names(check):
     names = [s["name"] for s in check.steps if s["status"] == "unknown"]
     return ", ".join(names) if names else "unknown"
 
-def settled_gate(item):
-    """Runs the gate and reruns it while it is void. Returns the first result that is not void, or the last void result after the bound."""
-    check = gate(name = "check")
-    for attempt in range(1, VOID_RERUNS + VOID_ASKS + 1):
+def ended(loop, head, gate = None, review = None, stopped = False, exhausted = False, rejected = False, design = None, held = ""):
+    """The result of the loop. head is the commit that the last step of the loop judged. gate is the last gate of a candidate, and it is None when the loop ended before the first one.
+    host_losses is the highest count that a gate of the loop read, and host_lost is true when HOST_LOSS_LIMIT stopped the reruns."""
+    return struct(head = head, stopped = stopped, exhausted = exhausted, rejected = rejected, design = design, held = held, gate = gate, review = review, host_losses = loop.host["losses"], host_lost = loop.host["lost"])
+
+def sent_back(findings, mechanism = "", gate = None, review = None, due = True):
+    """The result of a step that sends the head back to a fix: the findings and the mechanism that they are about. due is false only for a head that needs no fix."""
+    return struct(end = None, due = due, findings = findings, mechanism = mechanism, gate = gate, review = review)
+
+def is_host_void(check):
+    return is_void(check) and len(check.host_loss) > 0
+
+def note_losses(loop, check):
+    """Keeps the highest host_losses that a gate of the loop read."""
+    loop.host["losses"] = max(loop.host["losses"], check.host_losses)
+
+def check_gate(loop):
+    """Runs the gate of the candidate on the base and reruns it while it is void. Returns the first result that is not void, or stops the item after the bound.
+    A void gate with a host cause reruns as candidate-gate-host-<k> and takes no plain attempt. The loop returns it once its host_losses reach HOST_LOSS_LIMIT.
+    The highest host_losses of every gate that ran goes to loop.host."""
+    check = gate(name = "candidate-gate", base = loop.base)
+    note_losses(loop, check)
+    hosts = 0
+    attempt = 0
+    for _ in range(HOST_LOSS_LIMIT + loop.void_reruns + loop.void_asks + 1):
         if not is_void(check):
             return check
 
-        if attempt > VOID_RERUNS:
+        if is_host_void(check):
+            if check.host_losses >= HOST_LOSS_LIMIT:
+                return check
+
+            hosts += 1
+            check = gate(name = "candidate-gate-host-%d" % hosts, base = loop.base)
+            note_losses(loop, check)
+            continue
+
+        attempt += 1
+        if attempt > loop.void_reruns + loop.void_asks:
+            break
+
+        if attempt > loop.void_reruns:
             wait(
-                "The gate gave no result for %s (steps with no result: %s). %s Fix the cause, then answer to run the gate again." % (item.id, void_names(check), check.report),
+                "The gate gave no result for %s (steps with no result: %s). %s Fix the cause, then answer to run the gate again." % (loop.item.id, void_names(check), check.report),
                 name = "gate-void-%d" % attempt,
             )
 
-        check = gate(name = "check-void-%d" % attempt)
+        check = gate(name = "candidate-gate-void-%d" % attempt, base = loop.base)
+        note_losses(loop, check)
+
+    # A gate that is still void after the reruns and the asks gave no verdict about the code. No fix agent reads its report.
+    if is_void(check):
+        fail("REFUSE: the gate gave no result for %s after %d reruns and %d questions (steps with no result: %s). %s" % (loop.item.id, loop.void_reruns, loop.void_asks, void_names(check), check.report))
 
     return check
 
-def review_fix(item, impl, review_prompt, fix_prompt, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None):
-    """Runs the loop and returns a struct with stopped, exhausted, rejected, design, held, gate and review.
+def check_before_review(loop, check):
+    """Runs the checks before review on the head that the gate passed. Returns an empty text when the head is clean, or the findings as text."""
+    judged = before_review(name = "candidate-before-review", base = "origin/" + loop.base, head = check.head, **loop.scope_check)
+    if judged.ok:
+        return ""
 
-    review_check is a function of one argument, the review, that runs after each review whose verdict is not reject. It returns an empty text to go on,
-    or a reason. A reason ends the loop at once: held holds it, no fix lane starts, and the caller holds the item. Without the function held is an empty text.
+    return "The checks before review refused the head:\n" + "\n".join(["- " + finding for finding in judged.findings])
 
-    guard holds the settings of the preflight call that runs before every review, design and fix agent: base, hold and own.
-    The call compares the forge head with the head the gate ran on, which is the head of the worktree. The loop therefore needs each fix
-    pushed before the next gate. A stop is a result: stopped is true, the step of the stop is the reason of the run, and the loop starts no more agents.
-    The caller returns when stopped is true. An item with no pull request passes.
+def with_violations(findings, *violations):
+    """Puts the lines of the violations before the findings, latest first."""
+    for lines in violations:
+        if lines != "":
+            findings = lines + "\n\n" + findings
+    return findings
 
-    protect lists the directories that no command of the review or the fix may write in, such as the checkout of the owner.
-    A non-empty list adds the kind protected-path to both calls. An empty list adds nothing.
+def review_args(loop, head, violations, scope, outputs):
+    """The arguments of a fresh read-only review of the head, other than its name. scope tells the review what it judges."""
+    return dict(
+        lane = "review",
+        rounds = loop.review_cap,
+        prompt = loop.review_prompt,
+        model = loop.steps["review"]["model"],
+        runner = loop.steps["review"]["runner"],
+        pin = head,
+        outputs = (["verdict", "mechanism"] if loop.design_prompt != "" else ["verdict"]) + outputs,
+        forbid_commands = REVIEW_FORBID + loop.extra,
+        protect_paths = loop.protect,
+        follow_ups = loop.follow_ups,
+        output_tries = 2,
+        edits = False,
+        inputs = {"item": loop.item, "violations": violations, "facts": loop.facts, "scope": scope},
+    )
 
-    The review verdict is approve, changes or reject. A reject ends the loop at once: rejected is true and no fix round runs.
+def mechanism_of(loop, review):
+    """The file that the findings of the review are about: the text before the first colon. Without a design round it is empty."""
+    return review.mechanism.split(":")[0].strip() if loop.design_prompt != "" else ""
 
-    The design round is opt-in. With the default design_prompt of an empty text, the review declares only the output `verdict`, no design step runs,
-    and the loop is the plain loop. With a design_prompt, the review also writes the output `mechanism`: the file path that its findings are about
-    (it may add `:function`; the loop keys on the part before the first colon), or an empty text. The loop counts the fix steps
-    of each mechanism. When a mechanism had two fix steps and the review still asks for changes on it, the next step is the design step, not a fix.
-    The design step writes a decision (keep, replace or delete) and a reason. Keep runs the fix with the reason, and the design step does not run
-    again for that mechanism. Replace and delete end the loop at once: design holds the mechanism, the decision and the reason, and no fix round runs.
-    A finding on another mechanism, and a finding with no mechanism, keep the normal fix rounds.
+def check_review(loop, check, inner, outer):
+    """Runs the full review of the candidate that passed every other check. Returns the end of the loop, or the findings for the next fix."""
+    lane = inner.lane
+    if stopped_before(loop.item, "before-review-%d" % outer, check.head, loop.guard) != None:
+        return struct(end = ended(loop, check.head, stopped = True, gate = check))
 
-    allow lists the globs that a fix may change, as allow_paths does for an agent step. A fix that changes any other path fails the step.
-    An empty list adds no check.
+    review = agent(name = "candidate-review", **review_args(loop, check.head, lane.violations, "the whole pull request", loop.review_outputs))
+    capped(review, "review", loop.item)
 
-    review_outputs lists more outputs that the review writes beside the verdict, for a workflow that reads a field of the review, such as a count.
-    The review prompt must ask the agent to write each one, and the returned review holds them. An empty list adds none.
-    facts is the value of the facts() builtin, or an empty dict. The loop passes it as the input `facts` of each review, design and fix agent, so a prompt can state the facts of the project.
+    # A reject ends the loop with no fix round. The caller holds the item with the text of the review as the reason.
+    if review.verdict == "reject":
+        return struct(end = ended(loop, check.head, rejected = True, gate = check, review = review))
 
-    follow_ups is passed to each review call. With "forbid", a review that leaves any finding open gets the verdict "changes",
-    and the review prompt must ask the agent to write a `findings` list beside the verdict. A reject needs the list too: a call that writes the verdict reject and no `findings` fails the step. With "audit", any open finding of any class
-    gives the verdict "findings"; the method sets no threshold, so the prompt decides what the agent lists.
+    # The hook sees every full review at once, so a bad round ends the loop before the next fix lane starts.
+    held = loop.review_check(review) if loop.review_check != None else ""
+    if held != "":
+        return struct(end = ended(loop, check.head, held = held, gate = check, review = review))
+
+    # A read-only step that changed the folder is a violation of this round, the last scoped review included: the approve of that review is not clean.
+    if review.verdict == "approve" and lane.violations == "" and review.violations == "" and inner.breach == "":
+        return struct(end = ended(loop, check.head, gate = check, review = review))
+
+    return sent_back(with_violations(review.text, inner.breach, review.violations, lane.violations), mechanism_of(loop, review), check, review)
+
+def check_candidate(loop, inner, outer):
+    """Runs the full checks of the candidate once, in order: the gate on the base, the checks before review, each check of the caller, then the full review.
+    The first entry with findings sends the candidate back, and the entries after it do not run. Findings that the last scoped review left open go with them."""
+    check = check_gate(loop)
+
+    # A host report is no finding of the code: a fix agent never reads it. The item stops, and the caller decides what the loss costs.
+    if is_host_void(check):
+        loop.host["lost"] = True
+        return struct(end = ended(loop, check.head, gate = check))
+
+    if not check.passed:
+        return sent_back(with_violations(check.report, inner.open), gate = check)
+
+    findings = check_before_review(loop, check)
+    if findings != "":
+        return sent_back(with_violations(findings, inner.open), gate = check)
+
+    for entry in loop.checks:
+        findings = entry(check)
+        if findings != "":
+            return sent_back(with_violations(findings, inner.open), gate = check)
+
+    return check_review(loop, check, inner, outer)
+
+def design_round(loop, pending, fixes, decided, outer, lane):
+    """Runs the design step when the mechanism of the findings had design_after fixes. Returns the end of the loop for a replace or a delete, or the findings for the fix."""
+    mechanism = pending.mechanism
+    if mechanism == "" or fixes.get(mechanism, 0) < loop.design_after or mechanism in decided:
+        return pending
+
+    if stopped_before(loop.item, "before-design-%d" % outer, lane.head_sha, loop.guard) != None:
+        return struct(end = ended(loop, lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
+
+    design = agent(
+        name = "design",
+        lane = "design",
+        prompt = loop.design_prompt,
+        model = loop.steps["design"]["model"],
+        runner = loop.steps["design"]["runner"],
+        outputs = ["decision", "reason"],
+        forbid_commands = REVIEW_FORBID + loop.extra,
+        protect_paths = loop.protect,
+        output_tries = 2,
+        edits = False,
+        inputs = {"item": loop.item, "mechanism": mechanism, "fixes": fixes[mechanism], "findings": pending.findings, "facts": loop.facts},
+    )
+    capped(design, "design", loop.item)
+
+    if design.violations != "":
+        fail("REFUSE: the design step changed the item folder, and it is read-only. %s Check the folder, then run beehave resume %s." % (design.violations, loop.item.id))
+
+    if design.decision not in DECISIONS:
+        fail("REFUSE: the design step wrote the decision %r. Use one of: %s. Run beehave resume %s." % (design.decision, ", ".join(DECISIONS), loop.item.id))
+
+    if design.decision != "keep":
+        return struct(end = ended(loop, lane.head_sha, gate = pending.gate, review = pending.review, design =struct(mechanism = mechanism, decision = design.decision, reason = design.reason)))
+
+    decided[mechanism] = True
+    return sent_back("Design decision for %s: keep and patch. %s\n\n%s" % (mechanism, design.reason, pending.findings), mechanism, pending.gate, pending.review)
+
+def scoped_fix(loop, pending, fixes, decided, outer, inner, lane):
+    """Runs the design round when it is due, then one scoped fix of the findings. Returns the end of the loop, or the fix lane."""
+    pending = design_round(loop, pending, fixes, decided, outer, lane)
+    if pending.end != None:
+        return pending
+
+    if stopped_before(loop.item, "before-fix-%d" % outer, lane.head_sha, loop.guard) != None:
+        return struct(end = ended(loop, lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
+
+    # The fixes after candidate k are fix round k, and the fixes inside candidate 1 are round 1. The rounds up to escalate_after run on the step fix, and they resume the session of the implementer
+    # when both steps name the same runner: a session belongs to one login. Later rounds start a fresh agent on the step fix_late, or on fix when the project names no fix_late.
+    round = max(outer - 1, 1)
+    early = round <= loop.escalate_after
+    chosen = loop.steps["fix"] if early else loop.steps.get("fix_late", loop.steps["fix"])
+    fix = agent(
+        name = "fix-scoped-%d" % inner,
+        lane = "rework",
+        rounds = loop.fix_cap,
+        prompt = loop.fix_prompt,
+        model = chosen["model"],
+        runner = chosen["runner"],
+        resume = loop.impl.session if early and loop.steps["fix"]["runner"] == loop.steps["implement"]["runner"] else "",
+        forbid_commands = FORBID + loop.extra,
+        protect_paths = loop.protect,
+        inputs = {"item": loop.item, "round": round, "findings": pending.findings, "facts": loop.facts},
+        **loop.scope
+    )
+    capped(fix, "fix", loop.item)
+    kept_history(fix, "fix", loop.item)
+
+    if pending.mechanism != "":
+        fixes[pending.mechanism] = fixes.get(pending.mechanism, 0) + 1
+
+    return struct(end = None, lane = fix)
+
+def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
+    """The scoped loop: a fix of the open findings, then a scoped review of the head, up to MAX_INNER times. It runs no gate.
+    Returns the end of the loop, or the lane whose head is the candidate. open holds the findings that the last scoped review left, and breach its read-only violations."""
+    for inner in range(1, MAX_INNER + 1):
+        # Only the first candidate after a clean implementer has no findings due. Its first review judges the diff of the implementer, as no fix ran.
+        first = not pending.due
+        if pending.due:
+            fixed = scoped_fix(loop, pending, fixes, decided, outer, inner, lane)
+            if fixed.end != None:
+                return fixed
+            lane = fixed.lane
+
+        if stopped_before(loop.item, "before-scoped-review-%d" % outer, lane.head_sha, loop.guard) != None:
+            return struct(end = ended(loop, lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
+
+        name = FIRST_REVIEW if first else "scoped-review-%d" % inner
+        scope = "the diff of the implementer" if first else "the diff of the last fix"
+        review = agent(name = name, **review_args(loop, lane.head_sha, lane.violations, scope, []))
+        capped(review, "review", loop.item)
+        if review.verdict == "reject":
+            return struct(end = ended(loop, lane.head_sha, rejected = True, gate = pending.gate, review = review))
+
+        if review.verdict == "approve" and lane.violations == "" and review.violations == "":
+            return struct(end = None, lane = lane, open = "", breach = "")
+
+        pending = sent_back(with_violations(review.text, review.violations, lane.violations), mechanism_of(loop, review), pending.gate, review)
+
+    # The last scoped review asked for changes. Its findings go to the full checks, and its violations keep the full review from a clean approve.
+    return struct(end = None, lane = lane, open = pending.findings, breach = review.violations)
+
+def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER):
+    """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
+
+    steps is a dict from a step name to {"model": text, "runner": text}. The entries implement, review and fix are required, design is required with a design_prompt, and fix_late is optional.
+    The library holds no model. An empty runner means the pool pick. design_after, void_reruns, void_asks and escalate_after are the limits of the loop, and the constants of the same names are their defaults.
+    base is the base branch of the item. The gate of each candidate runs on it, and the checks before review compare the head with origin/<base>.
+    rounds caps the candidates. With 0 the loop runs no agent and ends exhausted at the head of the implementer. checks lists functions of one argument, the passed gate, that run after the checks before review and before the full review.
+    Each returns an empty text for a clean head, or the findings as text, which send the candidate back to a fix.
+    review_check is a function of one argument, the full review, that runs after each full review whose verdict is not reject. A reason ends the loop: held holds it.
+    guard holds the settings of the preflight call before every agent of the loop: base, hold and own. A stop ends the loop with stopped set.
+    protect lists the directories that no command of a review or a fix may write in. allow lists the globs that a fix may change.
+    design_prompt turns on the design round: each review then writes the output `mechanism`. review_outputs lists more outputs of the full review.
+    facts is the value of the facts() builtin, passed to each agent. follow_ups is passed to each review.
     """
-    extra = ["protected-path"] if protect else []
-    scope = {"allow_paths": allow} if allow else {}
-    violations = impl.violations
-    check = None
-    review = None
+    kept_history(impl, "implement", item)
+
+    loop = struct(
+        item = item,
+        impl = impl,
+        base = base,
+        review_prompt = review_prompt,
+        fix_prompt = fix_prompt,
+        follow_ups = follow_ups,
+        protect = protect,
+        extra = ["protected-path"] if protect else [],
+        scope = {"allow_paths": allow} if allow else {},
+        scope_check = {"allow": allow} if allow else {},
+        design_prompt = design_prompt,
+        steps = checked_steps(steps, design_prompt),
+        design_after = design_after,
+        void_reruns = void_reruns,
+        void_asks = void_asks,
+        escalate_after = escalate_after,
+        guard = guard,
+        review_outputs = review_outputs,
+        facts = facts,
+        review_check = review_check,
+        checks = checks,
+        host = {"losses": 0, "lost": False},
+        review_cap = rounds * (MAX_INNER + 1),
+        fix_cap = rounds * MAX_INNER,
+    )
+    lane = impl
+    pending = sent_back(impl.violations, due = impl.violations != "")
     fixes = {}
     decided = {}
 
-    kept_history(impl, "implement", item)
+    for outer in range(1, rounds + 1):
+        inner = fix_until_candidate(loop, pending, fixes, decided, outer, lane)
+        if inner.end != None:
+            return inner.end
 
-    for round in range(1, rounds + 1):
-        check = settled_gate(item)
-        review = None
+        lane = inner.lane
+        pending = check_candidate(loop, inner, outer)
+        if pending.end != None:
+            return pending.end
 
-        # A gate that is still void after the reruns and the asks gave no verdict about the code. No fix agent reads its report.
-        if is_void(check):
-            fail("REFUSE: the gate gave no result for %s after %d reruns and %d questions (steps with no result: %s). %s" % (item.id, VOID_RERUNS, VOID_ASKS, void_names(check), check.report))
-
-        if check.passed:
-            if stopped_before(item, "before-review-%d" % round, check.head, guard) != None:
-                return struct(stopped = True, exhausted = False, rejected = False, design = None, held = "", gate = check, review = None)
-
-            review = agent(
-                name = "review",
-                lane = "review",
-                rounds = rounds,
-                prompt = review_prompt,
-                model = "opus",
-                pin = check.head,
-                outputs = (["verdict", "mechanism"] if design_prompt != "" else ["verdict"]) + review_outputs,
-                forbid_commands = REVIEW_FORBID + extra,
-                protect_paths = protect,
-                follow_ups = follow_ups,
-                output_tries = 2,
-                edits = False,
-                inputs = {"item": item, "violations": violations, "facts": facts},
-            )
-            capped(review, "review", item)
-
-            # The hook sees every review at once, so a bad round ends the loop before the next fix lane starts. A reject keeps its own result.
-            held = review_check(review) if review_check != None and review.verdict != "reject" else ""
-            if held != "":
-                return struct(stopped = False, exhausted = False, rejected = False, design = None, held = held, gate = check, review = review)
-
-        # A read-only step that changed the folder is a violation of this round: the approve of that review is not clean.
-        review_violations = review.violations if review != None else ""
-
-        if check.passed and review.verdict == "approve" and violations == "" and review_violations == "":
-            return struct(stopped = False, exhausted = False, rejected = False, design = None, held = "", gate = check, review = review)
-
-        # A reject ends the loop with no fix round, whatever the gate says. The review runs only on a passing gate, so a missing review is no reject.
-        # The caller holds the item with the text of the review as the reason.
-        if review != None and review.verdict == "reject":
-            return struct(stopped = False, exhausted = False, rejected = True, design = None, held = "", gate = check, review = review)
-
-        if round == rounds:
-            break
-
-        findings = review.text if check.passed else check.report
-        if review_violations != "":
-            findings = review_violations + "\n\n" + findings
-
-        if violations != "":
-            findings = violations + "\n\n" + findings
-
-        # A failed gate has no review, so its fix names no mechanism. The key is the file: the text before the first colon.
-        mechanism = ""
-        if design_prompt != "" and review != None:
-            mechanism = review.mechanism.split(":")[0].strip()
-
-        if mechanism != "" and fixes.get(mechanism, 0) >= DESIGN_AFTER and mechanism not in decided:
-            if stopped_before(item, "before-design-%d" % round, check.head, guard) != None:
-                return struct(stopped = True, exhausted = False, rejected = False, design = None, held = "", gate = check, review = review)
-
-            design = agent(
-                name = "design",
-                lane = "design",
-                prompt = design_prompt,
-                model = "opus",
-                outputs = ["decision", "reason"],
-                forbid_commands = REVIEW_FORBID + extra,
-                protect_paths = protect,
-                output_tries = 2,
-                edits = False,
-                inputs = {"item": item, "mechanism": mechanism, "fixes": fixes[mechanism], "findings": findings, "facts": facts},
-            )
-            capped(design, "design", item)
-
-            if design.violations != "":
-                fail("REFUSE: the design step changed the item folder, and it is read-only. %s Check the folder, then run beehave resume %s." % (design.violations, item.id))
-
-            if design.decision not in DECISIONS:
-                fail("REFUSE: the design step wrote the decision %r. Use one of: %s. Run beehave resume %s." % (design.decision, ", ".join(DECISIONS), item.id))
-
-            if design.decision != "keep":
-                return struct(
-                    stopped = False,
-                    exhausted = False,
-                    rejected = False,
-                    held = "",
-                    design = struct(mechanism = mechanism, decision = design.decision, reason = design.reason),
-                    gate = check,
-                    review = review,
-                )
-
-            decided[mechanism] = True
-            findings = "Design decision for %s: keep and patch. %s\n\n%s" % (mechanism, design.reason, findings)
-
-        if stopped_before(item, "before-fix-%d" % round, check.head, guard) != None:
-            return struct(stopped = True, exhausted = False, rejected = False, design = None, held = "", gate = check, review = review)
-
-        fix = agent(
-            name = "fix",
-            lane = "rework",
-            rounds = rounds - 1,
-            prompt = fix_prompt,
-            model = "sonnet" if round <= 3 else "opus",
-            resume = impl.session if round <= 3 else "",
-            forbid_commands = FORBID + extra,
-            protect_paths = protect,
-            inputs = {"item": item, "round": round, "findings": findings, "facts": facts},
-            **scope
-        )
-        capped(fix, "fix", item)
-        kept_history(fix, "fix", item)
-        violations = fix.violations
-
-        if mechanism != "":
-            fixes[mechanism] = fixes.get(mechanism, 0) + 1
-
-    return struct(stopped = False, exhausted = True, rejected = False, design = None, held = "", gate = check, review = review)
+    return ended(loop, lane.head_sha, exhausted = True, gate = pending.gate, review = pending.review)

@@ -58,6 +58,7 @@ func TestResultFields_TheOutputsOfEachBuiltinAreTheFieldsOfTheTable(t *testing.T
 		"pr_assign":     keysOf(prOutputs(0, nil)),
 		"pr_comment":    keysOf(prCommentOutputs(0)),
 		"pr_open":       keysOf(openOutputs(OpenResult{})),
+		"pr_state":      keysOf(prStateOutputs("")),
 		"preflight":     keysOf(preflightOutputs(preflight.Result{})),
 		"wait":          keysOf(answerOutputs("", nil, false)),
 		"write":         keysOf(writeOutputs("", "", 0, "", false)),
@@ -83,8 +84,11 @@ func TestResultFields_TheStructsOfTheSwarmBuiltinsAreTheFieldsOfTheTable(t *test
 	gathered, err := outcomesValue([]childOutcome{{}})
 	require.NoError(t, err)
 
+	landed, err := batchResult(batch.Result{}, batch.Report{}, nil, nil)
+	require.NoError(t, err)
+
 	got := map[string][]string{
-		"batch_merge": batchStruct(t, batchResult(batch.Result{}, batch.Report{}, nil)).AttrNames(),
+		"batch_merge": batchStruct(t, landed).AttrNames(),
 		"gather":      gathered.AttrNames(),
 		"queue":       queuedValue(queued{}).AttrNames(),
 		"spawn":       runsValue([]spawnedRun{{}}).AttrNames(),

@@ -3,6 +3,7 @@ package flow
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -16,11 +17,22 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/model"
 	trackerstore "github.com/tobocop2/beehave/internal/store"
 )
 
-var dryExampleEnv = map[string]string{"REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SOURCE_CHECKOUT": "/own/checkout", "MERGE": "false", "EXPECT_HEAD": ""}
+// dryRoundFile is the file of the example as it is. A dry run of it runs the round, which ends at the read of the queue.
+var dryRoundFile = filepath.Join("..", "..", "examples", "remediation", "workflow.star")
+
+// dryPipeline starts a dry run at the entry pipeline of the example, so that it walks the gate, the review and the fix round of one item.
+var dryPipeline = WithEntry("pipeline")
+
+// dryRound gives the dry run the vars of the example project: the round settings, which every entry of the example reads, and the command of the mutation step.
+var dryRound = WithVars(with(roundVars(map[string]any{
+	"base": "integration", "owner": "owner", "owner_email": "owner@example.com", "source_checkout": "/own/checkout", "merge": false,
+	"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round",
+}), map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}}))
 
 func dryFile(t *testing.T, text string) string {
 	t.Helper()
@@ -28,20 +40,24 @@ func dryFile(t *testing.T, text string) string {
 	return writeFlow(t, text)
 }
 
-func TestDryRun_PrintsEachStepOfTheExampleInOrderAndEndsClean(t *testing.T) {
+func TestDryRun_ThePipelineOfTheExamplePrintsEachStepInOrderAndEndsClean(t *testing.T) {
 	t.Parallel()
 
 	var out bytes.Buffer
 
-	err := DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out)
+	err := DryRun(t.Context(), dryRoundFile, "12", nil, &out, dryPipeline, dryRound)
 	require.NoError(t, err, out.String())
 
 	text := out.String()
 	assert.Contains(t, text, "step 1 ")
-	assert.Contains(t, text, "dry run: no agent ran")
+	// The listing clips each line at dryOutLimit, so the test reads the head of each phase record: the outcome, the login and the model come first.
+	assert.Equal(t, 4, strings.Count(text, `DBOS.getResult: {"outcome":"exited","exit_code":0,"login":"dry-run","model":`), "each of the four agent phases ends with the fake agent, on the fake login and its model")
+	assert.Contains(t, text, `"model":"opus"`)
+	assert.Contains(t, text, `"model":"sonnet"`)
 	assert.Positive(t, strings.Index(text, " agent:plan#1"), text)
 	assert.Less(t, strings.Index(text, " agent:plan#1"), strings.Index(text, " agent:implement#2"), text)
-	assert.Less(t, strings.Index(text, " agent:implement#2"), strings.Index(text, " agent:review#3"), text)
+	assert.Less(t, strings.Index(text, " agent:implement#2"), strings.Index(text, " agent:scoped-review-implement#3"), text)
+	assert.Less(t, strings.Index(text, " agent:scoped-review-implement#3"), strings.Index(text, " agent:candidate-review#4"), text)
 	assert.NotContains(t, text, "agent:fix")
 	assert.NotContains(t, text, "FAILED")
 }
@@ -57,6 +73,33 @@ command(run = ["show", str(a.cost_usd)], name = "show")
 	var out bytes.Buffer
 
 	require.NoError(t, DryRun(t.Context(), file, "12", map[string]string{}, &out), out.String())
+	assert.NotContains(t, out.String(), "FAILED")
+}
+
+func TestDryRun_ACommandWithASlotClassRunsItsFakeProgram(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	file := dryFile(t, bodyFlow(`command(run = ["mutate"], host = "box", slots = "mutation", name = "mutate")`))
+
+	require.NoError(t, DryRun(t.Context(), file, "12", map[string]string{}, &out), out.String())
+	assert.Contains(t, out.String(), "command:mutate")
+	assert.NotContains(t, out.String(), "FAILED")
+}
+
+// The pipeline of the example holds no merge, so this file walks one: the dry forge reads the reviewed head and the dry watch shows the pull request as merged.
+func TestDryRun_AMergeMarksThePullRequestReadyAndTheWatchShowsItMerged(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	file := dryFile(t, bodyFlow("c = gate(name = \"check\")\nm = merge(head = c.head, tree = c.tree, steps = c.steps, name = \"ship\")\nif m.state != \"merged\":\n    fail(\"the merge state is \" + m.state)"))
+
+	require.NoError(t, DryRun(t.Context(), file, "12", map[string]string{}, &out), out.String())
+	assert.Contains(t, out.String(), " ready")
+	assert.Contains(t, out.String(), " watch")
+	assert.Contains(t, out.String(), "merge:ship#1")
 	assert.NotContains(t, out.String(), "FAILED")
 }
 
@@ -96,6 +139,7 @@ func TestDryRun_AStepThatTheDryRunDoesNotFakeIsNotRunAndIsNotAnError(t *testing.
 	for name, tc := range map[string]struct{ body, want string }{
 		"host":  {body: "host_teardown(name = \"stop\")", want: "not run in a dry run: stop the build host"},
 		"queue": {body: "queue(name = \"q\")", want: "not run in a dry run: read the open work of the project"},
+		"state": {body: "pr_state(pr = 41, name = \"s\")", want: "not run in a dry run: read the state of a pull request"},
 		"merge": {body: shipCall("merge = True, "), want: "not run in a dry run: merge the pull request"},
 		"batch": {body: "batch_merge(prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", name = \"b\")", want: "not run in a dry run: merge a batch of pull requests"},
 	} {
@@ -177,22 +221,37 @@ func TestDryRun_TheFirstGateIsRedAndTheRunWalksAFixRoundBeforeTheGatePasses(t *t
 
 	var out bytes.Buffer
 
-	require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, WithRedGate()), out.String())
+	const text = "def main(item):\n    g = gate(name = \"check\")\n    if not g.passed:\n        agent(name = \"fix\", prompt = \"p.md\", model = \"sonnet\")\n        gate(name = \"check\")\n"
 
-	text := out.String()
-	fix := strings.Index(text, "agent:fix")
-	require.GreaterOrEqual(t, fix, 0, "no fix round ran:\n"+text)
+	require.NoError(t, DryRun(t.Context(), dryFileWithPrompt(t, text), "12", nil, &out, WithRedGate()), out.String())
 
-	first := strings.Index(text, "gate:check#1")
-	last := strings.LastIndex(text, "gate:check#")
+	got := out.String()
+	fix := strings.Index(got, "agent:fix")
+	require.GreaterOrEqual(t, fix, 0, "no fix round ran:\n"+got)
+
+	first := strings.Index(got, "gate:check#1")
+	last := strings.LastIndex(got, "gate:check#")
 	assert.Less(t, first, fix, "the fix round follows the red gate")
 	assert.Greater(t, last, fix, "a gate follows the fix round")
+}
+
+// dryFileWithPrompt writes the workflow text beside a prompt file p.md and returns the workflow file.
+func dryFileWithPrompt(t *testing.T, text string) string {
+	t.Helper()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "p.md"), []byte("Judge the change. Nothing else."), 0o600))
+
+	flow := filepath.Join(dir, "workflow.star")
+	require.NoError(t, os.WriteFile(flow, []byte(text), 0o600))
+
+	return flow
 }
 
 func TestDryGate_EveryRunPassesWithAPassedStepUnlessTheRedGateIsChosen(t *testing.T) {
 	t.Parallel()
 
-	gate := newDryGate("h", false)
+	gate := newDryGate(t.TempDir(), "h", false)
 
 	for range 2 {
 		green, err := gate.Run(t.Context(), "p", "i", "", GateJob{})
@@ -205,7 +264,7 @@ func TestDryGate_EveryRunPassesWithAPassedStepUnlessTheRedGateIsChosen(t *testin
 func TestDryGate_WithTheRedGateTheFirstRunIsRedWithAFailedStepAndEveryLaterRunPasses(t *testing.T) {
 	t.Parallel()
 
-	gate := newDryGate("h", true)
+	gate := newDryGate(t.TempDir(), "h", true)
 
 	red, err := gate.Run(t.Context(), "p", "i", "", GateJob{})
 	require.NoError(t, err)
@@ -220,13 +279,13 @@ func TestDryGate_WithTheRedGateTheFirstRunIsRedWithAFailedStepAndEveryLaterRunPa
 	}
 }
 
-// remediationStepNames dry-runs the remediation example and returns the names of its steps in order.
+// remediationStepNames dry-runs the pipeline of the remediation example with the round settings of the example project, and returns the names of its steps in order.
 func remediationStepNames(t *testing.T, options ...DryOption) []string {
 	t.Helper()
 
 	var out bytes.Buffer
 
-	require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", "remediation", "workflow.star"), "12", dryExampleEnv, &out, options...), out.String())
+	require.NoError(t, DryRun(t.Context(), dryRoundFile, "12", nil, &out, append([]DryOption{dryPipeline, dryRound}, options...)...), out.String())
 
 	var names []string
 
@@ -241,33 +300,40 @@ func remediationStepNames(t *testing.T, options ...DryOption) []string {
 	return names
 }
 
-func TestDryRun_TheStepListOfTheRemediationExampleIsComplete(t *testing.T) {
+// The pipeline of the example ends at the review: the round lands the approved head, so the step list of one item holds no merge.
+func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "env:QUEUE_SWEEP#1", "env:TAKE_PR#2", "env:ROUND_STEP#3", "env:HOST_UP#4", "env:LAND#5", "env:EXPECT_HEAD#6", "env:BASE#7", "env:OWNER_LOGIN#8", "preflight:intake#1", "env:LANE_KIND#9", "earlier_calls:fix-lanes-spent#1", "env:PATCH_ROUNDS#10", "facts#1", "login#1",
-		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1", "env:SOURCE_CHECKOUT#11", "env:BASE#12", "env:ACCEPTANCE#13", "env:BASE_RESULT#14",
-		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "env:BASE#15", "env:PARENT#16", "pr_open:draft#1", "env:BASE#17", "env:OWNER_LOGIN#18", "env:SOURCE_CHECKOUT#19",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "preflight:before-review-1#2",
-		"agent:review#3/render", "agent:review#3/clear1", "agent:review#3/budget1.0", "phase", "DBOS.getResult", "agent:review#3/read1",
-		"env:MERGE#20", "env:REPO#21", "env:BASE#22", "env:OWNER_LOGIN#23", "env:OWNER_EMAIL#24", "ready", "DBOS.setEvent", "watch", "watch", "merge:ship#1",
-		"env:HOST_TEARDOWN#25", "worktree", "release",
+		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
+		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"preflight:before-scoped-review-1#2",
+		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "before_review:candidate-before-review#1",
+		"host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-1#3",
+		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "phase", "DBOS.getResult", "agent:candidate-review#4/read1",
+		"worktree", "release",
 	}, remediationStepNames(t))
 }
 
-func TestDryRun_TheStepListOfTheRemediationExampleWithARedGateHoldsTheFixRound(t *testing.T) {
+func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "env:QUEUE_SWEEP#1", "env:TAKE_PR#2", "env:ROUND_STEP#3", "env:HOST_UP#4", "env:LAND#5", "env:EXPECT_HEAD#6", "env:BASE#7", "env:OWNER_LOGIN#8", "preflight:intake#1", "env:LANE_KIND#9", "earlier_calls:fix-lanes-spent#1", "env:PATCH_ROUNDS#10", "facts#1", "login#1",
-		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1", "env:SOURCE_CHECKOUT#11", "env:BASE#12", "env:ACCEPTANCE#13", "env:BASE_RESULT#14",
-		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "env:BASE#15", "env:PARENT#16", "pr_open:draft#1", "env:BASE#17", "env:OWNER_LOGIN#18", "env:SOURCE_CHECKOUT#19",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "preflight:before-fix-1#2",
-		"agent:fix#3/render", "agent:fix#3/clear1", "agent:fix#3/budget1.0", "phase", "DBOS.getResult", "agent:fix#3/read1",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:check#2", "preflight:before-review-2#3",
-		"agent:review#4/render", "agent:review#4/clear1", "agent:review#4/budget1.0", "phase", "DBOS.getResult", "agent:review#4/read1",
-		"env:MERGE#20", "env:REPO#21", "env:BASE#22", "env:OWNER_LOGIN#23", "env:OWNER_EMAIL#24", "ready", "DBOS.setEvent", "watch", "watch", "merge:ship#1",
-		"env:HOST_TEARDOWN#25", "worktree", "release",
+		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
+		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"preflight:before-scoped-review-1#2",
+		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "preflight:before-fix-2#3",
+		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1",
+		"preflight:before-scoped-review-2#4",
+		"agent:scoped-review-1#5/render", "agent:scoped-review-1#5/clear1", "phase", "DBOS.getResult", "agent:scoped-review-1#5/read1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:candidate-gate#2", "before_review:candidate-before-review#1",
+		"host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-2#5",
+		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "phase", "DBOS.getResult", "agent:candidate-review#6/read1",
+		"worktree", "release",
 	}, remediationStepNames(t, WithRedGate()))
 }
 
@@ -375,7 +441,7 @@ func TestDryRun_TheUsersGitConfigDoesNotRunInTheDryRepository(t *testing.T) {
 	home := t.TempDir()
 	hooks := filepath.Join(home, "hooks")
 	require.NoError(t, os.MkdirAll(hooks, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o700)) //nolint:gosec // a test hook must run
+	require.NoError(t, exectest.Write(filepath.Join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n"))
 	require.NoError(t, os.WriteFile(filepath.Join(home, ".gitconfig"), []byte("[core]\n\thooksPath = "+hooks+"\n[commit]\n\tgpgsign = true\n[init]\n\ttemplateDir = "+filepath.Join(home, "missing")+"\n"), 0o600))
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
@@ -389,7 +455,7 @@ func TestDryRun_TheTemplateDirOfTheEnvironmentCopiesNothingIntoTheDryRepository(
 	template := t.TempDir()
 	hooks := filepath.Join(template, "hooks")
 	require.NoError(t, os.MkdirAll(hooks, 0o750))
-	require.NoError(t, os.WriteFile(filepath.Join(hooks, "pre-commit"), []byte("#!/bin/sh\nexit 1\n"), 0o700)) //nolint:gosec // a test hook must run
+	require.NoError(t, exectest.Write(filepath.Join(hooks, "pre-commit"), "#!/bin/sh\nexit 1\n"))
 	t.Setenv("GIT_TEMPLATE_DIR", template)
 
 	var out bytes.Buffer
@@ -471,6 +537,33 @@ func TestDryRepo_FailsWhenTheFolderCannotBeMade(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestDryGate_ASubmitWithABasePointsTheRemoteBranchOfTheBaseAtTheParentOfTheHead(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	head, err := dryRepo(t.Context(), dir, t.TempDir())
+	require.NoError(t, err)
+
+	gate := newDryGate(dir, head, false)
+
+	job, err := gate.Submit(t.Context(), "p", "i", "", "integration")
+	require.NoError(t, err)
+	assert.Equal(t, "integration", job.Plan.Base)
+
+	base, err := dryGit(t.Context(), dir, []string{"rev-parse", "refs/remotes/origin/integration"})
+	require.NoError(t, err)
+	parent, err := dryGit(t.Context(), dir, []string{"rev-parse", head + "^"})
+	require.NoError(t, err)
+	assert.Equal(t, parent, base)
+
+	landing, err := newDryGate(filepath.Join(dir, "none"), head, false).Submit(t.Context(), "p", "i", "", "")
+	require.NoError(t, err, "a gate with no base touches no repository")
+	assert.Empty(t, landing.Plan.Base)
+
+	_, err = newDryGate(dir, "no-such-commit", false).Submit(t.Context(), "p", "i", "", "integration")
+	require.ErrorContains(t, err, "git exited")
+}
+
 func TestDryRun_FailsWhenTheTemporaryFolderCannotBeMade(t *testing.T) {
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "none"))
 
@@ -528,9 +621,8 @@ func TestDryRun_EveryExampleThatNeedsNoServiceRunsToTheEnd(t *testing.T) {
 	t.Parallel()
 
 	envs := map[string]map[string]string{
-		"local":       {},
-		"remediation": dryExampleEnv,
-		"research":    {"RESEARCH_TOOLS": "/tools", "RESEARCH_OUT": "/out"},
+		"local":    {},
+		"research": {"RESEARCH_TOOLS": "/tools", "RESEARCH_OUT": "/out"},
 	}
 
 	for name, env := range envs {
@@ -542,6 +634,22 @@ func TestDryRun_EveryExampleThatNeedsNoServiceRunsToTheEnd(t *testing.T) {
 			require.NoError(t, DryRun(t.Context(), filepath.Join("..", "..", "examples", name, "workflow.star"), "12", env, &out), out.String())
 		})
 	}
+}
+
+func TestDryRun_ARoundRunsWithNoEnvironmentVariables(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	// The round reads every setting from the project vars, so the run has no environment at all. It ends early at the read of the queue, which the dry run does not fake.
+	err := DryRun(t.Context(), dryRoundFile, "12", nil, &out, dryRound)
+
+	require.ErrorIs(t, err, ErrDryRunEndedEarly, out.String())
+	assert.Contains(t, out.String(), "host_up:round-host#1")
+	assert.Contains(t, out.String(), "agent:queue-audit-1#1")
+	assert.Contains(t, out.String(), "not run in a dry run: read the open work of the project")
+	assert.NotContains(t, out.String(), "FAILED")
+	assert.NotContains(t, out.String(), "env:")
 }
 
 func TestDryRun_TheSwarmExampleFilesItsBacklogAndChecksTheBudgetThenEndsEarlyAtTheReadOfTheOpenWork(t *testing.T) {
@@ -600,7 +708,7 @@ func TestDryFakes_AnswerWithoutTouchingAnything(t *testing.T) {
 	assert.True(t, created)
 	assert.Equal(t, "dry-1", id)
 
-	dir, err := dryTrees{dir: "/t"}.Ensure(ctx, "p", "1")
+	dir, err := dryTrees{dir: "/t"}.Ensure(ctx, "p", "1", "")
 	require.NoError(t, err)
 	assert.Equal(t, "/t", dir)
 
@@ -624,17 +732,35 @@ func countStep(names []string, prefix string) int {
 func TestDryRun_WithSendBackTheFirstReviewSendsTheItemToAFixRoundAndTheSecondReviewApproves(t *testing.T) {
 	t.Parallel()
 
-	names := remediationStepNames(t, WithSendBack())
+	names := reviewStepNames(t, WithSendBack())
 
 	assert.Equal(t, 2, countStep(names, "agent:review"), names)
 	assert.Equal(t, 1, countStep(names, "agent:fix"), names)
-	assert.Contains(t, names, "merge:ship#1")
+}
+
+// reviewStepNames dry-runs a small workflow that reviews, fixes on the verdict changes and reviews again, and returns its step names.
+func reviewStepNames(t *testing.T, options ...DryOption) []string {
+	t.Helper()
+
+	const flow = "def main(item):\n    r = agent(name = \"review\", prompt = \"p.md\", model = \"sonnet\", outputs = [\"verdict\"])\n    if r.verdict == \"changes\":\n        agent(name = \"fix\", prompt = \"p.md\", model = \"sonnet\")\n        agent(name = \"review\", prompt = \"p.md\", model = \"sonnet\", outputs = [\"verdict\"])\n"
+
+	var out bytes.Buffer
+
+	require.NoError(t, DryRun(t.Context(), dryFileWithPrompt(t, flow), "12", nil, &out, options...), out.String())
+
+	var names []string
+
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		names = append(names, strings.TrimSuffix(strings.Fields(line)[2], ":"))
+	}
+
+	return names
 }
 
 func TestDryRun_WithoutSendBackTheReviewApprovesAtOnceAndNoFixRoundRuns(t *testing.T) {
 	t.Parallel()
 
-	names := remediationStepNames(t)
+	names := reviewStepNames(t)
 
 	assert.Equal(t, 1, countStep(names, "agent:review"), names)
 	assert.Zero(t, countStep(names, "agent:fix"), names)

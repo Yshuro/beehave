@@ -1,6 +1,15 @@
 package flow
 
-import "github.com/tobocop2/beehave/internal/agent"
+import (
+	"cmp"
+	"encoding/json"
+
+	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/model"
+)
+
+// revertField is the result field of gate and before_review that holds the verdict of the revert run.
+const revertField = "revert"
 
 // The outputs of each builtin that records a step, one function each. The fields of a function are the fields in workflow.ResultFields,
 // and a test compares them, so the check of a workflow file and the run read the same names.
@@ -20,6 +29,8 @@ func writeOutputs(stdout, stderr string, rc int, key string, skipped bool) map[s
 // gateOutputs records the fields of a GateResult. A gate with no step records an empty list, never a null.
 // required holds the names that the gate list of the project had when the gate ran. A merge reads them from this record, never from the config of the day.
 // checks is what the log of a candidate job gave. new_tests is the list of its new test names, and a gate with no checks records an empty list and a zero record.
+// host_loss is an empty dict and host_losses is 0 here. Only a gate whose host job was lost and proved unable to run fills them: host_losses then counts
+// the host losses of the item tree, this one included (recordLoss).
 func gateOutputs(passed bool, head, tree, report string, steps []GateStep, required []string, checks *GateChecks) map[string]any {
 	recorded := GateChecks{}
 	if checks != nil {
@@ -27,10 +38,11 @@ func gateOutputs(passed bool, head, tree, report string, steps []GateStep, requi
 	}
 
 	recorded.NewTests, recorded.Failed = append([]string{}, recorded.NewTests...), append([]string{}, recorded.Failed...)
+	recorded.RevertPassed, recorded.Revert = append([]string{}, recorded.RevertPassed...), cmp.Or(recorded.Revert, model.RevertFail)
 
 	return map[string]any{
 		"passed": passed, "head": head, treeName: tree, "report": report, "steps": append([]GateStep{}, steps...), "required": append([]string{}, required...),
-		"checks": recorded, "new_tests": recorded.NewTests,
+		"checks": recorded, "new_tests": recorded.NewTests, revertField: string(recorded.Revert), hostLossKey: map[string]any{}, hostLossesKey: 0,
 	}
 }
 
@@ -53,7 +65,7 @@ func answerOutputs(answer string, answers map[string]string, timedOut bool) map[
 }
 
 func mergeOutputs(state, reason string) map[string]any {
-	return map[string]any{"state": state, reasonKey: reason}
+	return map[string]any{stateField: state, reasonKey: reason}
 }
 
 func createOutputs(id string, created bool) map[string]any {
@@ -73,6 +85,9 @@ func prCommentOutputs(number int) map[string]any { return map[string]any{numberF
 func openOutputs(r OpenResult) map[string]any {
 	return map[string]any{numberField: r.Number, "created": r.Created, "stack": r.Stack}
 }
+
+// prStateOutputs are the fields of pr_state: the state of the pull request, OPEN, CLOSED or MERGED.
+func prStateOutputs(state string) map[string]any { return map[string]any{stateField: state} }
 
 // boardOutputs are the fields of board_sync: the number of the pull request or issue, and the status that the read-back showed.
 func boardOutputs(number int, status string) map[string]any {
@@ -116,23 +131,69 @@ func spendOutputs(spend agent.Spend) map[string]any {
 	return map[string]any{costField: spend.Cost, estimatedField: spend.Estimated, unknownField: spend.Unknown}
 }
 
-// spendOf reads the cost that the outputs of an agent call hold. An output that is missing or has another type reads as no cost and no mark.
+// spendOf reads the cost that the outputs of an agent call hold. A cost that is missing reads as no cost and no mark, as a run that cost nothing does.
+// A cost that is there but is no number that costOf can read marks the spend unknown: a silent 0 would hide the spend from the cap.
 func spendOf(outputs map[string]any) agent.Spend {
-	cost, _ := outputs[costField].(float64)        //nolint:errcheck // a missing or ill-typed cost reads as 0
-	estimated, _ := outputs[estimatedField].(bool) //nolint:errcheck // a missing mark reads as false
-	unknown, _ := outputs[unknownField].(bool)     //nolint:errcheck // a missing mark reads as false
+	var (
+		cost       float64
+		unreadable bool
+	)
 
-	return agent.Spend{Cost: cost, Estimated: estimated, Unknown: unknown}
+	unknown, _ := outputs[unknownField].(bool) //nolint:errcheck // a missing mark reads as false
+
+	if raw, present := outputs[costField]; present {
+		var readable bool
+
+		cost, readable = costOf(raw)
+		unreadable = !readable
+	}
+
+	estimated, _ := outputs[estimatedField].(bool) //nolint:errcheck // a missing mark reads as false
+
+	return agent.Spend{Cost: cost, Estimated: estimated, Unknown: unknown || unreadable, Unreadable: unreadable}
+}
+
+// recordedSpend reads the cost of the recorded output of an agent step through spendOf, the reader of the run cap. An output that is not text, or is not
+// the record of a step, marks the spend unreadable: the record holds a cost that cannot be read.
+func recordedSpend(output any) agent.Spend {
+	text, ok := output.(string)
+	if !ok {
+		return agent.Spend{Unknown: true, Unreadable: true}
+	}
+
+	var step recorded[map[string]any]
+
+	if json.Unmarshal([]byte(text), &step) != nil {
+		return agent.Spend{Unknown: true, Unreadable: true}
+	}
+
+	return spendOf(step.Outputs)
+}
+
+// costOf reads a dollar amount that is a float64 on a first run and a json.Number on a replay. It reports false, with 0 dollars, for a value that is
+// no number, and for a number that does not fit a float64.
+func costOf(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case json.Number:
+		cost, err := x.Float64()
+		if err != nil {
+			return 0, false
+		}
+
+		return cost, true
+	default:
+		return 0, false
+	}
 }
 
 // floatBits is the bit size of a dollar amount.
 const floatBits = 64
 
-// agentFields are the fields that every agent call returns, as the view of a run reads them. A test decodes agentOutputs into it.
-// The output verdict is declared by the call, so a reader takes it by its name.
+// agentFields are the fields that every agent call returns, as the view of a run reads them, except the cost, which only spendOf reads.
+// A test decodes agentOutputs into it. The output verdict is declared by the call, so a reader takes it by its name.
 type agentFields struct {
-	agent.Spend
-
 	Text       string `json:"text"`
 	Session    string `json:"session"`
 	Transcript string `json:"transcript"`

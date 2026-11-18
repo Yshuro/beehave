@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -54,11 +53,11 @@ func TestHelperProcess(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(filepath.Join(stateDir, "helper-ready-"+index), nil, 0o600))
 
-	require.Eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		_, err := os.Stat(filepath.Join(stateDir, goFile))
 
 		return err == nil
-	}, time.Minute, time.Millisecond)
+	}))
 
 	switch mode {
 	case "hang":
@@ -104,7 +103,7 @@ func swarmHelper(t *testing.T, mode, stateDir string) {
 	h.commands.reply = ownOutput
 	h.commands.before = func(ctx context.Context, request CommandRequest) error {
 		if mode == swarmFirst && request.Item == "22" {
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -121,9 +120,9 @@ func swarmHelper(t *testing.T, mode, stateDir string) {
 			}
 		}()
 
-		require.Eventually(t, func() bool {
+		waitOn(t, condition(func() bool {
 			return finished(engine, "21") && finished(engine, "23")
-		}, time.Minute, 10*time.Millisecond)
+		}))
 		// The parent has seen both rows or will on its next poll: it waits for 22 in the gather step.
 		time.Sleep(200 * time.Millisecond)
 		require.NoError(t, os.WriteFile(filepath.Join(stateDir, swarmMid), nil, 0o600))
@@ -132,11 +131,11 @@ func swarmHelper(t *testing.T, mode, stateDir string) {
 		return
 	}
 
-	require.Eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		last, found, err := latestRun(engine.ctx, testItem)
 
 		return err == nil && found && last.Status.Status == dbos.WorkflowStatusSuccess
-	}, time.Minute, 10*time.Millisecond)
+	}))
 	require.NoError(t, os.WriteFile(filepath.Join(stateDir, swarmResult), []byte(gatherJSON(t, engine)), 0o600))
 
 	var ran []string
@@ -158,22 +157,21 @@ func TestSpawnGather_AParentKilledMidGatherIsRecoveredByANewProcessAndEachOutput
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(stateDir), swarmFlow), []byte(stopSwarm), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(stateDir, goFile), nil, 0o600))
 
-	var output bytes.Buffer
+	var output safeBuffer
 
 	first := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestHelperProcess$", "--", swarmFirst, stateDir, "0") //nolint:gosec // the test starts its own binary
 	first.Stdout, first.Stderr = &output, &output
 	require.NoError(t, first.Start())
 
 	midGather := filepath.Join(stateDir, swarmMid)
-	reached := assert.Eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the first process to reach the gather", last: func() string { return "the output of the process:\n" + output.String() }, read: func() (struct{}, bool, error) {
 		_, err := os.Stat(midGather)
 
-		return err == nil
-	}, helperDeadline, 10*time.Millisecond)
+		return struct{}{}, err == nil, nil
+	}})
 
 	require.NoError(t, first.Process.Kill(), "SIGKILL")
 	require.Error(t, first.Wait(), "the process ended by the signal")
-	require.True(t, reached, "the first process never reached the gather:\n%s", output.String())
 
 	require.NoError(t, runHelpers(stateDir, []string{swarmSecond}, helperDeadline))
 
@@ -254,8 +252,15 @@ func runHelpers(stateDir string, modes []string, deadline time.Duration) error {
 	for ready := false; !ready; {
 		select {
 		case i := <-exited:
+			// The deadline kills the helpers, so an exit seen after it is the same state as the deadline.
+			expired := ctx.Err() != nil
+
 			cancel()
 			group.Wait()
+
+			if expired {
+				return run.notReady(stateDir)
+			}
 
 			return run.failure(i, "exited before the go file")
 		case <-ctx.Done():
@@ -303,6 +308,20 @@ func TestRunHelpers_HelpersThatAreNotReadyAtTheDeadlineReportTheOutputOfThoseTha
 	require.ErrorContains(t, err, "not ready before the deadline")
 	require.ErrorContains(t, err, "the helper stalls before its ready file")
 	require.NotContains(t, err.Error(), "the helper hangs now")
+}
+
+func TestRunHelpers_ADeadlineThatPassedBeforeTheHelpersStartedIsReportedAsNotReady(t *testing.T) {
+	t.Parallel()
+
+	// A deadline that has already passed makes every helper fail to start and the deadline fire at the same moment, so the run must not depend on which one it sees first.
+	modes := []string{"stall", "stall", "stall", "stall", "stall", "stall", "stall", "stall"}
+
+	for range 200 {
+		err := runHelpers(t.TempDir(), modes, time.Nanosecond)
+
+		require.ErrorContains(t, err, "not ready before the deadline")
+		require.NotContains(t, err.Error(), "exited before the go file")
+	}
 }
 
 // This test is the guard for safe concurrent first opens: DBOS v1.8.0, not beehave, makes them safe, so a failure here

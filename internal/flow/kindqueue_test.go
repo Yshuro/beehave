@@ -53,16 +53,47 @@ func TestAgentKind_ARunOfAKindWaitsWhenTheCapOfItsQueueIsFull(t *testing.T) {
 			engine := harness.engine(t)
 			runs := []<-chan runOutcome{runInBackground(engine, "1"), runInBackground(engine, "2"), runInBackground(engine, "3")}
 
-			eventually(t, func() bool { return harness.agents.running() == 2 })
-			eventually(t, func() bool { return enqueuedOn(t, engine, test.full) == 1 })
+			waitOn(t, condition(func() bool { return harness.agents.running() == 2 }))
+			waitOn(t, condition(func() bool { return enqueuedOn(t, engine, test.full) == 1 }))
 			assert.Zero(t, enqueuedOn(t, engine, test.other))
 			release()
 
 			for _, run := range runs {
-				require.NoError(t, (<-run).err)
+				require.NoError(t, receive(t, run).err)
 			}
 
 			assert.Equal(t, 2, harness.agents.maxTotal)
+		})
+	}
+}
+
+func TestAgentKind_PerLoginSetsHowManyRunsOfOneLoginRunAtOnceOnEachAgentQueue(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct{ name, flow string }{
+		{"the_agents_queue", kindFlow("implement")},
+		{"the_reviews_queue", kindFlow("review")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			harness := newHarness(t)
+			harness.opts.MaxConcurrent, harness.opts.MaxReviewConcurrent, harness.opts.PerLogin = 2, 2, 2
+			harness.flowIs(t, test.flow)
+			harness.logins = fakeLogins{byItem: map[string]string{"1": "a", "2": "a"}}
+			harness.agents.gate = make(chan struct{})
+			release := sync.OnceFunc(func() { close(harness.agents.gate) })
+			t.Cleanup(release)
+
+			engine := harness.engine(t)
+			runs := []<-chan runOutcome{runInBackground(engine, "1"), runInBackground(engine, "2")}
+
+			waitOn(t, condition(func() bool { return harness.agents.running() == 2 }))
+			release()
+
+			for _, run := range runs {
+				require.NoError(t, receive(t, run).err)
+			}
 		})
 	}
 }
@@ -79,8 +110,8 @@ func TestAgentQueue_AnItemThatWaitsForTheOwnerHoldsNoAgentSlot(t *testing.T) {
 	client := harness.client(t, testVersion)
 	run := runInBackground(engine, testItem)
 
-	eventually(t, func() bool { return len(harness.agents.seen()) == 1 })
-	eventually(t, func() bool { return activePhases(t, engine) == 0 })
+	waitOn(t, waiting[struct{}]{what: "the agent to be called once", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, len(harness.agents.seen()) == 1, nil }})
+	waitOn(t, waiting[struct{}]{what: "no agent phase to be active", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, activePhases(t, engine) == 0, nil }})
 
 	select {
 	case <-run:
@@ -88,8 +119,8 @@ func TestAgentQueue_AnItemThatWaitsForTheOwnerHoldsNoAgentSlot(t *testing.T) {
 	default:
 	}
 
-	eventually(t, func() bool { return client.Answer(testItem, "go") == nil })
-	require.NoError(t, (<-run).err)
+	waitOn(t, condition(func() bool { return client.Answer(testItem, "go") == nil }))
+	require.NoError(t, receive(t, run).err)
 }
 
 func activePhases(t *testing.T, engine *Engine) int {
@@ -133,7 +164,7 @@ func TestAgentKind_TheCapsOfTheTwoQueuesAreIndependent(t *testing.T) {
 	go func() { defer group.Done(); first.result, first.err = engine.RunFile("1", testProject, implement) }()
 	go func() { defer group.Done(); second.result, second.err = engine.RunFile("2", testProject, review) }()
 
-	eventually(t, func() bool { return harness.agents.running() == 2 })
+	waitOn(t, condition(func() bool { return harness.agents.running() == 2 }))
 	release()
 	group.Wait()
 	require.NoError(t, first.err)
@@ -199,10 +230,10 @@ func TestAgentKind_AReviewRunsBesideAnImplementStepOfTheSameLogin(t *testing.T) 
 	group.Add(2)
 
 	go func() { defer group.Done(); first.result, first.err = engine.RunFile("1", testProject, implement) }()
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, condition(func() bool { return harness.agents.running() == 1 }))
 	go func() { defer group.Done(); second.result, second.err = engine.RunFile("2", testProject, review) }()
 
-	eventually(t, func() bool { return harness.agents.running() == 2 })
+	waitOn(t, condition(func() bool { return harness.agents.running() == 2 }))
 	release()
 	group.Wait()
 	require.NoError(t, first.err)

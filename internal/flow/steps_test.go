@@ -4,8 +4,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -106,7 +108,7 @@ func TestClient_StepsOfARunInItsAgentStepShowTheStepAsRunningWithItsElapsedTime(
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	view, err := client.Steps(testRun)
 	require.NoError(t, err)
@@ -126,7 +128,7 @@ func TestClient_StepsOfARunInItsAgentStepShowTheStepAsRunningWithItsElapsedTime(
 	}
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	view, err = client.Steps(testRun)
 	require.NoError(t, err)
@@ -431,6 +433,38 @@ func withChild(record dbos.StepInfo) dbos.StepInfo {
 	return record
 }
 
+func TestStepLine_ACostRecordThatIsNotAStepRecordMarksTheSpendUnreadable(t *testing.T) {
+	t.Parallel()
+
+	for name, record := range map[string]dbos.StepInfo{
+		"spent output not text":  {StepName: "agent:a#1/spent0", Output: 42},
+		"spent not json":         {StepName: "agent:a#1/spent0", Output: `not json`},
+		"read output not text":   {StepName: "agent:a#1/read0", Output: 42},
+		"spent cost is a string": {StepName: "agent:a#1/spent0", Output: `{"outputs":{"cost_usd":"2"}}`},
+	} {
+		line := callLine([]dbos.StepInfo{record}, record.StepName)
+
+		assert.Equal(t, agent.Spend{Unknown: true, Unreadable: true}, line.Spend, name)
+		assert.True(t, line.OutputUnreadable, name)
+	}
+}
+
+func TestStepLine_AReadWhoseCostIsUnreadableStillShowsItsHeadStopAndVerdict(t *testing.T) {
+	t.Parallel()
+
+	for name, cost := range map[string]string{"a string": `"2"`, "a bool": `true`, "an object": `{}`} {
+		output := `{"outputs":{"cost_usd":` + cost + `,"head_sha":"h2","stop":"turns","rewrote":true,"verdict":"approve"}}`
+		line := callLine([]dbos.StepInfo{{StepName: "agent:a#1/read1", Output: output}}, "agent:a#1/read1")
+
+		assert.Equal(t, agent.Spend{Unknown: true, Unreadable: true}, line.Spend, name)
+		assert.False(t, line.OutputUnreadable, name)
+		assert.Equal(t, "h2", line.Head, name)
+		assert.Equal(t, "turns", line.Stop, name)
+		assert.Equal(t, "approve", line.Verdict, name)
+		assert.True(t, line.Rewrote, name)
+	}
+}
+
 func TestStepLine_AnOutputThatDoesNotDecodeKeepsTheStepAndSaysTheOutputCannotBeRead(t *testing.T) {
 	t.Parallel()
 
@@ -493,6 +527,20 @@ func withVerdict(outputs map[string]any, verdict string) map[string]any {
 	return outputs
 }
 
+func TestStepLines_TheCostOfAFailedRunGoesToTheLineOfItsCallOrToALineOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	lines := []StepLine{{Name: "agent:a#1", State: stepDone, Spend: agent.Spend{Cost: 0.3}}}
+	runs := []failedRun{{Call: "agent:a#1", Spend: agent.Spend{Cost: 0.7}}, {Call: "agent:b#2", Spend: agent.Spend{Cost: 0.4, Estimated: true}}}
+
+	got := withFailedRuns(lines, runs)
+
+	require.Len(t, got, 2)
+	assert.InDelta(t, 1.0, got[0].Cost, 1e-9, "the failed run of a adds to the line of a")
+	assert.Equal(t, StepLine{Name: "agent:b#2", State: stepFailed, Spend: agent.Spend{Cost: 0.4, Estimated: true}}, got[1],
+		"a call that the run has not reached again since the resume gets a line of its own")
+}
+
 func TestStepLines_AnOpenRunThatRecordedNoStepForItsWorkShowsAStepInProgress(t *testing.T) {
 	t.Parallel()
 
@@ -542,4 +590,50 @@ func TestStepLine_AnAgentLineNamesTheKindOfItsPhase(t *testing.T) {
 
 	gate := callLine([]dbos.StepInfo{withChild(record("gate:stop", map[string]any{"holder": "x"}))}, "gate:g#1")
 	assert.Empty(t, gate.Kind, "a gate is not a lane, so its line has no kind")
+}
+
+// loginFlow is an agent call that names the model and the runner that its test fills in.
+const loginFlow = "def main(item):\n" +
+	"    agent(%s prompt = \"prompts/a.md\", outputs = [\"verdict\"], name = \"a\")\n"
+
+func TestStatus_AnAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name, keywords, login, model string
+	}{
+		{name: "the_pool_pick_and_the_model_of_the_step", keywords: `model = "m-seen",`, login: testLogin, model: "m-seen"},
+		{name: "the_named_runner_and_the_model", keywords: `runner = "oc", model = "m-seen",`, login: "oc", model: "m-seen"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			rig.reply(`{"verdict":"approve"}`, exited)
+
+			_, err := rig.run(t, fmt.Sprintf(loginFlow, tc.keywords), "Write to {{ .output_file }}\n")
+			require.NoError(t, err)
+
+			view, err := rig.h.client(t, testVersion).Steps(testRun)
+			require.NoError(t, err)
+
+			line := view.Steps[slices.IndexFunc(view.Steps, func(l StepLine) bool { return strings.HasPrefix(l.Name, "agent:a") })]
+			assert.Equal(t, tc.login, line.Login)
+			assert.Equal(t, tc.model, line.Model)
+		})
+	}
+}
+
+func TestStepLine_AnAgentRecordThatHasNoLoginAndNoModelLeavesThemOutOfTheLine(t *testing.T) {
+	t.Parallel()
+
+	data, err := json.Marshal(PhaseOutput{Outcome: "exited"})
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "login", "a record with no login stays as an older version wrote it")
+	assert.NotContains(t, string(data), "model")
+
+	line := callLine([]dbos.StepInfo{withChild(dbos.StepInfo{StepName: "any-name", Output: string(data)})}, "agent:a#1")
+	assert.Empty(t, line.Login)
+	assert.Empty(t, line.Model)
+	assert.False(t, line.OutputUnreadable)
 }

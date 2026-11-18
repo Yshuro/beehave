@@ -30,12 +30,16 @@ type agents struct {
 	MaxConcurrent int
 	// MaxReviewConcurrent is the limit on agent processes of the steps of the kind review. It is separate from MaxConcurrent: the two queues do not lend slots.
 	MaxReviewConcurrent int
+	// PerLogin is the most agent steps that one login runs at once, in each of the two agent queues. The default is 1.
+	PerLogin int
 	// MaxTurns is the most agentic turns of one agent run. 0 means no cap.
 	MaxTurns int
 	// MaxBudgetUSD is the most dollars that one agent run spends on API calls. 0 means no cap.
 	MaxBudgetUSD float64
 	// ReviewPollMinutes is the minutes between two review polls. 0 means no poll.
 	ReviewPollMinutes int
+	// ReviewLookbackDays is the days that the review poll looks back for replies. The default is 3.
+	ReviewLookbackDays int
 	// MaxRunBudgetUSD is the most dollars that the agent steps of one item run spend in all, failed runs included. An agent step does not start when the sum is at or past it, so the last step can pass it by its own cost.
 	// A child workflow that the run spawns starts its own sum. 0 means no cap.
 	MaxRunBudgetUSD float64
@@ -59,7 +63,7 @@ type runnersFile struct {
 
 // The schemas of the constructors of the runners file.
 func agentsSpec() spec {
-	return spec{"agents", []string{"max_concurrent?", "max_review_concurrent?", "max_turns?", "max_budget_usd?", "review_poll_minutes?", "max_run_budget_usd?", "retention_days?", "max_tree_budget_usd?"}}
+	return spec{"agents", []string{"max_concurrent?", "max_review_concurrent?", "max_turns?", "max_budget_usd?", "review_poll_minutes?", "max_run_budget_usd?", "retention_days?", "max_tree_budget_usd?", "per_login?", "review_lookback_days?"}}
 }
 
 func poolSpec() spec { return spec{"pool", []string{"five_hour_max?", "seven_day_max?"}} }
@@ -86,7 +90,7 @@ func loadRunnersFile(path string, adapters Adapters) (agents, Pool, []model.Runn
 func (f *runnersFile) addAgents(at syntax.Position, kwargs []starlark.Tuple) error {
 	budget, runBudget, treeBudget := number(f.agents.MaxBudgetUSD), number(f.agents.MaxRunBudgetUSD), number(f.agents.MaxTreeBudgetUSD)
 
-	if err := agentsSpec().unpack(at, kwargs, &f.agents.MaxConcurrent, &f.agents.MaxReviewConcurrent, &f.agents.MaxTurns, &budget, &f.agents.ReviewPollMinutes, &runBudget, &f.agents.RetentionDays, &treeBudget); err != nil {
+	if err := agentsSpec().unpack(at, kwargs, &f.agents.MaxConcurrent, &f.agents.MaxReviewConcurrent, &f.agents.MaxTurns, &budget, &f.agents.ReviewPollMinutes, &runBudget, &f.agents.RetentionDays, &treeBudget, &f.agents.PerLogin, &f.agents.ReviewLookbackDays); err != nil {
 		return err
 	}
 

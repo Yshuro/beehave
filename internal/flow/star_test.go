@@ -16,6 +16,7 @@ import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
 
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/review"
 	trackerstore "github.com/tobocop2/beehave/internal/store"
 	"github.com/tobocop2/beehave/internal/workflow"
@@ -180,11 +181,11 @@ func interrupted(t *testing.T, h *harness, file string) {
 		ended <- runErr
 	}()
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the run to show a question", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		rows, err := client.Status()
 
-		return err == nil && len(rows) == 1 && rows[0].Question != ""
-	})
+		return struct{}{}, err == nil && len(rows) == 1 && rows[0].Question != "", nil
+	}})
 
 	stop()
 	require.NoError(t, engine.Shutdown())
@@ -239,9 +240,9 @@ func TestRunStar_AReplayIssuesTheSameStepNamesAndRunsNoRecordedStepAgain(t *test
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfEngine(t, next), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 	assert.Equal(t, []string{"before", "after yes"}, h.commands.ran(), "the command before the wait ran once")
@@ -266,13 +267,31 @@ const goldenFlow = `def main(item):
 // A later change re-keys this list for each module.
 var goldenSteps = []string{
 	"env:HOME#1", "now#1", "facts#1", "board_sync:b#1", "command:c#1", "scope:g#1", "gate:g#1",
-	"login#1", "agent:a#1/render", "agent:a#1/clear1", "agent:a#1/budget1.0", "agent:a#1/read1",
+	"login#1", "agent:a#1/render", "agent:a#1/clear1", "agent:a#1/read1",
 	"wait:w#1", "merge:m#1",
 }
 
 // goldenGateSteps are the steps of the exclusive run that the gate of goldenFlow queues. They are in the child run, so goldenSteps does not list them.
 // The step gate:job holds the host job, and a replay that finds it waits on that job.
 var goldenGateSteps = []string{"gate:job", "gate"}
+
+// goldenLostGateSteps are the steps of the exclusive run of a gate whose job was lost. The wait records when it started, then one look for each poll,
+// with a durable sleep between two looks. The second look proves the loss here.
+var goldenLostGateSteps = []string{"gate:job", "gate", "gate:lost-start", "gate:lost-look.0", "DBOS.sleep", "gate:lost-look.1"}
+
+func TestRunStar_TheStepNamesOfTheWaitForALostGateJobMatchTheGoldenList(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, _ := lostHarness(t, time.Hour)
+	hosts.proofs = []model.LostProof{{Note: "the link is down"}, {Kind: model.LostStopped}}
+	engine := h.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow("gate(name = \"g\")\n")))
+	require.NoError(t, err)
+
+	_, child := gateChildSteps(t, engine)
+	assert.Equal(t, goldenLostGateSteps, child, "the steps of the wait for a lost gate job changed: bump the version of the gate module in moduleTable (stepmodules.go) and update the list")
+}
 
 func TestRunStar_TheStepNamesOfEveryBuiltinMatchTheGoldenListOfTheStepsVersion(t *testing.T) {
 	t.Parallel()
@@ -287,10 +306,10 @@ func TestRunStar_TheStepNamesOfEveryBuiltinMatchTheGoldenListOfTheStepsVersion(t
 	client := h.client(t, testVersion)
 	done := runInBackground(engine, testItem)
 
-	waitForTheOwner(t, h)
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, ownerAsks(t, h))
+	waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, "star30", stepsVersion)
 	assert.Equal(t, goldenSteps, stepNames(t, engine), "the step names changed: bump the version of the module that owns the step in moduleTable (stepmodules.go) and update the list")
 

@@ -19,7 +19,7 @@ func TestWorktrees_EnsureForAProjectWithNoRepositoryMakesAPlainFolderAndRunsNoGi
 	trees.projects = map[string]config.Project{"p": {Project: model.Project{Name: "p"}}}
 	want := filepath.Join(state, "trees", "p", "bb-1")
 
-	got, err := trees.Ensure(t.Context(), "p", "bb-1")
+	got, err := trees.Ensure(t.Context(), "p", "bb-1", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -35,7 +35,7 @@ func TestWorktrees_EnsureForAPlainFolderFailsWhenTheFolderCannotBeMade(t *testin
 	trees.projects = map[string]config.Project{"p": {Project: model.Project{Name: "p"}}}
 	require.NoError(t, os.WriteFile(trees.root, []byte("a file"), 0o600))
 
-	_, err := trees.Ensure(t.Context(), "p", "bb-1")
+	_, err := trees.Ensure(t.Context(), "p", "bb-1", "")
 
 	require.ErrorContains(t, err, "make the folder of item bb-1")
 }
@@ -46,7 +46,7 @@ func TestWorktrees_AResumeOfAPlainFolderFindsItAgainAndKeepsItsFiles(t *testing.
 	trees, git, _ := ensureFixture(t)
 	trees.projects = map[string]config.Project{"p": {Project: model.Project{Name: "p"}}}
 
-	first, err := trees.Ensure(t.Context(), "p", "bb-1")
+	first, err := trees.Ensure(t.Context(), "p", "bb-1", "")
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(filepath.Join(first, "notes.md"), []byte("kept"), 0o600))
 
@@ -54,7 +54,7 @@ func TestWorktrees_AResumeOfAPlainFolderFindsItAgainAndKeepsItsFiles(t *testing.
 	require.NoError(t, err)
 	assert.Equal(t, first, path)
 
-	again, err := trees.Ensure(t.Context(), "p", "bb-1")
+	again, err := trees.Ensure(t.Context(), "p", "bb-1", "")
 	require.NoError(t, err)
 	assert.Equal(t, first, again)
 	assert.FileExists(t, filepath.Join(again, "notes.md"))

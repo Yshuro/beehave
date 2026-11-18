@@ -3,6 +3,7 @@ package config
 import (
 	"maps"
 	"slices"
+	"strconv"
 	"time"
 
 	"go.starlark.net/starlark"
@@ -16,9 +17,19 @@ const (
 	defaultStaleMins  = 20
 	maxCount          = model.MaxDiskFloorGB
 	defaultMaxRun     = "24h"
+	minMaxRun         = time.Second
 	defaultBankBudget = "20s"
-	hostTableMessage  = "the `host` block %s. %s"
-	hostSpecName      = "host"
+	// DefaultLostJobWait is the default of host.lost_job_wait. The engine also waits this long for a project with no host block.
+	// The bounds follow it. The lower bound is one poll of the wait.
+	DefaultLostJobWait = 60 * time.Minute
+	// DefaultLostAfter is the default of host.lost_after: the time without an answered read before a wait for a job ends as lost.
+	DefaultLostAfter = 5 * time.Minute
+	// DefaultStopLimit is the default of host.stop_limit: the time a job may take to end after the cancel.
+	DefaultStopLimit = 5 * time.Minute
+	minLostJobWait   = time.Minute
+	maxLostJobWait   = 24 * time.Hour
+	hostTableMessage = "the `host` block %s. %s"
+	hostSpecName     = "host"
 )
 
 // rawHost is a host block as written. At is the position of its call. Blocks holds the provider blocks that the call holds, by block name.
@@ -29,15 +40,19 @@ type rawHost struct {
 	StaleMinutes  int
 	MaxRun        string
 	BankBudget    string
+	LostJobWait   string
+	LostAfter     string
+	StopLimit     string
 	DiskFloorGB   int
 	DiskWaitMins  int
 	PrivateRemote string
+	Slots         slotTable
 	Blocks        map[string]*model.Block
 }
 
 // hostSpec is the schema of the host constructor: the keys every provider shares, and one optional argument for each provider block that the registry declares.
 func hostSpec(declared []Block) spec {
-	args := []string{"provider", "disk_floor_gb", "idle_minutes?", "stale_minutes?", "max_run?", "disk_wait_minutes?", "bank_budget?", "private_remote?"}
+	args := []string{"provider", "disk_floor_gb", "idle_minutes?", "stale_minutes?", "max_run?", "disk_wait_minutes?", "bank_budget?", "lost_job_wait?", "slots?", "private_remote?", "lost_after?", "stop_limit?"}
 
 	return spec{hostSpecName, append(args, blockArgs(declared)...)}
 }
@@ -48,9 +63,9 @@ const idleUnset = -1 << 31
 // newHost returns the constructor of the host block. A key that the call leaves out keeps its default.
 func newHost(declared []Block) func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
 	return func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
-		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget}
+		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget, LostJobWait: defaultLostJobWaitText(), LostAfter: minutesText(DefaultLostAfter), StopLimit: minutesText(DefaultStopLimit)}
 		held := holders(declared)
-		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.PrivateRemote}
+		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.LostJobWait, &raw.Slots, &raw.PrivateRemote, &raw.LostAfter, &raw.StopLimit}
 
 		err := hostSpec(declared).unpack(at, kwargs, append(dests, blockDests(held)...)...)
 		raw.Blocks = heldBlocks(declared, held)
@@ -167,23 +182,76 @@ func checkBlocks(raw rawHost, provider model.HostProvider, entry *Entry) error {
 
 // fillKeys sets the keys of host that are not the provider name.
 func fillKeys(raw rawHost, host *model.HostConfig) error {
-	var err error
-
 	if raw.PrivateRemote != "" && !model.RemoteHasHost(raw.PrivateRemote) {
 		return refuseAt(raw.At, "`host.private_remote` must name a machine, such as git@host:org/repo.git; a path or a file URL does not count. Fix the value.")
 	}
 
-	if err = fillCounts(raw, host); err != nil {
+	if err := fillCounts(raw, host); err != nil {
 		return err
 	}
 
-	if host.MaxRun, err = duration(raw.At, "host.max_run", raw.MaxRun, defaultMaxRun); err != nil {
+	return fillDurations(raw, host)
+}
+
+// fillDurations sets the keys of host that are durations.
+func fillDurations(raw rawHost, host *model.HostConfig) error {
+	var err error
+
+	if host.MaxRun, err = maxRun(raw.At, raw.MaxRun); err != nil {
 		return err
 	}
 
-	host.BankBudget, err = duration(raw.At, "host.bank_budget", raw.BankBudget, defaultBankBudget)
+	if host.BankBudget, err = duration(raw.At, "host.bank_budget", raw.BankBudget, defaultBankBudget); err != nil {
+		return err
+	}
+
+	if host.LostJobWait, err = lostJobWait(raw.At, raw.LostJobWait); err != nil {
+		return err
+	}
+
+	return fillWaitLimits(raw, host)
+}
+
+// fillWaitLimits sets the two time limits of the wait for a job.
+func fillWaitLimits(raw rawHost, host *model.HostConfig) error {
+	var err error
+
+	if host.LostAfter, err = duration(raw.At, "host.lost_after", raw.LostAfter, minutesText(DefaultLostAfter)); err != nil {
+		return err
+	}
+
+	host.StopLimit, err = duration(raw.At, "host.stop_limit", raw.StopLimit, minutesText(DefaultStopLimit))
 
 	return err
+}
+
+// maxRun parses the text of host.max_run and refuses a value under one second. Every consumer turns the limit into whole seconds, so a smaller
+// value would turn the limit off. The refusal names the key and the smallest value.
+func maxRun(at syntax.Position, text string) (time.Duration, error) {
+	parsed, err := time.ParseDuration(text)
+	if err != nil || parsed < minMaxRun {
+		return 0, refuseAt(at, "`host.max_run` must be a duration of at least %s, such as \"%s\"; got `%s`. Fix the value.", minMaxRun, defaultMaxRun, text)
+	}
+
+	return parsed, nil
+}
+
+// lostJobWait parses the text of host.lost_job_wait and refuses a value outside the bounds. The refusal names the key and the range.
+func lostJobWait(at syntax.Position, text string) (time.Duration, error) {
+	parsed, err := time.ParseDuration(text)
+	if err != nil || parsed < minLostJobWait || parsed > maxLostJobWait {
+		return 0, refuseAt(at, "`host.lost_job_wait` must be a duration from 1m to 24h, such as \"%s\"; got `%s`. Fix the value.", defaultLostJobWaitText(), text)
+	}
+
+	return parsed, nil
+}
+
+// defaultLostJobWaitText is DefaultLostJobWait as a project file writes it, in minutes.
+func defaultLostJobWaitText() string { return minutesText(DefaultLostJobWait) }
+
+// minutesText writes a whole number of minutes as a project file does.
+func minutesText(d time.Duration) string {
+	return strconv.Itoa(int(d/time.Minute)) + "m"
 }
 
 // fillCounts sets the keys of host that are whole numbers.
@@ -205,6 +273,18 @@ func fillCounts(raw rawHost, host *model.HostConfig) error {
 	}
 
 	host.DiskWaitMinutes = raw.DiskWaitMins
+
+	return fillLimits(raw, host)
+}
+
+// fillLimits sets the slot classes and the disk floor of host.
+func fillLimits(raw rawHost, host *model.HostConfig) error {
+	var err error
+
+	if host.Slots, err = slotsOf(raw.At, raw.Slots); err != nil {
+		return err
+	}
+
 	host.DiskFloorGB, err = positive(raw.At, "host.disk_floor_gb", raw.DiskFloorGB)
 
 	return err

@@ -58,7 +58,7 @@ func TestDecodeBlock_ReadsEveryKeyTheBlockDeclares(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, block{
-		address: "address-value", user: "user-value", port: 2222, identity: "/home/ci/identity",
+		at: "p.star:3:4", address: "address-value", user: "user-value", port: 2222, identity: "/home/ci/identity",
 		workRoot: "/home/ci/work_root", knownHosts: model.KnownHostsAcceptNew,
 	}, got)
 }
@@ -70,7 +70,7 @@ func TestDecodeBlock_ANilBlockAndAnEmptyBlockGiveEveryKeyEmpty(t *testing.T) {
 		got, err := decodeBlock(from)
 
 		require.NoError(t, err, name)
-		assert.Equal(t, block{}, got, name)
+		assert.Equal(t, block{at: from.At()}, got, name)
 	}
 }
 
@@ -112,6 +112,35 @@ func TestDecodeBlock_TheEdgesOfTheValuesThatItAccepts(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, strings.HasPrefix(got.workRoot, "~/") && strings.HasPrefix(got.identity, "~/"))
+}
+
+func TestNew_EveryRefusalOfTheBlockShowsItsPositionInTheProjectFile(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		entry model.BlockEntry
+		key   string
+	}{
+		"a hostile address":       {model.TextEntry(BlockAddress, "-oProxyCommand=x"), "host.ssh.address"},
+		"a hostile user":          {model.TextEntry(BlockUser, "-oProxyCommand=x"), "host.ssh.user"},
+		"a known_hosts value":     {model.TextEntry(BlockKnownHosts, "no"), "`host.ssh.known_hosts`"},
+		"a work root with a sign": {model.TextEntry(BlockWorkRoot, "/work/%h"), "`host.ssh.work_root`"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := model.HostConfig{Provider: Name, MaxRun: 3600e9, Block: model.NewBlock("p.star:3:4", []model.BlockEntry{tc.entry})}
+
+			_, err := New("gates", cfg, nil)
+
+			require.ErrorIs(t, err, link.ErrConfig)
+			assert.Contains(t, err.Error(), "invalid ssh host setting: p.star:3:4: ")
+			assert.Contains(t, err.Error(), tc.key)
+			assert.Equal(t, 1, strings.Count(err.Error(), "p.star:3:4"))
+		})
+	}
 }
 
 func TestNew_ReadsTheBlockOnceAndPassesItsLinkKeysToTheLink(t *testing.T) {

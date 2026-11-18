@@ -52,7 +52,7 @@ func TestNewEngine_AStartIsNotRefusedByACheckThatHoldsTheEngineLockUnderTheProbe
 	require.NoError(t, check.Unlock())
 	require.NoError(t, probe.Unlock())
 
-	got := <-result
+	got := receive(t, result)
 	require.NoError(t, got.err, "the start waits for probe.lock, so it never meets the lock of a check")
 	require.NoError(t, got.engine.Shutdown())
 }
@@ -166,13 +166,13 @@ func TestNewEngine_ASecondEngineOnOneStateFolderIsRefusedUntilTheFirstStops(t *t
 	// A process that another test forks holds a copy of the lock file until it runs exec, so the lock can outlive Shutdown by a moment.
 	var second *Engine
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		var openErr error
 
 		second, openErr = NewEngine(t.Context(), harness.opts, harness.deps())
 
 		return openErr == nil
-	})
+	}))
 	require.NoError(t, second.Shutdown())
 }
 
@@ -234,7 +234,7 @@ func TestCancel_ReportsAnEngineLockThatCannotOpen(t *testing.T) {
 	client := harness.client(t, testVersion)
 	require.NoError(t, os.MkdirAll(filepath.Join(harness.opts.StateDir, engineLockName), 0o700))
 
-	err := client.giveBackUnowned(testProject, testItem, run{})
+	err := client.releaseUnowned(testProject, testItem, run{})
 
 	require.ErrorContains(t, err, engineLockName)
 	assert.NotErrorIs(t, err, ErrStateBusy)
@@ -299,7 +299,7 @@ func TestLocks_AProbeLockFileThatCannotOpenIsReported(t *testing.T) {
 	_, err = NewEngine(t.Context(), harness.opts, harness.deps())
 	require.ErrorContains(t, err, probeLockName)
 
-	err = client.giveBackUnowned(testProject, testItem, run{})
+	err = client.underProbe(func() error { return nil })
 	require.ErrorContains(t, err, probeLockName)
 }
 

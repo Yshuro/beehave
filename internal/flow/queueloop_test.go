@@ -227,12 +227,12 @@ func TestQueueLoop_ReadyItemsStartInFreeSlotsWhileOneItemLoops(t *testing.T) {
 		done <- err
 	}()
 
-	require.True(t, waitUntil(func() bool { return itemEnded(engine, "22") && itemEnded(engine, "23") && itemEnded(engine, "24") }),
-		"22, 23 and 24 pass through the one free slot while 21 still loops")
+	// 22, 23 and 24 pass through the one free slot while 21 still loops.
+	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool { return itemEnded(engine, "22") && itemEnded(engine, "23") && itemEnded(engine, "24") }))
 	assert.False(t, itemEnded(engine, "21"), "the item that loops keeps its run open")
 
 	close(loops)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 	assert.ElementsMatch(t, []string{"21", "22", "23", "24"}, r.agents.started())
 }
 
@@ -305,7 +305,7 @@ func TestQueueLoop_OnePassStartsNoMoreRunsThanFreeSlots(t *testing.T) {
 
 	slots := r.h.opts.MaxConcurrent
 	require.Less(t, slots, 4, "the rig has more ready items than slots")
-	require.True(t, waitUntil(func() bool { return len(r.agents.started()) == slots }), "the free slots fill")
+	waitOn(t, condition(func() bool { return len(r.agents.started()) == slots }))
 
 	// A run that the loop spawned beyond the free slots exists at once, queued behind the others.
 	spawned := 0
@@ -319,7 +319,7 @@ func TestQueueLoop_OnePassStartsNoMoreRunsThanFreeSlots(t *testing.T) {
 	assert.Equal(t, slots, spawned, "the first pass spawns one run for each free slot and no more")
 
 	close(loops)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 }
 
 func TestQueueLoop_ACrashAfterSpawnAndAResumeStartNoItemTwice(t *testing.T) {
@@ -328,7 +328,7 @@ func TestQueueLoop_ACrashAfterSpawnAndAResumeStartNoItemTwice(t *testing.T) {
 	r := newLoopRig(t, queueItem("21", model.SeverityP1), queueItem("22", model.SeverityP1), queueItem("23", model.SeverityP1))
 	r.agents.setAct(func(ctx context.Context, item string) error {
 		if item == "21" || item == "22" {
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -340,7 +340,7 @@ func TestQueueLoop_ACrashAfterSpawnAndAResumeStartNoItemTwice(t *testing.T) {
 
 	go func() { _, _ = first.RunFile(testItem, testProject, r.file) }() //nolint:errcheck // the crash ends the run with an error
 
-	require.True(t, waitUntil(func() bool { return len(r.agents.started()) == 2 }), "both slots are in use when the engine stops")
+	waitOn(t, condition(func() bool { return len(r.agents.started()) == 2 }))
 	stop()
 	require.NoError(t, first.Shutdown())
 

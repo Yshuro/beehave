@@ -11,10 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/merge"
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // upHosts answers host_up. started is true for a host that this call launched, and false for a host that was already up.
-// A teardown is counted and always succeeds.
+// A teardown is counted and always succeeds. LostProof answers from proofs in order, the last repeating; with none it gives no proof.
 type upHosts struct {
 	mu        sync.Mutex
 	started   bool
@@ -23,6 +24,12 @@ type upHosts struct {
 	asked     []string // the cluster each Up call named
 	stopped   []string // the cluster each Teardown call named
 	teardowns int
+	proofs    []model.LostProof
+	proofErr  error
+	// proved holds the cluster and the job of each LostProof call, as "cluster/job".
+	proved []string
+	// afterProof runs after each LostProof call, outside the lock, when a test sets it.
+	afterProof func()
 }
 
 // defaultCluster is the build host that upHosts resolves an empty choice to.
@@ -46,6 +53,49 @@ func (u *upHosts) Teardown(_ context.Context, _, cluster string) error {
 	u.stopped = append(u.stopped, cluster)
 
 	return nil
+}
+
+func (u *upHosts) LostProof(_ context.Context, _, cluster, job string) (model.LostProof, error) {
+	u.mu.Lock()
+
+	var proof model.LostProof
+	if len(u.proofs) > 0 {
+		proof = u.proofs[min(len(u.proved), len(u.proofs)-1)]
+	}
+
+	u.proved = append(u.proved, cluster+"/"+job)
+	after, err := u.afterProof, u.proofErr
+	u.mu.Unlock()
+
+	if after != nil {
+		after()
+	}
+
+	return proof, err
+}
+
+// proofReads counts the LostProof calls so far.
+func (u *upHosts) proofReads() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	return len(u.proved)
+}
+
+// prove makes every later LostProof call give proof.
+func (u *upHosts) prove(proof model.LostProof) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	u.proofs = []model.LostProof{proof}
+}
+
+// teardownCount counts the Teardown calls so far.
+func (u *upHosts) teardownCount() int {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+
+	return u.teardowns
 }
 
 const chosenHostFlow = "def main(item):\n    up = host_up(name = \"start\", host = \"gpu-b\")\n    if up.host != \"gpu-b\":\n        fail(\"HOST \" + up.host)\n    fail(\"main failed\")\n\ndef finish(item):\n    host_teardown(name = \"stop\")\n"

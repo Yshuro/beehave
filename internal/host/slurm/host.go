@@ -35,13 +35,13 @@ func NewHost(target string, config model.HostConfig, ssh proc.Runner, opts ...Op
 	}
 
 	l, err := link.ForMachine(target, link.Options{
-		Block: string(Name), Address: values.address, User: values.user, Identity: values.identity, KnownHosts: values.knownHosts, Port: values.port,
+		Block: string(Name), At: values.at, Address: values.address, User: values.user, Identity: values.identity, KnownHosts: values.knownHosts, Port: values.port,
 	}, ssh)
 	if err != nil {
 		return nil, err
 	}
 
-	opts = append([]Option{func(s *settings) { s.limit = config.MaxRun }}, opts...)
+	opts = append([]Option{WithLimit(config.MaxRun)}, opts...)
 
 	return &Host{Queue: New(l, config, noSlot{}, opts...), link: l}, nil
 }
@@ -57,7 +57,7 @@ func checkConfig(config model.HostConfig) (block, error) {
 	case config.MaxRun < time.Second:
 		return block{}, fmt.Errorf("%w: `host.max_run` must be at least one second", link.ErrConfig)
 	case values.workRoot != "":
-		return block{}, fmt.Errorf("%w: `host.slurm.work_root` is not used with the slurm provider. Jobs run in the login folder of the head node. Remove the key", link.ErrConfig)
+		return block{}, link.Refusal(values.at, "`host.slurm.work_root` is not used with the slurm provider. Jobs run in the login folder of the head node. Remove the key")
 	}
 
 	return values, nil

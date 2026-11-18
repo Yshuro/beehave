@@ -42,11 +42,15 @@ type treeAt string
 
 func (t treeAt) Path(context.Context, string, string) (string, error) { return string(t), nil }
 
-func (t treeAt) Ensure(context.Context, string, string) (string, error) { return string(t), nil }
+func (t treeAt) Ensure(context.Context, string, string, string) (string, error) {
+	return string(t), nil
+}
 
 type treeFails struct{}
 
 func (treeFails) Path(context.Context, string, string) (string, error) { return "", errFake }
+
+func (treeFails) Ensure(context.Context, string, string, string) (string, error) { return "", errFake }
 
 func TestWorktrees_PathIsTheFolderThatGitListsAsAWorktree(t *testing.T) {
 	t.Parallel()
@@ -77,7 +81,7 @@ func TestWorktrees_PathIsTheFolderThatGitListsAsAWorktree(t *testing.T) {
 
 			var asked *[]string
 
-			trees := worktrees{root: root, git: func(string) proc.Runner { return scripted{result: test.result, args: asked} }}
+			trees := worktrees{root: root, repos: t.TempDir(), git: func(string) proc.Runner { return scripted{result: test.result, args: asked} }}
 
 			got, err := trees.Path(t.Context(), "p", test.item)
 			if test.wantErr != "" {
@@ -103,7 +107,7 @@ func TestWorktrees_AskGitToListTheWorktreesInTheItemFolder(t *testing.T) {
 		inDir string
 	)
 
-	trees := worktrees{root: root, git: func(dir string) proc.Runner {
+	trees := worktrees{root: root, repos: t.TempDir(), git: func(dir string) proc.Runner {
 		inDir = dir
 
 		return scripted{args: &asked}
@@ -126,7 +130,7 @@ func TestWorktrees_TheFolderOfAnItemHoldsOnlyLettersDigitsAndFewMarks(t *testing
 	folder := filepath.Join(root, "p", model.SafeName(item))
 	require.NoError(t, os.MkdirAll(folder, 0o700))
 
-	trees := worktrees{root: root, git: func(dir string) proc.Runner {
+	trees := worktrees{root: root, repos: t.TempDir(), git: func(dir string) proc.Runner {
 		inDir = dir
 
 		return scripted{args: new([]string)}
@@ -258,7 +262,7 @@ func TestPrograms_ACapThatCannotBeCountedOrSetFailsTheStepWithItsCause(t *testin
 }
 
 func TestNewPrograms_ACappedProgramThatExits125WithCouldNotKeepsItsResult(t *testing.T) { //nolint:paralleltest // the cap counts every process of the user
-	runs := newPrograms(config.Config{}, treeAt(t.TempDir()), newAdapters(nil, nil, nil))
+	runs := newPrograms(config.Config{}, treeAt(t.TempDir()), cloneLock{}, newAdapters(nil, nil, nil))
 
 	got, err := runs.Run(t.Context(), flow.CommandRequest{Run: []string{"sh", "-c", `echo out; echo "could not open the thing" >&2; exit 125`}, MaxNewProcesses: 1000})
 
@@ -270,7 +274,7 @@ func TestNewPrograms_ACappedProgramThatExits125WithCouldNotKeepsItsResult(t *tes
 func TestNewPrograms_ACommandStepGetsOnlyTheEnvironmentOfItsRequestAndItsStdin(t *testing.T) {
 	t.Setenv("BEEHAVE_TEST_SECRET", "secret")
 
-	runs := newPrograms(config.Config{}, treeAt(t.TempDir()), newAdapters(nil, nil, nil))
+	runs := newPrograms(config.Config{}, treeAt(t.TempDir()), cloneLock{}, newAdapters(nil, nil, nil))
 
 	got, err := runs.Run(t.Context(), flow.CommandRequest{Run: []string{"sh", "-c", "env; cat"}, Stdin: "from stdin\n", Env: []string{"A=1"}})
 
@@ -299,12 +303,20 @@ type fakeHost struct {
 	submitErr error
 	waitErr   error
 	spec      model.JobSpec
+	log       string
 }
 
 func (*fakeHost) WorkRoot(context.Context) (string, error) { return "/home/ob", nil }
 
 // Log gives no log: the gate reads the log of every failed job, and this host keeps none.
-func (*fakeHost) Log(context.Context, model.JobID) (string, error) { return "", errFake }
+// A test that sets log gets it.
+func (f *fakeHost) Log(context.Context, model.JobID) (string, error) {
+	if f.log == "" {
+		return "", errFake
+	}
+
+	return f.log, nil
+}
 
 func (f *fakeHost) Submit(_ context.Context, spec model.JobSpec) (model.JobID, error) {
 	f.spec = spec
@@ -331,6 +343,8 @@ func TestPrograms_AHostProgramRunsAsOneQuotedJob(t *testing.T) {
 	}{
 		{"succeeded", &fakeHost{state: model.JobSucceeded}, flow.CommandOutput{}, nil},
 		{"failed", &fakeHost{state: model.JobFailed}, flow.CommandOutput{RC: 1}, nil},
+		{"failed with a log", &fakeHost{state: model.JobFailed, log: "a.go:3: a mutant lived\n"}, flow.CommandOutput{Stdout: "a.go:3: a mutant lived\n", RC: 1}, nil},
+		{"succeeded with a log", &fakeHost{state: model.JobSucceeded, log: "noise\n"}, flow.CommandOutput{}, nil},
 		{"canceled", &fakeHost{state: model.JobCanceled}, flow.CommandOutput{}, errHostJob},
 		{"submit fails", &fakeHost{submitErr: errFake}, flow.CommandOutput{}, errFake},
 		{"wait fails", &fakeHost{waitErr: errFake}, flow.CommandOutput{}, errFake},
@@ -393,7 +407,7 @@ func TestNewPrograms_BuildTheHostOfTheProjectOnlyWhenItHasOne(t *testing.T) {
 	t.Parallel()
 
 	cfg := config.Config{Projects: map[string]config.Project{"bare": {}}}
-	runs := newPrograms(cfg, treeAt("/tree"), newAdapters(nil, nil, nil))
+	runs := newPrograms(cfg, treeAt("/tree"), cloneLock{}, newAdapters(nil, nil, nil))
 
 	_, err := runs.hosts("zzz", "")
 	require.ErrorIs(t, err, errUnknownProject)
@@ -415,7 +429,7 @@ func TestNewPrograms_ReturnTheHostThatTheTableBuildsForTheProject(t *testing.T) 
 	}
 
 	project := config.Project{Project: model.Project{Name: "h", Host: &model.HostConfig{Provider: skypilot.Name}}}
-	runs := newPrograms(config.Config{Projects: map[string]config.Project{"h": project}}, treeAt("/tree"), table)
+	runs := newPrograms(config.Config{Projects: map[string]config.Project{"h": project}}, treeAt("/tree"), cloneLock{}, table)
 
 	got, err := runs.hosts("h", "")
 
@@ -441,7 +455,7 @@ func TestNewPrograms_BuildTheHostOfTheClusterThatTheRunChose(t *testing.T) {
 	}
 
 	project := config.Project{Project: model.Project{Name: "h", BuildHost: "gpu", BuildHosts: []string{"gpu", "gpu-b"}, Host: &model.HostConfig{Provider: skypilot.Name}}}
-	runs := newPrograms(config.Config{Projects: map[string]config.Project{"h": project}}, treeAt("/tree"), table)
+	runs := newPrograms(config.Config{Projects: map[string]config.Project{"h": project}}, treeAt("/tree"), cloneLock{}, table)
 
 	_, err := runs.hosts("h", "gpu-b")
 	require.NoError(t, err)

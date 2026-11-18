@@ -8,8 +8,10 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/signal"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -141,11 +143,12 @@ func (f flowCommands) options(stderr io.Writer, flag string) (config.Config, flo
 // engineOptions builds the options of the engine from the config and the state folder.
 func (f flowCommands) engineOptions(cfg config.Config, state string) flow.Options {
 	return flow.Options{
-		StateDir: state, Version: f.version, MaxConcurrent: cfg.Agents.MaxConcurrent, MaxReviewConcurrent: cfg.Agents.MaxReviewConcurrent, Env: f.env,
+		StateDir: state, Version: f.version, MaxConcurrent: cfg.Agents.MaxConcurrent, MaxReviewConcurrent: cfg.Agents.MaxReviewConcurrent, PerLogin: cfg.Agents.PerLogin, Env: f.env,
 		MaxRunBudget: cfg.Agents.MaxRunBudgetUSD, MaxTreeBudget: cfg.Agents.MaxTreeBudgetUSD,
-		ReviewPoll: time.Duration(cfg.Agents.ReviewPollMinutes) * time.Minute,
-		Retention:  time.Duration(cfg.Agents.RetentionDays) * 24 * time.Hour,
-		KeepRuns:   cfg.Agents.RetentionDays == 0,
+		ReviewPoll:         time.Duration(cfg.Agents.ReviewPollMinutes) * time.Minute,
+		ReviewLookbackDays: cfg.Agents.ReviewLookbackDays,
+		Retention:          time.Duration(cfg.Agents.RetentionDays) * 24 * time.Hour,
+		KeepRuns:           cfg.Agents.RetentionDays == 0,
 	}
 }
 
@@ -179,7 +182,8 @@ func addConfigFlag(command *cobra.Command, target *string) {
 const runLong = "Take one item through its workflow.\nName the project when the config holds more than one.\n\n" +
 	"The steps of the workflow file run in file order. Name the file with --workflow, or keep " + defaultWorkflowFile + " in the current folder. " +
 	"beehave checks the file first and refuses on any problem. If no file is named and the folder has none, beehave run refuses, unless the item has an open run.\n\n" +
-	"If an earlier run of the item is open, beehave run continues it with the file that the run pinned. Press Ctrl-C to stop the command: the run stays open, and beehave run continues it.\n" +
+	"If an earlier run of the item is open, beehave run continues it with the file that the run pinned. Press Ctrl-C to stop the command: the run stays open, and beehave run continues it. A second Ctrl-C during the stop exits at once with code 130. " +
+	"If the run has already ended when the stop begins, the next Ctrl-C exits at once with the exit code of the run: 0 for a finished run, 1 for a failed or stopped run.\n" +
 	"If the last run failed, beehave run refuses and names the step that failed. Run beehave resume, then beehave run.\n" +
 	"After a finished or a canceled run, beehave run starts a new run.\n\n" +
 	"If another engine holds the state folder, beehave run gives the item to that engine and waits for the result. " +
@@ -359,7 +363,7 @@ func (f flowCommands) ownEngine(stdout, stderr io.Writer, cfg config.Config, opt
 	// The engine writes the start of the run and the start and end of each step to stderr, so that stdout keeps the result lines.
 	opts.Progress = stderr
 
-	err := f.runOnEngine(stdout, cfg, opts, item, project, file)
+	err := f.runOnEngine(stdout, stderr, cfg, opts, item, project, file)
 	if !errors.Is(err, flow.ErrStateBusy) {
 		return err
 	}
@@ -413,7 +417,7 @@ func (f flowCommands) joinEngine(stdout, stderr io.Writer, client Steering, item
 }
 
 // runOnEngine opens the engine, runs the item on it and shuts it down.
-func (f flowCommands) runOnEngine(stdout io.Writer, cfg config.Config, opts flow.Options, item, project, file string) error {
+func (f flowCommands) runOnEngine(stdout, stderr io.Writer, cfg config.Config, opts flow.Options, item, project, file string) error {
 	engine, err := f.factory.Engine(f.ctx, cfg, opts)
 	if err != nil {
 		return err
@@ -423,7 +427,47 @@ func (f flowCommands) runOnEngine(stdout io.Writer, cfg config.Config, opts flow
 		return errors.Join(err, engine.Shutdown())
 	}
 
-	return errors.Join(f.continueOrStart(stdout, engine, item, project, file), engine.Shutdown())
+	return shutDownWithExitStatus(engine, stderr, f.continueOrStart(stdout, engine, item, project, file))
+}
+
+// shutDownWithExitStatus shuts the engine down for beehave run.
+// The shutdown can wait for a start that waits for the store. Whatever ended the run (the result or the first interrupt), the command listens from here on:
+// the next signal exits at once, as beehave serve does.
+// If no second signal ends the shutdown, it returns the error of the run joined with the error of the shutdown.
+// If a second signal ends the shutdown and the run was interrupted, it returns the exit error with code 130, and the run stays open for the next launch.
+// If a second signal ends the shutdown and the run ended, it returns the error of the run alone (nil for a finished run), and the line says the run is not open.
+func shutDownWithExitStatus(engine Runner, stderr io.Writer, runErr error) error {
+	downErr := stopListening(engine)
+
+	var exit *ExitError
+	if !errors.As(downErr, &exit) || exit.Code != exitSecondSignal {
+		return errors.Join(runErr, downErr)
+	}
+
+	if errors.Is(runErr, errInterrupted) {
+		sayStoppedAtOnce(stderr, "the run stays open: run beehave run again to continue it")
+
+		return downErr
+	}
+
+	sayStoppedAtOnce(stderr, "the run had ended before the stop")
+
+	return runErr
+}
+
+// stopListening shuts the engine down while it listens for a signal that ends the wait.
+func stopListening(engine Runner) error {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	defer signal.Stop(signals)
+
+	return stopEngine(engine, signals)
+}
+
+func sayStoppedAtOnce(stderr io.Writer, what string) {
+	// A failed write to stderr has no recovery.
+	_, _ = fmt.Fprintf(stderr, "%s: stopped at once; %s\n", commandName, what)
 }
 
 func (f flowCommands) continueOrStart(stdout io.Writer, engine Runner, item, project, file string) error {
@@ -870,6 +914,8 @@ func (f flowCommands) withClient(cmd *cobra.Command, flag string, fn func(Steeri
 		return err
 	}
 
+	opts.Progress = cmd.ErrOrStderr()
+
 	client, err := f.factory.Client(f.ctx, cfg, opts)
 	if err != nil {
 		return err
@@ -1137,7 +1183,8 @@ func (f flowCommands) cancelCommand() *cobra.Command {
 		Use:   "cancel <item> | --run <run id>",
 		Short: "Stop the open run of an item, or one run by its id",
 		Long: "Stop the open run of an item. With --run, stop the one run with that id, even when it is not the latest run of its item. " +
-			"Use --run for the pass run of a round: beehave status lists the run ids.",
+			"Use --run for the pass run of a round: beehave status lists the run ids. " +
+			"A canceled run whose phases an earlier cancel left running is canceled again, and the phases it stops are named.",
 		Args: func(cmd *cobra.Command, args []string) error { return cancelArgs(cmd, args, runID) },
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return f.withClient(cmd, flag, func(client Steering) error { return cancelOne(cmd, client, args, runID) })

@@ -23,6 +23,8 @@ func (r *capRefusal) ResetAt() (time.Time, bool) { return r.reset, !r.reset.IsZe
 
 // capLogins refuses every pick that does not allow the cap to be passed, until it has refused `refusals` times. Then it picks alice.
 type capLogins struct {
+	noReset
+
 	mu       sync.Mutex
 	refusals int
 	refusal  *capRefusal
@@ -112,11 +114,11 @@ func TestLoginStep_ACanceledRunEndsTheWaitForAReset(t *testing.T) {
 	engine := harness.engine(t)
 	done := runInBackground(engine, testItem)
 
-	waitForTheSleep(t, engine)
+	waitOn(t, inASleep(t, engine))
 	require.NoError(t, harness.client(t, testVersion).Cancel(testItem))
 	harness.tick(t)
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.Error(t, outcome.err)
 	assert.Equal(t, 1, logins.count(), "the run ends in the wait and reads no more")

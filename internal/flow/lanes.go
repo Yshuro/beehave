@@ -23,14 +23,14 @@ type ItemLanes struct {
 	Lanes []LaneLine `json:"lanes"`
 }
 
-// Lanes lists the lanes of an item across all its runs. It reads each run with Steps and keeps the lines that have a kind, so it keeps no table of its own.
+// Lanes lists the lanes of an item across all its runs. It reads each run as the view of one run does, without the count of the tree, and keeps the lines that have a kind, so it keeps no table of its own.
 func (c *Client) Lanes(item string) (ItemLanes, error) {
 	ids, err := c.attemptsOf(item)
 	if err != nil {
 		return ItemLanes{}, err
 	}
 
-	return lanesRead(item, ids, c.Steps)
+	return lanesRead(item, ids, c.runSteps)
 }
 
 // lanesRead reads the steps of each run id in order, stops at the first run that cannot be read, and keeps the lines that have a kind.

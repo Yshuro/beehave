@@ -1,6 +1,7 @@
 // Package ledger keeps one row for each lane of each pull request and counts them.
 // The rows are a SQLite file with a table for the lanes and a table for the issues the first review recorded.
 // Add writes in one BEGIN IMMEDIATE transaction, so two writers never lose a row.
+// Writers wait in turn on an operating system lock on a second file, so no writer starves while others come and go. Readers never take that lock.
 package ledger
 
 import (
@@ -17,11 +18,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/gofrs/flock"
 	// The driver registers itself under the name sqlite, as it does for the workflow store.
 	"modernc.org/sqlite"
 	sqlite3 "modernc.org/sqlite/lib"
 
 	"github.com/tobocop2/beehave/examples/remediation/tools/check"
+	"github.com/tobocop2/beehave/internal/lockfile"
 	"github.com/tobocop2/beehave/internal/store"
 )
 
@@ -37,6 +40,9 @@ const (
 const (
 	// FileName is the ledger file in the state folder.
 	FileName = "lane-ledger.db"
+
+	// LockName is the file in the state folder whose operating system lock puts the writers in turn.
+	LockName = "lane-ledger.lock"
 
 	fileMode      fs.FileMode = 0o600
 	busyTimeoutMs             = 30000
@@ -67,7 +73,7 @@ func driverWords(err error) string {
 	if errors.As(err, &driverErr) {
 		switch driverErr.Code() {
 		case sqlite3.SQLITE_BUSY:
-			return "the ledger is locked by another process"
+			return "the ledger stayed locked by another process until the wait ended. Run the command again"
 		case sqlite3.SQLITE_CANTOPEN:
 			return "the file cannot be opened"
 		case sqlite3.SQLITE_NOTADB:
@@ -153,11 +159,13 @@ type Rounds struct {
 type Ledger struct {
 	path   string
 	busyMs int
+	// free releases the lock file after a write. A test replaces it to make the release fail.
+	free func(turn *flock.Flock) error
 }
 
 // Open returns the ledger in the state folder dir. The file is made by the first Add.
 func Open(dir string) *Ledger {
-	return &Ledger{path: filepath.Join(dir, FileName), busyMs: busyTimeoutMs}
+	return &Ledger{path: filepath.Join(dir, FileName), busyMs: busyTimeoutMs, free: (*flock.Flock).Unlock}
 }
 
 func refuse(format string, args ...any) error {
@@ -172,7 +180,7 @@ type laneRow struct {
 
 // connect opens the file. A writer makes the file, and the tables in its first transaction; a reader opens the file read-only and writes nothing, so it works in a folder that cannot be written.
 // The journal is SQLite's default rollback journal: the ledger is small and written rarely, and the rollback journal needs no shared memory file.
-// Each connection waits for a lock; a writer starts a transaction with BEGIN IMMEDIATE.
+// A writer waits in turn on the lock file (see Add) and then starts a transaction with BEGIN IMMEDIATE; the connection waits at most busyTimeoutMs for the lock of SQLite, which only a process that does not use the lock file can hold.
 // A reader that meets a hot journal (see hotJournal) opens again with mode rw, which rolls the journal back and makes no file and no table.
 func (l *Ledger) connect(access access) (*sql.DB, error) {
 	query := url.Values{}
@@ -193,9 +201,17 @@ func (l *Ledger) connect(access access) (*sql.DB, error) {
 	return sql.Open("sqlite", store.SQLiteDSN(l.path, l.busyMs, query))
 }
 
-// touch makes the file at mode 0600 if it is missing, so SQLite does not make it with a wider mode.
+// touch makes the file at mode 0600 if it is missing, so SQLite does not make it with a wider mode (SQLite has no setting for the mode of a file it makes).
+// It opens no descriptor of a file that exists. SQLite documents the hazard (howtocorrupt.html, 2.2): "the close() system call will cancel all POSIX advisory locks
+// on the same file for all threads and all file descriptors in the process." O_EXCL makes the kernel refuse an existing file before it opens one.
+// The one descriptor that remains is of a file made a moment ago, which no connection of this process can hold a lock on: Add holds the lock file, so no other writer opens it,
+// and a reader skips a file that is missing or has no bytes.
 func (l *Ledger) touch() error {
-	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY, fileMode)
+	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, fileMode)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+
 	if err != nil {
 		return err
 	}
@@ -377,6 +393,8 @@ func mechanismOK(mechanism string) error {
 
 // Add records the lane unless its key already has a row for it. The first review of a key also records the issues its pull request closes.
 // The lane row and the closes go in one transaction, so a reader sees both or neither.
+// Add first waits, with no time limit, for its turn on the lock file next to the database. The kernel frees that lock when its holder ends, so a crash leaves no stale lock.
+// If the row is written and the lock file then cannot be freed, Add returns the result of the write with a refusal that says the lane is recorded.
 func (l *Ledger) Add(request Request) (Added, error) {
 	if err := request.check(); err != nil {
 		return Added{}, err
@@ -388,14 +406,34 @@ func (l *Ledger) Add(request Request) (Added, error) {
 		return Added{}, err
 	}
 
-	ctx := context.Background()
+	return l.addInTurn(request, numbers, first)
+}
 
+// addInTurn waits for the lock file, opens the database, writes the row, closes the database and frees the lock file.
+func (l *Ledger) addInTurn(request Request, numbers []string, first bool) (Added, error) {
+	turn := lockfile.Open(filepath.Join(filepath.Dir(l.path), LockName))
+	if err := turn.Lock(); err != nil {
+		return Added{}, l.fail("open", err)
+	}
+
+	added, err := l.addLocked(request, numbers, first)
+
+	if freed := l.free(turn); err == nil && freed != nil {
+		// The row is in the database, so the result stays with the error. The kernel frees the lock when this process ends.
+		return added, refuse("the lane is recorded in %s, but the lock file cannot be freed: %s. The lock frees when this process ends.", l.path, driverWords(freed))
+	}
+
+	return added, err
+}
+
+// addLocked opens the database, writes the row and closes the database. The caller holds the lock file.
+func (l *Ledger) addLocked(request Request, numbers []string, first bool) (Added, error) {
 	db, err := l.connect(writing)
 	if err != nil {
 		return Added{}, l.fail("open", err)
 	}
 
-	added, err := l.insert(ctx, db, request, numbers, first)
+	added, err := l.insert(context.Background(), db, request, numbers, first)
 
 	return added, l.fail("write", errors.Join(err, db.Close()))
 }

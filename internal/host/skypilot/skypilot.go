@@ -112,7 +112,7 @@ func (h *Host) Up(ctx context.Context) error {
 	args := []string{
 		"launch", "-y", "-c", h.cluster, "--down",
 		"-i", strconv.Itoa(h.config.IdleMinutes),
-		"--config", runLimitKey + strconv.FormatInt(int64(h.config.MaxRun/time.Second), 10),
+		"--config", runLimitKey + strconv.FormatInt(h.config.RunLimitSeconds(), 10),
 	}
 
 	if infra := h.infra(); infra != "" {
@@ -164,6 +164,12 @@ func (h *Host) Down(ctx context.Context) error {
 	return err
 }
 
+// LostProof gives no proof. The proof for this provider is the state of the cluster, read with `sky status --refresh` and the identity of the launch,
+// and that read is issue #401. Until it lands, a lost job on this provider waits for the owner. A list of the cloud is never a proof.
+func (*Host) LostProof(context.Context, model.JobID) (model.LostProof, error) {
+	return model.LostProof{Note: "the SkyPilot adapter reads no proof of a lost job yet: the read of the cluster state is issue #401"}, nil
+}
+
 // Teardown banks the work of the head node to `host.private_remote` and then deletes the cluster. It is host.Teardown with git and find on the head node.
 // A head node with unbanked work, or one whose work cannot be read, stays up, and the error says why.
 func (h *Host) Teardown(ctx context.Context) error {
@@ -176,7 +182,7 @@ type slot struct{ h *Host }
 
 // Hold starts the SkyPilot job that keeps the cluster busy.
 func (s slot) Hold(ctx context.Context, job jobwait.Job) error {
-	_, err := link.Run(ctx, s.h.sky, "sky exec", []string{"exec", s.h.cluster, "-d", slotCommand(s.h.config.MaxRun, s.markerName(job))})
+	_, err := link.Run(ctx, s.h.sky, "sky exec", []string{"exec", s.h.cluster, "-d", slotCommand(s.h.config, s.markerName(job))})
 
 	return err
 }
@@ -196,6 +202,6 @@ func (s slot) markerName(job jobwait.Job) string {
 }
 
 // slotCommand is the command of the SkyPilot job that keeps the cluster busy until the marker exists.
-func slotCommand(maxRun time.Duration, marker string) string {
-	return fmt.Sprintf("cd ~ && timeout %d sh -c 'until test -e %s; do sleep 5; done'", int64(maxRun/time.Second), marker)
+func slotCommand(config model.HostConfig, marker string) string {
+	return fmt.Sprintf("cd ~ && timeout %d sh -c 'until test -e %s; do sleep 5; done'", config.RunLimitSeconds(), marker)
 }

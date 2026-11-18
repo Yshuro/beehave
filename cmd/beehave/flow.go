@@ -20,15 +20,19 @@ import (
 	"github.com/tobocop2/beehave/internal/step"
 )
 
-var errUnknownProject = errors.New("the config has no project of this name")
+var (
+	errUnknownProject = errors.New("the config has no project of this name")
+	errUnknownRunner  = errors.New("the config has no runner of this name")
+)
 
 // logins picks the runner of an agent step that names none, from the pool.
 // pool returns the name of the runner that has room under the usage caps. It prefers a runner that busy does not name.
-// overCap does the same pick for a run that may go over a cap.
+// overCap does the same pick for a run that may go over a cap. reset returns when a runner gets room again, from the same usage read.
 type logins struct {
 	projects map[string]config.Project
 	pool     func(ctx context.Context, busy []string) (string, error)
 	overCap  func(ctx context.Context, busy []string) (string, error)
+	reset    func(ctx context.Context, login string) (time.Time, bool, error)
 }
 
 // newLogins reads the projects of the config. The pool pick reads the usage of each runner through the agent entries.
@@ -38,7 +42,31 @@ func newLogins(cfg config.Config, opts flow.Options) logins {
 
 // loginsReading is newLogins with the reader of the usage given. A test of the whole command gives a reader that needs no login.
 func loginsReading(cfg config.Config, read pool.Reader) logins {
-	return logins{projects: cfg.Projects, pool: poolPick(cfg, stepAgent, read, pool.Select), overCap: poolPick(cfg, stepAgent, read, pool.SelectOverCap)}
+	return logins{projects: cfg.Projects, pool: poolPick(cfg, stepAgent, read, pool.Select), overCap: poolPick(cfg, stepAgent, read, pool.SelectOverCap), reset: poolReset(cfg, read)}
+}
+
+// poolReset returns the function that reads the usage of one runner and gives the time when it gets room under the usage caps, and false when the read knows none.
+func poolReset(cfg config.Config, read pool.Reader) func(ctx context.Context, login string) (time.Time, bool, error) {
+	return func(ctx context.Context, login string) (time.Time, bool, error) {
+		for _, runner := range cfg.Runners {
+			if runner.Name == login {
+				reset, known := pool.EarliestReset(map[string]model.Reading{login: read(ctx, runner)}, cfg.Pool)
+
+				return reset, known, nil
+			}
+		}
+
+		return time.Time{}, false, fmt.Errorf("%w: %q", errUnknownRunner, login)
+	}
+}
+
+// Reset returns when the login gets room again, from its usage read. A project that the config lacks is an error: no guess.
+func (l logins) Reset(ctx context.Context, project, login string) (time.Time, bool, error) {
+	if _, ok := l.projects[project]; !ok {
+		return time.Time{}, false, fmt.Errorf("%w: %q", errUnknownProject, project)
+	}
+
+	return l.reset(ctx, login)
 }
 
 // poolPick returns the name of the runner of the agent kind that read finds with the select function: under both usage caps for pool.Select, the lowest use for pool.SelectOverCap.
@@ -142,7 +170,7 @@ func newEngineOn(ctx context.Context, cfg config.Config, opts flow.Options, read
 func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) flow.Deps {
 	trees := newWorktrees(cfg.Projects, opts, table.forge)
 	life := newLife(cfg, table)
-	commands := newPrograms(cfg, trees, table)
+	commands := newPrograms(cfg, trees, cloneLock{repos: trees.repos}, table)
 
 	return flow.Deps{
 		Agents: newAgents(cfg, opts, trees, table), Gate: projectGate{projects: cfg.Projects, programs: commands, forge: table.forge}, Logins: picks, Lifecycle: life, Forge: life, Watch: life, Merge: life, Preflight: life, Trees: trees, Beats: life, Others: life,
@@ -158,7 +186,7 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 		SandboxDefault: func(project string) bool { return cfg.Projects[project].SandboxByDefault() },
 		RefuseGate:     gateRefusal(cfg.Projects, enforcers.Refusal),
 		Repository:     repositoryOf(cfg.Projects),
-		Facts:          factsOf(cfg.Projects),
+		Facts:          factsOf(cfg.Projects), Slots: slotsOf(cfg.Projects),
 	}
 }
 
@@ -221,10 +249,11 @@ func localRunner(binary, dir string, timeout time.Duration) proc.Runner { //noli
 }
 
 // newPrograms runs command steps in the worktree of the item, or on the host of the project.
-func newPrograms(cfg config.Config, trees treeFinder, table adapters) programs {
+// The sandbox of a gate holds the lock of the clone, clones, while it adds or removes the worktree of its copy.
+func newPrograms(cfg config.Config, trees programTrees, clones cloneLock, table adapters) programs {
 	return programs{
 		trees:    trees,
-		sandbox:  newGateSandbox(cfg.Projects),
+		sandbox:  newGateSandbox(cfg.Projects, clones),
 		local:    localRunner,
 		exec:     func(spec proc.ExecRunner) proc.Runner { return spec },
 		hosts:    func(project, cluster string) (host.Host, error) { return buildHostOf(cfg, table, project, cluster) },

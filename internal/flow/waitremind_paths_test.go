@@ -38,7 +38,7 @@ func inFlow(t *testing.T, body func(ctx dbos.Context) error) error {
 		sendVoiceSoon(t, flowCtx)
 	}
 
-	_, err = handle.GetResult(dbos.WithHandleTimeout(eventTimeout))
+	_, err = resultOfHandle(t, handle)
 
 	return err
 }
@@ -137,7 +137,7 @@ func TestWait_ARemindThatOnlyTheRunCanReadIsRefused(t *testing.T) {
 			harness.flowIs(t, "big = [2.0]\nok = [0.5]\n\ndef main(item):\n    wait(question = \"q\", "+tc.call+")\n")
 			engine := harness.engine(t)
 
-			outcome := <-runInBackground(engine, testItem)
+			outcome := receive(t, runInBackground(engine, testItem))
 
 			require.Error(t, outcome.err)
 			assert.Contains(t, outcome.err.Error(), tc.want)

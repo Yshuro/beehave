@@ -1,9 +1,11 @@
 package flow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -17,7 +19,9 @@ import (
 // Prompt is the rendered prompt, which is the whole brief. Resume is the session to continue.
 // Model, Timeout and IdleTimeout go to the agent as they are. Forbid lists the kinds of command that the step forbids.
 type PhaseInput struct {
-	Run     string `json:"run"`
+	Run string `json:"run"`
+	// Call is the name of the agent call, such as agent:fix#1. The stop at a cap and the error of a look name it.
+	Call    string `json:"call,omitempty"`
 	Item    string `json:"item"`
 	Project string `json:"project"`
 	Login   string `json:"login"`
@@ -37,6 +41,8 @@ type PhaseInput struct {
 	Forbid []model.FindingKind `json:"forbid,omitempty"`
 	// Protect lists the directories of the kind protected-path. It is empty, and so left out of a recorded phase, for a step that does not use the kind.
 	Protect []string `json:"protect,omitempty"`
+	// RequireSkills is the require_skills of the step. It is left out of a recorded phase for a step that names none, so a stored phase keeps its form.
+	RequireSkills []string `json:"require_skills,omitempty"`
 
 	// MaxBudget is the max_budget_usd of the step. It is left out of a recorded phase for a step that sets none.
 	MaxBudget float64 `json:"max_budget_usd,omitempty"`
@@ -54,6 +60,21 @@ type PhaseInput struct {
 	// OutputFile is the file where the agent writes its declared outputs. Outputs names them. Outputs is left out for a call that declares none.
 	OutputFile string   `json:"output_file,omitempty"`
 	Outputs    []string `json:"outputs,omitempty"`
+
+	// ResetPassed is true for the rerun after a provider limit whose reset time had passed. A rerun that a limit with a past reset time stops again fails.
+	// It is left out of a recorded phase for any other run.
+	ResetPassed bool `json:"reset_passed,omitempty"`
+
+	// Limited is the run that a provider limit stopped, for the rerun after the reset, and is left out of a recorded phase for any other run.
+	Limited *LostRun `json:"limited,omitempty"`
+
+	// StartHead is the commit of the item folder when the render step of the call ran. The record of a lost start holds the diff summary since that commit.
+	// It is empty for a plain folder.
+	StartHead string `json:"start_head,omitempty"`
+
+	// TreeStart is the commit that the run made the worktree of a round item at. The diff of a lost start makes a removed worktree again there.
+	// It is left out of a recorded phase for any other item.
+	TreeStart string `json:"tree_start,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
@@ -61,6 +82,10 @@ type PhaseInput struct {
 type PhaseOutput struct {
 	Outcome  agent.Outcome `json:"outcome"`
 	ExitCode int           `json:"exit_code"`
+	// Login is the runner that the agent ran on: the pool pick, or the runner that the call named. It is empty in a record that an older version wrote.
+	Login string `json:"login,omitempty"`
+	// Model is the model that the step set. It is left out of a recorded phase for a step that sets none.
+	Model string `json:"model,omitempty"`
 	// Kind is the kind of the lane in the ledger of the method: fix, rework, relay, review or design. It is empty in a record that an older version wrote.
 	Kind       string   `json:"kind,omitempty"`
 	Note       string   `json:"note"`
@@ -73,31 +98,42 @@ type PhaseOutput struct {
 	agent.Spend
 	// Rounds is the loop cap that the step named. The status view shows the rounds used against it.
 	Rounds int `json:"rounds,omitempty"`
+	// Limit is the provider limit that stopped a run that ended as limited. It is left out of a recorded phase for any other run, so a stored phase keeps its form.
+	Limit *agent.Limit `json:"limit,omitempty"`
+	// Resumed is true for a run that resumed the session of a lost start or of a run that a provider limit stopped. It is left out of a recorded phase for any other run.
+	Resumed bool `json:"resumed,omitempty"`
+	// CapStop is the run cap or the tree cap that stopped the look of the phase, so no agent ran. It is left out of a recorded phase for any other run.
+	CapStop *CapStop `json:"cap_stop,omitempty"`
+	// ResumeOf is the session of the lost start or the limited run that this run was given to resume, and is left out of a recorded phase for any other run.
+	ResumeOf string `json:"resume_of,omitempty"`
 }
 
-// phase waits for the claim of its run, then runs the agent as a step, so a restart skips the work that finished.
-// A phase starts no agent unless the run that queued it holds a trusted claim now, whatever context the phase runs under:
-// the child workflow of a phase outlives the run that queued it, and a later run of the same item holds another claim.
+// phase waits for a trusted claim of its run, looks at the caps, then runs the agent as a step; a cap stop ends it with the stop and no agent run.
 func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 	claim, err := e.awaitClaim(ctx, in)
 	if err != nil {
 		return PhaseOutput{}, err
 	}
 
-	in, err = e.markStarts(ctx, in)
+	if check, err := e.lookAtCaps(ctx, in); err != nil || check.Stop != nil {
+		return PhaseOutput{CapStop: check.Stop}, err
+	}
+
+	in, lost, err := e.markStarts(ctx, in)
 	if err != nil {
 		return PhaseOutput{}, err
 	}
 
-	return e.agentStep(ctx, claim, in)
+	return e.agentStep(ctx, claim, in, cmp.Or(lost, in.Limited))
 }
 
 // agentStep runs the agent of the phase as a step. A failed step returns no output, so it leaves the cost of the failed run in an event that the queuing run reads.
-func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInput) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
+// lost is the lost or limited run that the start follows, or nil.
+func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
 	var spent agent.Spend
 
 	out, err := runStep(e, ctx, agentStepName, func(c context.Context) (PhaseOutput, error) {
-		ran, runErr := e.runAgent(c, claim, in)
+		ran, runErr := e.runAgent(c, claim, in, lost)
 		spent = ran.Spend
 
 		return ran, runErr
@@ -113,36 +149,156 @@ func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInpu
 // runAgent starts the agent of one phase under the context of the claim of its run, and waits for it. The agent dies with its process group when
 // the claim ends, or when the phase is canceled, times out or ends. A loss of the claim either comes first, and the start finds its context done,
 // or comes after, and the end of the context kills the group: no lock and no list of groups to kill on a loss.
-func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput) (PhaseOutput, error) {
+// ctx is the context of the step, which saves each session id that the agent names.
+func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) {
 	agentCtx, cancel := context.WithCancelCause(claim)
 	defer cancel(nil)
 
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)) })()
 	defer e.endGroups(in.Run)
 
-	result, err := e.deps.Agents.Run(agentCtx, AgentRequest{
-		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in),
-		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
-		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
-	})
+	saver := e.saveSession(ctx, in)
+	defer saver.finish()
 
+	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, lost, saver.name))
+
+	out, err := e.judgePhase(ctx, in, result, err)
+	out.ResumeOf = lost.session()
+
+	return out, err
+}
+
+// judgePhase returns the output of a phase from the result of its agent, and the error that ends the phase.
+// A limit with no reset time gets the one that the usage read gives. The end of the phase is judged inside the step, so a phase that did not exit with code 0,
+// and that no cap and no provider limit with an end to its wait stopped, is a failed step that beehave resume reruns.
+func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Result, runErr error) (PhaseOutput, error) {
 	out := phaseOutput(result)
 	out.Kind, out.Rounds = workflow.LaneKind(in.Kind, in.Lane), in.Rounds
+	out.Login, out.Model = in.Login, in.Model
 
-	if err != nil {
+	if runErr != nil {
+		return out, runErr
+	}
+
+	if err := e.dateLimit(ctx, in, &out); err != nil {
 		return out, err
 	}
 
-	// The end of the phase is judged inside the step, so a phase that did not exit with code 0 is a failed step that beehave resume reruns.
-	return out, phaseEnd(in, out)
+	return out, phaseEnd(in, out, e.deps.Clock.wall())
+}
+
+// agentRequest is the request for the agent of a phase. named receives each new session id that the agent names.
+func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, lost *LostRun, named func(session string)) AgentRequest {
+	return AgentRequest{
+		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: named, Lost: lost,
+		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
+		Forbid: in.Forbid, Protect: in.Protect, RequireSkills: in.RequireSkills, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
+	}
 }
 
 // phaseOutput records how the agent of a phase ended.
 func phaseOutput(result agent.Result) PhaseOutput {
 	return PhaseOutput{
 		Outcome: result.Outcome, ExitCode: result.ExitCode, Note: result.Note, Session: result.Session, Transcript: result.Transcript,
-		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Spend: result.Spend,
+		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Spend: result.Spend, Limit: result.Limit, Resumed: result.Resumed,
 	}
+}
+
+// sessionEvent is the key of the event in which a phase saves the session id of its agent while the agent runs. A lost step records no output,
+// and the event outlives the loss. A rewind of the phase drops the event with the agent step that wrote it.
+const sessionEvent = "session"
+
+// saveSession starts the saver that writes the session ids of the agent as the event of the phase, from the context of the agent step.
+// The library writes the event of a step at once, with no step of its own. Each write is logged. A refused write lets the run go on: a replay of a lost step then starts fresh.
+// While the store is down, the library retries the write until the step ends. Only the saver waits then, so the agent and the reading of its output go on.
+func (e *Engine) saveSession(ctx context.Context, in PhaseInput) *sessionSaver {
+	// The library runs every step body with a context of its own. Any other context leaves step nil, and the write then fails and is logged.
+	var step dbos.Context
+	if c, isStep := ctx.(dbos.Context); isStep {
+		step = c
+	}
+
+	return startSessionSaver(func(session string) {
+		if err := dbos.SetEvent(step, sessionEvent, session); err != nil {
+			e.logger.WarnContext(ctx, "cannot save the session of the agent", "item", in.Item, "session", session, "error", err)
+
+			return
+		}
+
+		e.logger.InfoContext(ctx, "saved the session of the agent", "item", in.Item, "session", session)
+	})
+}
+
+// sessionSaver writes the session ids of an agent on a goroutine of its own. The tap gives it each new id on the goroutine that reads the output of the agent,
+// so a write that waits for the store never stops that reading. Only the newest id waits for a write: the event keeps only the last value,
+// so an id that a newer one replaces before its write is not written.
+type sessionSaver struct {
+	write   func(session string)
+	mu      sync.Mutex
+	pending string
+	// wake holds one signal that an id waits. stop ends the goroutine after it writes the id that waits, and done closes when it ended.
+	wake, stop, done chan struct{}
+}
+
+// startSessionSaver starts the goroutine of a saver that writes each id with write. The caller must call finish once.
+func startSessionSaver(write func(session string)) *sessionSaver {
+	s := &sessionSaver{write: write, wake: make(chan struct{}, 1), stop: make(chan struct{}), done: make(chan struct{})}
+
+	go s.run()
+
+	return s
+}
+
+// name gives a new session id to the saver. It never waits for the write.
+func (s *sessionSaver) name(session string) {
+	s.mu.Lock()
+	s.pending = session
+	s.mu.Unlock()
+
+	select {
+	case s.wake <- struct{}{}:
+	default: // a signal waits already, and the write that it starts reads the newest id
+	}
+}
+
+// run writes the id that waits after each signal. Each turn checks the stop first: once finish closed it, the next turn writes the id that waits
+// and ends, even when a signal waits too.
+func (s *sessionSaver) run() {
+	defer close(s.done)
+
+	for {
+		select {
+		case <-s.stop:
+			s.flush()
+
+			return
+		default:
+		}
+
+		select {
+		case <-s.wake:
+			s.flush()
+		case <-s.stop: // the next turn writes the id that waits
+		}
+	}
+}
+
+// flush writes the id that waits, if one waits.
+func (s *sessionSaver) flush() {
+	s.mu.Lock()
+	session := s.pending
+	s.pending = ""
+	s.mu.Unlock()
+
+	if session != "" {
+		s.write(session)
+	}
+}
+
+// finish waits until the saver wrote the newest id and its goroutine ended, so the event is written before the step records its output.
+func (s *sessionSaver) finish() {
+	close(s.stop)
+	<-s.done
 }
 
 // recordGroup returns the function that writes the process group of an agent to the process file, under the id of the run. A failed write is logged.
@@ -224,13 +380,22 @@ type childResult[T any] struct {
 // settle returns the result of a child. The child run sees the stop of the engine before the context of the waiting run is canceled, and its error can arrive first.
 // An error that arrives after the engine stopped is the stop, not a failure of the phase: the run stays open for the next start.
 func (r childResult[T]) settle(engine dbos.Context) (T, error) { //nolint:ireturn // the result is the type of the child workflow
-	if r.err != nil && engine.Err() != nil {
+	if stop := engineStop(engine, r.err); stop != nil {
 		var none T
 
-		return none, stopError(engine)
+		return none, stop
 	}
 
 	return r.out, r.err
+}
+
+// engineStop is the stop error when err is set and the engine has stopped, and nil otherwise. It reads the context of the engine, which the library cancels before the context of any run.
+func engineStop(engine context.Context, err error) error {
+	if err != nil && engine.Err() != nil {
+		return stopError(engine)
+	}
+
+	return nil
 }
 
 // awaitResult waits for the result of a child workflow. A stop of the engine (its context) ends the wait without a failure, even when the error of the child comes first. A cancel of ctx ends the wait at once:
@@ -262,7 +427,13 @@ func stopError(ctx context.Context) error {
 
 // phaseEnd turns a phase that did not exit with code 0 into an error that names the step.
 // A run that a cap stopped (turns or dollars) is not a failure: the output `stop` names the cap and the workflow decides what follows.
-func phaseEnd(in PhaseInput, out PhaseOutput) error {
+// A run that a provider limit stopped is not a failure either: the item run waits for the reset and runs the call again, so the wait holds no slot of the queue.
+// Only a limit that no wait ends fails the phase (see limitEnd). now is the wall clock at the end of the run.
+func phaseEnd(in PhaseInput, out PhaseOutput, now time.Time) error {
+	if out.Outcome == agent.OutcomeLimited && out.Limit != nil {
+		return limitEnd(in, *out.Limit, now)
+	}
+
 	if out.Outcome == agent.OutcomeTurnCap || out.Outcome == agent.OutcomeBudgetCap {
 		return nil
 	}

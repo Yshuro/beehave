@@ -428,9 +428,9 @@ func TestQueue_AReplayReturnsTheRecordedRowsNotAFreshRead(t *testing.T) {
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, []string{"seen 21:ready"}, h.commands.ran(), "the rows recorded before the stop come back, whatever the tracker says now")
 }
 
@@ -457,7 +457,7 @@ func TestQueue_AStoreThatIsClosedFailsTheReadsOfTheRunsAndTheSlots(t *testing.T)
 	require.NoError(t, err)
 	require.NoError(t, engine.Shutdown())
 
-	_, err = engine.readQueue(t.Context(), testProject, "")
+	_, err = engine.readQueue(t.Context(), testProject, "", "")
 	require.ErrorContains(t, err, "count the open runs", "the slots are read before the rows, so the slots fail first")
 
 	_, err = engine.freeSlots()

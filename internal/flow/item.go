@@ -89,7 +89,12 @@ func (e *Engine) workHolding(ctx dbos.Context, in ItemInput, login string, taken
 		return ItemResult{}, err
 	}
 
-	result, err := e.runStar(ctx, in, login)
+	start, err := e.makeTree(ctx, in)
+	if err != nil {
+		return ItemResult{}, err
+	}
+
+	result, err := e.runStar(ctx, in, login, start)
 
 	if lost := e.claimCheck(id, in.Item); lost != nil {
 		return result, lost
@@ -115,6 +120,29 @@ func (e *Engine) firstTrust(ctx context.Context, id string, in ItemInput, taken 
 	}
 
 	return e.claimCheck(id, in.Item)
+}
+
+// makeTree makes the worktree of a round item before its workflow file runs, so the command and gate steps of the item run in the repository.
+// It returns the commit of the worktree, which every later step of the run makes a removed worktree again at. The step is recorded, so a resumed run
+// reads the same commit and does not run it again. Any other item, and a round item of a project with no repository, gets no step and an empty commit.
+func (e *Engine) makeTree(ctx dbos.Context, in ItemInput) (string, error) {
+	if model.ItemKind(in.Item) != model.KindRound || !e.hasRepository(in.Project) {
+		return "", nil
+	}
+
+	start, err := runStep(e, ctx, treeMakeStepName, func(c context.Context) (string, error) {
+		dir, err := e.deps.Trees.Ensure(c, in.Project, in.Item, "")
+		if err != nil {
+			return "", err
+		}
+
+		return folderHead(c, dir)
+	})
+	if err != nil {
+		return "", fmt.Errorf("%s of item %s: %w", treeMakeStepName, in.Item, err)
+	}
+
+	return start, nil
 }
 
 // remember reads the last renewal of the lease of the claim of the owner from the claim store and keeps it with the claim of the run. A read that fails is logged
@@ -301,7 +329,7 @@ func (e *Engine) receiveAnswer(ctx dbos.Context, deadline time.Duration) (answer
 	}
 
 	for {
-		answer, err = dbos.Recv[string](ctx, ownerTopic, cmp.Or(e.deps.Clock.OwnerWait, ownerWaitLimit))
+		answer, err = dbos.Recv[string](ctx, ownerTopic, e.waitWindow())
 		if !errors.Is(err, context.DeadlineExceeded) {
 			return answer, false, err
 		}

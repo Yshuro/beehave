@@ -1,0 +1,72 @@
+package flow
+
+import (
+	"errors"
+	"fmt"
+
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
+)
+
+// slotQueuePrefix starts the name of the queue of a slot class.
+const slotQueuePrefix = "slots:"
+
+// errNoSlots is the refusal of a command call with `slots` when the build has no slot classes.
+var errNoSlots = errors.New("the build has no slot classes, so a command call cannot name `slots`")
+
+// SlotGrant is what a host gives to a slot class: the host that runs the job, and how many jobs of the class it runs at once.
+type SlotGrant struct {
+	Host  string
+	Count int
+}
+
+// queueSlotCommand runs the command of request as a host job and waits for it. At most Count jobs of the class of the request run on the host at once:
+// the jobs of one class share one queue, and the host is the partition of that queue, so a job of another class or of no class never waits for them.
+// The engine knows the class by its name only. The host block of the project gives the count.
+func (e *Engine) queueSlotCommand(run dbos.Context, request CommandRequest) (CommandOutput, error) {
+	grant, queue, err := e.grantOf(request)
+	if err != nil {
+		return CommandOutput{}, err
+	}
+
+	in := ExclusiveInput{Kind: kindCommand, Project: request.Project, Item: request.Item, HostKey: hostKeyPrefix + grant.Host, Request: request}
+
+	var out ExclusiveOutput
+
+	if err = e.runJob(run, in, queue, &out); err != nil {
+		return CommandOutput{}, err
+	}
+
+	return out.Command, nil
+}
+
+// grantOf asks the build for the host and the count of the slot class of request, and returns the queue of the class.
+func (e *Engine) grantOf(request CommandRequest) (SlotGrant, dbos.Queue, error) { //nolint:ireturn // the queue type of the workflow library
+	if e.deps.Slots == nil {
+		return SlotGrant{}, nil, errNoSlots
+	}
+
+	grant, err := e.deps.Slots(request.Project, request.BuildHost, request.SlotClass)
+	if err != nil {
+		return SlotGrant{}, nil, err
+	}
+
+	queue, err := e.slotQueue(request.SlotClass, grant.Count)
+
+	return grant, queue, err
+}
+
+// slotQueue registers the queue of a slot class with its count, and returns it. The queue allows count jobs at once for each host.
+// The registration is saved: a count that the host block changed takes effect at the next call, and a job already queued keeps its place.
+func (e *Engine) slotQueue(class string, count int) (dbos.Queue, error) { //nolint:ireturn // the queue type of the workflow library
+	options := []dbos.QueueOption{dbos.WithPartitionConcurrency(count)}
+	if poll := e.deps.Clock.Poll; poll > 0 {
+		options = append(options, dbos.WithQueueBasePollingInterval(poll))
+	}
+
+	queue, err := dbos.RegisterQueue(e.ctx, slotQueuePrefix+class, options...)
+	if err != nil {
+		return nil, fmt.Errorf("register the queue of the slot class %q: %w", class, err)
+	}
+
+	return queue, nil
+}

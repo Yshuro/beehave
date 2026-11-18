@@ -180,7 +180,12 @@ const nullWord = "null"
 
 // Summary returns `<path>:<line> <author>: <comment>`, with null for a missing part, as jq prints it.
 func (t ReviewThread) Summary() string {
-	path, line := nullWord, nullWord
+	return t.Where() + ": " + t.Comment()
+}
+
+// Where returns `<path>:<line> <author>`, with null for a missing part.
+func (t ReviewThread) Where() string {
+	path, line, author := nullWord, nullWord, nullWord
 	if t.Path != nil {
 		path = *t.Path
 	}
@@ -189,13 +194,20 @@ func (t ReviewThread) Summary() string {
 		line = strconv.Itoa(*t.Line)
 	}
 
-	author, body := nullWord, nullWord
 	if t.First != nil {
 		author = OrNull(t.First.Author.Login)
-		body = firstRunes(t.First.Body)
 	}
 
-	return path + ":" + line + " " + author + ": " + body
+	return path + ":" + line + " " + author
+}
+
+// Comment returns at most threadCommentWidth characters of the first comment, and null when there is none.
+func (t ReviewThread) Comment() string {
+	if t.First == nil {
+		return nullWord
+	}
+
+	return firstRunes(t.First.Body)
 }
 
 func firstRunes(text *string) string {

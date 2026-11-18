@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -185,19 +184,15 @@ func TestRunStar_ACancelDuringAWaitShowsTheRunAsCancelled(t *testing.T) {
 	client := h.client(t, testVersion)
 	done := runInBackground2(engine, writeFlow(t, bodyFlow("wait(question = \"go?\")\ncommand(run = [\"after\"])")))
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
 
-	select {
-	case outcome := <-done:
-		// The library returns the cancel in one of two forms, by which side sees it first: the step's own context error, or the cancel row that the result poll reads.
-		// Only the form with the context error carries context.Canceled, so both count as the cancel.
-		require.Error(t, outcome.err)
-		assert.True(t, errors.Is(outcome.err, context.Canceled) || errors.Is(outcome.err, dbos.ErrWorkflowCancelled), "the run ended with %v, not a cancel", outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the cancel")
-	}
+	// The library returns the cancel in one of two forms, by which side sees it first: the step's own context error, or the cancel row that the result poll reads.
+	// Only the form with the context error carries context.Canceled, so both count as the cancel.
+	outcome := receive(t, done)
+	require.Error(t, outcome.err)
+	assert.True(t, errors.Is(outcome.err, context.Canceled) || errors.Is(outcome.err, dbos.ErrWorkflowCancelled), "the run ended with %v, not a cancel", outcome.err)
 
 	infos, err := client.Status()
 	require.NoError(t, err)

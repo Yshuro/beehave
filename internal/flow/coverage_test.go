@@ -277,7 +277,7 @@ func TestClock_AfterStartsTheFunctionAndItsStopFunctionCancelsIt(t *testing.T) {
 	fired := make(chan struct{})
 
 	clock{}.after(time.Millisecond, func() { close(fired) })
-	<-fired
+	receive(t, fired)
 
 	stop := clock{}.after(time.Hour, func() { t.Error("a stopped timer fires") })
 	stop()
@@ -318,9 +318,9 @@ func TestTick_TheRealTickerRenewsAHeldClaim(t *testing.T) {
 		close(ended)
 	}()
 
-	eventually(t, func() bool { return len(harness.beats.seen()) > 0 })
+	waitOn(t, condition(func() bool { return len(harness.beats.seen()) > 0 }))
 	close(stop)
-	<-ended
+	receive(t, ended)
 
 	assert.Equal(t, testProject+"/"+testOwner+testItem, harness.beats.seen()[0])
 }
@@ -366,7 +366,7 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 	require.ErrorContains(t, engine.deleteOldRuns(), "list the finished runs")
 	engine.retain()
 
-	_, err = engine.Run(testItem, testProject)
+	_, err = engine.handleFor(ItemInput{Item: testItem, Project: testProject})
 	require.ErrorContains(t, err, "list the runs of item 12")
 
 	// Outside a workflow the run id is empty: hold a trusted claim under it, so the guard on the phase start passes.
@@ -380,9 +380,53 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 
 	_, err = engine.awaitClaim(t.Context(), PhaseInput{Run: "run-gone", Item: testItem})
 	require.ErrorContains(t, err, "read run run-gone")
+}
 
-	_, err = engine.phase(engine.ctx, PhaseInput{Item: testItem, Project: testProject, Login: testLogin})
+// stepsOfOneFail is a store whose list of the steps of one workflow fails. Each other read goes to the store.
+type stepsOfOneFail struct {
+	dbos.Context
+
+	id string
+}
+
+func (s *stepsOfOneFail) GetWorkflowSteps(_ dbos.Client, id string, opts ...dbos.GetWorkflowStepsOption) ([]dbos.StepInfo, error) {
+	if id == s.id {
+		return nil, errors.New("the store failed")
+	}
+
+	return dbos.GetWorkflowSteps(s.Context, id, opts...)
+}
+
+func TestPhase_AListOfEarlierStartsThatCannotBeReadFailsThePhaseAfterItsLookAtTheCaps(t *testing.T) {
+	t.Parallel()
+
+	const phaseID = "item-12-r1-phase"
+
+	var store dbos.Context
+
+	// No cap is set, so the look reads nothing. The list of the earlier starts of this one phase fails.
+	engine := newHarness(t).engineWith(t, func(e *Engine) {
+		store = e.ctx
+		e.ctx = &stepsOfOneFail{Context: e.ctx, id: phaseID}
+		e.holds.add(runID(testItem, 1), claimHold{renewed: time.Now()})
+	})
+
+	handle, err := dbos.RunWorkflow(engine.ctx, engine.phase, PhaseInput{Run: runID(testItem, 1), Item: testItem, Project: testProject, Login: testLogin},
+		dbos.WithWorkflowID(phaseID), dbos.WithQueue(engine.queue), dbos.WithQueuePartitionKey(testLogin))
+	require.NoError(t, err)
+
+	_, err = handle.GetResult()
 	require.ErrorContains(t, err, "read the steps of the agent step")
+
+	steps, err := dbos.GetWorkflowSteps(store, phaseID)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(steps))
+	for _, step := range steps {
+		names = append(names, step.StepName)
+	}
+
+	assert.Equal(t, []string{capLookStepName}, names, "the look ran as a step of the phase, and no start mark followed")
 }
 
 func TestMarkStarts_ReportsAStartThatIsNotInAWorkflow(t *testing.T) {
@@ -393,7 +437,7 @@ func TestMarkStarts_ReportsAStartThatIsNotInAWorkflow(t *testing.T) {
 
 	t.Cleanup(func() { assert.NoError(t, engine.Shutdown()) })
 
-	_, err = engine.markStarts(engine.ctx, PhaseInput{Item: testItem})
+	_, _, err = engine.markStarts(engine.ctx, PhaseInput{Item: testItem})
 	require.Error(t, err, "outside a workflow the start mark is not a step")
 }
 
@@ -570,11 +614,11 @@ func TestClient_StatusReportsAQuestionThatIsNotText(t *testing.T) {
 
 	client := harness.client(t, testVersion)
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		_, err := client.Status()
 
 		return err != nil
-	})
+	}))
 
 	_, err = client.Status()
 	require.ErrorContains(t, err, "read the question of "+stuckItemID)
@@ -584,47 +628,65 @@ func TestClient_StatusReportsAQuestionThatIsNotText(t *testing.T) {
 	t.Log("the run is canceled and the context is shut down")
 }
 
-// stuckMerge sets a merge state that is not text, then waits for the owner.
-func stuckMerge(ctx dbos.Context, _ string) (string, error) {
-	if err := dbos.SetEvent(ctx, mergeKey, 42); err != nil {
-		return "", err
-	}
+// stuckEvent is a run that sets the event key to a number, which is not the shape that status reads, then waits for the owner.
+func stuckEvent(key string) func(dbos.Context, string) (string, error) {
+	return func(ctx dbos.Context, _ string) (string, error) {
+		if err := dbos.SetEvent(ctx, key, 42); err != nil {
+			return "", err
+		}
 
-	return dbos.Recv[string](ctx, ownerTopic, time.Minute)
+		return dbos.Recv[string](ctx, ownerTopic, time.Minute)
+	}
 }
 
-func TestClient_StatusReportsAMergeStateThatIsNotText(t *testing.T) {
+func TestClient_StatusReportsAnEventThatIsNotInItsShape(t *testing.T) {
 	t.Parallel()
 
-	harness := newHarness(t)
-	state, err := openStore(harness.opts)
-	require.NoError(t, err)
+	tests := []struct {
+		name string
+		key  string
+		want string
+	}{
+		{"a_merge_state_that_is_not_text", mergeKey, "read the merge state of " + stuckItemID},
+		{"a_lost_job_that_is_not_an_object", lostJobKey, "read the lost gate job of " + stuckItemID},
+	}
 
-	t.Cleanup(func() { _ = state.log.Close() })
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	flowCtx, err := dbos.NewContext(t.Context(), dbos.Config{
-		AppName: appName, DatabaseURL: state.url, ApplicationVersion: applicationVersion(testVersion), ExecutorID: executorName,
-	})
-	require.NoError(t, err)
+			harness := newHarness(t)
+			state, err := openStore(harness.opts)
+			require.NoError(t, err)
 
-	dbos.RegisterWorkflow(flowCtx, stuckMerge, dbos.WithWorkflowName(itemName))
-	require.NoError(t, dbos.Launch(flowCtx))
+			t.Cleanup(func() { _ = state.log.Close() })
 
-	_, err = dbos.RunWorkflow(flowCtx, stuckMerge, stuckItemName, dbos.WithWorkflowID(stuckItemID))
-	require.NoError(t, err)
+			flowCtx, err := dbos.NewContext(t.Context(), dbos.Config{
+				AppName: appName, DatabaseURL: state.url, ApplicationVersion: applicationVersion(testVersion), ExecutorID: executorName,
+			})
+			require.NoError(t, err)
 
-	client := harness.client(t, testVersion)
+			stuck := stuckEvent(tc.key)
+			dbos.RegisterWorkflow(flowCtx, stuck, dbos.WithWorkflowName(itemName))
+			require.NoError(t, dbos.Launch(flowCtx))
 
-	eventually(t, func() bool {
-		_, err := client.Status()
+			_, err = dbos.RunWorkflow(flowCtx, stuck, stuckItemName, dbos.WithWorkflowID(stuckItemID))
+			require.NoError(t, err)
 
-		return err != nil
-	})
+			client := harness.client(t, testVersion)
 
-	_, err = client.Status()
-	require.ErrorContains(t, err, "read the merge state of "+stuckItemID)
-	require.NoError(t, dbos.CancelWorkflow(flowCtx, stuckItemID))
-	require.NoError(t, dbos.Shutdown(flowCtx, shutdownTimeout))
+			waitOn(t, condition(func() bool {
+				_, err := client.Status()
+
+				return err != nil
+			}))
+
+			_, err = client.Status()
+			require.ErrorContains(t, err, tc.want)
+			require.NoError(t, dbos.CancelWorkflow(flowCtx, stuckItemID))
+			require.NoError(t, dbos.Shutdown(flowCtx, shutdownTimeout))
+		})
+	}
 }
 
 func TestClient_CommandsReportAStoreThatIsGone(t *testing.T) {

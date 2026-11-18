@@ -44,10 +44,14 @@ func TestWait_AQuorumOfNamedPeopleEndsTheWait(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	eventually(t, func() bool { a := askedOf(t, client); return a != nil && len(a.Heard) == 1 })
+	waitOn(t, waiting[struct{}]{what: "the run to show one voice heard", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		a := askedOf(t, client)
+
+		return struct{}{}, a != nil && len(a.Heard) == 1, nil
+	}})
 
 	asked := askedOf(t, client)
 	assert.Equal(t, []string{"ana", "bo", "cy"}, asked.From)
@@ -57,7 +61,7 @@ func TestWait_AQuorumOfNamedPeopleEndsTheWait(t *testing.T) {
 
 	require.NoError(t, client.AnswerAs(testItem, "cy", "no"))
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 }
@@ -71,8 +75,8 @@ func TestWait_AnAnswerFromSomeoneNotNamedIsRefused(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
-	eventually(t, func() bool { return askedOf(t, client) != nil })
+	waitOn(t, ownerAsks(t, harness))
+	waitOn(t, waiting[struct{}]{what: "the run to show who it asks", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, askedOf(t, client) != nil, nil }})
 
 	require.ErrorContains(t, client.AnswerAs(testItem, "dee", "yes"), `"dee" is not one of the people this wait asks: ana, bo, cy`)
 	require.ErrorContains(t, client.AnswerAs(testItem, "", "yes"), "name yourself with --as: ana, bo, cy")
@@ -80,7 +84,7 @@ func TestWait_AnAnswerFromSomeoneNotNamedIsRefused(t *testing.T) {
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
 	require.NoError(t, client.AnswerAs(testItem, "bo", "no"))
-	<-done
+	receive(t, done)
 }
 
 func TestWait_AnAnswerOutsideTheChoicesIsRefused(t *testing.T) {
@@ -92,15 +96,15 @@ func TestWait_AnAnswerOutsideTheChoicesIsRefused(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
-	eventually(t, func() bool { return askedOf(t, client) != nil })
+	waitOn(t, ownerAsks(t, harness))
+	waitOn(t, waiting[struct{}]{what: "the run to show who it asks", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, askedOf(t, client) != nil, nil }})
 
 	require.ErrorContains(t, client.AnswerAs(testItem, "ana", "maybe"), `"maybe" is not one of the choices: yes, no`)
 	assert.Empty(t, askedOf(t, client).Heard)
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
 	require.NoError(t, client.AnswerAs(testItem, "bo", "no"))
-	<-done
+	receive(t, done)
 }
 
 func TestWait_ASecondAnswerOfOnePersonReplacesTheFirstAndCountsOnce(t *testing.T) {
@@ -116,12 +120,16 @@ func TestWait_ASecondAnswerOfOnePersonReplacesTheFirstAndCountsOnce(t *testing.T
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
-	eventually(t, func() bool { return askedOf(t, client) != nil })
+	waitOn(t, ownerAsks(t, harness))
+	waitOn(t, waiting[struct{}]{what: "the run to show who it asks", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, askedOf(t, client) != nil, nil }})
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "first"))
 	require.NoError(t, client.AnswerAs(testItem, "ana", "second"))
-	eventually(t, func() bool { a := askedOf(t, client); return a != nil && len(a.Heard) == 1 })
+	waitOn(t, waiting[struct{}]{what: "the run to show one voice heard", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		a := askedOf(t, client)
+
+		return struct{}{}, a != nil && len(a.Heard) == 1, nil
+	}})
 
 	select {
 	case <-done:
@@ -131,7 +139,7 @@ func TestWait_ASecondAnswerOfOnePersonReplacesTheFirstAndCountsOnce(t *testing.T
 
 	require.NoError(t, client.AnswerAs(testItem, "bo", "ok"))
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestWait_AnAnswerWithNoNamesNeedsNoName(t *testing.T) {
@@ -147,14 +155,14 @@ func TestWait_AnAnswerWithNoNamesNeedsNoName(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
-	eventually(t, func() bool { return askedOf(t, client) != nil })
+	waitOn(t, ownerAsks(t, harness))
+	waitOn(t, waiting[struct{}]{what: "the run to show who it asks", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, askedOf(t, client) != nil, nil }})
 
 	require.ErrorContains(t, client.Answer(testItem, "c"), `"c" is not one of the choices: a, b`)
 	require.ErrorContains(t, client.AnswerAs(testItem, "ana", "b"), "this wait names no people")
 	require.NoError(t, client.Answer(testItem, "b"))
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestWait_AWaitWithNoNamesRefusesAName(t *testing.T) {
@@ -166,11 +174,11 @@ func TestWait_AWaitWithNoNamesRefusesAName(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	require.ErrorContains(t, client.AnswerAs(testItem, "ana", "yes"), "this wait names no people")
 	require.NoError(t, client.Answer(testItem, "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestWait_ADeadlineEndsAQuorumThatNobodyReached(t *testing.T) {
@@ -199,16 +207,20 @@ func TestWait_ADeadlineEndsAQuorumThatNobodyReached(t *testing.T) {
 		ended <- runErr
 	}()
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
 	client := h.client(t, testVersion)
-	eventually(t, func() bool { return askedOf(t, client) != nil })
+	waitOn(t, waiting[struct{}]{what: "the run to show who it asks", run: runOfEngine(t, first), read: func() (struct{}, bool, error) { return struct{}{}, askedOf(t, client) != nil, nil }})
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	eventually(t, func() bool { a := askedOf(t, client); return a != nil && len(a.Heard) == 1 })
+	waitOn(t, waiting[struct{}]{what: "the run to show one voice heard", run: runOfEngine(t, first), read: func() (struct{}, bool, error) {
+		a := askedOf(t, client)
+
+		return struct{}{}, a != nil && len(a.Heard) == 1, nil
+	}})
 
 	stop()
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
+	require.Error(t, receive(t, ended))
 
 	past := base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(time.Now().Add(-time.Second).UnixMilli(), 10)))
 	// The deadline of the wait and the end of the receive that DBOS recorded for the second voice are both moved.
@@ -218,7 +230,7 @@ func TestWait_ADeadlineEndsAQuorumThatNobodyReached(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, rows, int64(2), "the wait recorded its deadline and the end of its receive")
 
-	require.NoError(t, (<-runInBackground(h.engine(t), testItem)).err)
+	require.NoError(t, receive(t, runInBackground(h.engine(t), testItem)).err)
 }
 
 func TestWait_AReplayCountsTheSameAnswers(t *testing.T) {
@@ -239,25 +251,33 @@ func TestWait_AReplayCountsTheSameAnswers(t *testing.T) {
 		ended <- runErr
 	}()
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
 	client := h.client(t, testVersion)
-	eventually(t, func() bool { return askedOf(t, client) != nil })
+	waitOn(t, waiting[struct{}]{what: "the run to show who it asks", run: runOfEngine(t, first), read: func() (struct{}, bool, error) { return struct{}{}, askedOf(t, client) != nil, nil }})
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	eventually(t, func() bool { a := askedOf(t, client); return a != nil && len(a.Heard) == 1 })
+	waitOn(t, waiting[struct{}]{what: "the run to show one voice heard", run: runOfEngine(t, first), read: func() (struct{}, bool, error) {
+		a := askedOf(t, client)
+
+		return struct{}{}, a != nil && len(a.Heard) == 1, nil
+	}})
 
 	// The engine stops as a crash would, with the first answer recorded and the quorum not reached.
 	stop()
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
+	require.Error(t, receive(t, ended))
 
 	next := h.engine(t)
 	done := runInBackground(next, testItem)
 
-	eventually(t, func() bool { a := askedOf(t, client); return a != nil && len(a.Heard) == 1 })
+	waitOn(t, waiting[struct{}]{what: "the run to show one voice heard", run: runOfEngine(t, next), read: func() (struct{}, bool, error) {
+		a := askedOf(t, client)
+
+		return struct{}{}, a != nil && len(a.Heard) == 1, nil
+	}})
 	require.NoError(t, client.AnswerAs(testItem, "cy", "no"))
 
-	require.NoError(t, (<-done).err, "the replay counts the answer of ana from its record and the new answer of cy")
+	require.NoError(t, receive(t, done).err, "the replay counts the answer of ana from its record and the new answer of cy")
 }
 
 func TestWait_ARecordFromBeforeTheChangeReadsAnswersAsEmpty(t *testing.T) {
@@ -287,11 +307,11 @@ func TestWait_TheAskEventHoldsTheQuestionToo(t *testing.T) {
 	client := h.client(t, testVersion)
 	done := runInBackground(engine, testItem)
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 	require.NotNil(t, askedOf(t, client))
 	assert.Equal(t, "Ship it?", askedOf(t, client).Question)
 	require.NoError(t, client.AnswerAs(testItem, "", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 // A wait that asks people opens with one write and ends with one write, both to the ask event. It never writes the question event, so no moment shows
@@ -305,7 +325,7 @@ func TestWait_AWaitWithPeopleOpensAndEndsInOneEvent(t *testing.T) {
 	client := h.client(t, testVersion)
 	done := runInBackground(engine, testItem)
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
 	question, err := client.questionOf(testRun)
 	require.NoError(t, err)
@@ -313,7 +333,7 @@ func TestWait_AWaitWithPeopleOpensAndEndsInOneEvent(t *testing.T) {
 	require.NotEmpty(t, askedOf(t, client).Wait, "the ask event names its wait")
 
 	require.NoError(t, client.AnswerAs(testItem, "", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	asked, err := dbos.GetEvent[Asked](client.flow, testRun, askKey, time.Second)
 	require.NoError(t, err)
@@ -341,23 +361,38 @@ func TestWait_ALateVoiceOfAnEarlierWaitIsNotCounted(t *testing.T) {
 	client := h.client(t, testVersion)
 	done := runInBackground(engine, testItem)
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
-	eventually(t, func() bool { a := askedOf(t, client); return a != nil && a.Question == "First?" })
+	waitOn(t, waiting[struct{}]{what: "the run to ask the first question", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		a := askedOf(t, client)
+
+		return struct{}{}, a != nil && a.Question == "First?", nil
+	}})
 
 	first := askedOf(t, client).Wait
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "first"))
-	eventually(t, func() bool { a := askedOf(t, client); return a != nil && a.Question == "Second?" })
+	waitOn(t, waiting[struct{}]{what: "the run to ask the second question", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		a := askedOf(t, client)
+
+		return struct{}{}, a != nil && a.Question == "Second?", nil
+	}})
 	require.NotEqual(t, first, askedOf(t, client).Wait, "each wait has its own id")
 
 	require.NoError(t, dbos.Send(client.flow, testRun, voice{Wait: first, From: "ana", Text: "stale"}, voiceTopic))
-	time.Sleep(100 * time.Millisecond)
+	// The run drops the stale voice: no message of the run waits unconsumed.
+	waitOn(t, waiting[struct{}]{what: "the run to consume the stale voice", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		pending, err := runOfEngine(t, engine).messagePending()
 
-	assert.Empty(t, askedOf(t, client).Heard, "the vote of the first wait is not a vote of the second")
+		return struct{}{}, !pending, err
+	}})
+
+	asked := askedOf(t, client)
+	require.NotNil(t, asked, "the second wait is still open")
+	assert.Empty(t, asked.Heard, "the vote of the first wait is not a vote of the second")
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "second"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestStatus_AWaitThatNamesPeopleShowsItsDeadline(t *testing.T) {
@@ -370,11 +405,11 @@ func TestStatus_AWaitThatNamesPeopleShowsItsDeadline(t *testing.T) {
 
 	before := time.Now()
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
-	eventually(t, func() bool { return !onlyRun(t, client).Deadline.IsZero() })
+	waitOn(t, waiting[struct{}]{what: "the run to show its deadline", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, !onlyRun(t, client).Deadline.IsZero(), nil }})
 	assert.WithinDuration(t, before.Add(time.Hour), onlyRun(t, client).Deadline, time.Minute)
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }

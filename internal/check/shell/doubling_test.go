@@ -1,14 +1,11 @@
-package shell_test
+package shell
 
 import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
-
-	"github.com/tobocop2/beehave/internal/check/shell"
 )
 
 // doublingScript sets a chain of variables that each double the one before, so the last one is near the size cap, and uses the last one n times.
@@ -26,29 +23,26 @@ func doublingScript(n int) string {
 	return script.String()
 }
 
-// timeOf returns how long a scan of the script takes and its findings.
-func timeOf(script string) (time.Duration, int) {
-	start := time.Now()
-	findings := shell.Scan(script)
+// readsOf returns how many shell strings a scan of the script reads behind a wrapper, and how many findings it returns.
+func readsOf(script string) (int, int) {
+	s := newScanner()
+	s.prepass(script)
+	s.scanZsh(script)
+	s.scan(script, false)
 
-	return time.Since(start), len(findings)
+	return s.reads, len(dedupe(s.findings))
 }
 
-// The scan reads the value of the last variable once, however many times the script uses it.
-// The bound is a multiple of the time of one use, so a slow host or a race build moves both sides.
-// Before the fix, 3000 uses cost 3000 times one use; now they cost under 100 times.
+// The scan reads the remote text of the last variable once, however many times the script uses it.
+// The test counts the reads, so the result does not depend on the speed of the host.
+// Before the fix, each use read the same text again and the count grew with the uses.
 func TestScanUsesOfADoublingChainCostOneRead(t *testing.T) {
 	t.Parallel()
 
-	const (
-		uses       = 3000
-		multiple   = 500
-		oneUseTime = time.Millisecond
-	)
-
-	one, _ := timeOf(doublingScript(1))
-	many, findings := timeOf(doublingScript(uses))
+	one, _ := readsOf(doublingScript(1))
+	many, findings := readsOf(doublingScript(3000))
 
 	assert.Zero(t, findings)
-	assert.Less(t, many, multiple*max(one, oneUseTime))
+	assert.Positive(t, one, "the scan reads the remote text")
+	assert.Equal(t, one, many, "3000 uses read the same texts as one use")
 }

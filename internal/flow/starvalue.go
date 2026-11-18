@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 
-	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
@@ -24,12 +24,34 @@ type stepResult struct {
 	Stopped *Stopped       `json:"stopped,omitempty"`
 }
 
+// UnmarshalJSON reads a recorded step with each number kept as a json.Number, so that a replay holds the digits and the int or float kind
+// that the first run recorded. A plain decode would turn every number into a float64.
+func (r *stepResult) UnmarshalJSON(data []byte) error {
+	type plain stepResult
+
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+
+	var decoded plain
+
+	if err := decoder.Decode(&decoded); err != nil {
+		return fmt.Errorf("decode a recorded step: %w", err)
+	}
+
+	*r = stepResult(decoded)
+
+	return nil
+}
+
 // script is the state of one run of a workflow file. The thread of the run calls its builtins one at a time on the workflow goroutine.
 type script struct {
 	e     *Engine
 	ctx   dbos.Context
 	in    ItemInput
 	login string
+	// treeStart is the commit that the recorded step made the worktree of a round item at. A step that finds the worktree removed makes it again there.
+	// It is empty for any other item.
+	treeStart string
 	// severity is the severity that the tracker gave the item, from the recorded fields of the run. It sets the place of the gates and the agent steps of the run in their queues.
 	severity model.Severity
 
@@ -40,9 +62,6 @@ type script struct {
 	counts map[string]int
 	// kinds is the table of step kinds that name accepts. It is nil, and so the table of the registry of the engine, unless a test sets it.
 	kinds []string
-
-	// spent is the sum of the costs that the agent steps of this run recorded so far, marks included. A replay adds the same recorded costs again in the same order.
-	spent agent.Spend
 
 	// merge and sentBack are what a merge builtin reported. They go into the result of the item.
 	mergeState, sentBack, closed string
@@ -103,8 +122,15 @@ func countedStep[T any](s *script, kind, label string, fn func(context.Context) 
 }
 
 func (s *script) countedName(builtin, label string) string {
+	name := s.nextName(builtin, label)
 	s.counts[builtin]++
-	n := strconv.Itoa(s.counts[builtin])
+
+	return name
+}
+
+// nextName is the name that the next call of builtin with label records, `<builtin>:<label>#<n>`. It counts nothing.
+func (s *script) nextName(builtin, label string) string {
+	n := strconv.Itoa(s.counts[builtin] + 1)
 
 	if label != "" {
 		builtin += ":" + label
@@ -178,7 +204,7 @@ func fields(outputs map[string]any) (starlark.StringDict, error) {
 }
 
 // toStarlark converts a recorded value through its JSON text with the decoder of the Starlark JSON library. A first run holds a Go int and
-// a replay holds a float64 from JSON. Both give the same Starlark int, and a dict keeps the key order of the text, which is sorted.
+// a replay holds a json.Number from the record. Both give the same Starlark int, and a dict keeps the key order of the text, which is sorted.
 func toStarlark(v any) (starlark.Value, error) { //nolint:ireturn // the value is any of the Starlark types
 	data, err := json.Marshal(v)
 	if err != nil {

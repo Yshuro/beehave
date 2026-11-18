@@ -24,13 +24,10 @@ import (
 
 // This file is the contract test of the claim policy over the claim store. The scenarios run against the fake bd of beadstest, which keeps
 // the fake honest, and against a real bd 1.3.2 with a private dolt server, which keeps the policy honest. The real run needs BEEHAVE_BD_132,
-// the path of a bd 1.3.2 binary, and `dolt` on PATH. Without the variable the real run is skipped. The scenarios of the claim store alone
-// are in internal/store, which may not import claim.
+// the path of a bd 1.3.2 binary, and `dolt` on PATH. Without the variable the real run is skipped, and in CI it fails. The scenarios of the claim
+// store alone are in internal/store, which may not import claim.
 
-const (
-	binaryVariable = "BEEHAVE_BD_132"
-	realPrefix     = "ct"
-)
+const realPrefix = "ct"
 
 // policyBackend is one bd the scenarios run against.
 // now is the clock the policy compares leases with. state reads what the tracker keeps for some rows, so a test can show that a call wrote nothing.
@@ -62,15 +59,12 @@ func fakePolicyBackend(t *testing.T) policyBackend {
 	return policyBackend{run: bd, prefix: "p", beads: beadsOver(t, bd), expire: expire, now: now, state: state}
 }
 
-// realPolicyBackend starts a private dolt server and a beads database on it. It skips when BEEHAVE_BD_132 is not set.
+// realPolicyBackend starts a private dolt server and a beads database on it. It skips when BEEHAVE_BD_132 is not set, and fails in CI.
 // Every command runs through env(1), so the test never changes the environment of the test process and can run in parallel.
 func realPolicyBackend(t *testing.T) policyBackend {
 	t.Helper()
 
-	binary := config.ProcessEnv()[binaryVariable]
-	if binary == "" {
-		t.Skip(binaryVariable + " is not set: the real bd contract test needs a bd 1.3.2 binary")
-	}
+	binary := beadstest.RealBd(t, config.ProcessEnv())
 
 	root := t.TempDir()
 	port := beadstest.StartDolt(t, root, "dolt")

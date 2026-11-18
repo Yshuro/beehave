@@ -43,7 +43,7 @@ func TestWait_ArgumentsThatOnlyTheRunCanReadAreRefused(t *testing.T) {
 			harness.flowIs(t, "none = []\nzero = 0\ntwo = 2\n\ndef main(item):\n    wait(question = \"q\", "+tc.call+")\n")
 			engine := harness.engine(t)
 
-			outcome := <-runInBackground(engine, testItem)
+			outcome := receive(t, runInBackground(engine, testItem))
 
 			require.ErrorContains(t, outcome.err, tc.want)
 		})
@@ -85,11 +85,11 @@ func TestClient_StatusAndAnswerReportAnAskThatIsNotARecord(t *testing.T) {
 
 	client := harness.client(t, testVersion)
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		_, statusErr := client.Status()
 
 		return statusErr != nil
-	})
+	}))
 
 	require.ErrorContains(t, client.Answer(stuckItemName, "go on"), "read who "+stuckItemID+" asks")
 	require.NoError(t, dbos.CancelWorkflow(flowCtx, stuckItemID))
@@ -105,15 +105,22 @@ func TestWait_AVoiceTheWaitRefusesIsDroppedAndAWindowWithNoVoiceReceivesAgain(t 
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
-	eventually(t, func() bool { return askedOf(t, client) != nil })
+	waitOn(t, ownerAsks(t, harness))
+	waitOn(t, waiting[struct{}]{what: "the run to show who it asks", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, askedOf(t, client) != nil, nil }})
 
-	time.Sleep(100 * time.Millisecond) // several windows of 20 ms end with no voice
+	// Several windows of 20 ms end with no voice.
+	before, err := runOfEngine(t, engine).windowsEnded()
+	require.NoError(t, err)
+	waitOn(t, windowsEndedBy(runOfEngine(t, engine), before+5))
 
 	require.NoError(t, dbos.Send(client.flow, testRun, voice{From: "zed", Text: "yes"}, voiceTopic))
-	time.Sleep(100 * time.Millisecond)
+
+	// The windows that end after the voice show that the run dropped it.
+	before, err = runOfEngine(t, engine).windowsEnded()
+	require.NoError(t, err)
+	waitOn(t, windowsEndedBy(runOfEngine(t, engine), before+3))
 	assert.Empty(t, askedOf(t, client).Heard, "a voice from someone not named counts for nothing")
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }

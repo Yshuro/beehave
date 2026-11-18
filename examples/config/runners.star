@@ -34,17 +34,21 @@ pool(
 # review_poll_minutes is the time between two polls of the open pull requests that wait for your
 # review or your reply. 0 means no poll, which is the default. The most is 10080 (one week).
 # `beehave status` shows the newest poll.
+# review_lookback_days is the number of days that the poll looks back for replies to answer. The default is 3. The least is 1. The most is 365.
+# per_login is the most agent steps that one login runs at once, in each of the two agent queues. The default is 1. The least is 1. The most is the lower of max_concurrent and max_review_concurrent.
 # retention_days is the age in days at which `beehave run` deletes a finished run with its recorded steps. The default is 7.
 # 0 keeps every finished run. The most is 36500. A failed or canceled run is never deleted.
 # Call agents() once.
 agents(
     max_concurrent = 2,
     # max_review_concurrent = 2,
+    # per_login = 1,
     # max_turns = 60,
     # max_budget_usd = 5,
     # max_run_budget_usd = 20,
     # max_tree_budget_usd = 100,
     # review_poll_minutes = 60,
+    # review_lookback_days = 3,
     # retention_days = 7,
 )
 

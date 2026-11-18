@@ -5,10 +5,13 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 // ownTemp points the temporary folder at a new folder and returns the folder that beehave owns for gate copies in it.
@@ -36,8 +39,8 @@ func readOnlyFolder(t *testing.T, path string) {
 
 	require.NoError(t, os.MkdirAll(filepath.Join(path, "sub"), 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(path, "sub", "f"), []byte("x"), 0o600))
-	require.NoError(t, os.Chmod(filepath.Join(path, "sub"), 0o500)) //nolint:gosec // a test folder
-	require.NoError(t, os.Chmod(path, 0o500))                       //nolint:gosec // a test folder
+	require.NoError(t, exectest.ChmodFolder(filepath.Join(path, "sub"), 0o500))
+	require.NoError(t, exectest.ChmodFolder(path, 0o500))
 }
 
 func entriesOf(t *testing.T, dir string) []string {
@@ -74,10 +77,10 @@ func TestGateSandbox_ACopyThatCannotBeRemovedIsNamedInTheOutput(t *testing.T) { 
 
 	root := ownTemp(t)
 	repo := repoWithCommit(t)
-	t.Cleanup(func() { assert.NoError(t, os.Chmod(root, 0o700)) }) //nolint:gosec // a test folder
+	t.Cleanup(func() { assert.NoError(t, exectest.ChmodFolder(root, 0o700)) })
 
 	// The gate takes the write right of the folder that holds the copy, so the copy cannot go.
-	fake := &fakeEnforcer{during: func(string) { require.NoError(t, os.Chmod(root, 0o500)) }} //nolint:gosec // a test folder
+	fake := &fakeEnforcer{during: func(string) { require.NoError(t, exectest.ChmodFolder(root, 0o500)) }}
 
 	out, code := sandboxFor(t, fake, nil).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
 
@@ -143,7 +146,7 @@ func TestGateSandbox_AFolderOfGatesThatAnotherUserCanWriteRunsNoCommand(t *testi
 	require.NoError(t, os.MkdirAll(root, 0o700))
 
 	for _, mode := range []os.FileMode{0o770, 0o707, 0o777} {
-		require.NoError(t, os.Chmod(root, mode))
+		require.NoError(t, exectest.ChmodFolder(root, mode))
 
 		enforcer := &fakeEnforcer{}
 		out, code := sandboxFor(t, enforcer, nil).run(t.Context(), "p", t.TempDir(), []string{"true"}, nil, 0)
@@ -164,7 +167,7 @@ func TestTrusted(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, os.Chmod(dir, 0o700)) //nolint:gosec // a test folder; a host with a group umask makes it group-writable
+	require.NoError(t, exectest.ChmodFolder(dir, 0o700)) // a host with a group umask makes the folder group-writable
 
 	info, err := os.Lstat(dir)
 	require.NoError(t, err)
@@ -189,8 +192,8 @@ func TestGateSandbox_AFolderOfGatesThatCannotBeListedOrWrittenRunsNoCommand(t *t
 	for name, mode := range map[string]os.FileMode{"list": 0o300, "write": 0o500} {
 		root := ownTemp(t)
 		require.NoError(t, os.MkdirAll(root, 0o700))
-		require.NoError(t, os.Chmod(root, mode))
-		t.Cleanup(func() { assert.NoError(t, os.Chmod(root, 0o700)) }) //nolint:gosec // a test folder
+		require.NoError(t, exectest.ChmodFolder(root, mode))
+		t.Cleanup(func() { assert.NoError(t, exectest.ChmodFolder(root, 0o700)) })
 
 		out, code := sandboxFor(t, &fakeEnforcer{}, nil).run(t.Context(), "p", t.TempDir(), []string{"true"}, nil, 0)
 
@@ -207,4 +210,19 @@ func TestOwnerAlive(t *testing.T) {
 	assert.False(t, ownerAlive("999999999-x"))
 	assert.False(t, ownerAlive("stray"))
 	assert.False(t, ownerAlive("0-x"))
+}
+
+func TestForgetCopies_AListThatFailsRemovesNoRecord(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	root := t.TempDir()
+	calls := filepath.Join(t.TempDir(), "calls")
+	// The failed listing still prints the path of a gate copy that is gone. A listing that failed is not trusted, so no record goes.
+	putGitOnPath(t, "#!/bin/sh\necho \"$*\" >> '"+calls+"'\necho 'worktree "+filepath.Join(root, "gone")+"'\necho 'fatal: not a git repository' >&2\nexit 128\n")
+
+	forgetCopies(t.Context(), t.TempDir(), root)
+
+	text, err := os.ReadFile(calls) //nolint:gosec // a file of the test
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(text)), "\n")
+	require.Len(t, lines, 1, "git ran the listing and nothing else")
+	assert.Contains(t, lines[0], "worktree list --porcelain")
 }

@@ -26,7 +26,7 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"agent text for a number", `agent(prompt = "p", model = "m", output_tries = "2")`, "output_tries must be an int, not a text."},
 		{"batch_merge unknown keyword", `batch_merge(prs = item.id, base = "b", repo = "r", name = "n", limit = 2)`, "batch_merge takes no argument limit"},
 		{"batch_merge missing base", `batch_merge(prs = item.id, repo = "r", name = "n")`, "batch_merge needs the `base` keyword"},
-		{"command unknown keyword", `command(run = ["a"], stop_on_code = [1])`, "command takes no argument stop_on_code. Use one of: run, host, stdin, env, timeout, stop_on_rc, max_new_processes, name."},
+		{"command unknown keyword", `command(run = ["a"], stop_on_code = [1])`, "command takes no argument stop_on_code. Use one of: run, host, stdin, env, timeout, stop_on_rc, max_new_processes, slots, name."},
 		{"command cap as text", `command(run = ["a"], max_new_processes = "5")`, "max_new_processes must be an int, not a text."},
 		{"command cap of zero", `command(run = ["a"], max_new_processes = 0)`, "command: max_new_processes must be a whole number from 1 to 100000."},
 		{"command cap below zero", `command(run = ["a"], max_new_processes = -3)`, "command: max_new_processes must be a whole number from 1 to 100000."},
@@ -38,7 +38,8 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"env missing name", `env()`, "env needs the `name` keyword"},
 		{"gate unknown keyword", `gate(runs = ["a"])`, "gate takes no argument runs"},
 		{"gate text for a list", `gate(run = "make check")`, "run must be a list, not a text."},
-		{"queue unknown keyword", `queue(name = "n", limit = 2)`, "queue takes no argument limit. Use one of: name, hold."},
+		{"queue unknown keyword", `queue(name = "n", limit = 2)`, "queue takes no argument limit. Use one of: name, hold, label."},
+		{"queue items is no argument", `queue(name = "n", items = ["1"])`, "queue takes no argument items. Use one of: name, hold, label."},
 		{"queue number for hold", `queue(name = "n", hold = 3)`, "hold must be a text, not an int."},
 		{"gather unknown keyword", `gather([], wait = True)`, "gather takes no argument wait"},
 		{"gather missing runs", `gather(fail = "raise")`, "gather needs the `runs` keyword"},
@@ -51,6 +52,9 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"item_comment missing key", `item_comment("1", "t")`, "item_comment needs the `key` keyword"},
 		{"item_create unknown keyword", `item_create("t", "k", label = "x")`, "item_create takes no argument label"},
 		{"item_create missing key", `item_create(title = "t")`, "item_create needs the `key` keyword"},
+		{"item_create text for shared", `item_create(title = "t", key = "k", shared = "yes")`, "shared must be a bool, not a text."},
+		{"pr_state missing pr", `pr_state(name = "s")`, "pr_state needs the `pr` keyword"},
+		{"pr_state text for pr", `pr_state(pr = "41")`, "pr must be an int, not a text."},
 		{"item_status unknown keyword", `item_status("1", "open", state = "x")`, "item_status takes no argument state"},
 		{"item_status missing status", `item_status(id = "1")`, "item_status needs the `status` keyword"},
 		{"item_status bad status", `item_status("1", "done")`, `status is "done". Use one of: open, closed, hold.`},
@@ -100,6 +104,7 @@ func TestCheck_AcceptsACallThatKeepsItsSignature(t *testing.T) {
 		`item_status("1", "hold")`,
 		`merge("h", children = "retarget", approved = True, own = {"logins": []})`,
 		`preflight(head = "h", base = "b", hold = "hold", name = "intake")`,
+		`queue(name = "n", hold = "hold", label = "beehave-round")`,
 		`spawn(["1"], name = "n")`,
 		`wait()`,
 	}
@@ -211,9 +216,10 @@ func TestUnpack_ReadsTheKeywordsOfTheSignature(t *testing.T) {
 	var (
 		run, env, codes, processes  starlark.Value
 		timeout, host, stdin, label string
+		slots                       starlark.Value
 	)
 
-	into := map[string]any{"run": &run, "host": &host, "stdin": &stdin, "env": &env, "timeout": &timeout, "stop_on_rc": &codes, "max_new_processes": &processes, "name": &label}
+	into := map[string]any{"run": &run, "host": &host, "stdin": &stdin, "env": &env, "timeout": &timeout, "stop_on_rc": &codes, "max_new_processes": &processes, "slots": &slots, "name": &label}
 
 	kwargs := []starlark.Tuple{{starlark.String("name"), starlark.String("n")}}
 	err := workflow.Unpack("command", starlark.Tuple{starlark.NewList(nil)}, kwargs, into)

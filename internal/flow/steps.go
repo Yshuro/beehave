@@ -13,6 +13,7 @@ import (
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -57,19 +58,27 @@ type StepLine struct {
 	Kind string `json:"kind,omitempty"`
 	// Rounds is the cap of the loop that an agent step named with its rounds keyword. It is 0 for a step that named none.
 	Rounds int `json:"rounds,omitempty"`
+	// Login is the runner that an agent step ran on: the pool pick, or the runner that the call named. An agent that an older version recorded has none.
+	Login string `json:"login,omitempty"`
+	// Model is the model that an agent step set. It is empty for a step that sets none.
+	Model string `json:"model,omitempty"`
 	// Spend is the cost of the agent runs of the call, failed runs included, with the marks of an estimate and of an unknown cost. It is empty for a step that is not an agent.
 	agent.Spend
 	Stop string `json:"stop,omitempty"`
 	// CapStop is set while the step waits for the owner to raise a cap.
 	CapStop *CapStop `json:"cap_stop,omitempty"`
-	Verdict string   `json:"verdict,omitempty"`
-	Head    string   `json:"head,omitempty"`
+	// LimitWait is set while the step waits for a provider limit to reset.
+	LimitWait *LimitWait `json:"limit_wait,omitempty"`
+	Verdict   string     `json:"verdict,omitempty"`
+	Head      string     `json:"head,omitempty"`
 	// Rewrote is set when the commit the agent started on is not in the history of its head: the agent amended, squashed or reset.
 	Rewrote bool       `json:"rewrote,omitempty"`
 	Passed  *bool      `json:"passed,omitempty"`
 	Gate    []GateStep `json:"gate,omitempty"`
 	// NewTests holds the names of the new tests that the gate of a candidate head found. It is empty for any other step.
 	NewTests []string `json:"new_tests,omitempty"`
+	// Revert is the verdict of the revert run of a candidate gate: pass or fail. It is empty for any other step.
+	Revert model.RevertVerdict `json:"revert,omitempty"`
 	// OutputUnreadable is set when a recorded output of the step did not decode into the type the engine wrote. The other fields are then incomplete.
 	OutputUnreadable bool `json:"output_unreadable,omitempty"`
 }
@@ -89,24 +98,46 @@ type RunSteps struct {
 
 // Steps lists the steps of one run from the store, with the outputs decoded. It reads the step listing of the workflow library and copies nothing.
 // A builtin call is one line, however many records it left. A step that runs now shows its elapsed time.
+// It is the view of one run, so it also counts the host losses of the tree of the run.
 func (c *Client) Steps(id string) (RunSteps, error) {
+	view, err := c.runSteps(id)
+	if err != nil {
+		return view, err
+	}
+
+	return view, c.addHostLosses(id, &view.RunProgress)
+}
+
+// runSteps is the view of one run with the figures that its own records give. The view of the lanes of an item reads each run with it and walks no tree.
+func (c *Client) runSteps(id string) (RunSteps, error) {
 	row, err := c.runRow(id)
 	if err != nil {
 		return RunSteps{}, err
 	}
 
-	records, err := c.records(id)
+	state := stateOf(row.Status)
+
+	records, lines, err := c.runView(id, state, !run{Status: row}.terminal())
 	if err != nil {
 		return RunSteps{}, err
 	}
-
-	state := stateOf(row.Status)
-	lines := stepLines(records, state, !run{Status: row}.terminal(), time.Now())
 
 	progress := progressOf(lines, c.maxRunBudget, !run{Status: row}.terminal())
 	progress.Deadline, err = c.waitDeadlineOf(row, records)
 
 	return RunSteps{Run: id, State: state, Error: errorText(row.Error), Steps: lines, RunProgress: progress}, err
+}
+
+// addHostLosses counts the host losses of the item tree of the run id into the progress, from the root of the tree, with the walk of the engine (walkTree).
+func (c *Client) addHostLosses(id string, progress *RunProgress) error {
+	root, err := rootRun(c.flow, id)
+	if err != nil {
+		return err
+	}
+
+	progress.HostLosses, err = hostLossesBelow(c.flow, root)
+
+	return err
 }
 
 // waitDeadlineOf reads the question of an open run once and returns the deadline of its wait. A finished run has none and reads nothing.
@@ -170,7 +201,10 @@ func withOutputs(records []dbos.StepInfo, outputs map[string]any) []dbos.StepInf
 	return records
 }
 
-// outputsOf reads the outputs of workflows by id.
+// passedLookOutput is the output that the view gives a phase that runs after its look at the caps passed: a phase output with no stop.
+const passedLookOutput = "{}"
+
+// outputsOf reads the outputs of workflows by id with outputOf.
 func (c *Client) outputsOf(ids []string) (map[string]any, error) {
 	rows, err := dbos.ListWorkflows(c.flow, dbos.WithFilterWorkflowIDs(ids...), dbos.WithFilterLoadOutput(true))
 	if err != nil {
@@ -179,10 +213,83 @@ func (c *Client) outputsOf(ids []string) (map[string]any, error) {
 
 	outputs := make(map[string]any, len(rows))
 	for _, row := range rows {
-		outputs[row.ID] = row.Output
+		if outputs[row.ID], err = c.outputOf(row); err != nil {
+			return outputs, err
+		}
 	}
 
 	return outputs, nil
+}
+
+// outputOf is the output of one workflow, or passedLookOutput for a phase that runs and whose look at the caps found no stop.
+func (c *Client) outputOf(row dbos.WorkflowStatus) (any, error) {
+	if row.Name != phaseName || row.Status != dbos.WorkflowStatusPending {
+		return row.Output, nil
+	}
+
+	steps, err := dbos.GetWorkflowSteps(c.flow, row.ID, dbos.WithStepsLoadOutput(true))
+	if err != nil {
+		return nil, fmt.Errorf("read the look at the caps of phase %s: %w", row.ID, err)
+	}
+
+	output := row.Output
+	if at := slices.IndexFunc(steps, func(step dbos.StepInfo) bool { return step.StepName == capLookStepName }); at >= 0 {
+		decodeThen(steps[at].Output, func(check capCheck) {
+			if check.Stop == nil {
+				output = passedLookOutput
+			}
+		})
+	}
+
+	return output, nil
+}
+
+// failedRunsStream is the stream of an item run that holds the cost of each agent run that failed. A rewind keeps the entries of a stream,
+// so beehave resume keeps the cost of the failed run that it runs again.
+const failedRunsStream = "failed_runs"
+
+// failedRun is one entry of the stream of failed runs: the agent call and the cost of the run.
+type failedRun struct {
+	Call string `json:"call"`
+	agent.Spend
+}
+
+// runView reads the step records of a run and makes its step lines with runLines. Each view of the client reads a run here.
+func (c *Client) runView(id string, state RunState, open bool) ([]dbos.StepInfo, []StepLine, error) {
+	records, err := c.records(id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	lines, err := runLines(c.flow, id, records, state, open, time.Now())
+
+	return records, lines, err
+}
+
+// runLines makes the step lines of a run from its records and adds the cost of each failed agent run from its stream. Every total of a cost reads
+// its lines here. The read of the stream is a snapshot, because a plain read waits until the run ends. The lines come back with an error of the read too.
+func runLines(ctx dbos.Client, id string, records []dbos.StepInfo, state RunState, open bool, now time.Time) ([]StepLine, error) {
+	runs, _, err := dbos.ReadStream[failedRun](ctx, id, failedRunsStream, dbos.WithReadStreamSnapshot())
+	if err != nil {
+		err = fmt.Errorf("read the cost of the failed agent runs of %s: %w", id, err)
+	}
+
+	return withFailedRuns(stepLines(records, state, open, now), runs), err
+}
+
+// withFailedRuns adds the cost of each failed run to the line of its call. A call that the run has not reached again since a resume gets a line of its own.
+func withFailedRuns(lines []StepLine, runs []failedRun) []StepLine {
+	for _, run := range runs {
+		at := slices.IndexFunc(lines, func(line StepLine) bool { return line.Name == run.Call })
+		if at < 0 {
+			lines = append(lines, StepLine{Name: run.Call, State: stepFailed})
+			at = len(lines) - 1
+		}
+
+		lines[at].Spend = lines[at].Plus(run.Spend)
+	}
+
+	return lines
 }
 
 // errorText is the text of an error, and empty for no error.
@@ -249,10 +356,14 @@ func callLine(group []dbos.StepInfo, name string) StepLine {
 	return line
 }
 
-// absorb adds the error and the decoded fields of one record to the line. The kind of the step picks the type that the record decodes into.
+// absorb adds the error and the decoded fields of one record to the line; a child workflow record ends a provider limit wait.
 func (l *StepLine) absorb(record dbos.StepInfo) {
 	if record.Error != nil && l.Error == "" {
 		l.Error, l.State = record.Error.Error(), stepFailed
+	}
+
+	if record.ChildWorkflowID != "" {
+		l.LimitWait = nil
 	}
 
 	if record.Output != nil && !l.decode(record) {
@@ -279,18 +390,42 @@ func (l *StepLine) decode(record dbos.StepInfo) bool {
 	return true
 }
 
-// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, or the cost record of a failed run. Any other sub-step decodes nothing.
+// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a stop at a cap, the cost record of a run whose limit step failed
+// (and of a failed run that agent module 3 or an earlier one recorded),
+// or the limit record of a run that a provider limit stopped. Any other sub-step decodes nothing.
 func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {
 	case strings.HasPrefix(sub, "read"):
+		// The cost comes through the reader of the run cap, so a cost that cannot be read marks the line, and the sum of a tree, unknown.
+		l.Spend = l.Plus(recordedSpend(output))
+
 		return decodeThen(output, func(read recorded[agentRead]) { l.fromAgentRead(read.Outputs) })
 	case strings.HasPrefix(sub, "budget"):
 		return decodeThen(output, func(check capCheck) { l.CapStop = check.Stop })
 	case strings.HasPrefix(sub, "spent"):
-		return decodeThen(output, func(spent recorded[agentFields]) { l.Spend = l.Plus(spent.Outputs.Spend) })
+		spend := recordedSpend(output)
+		l.Spend = l.Plus(spend)
+
+		return !spend.Unreadable
+	case strings.HasPrefix(sub, "limit"):
+		return l.fromLimit(output)
 	}
 
 	return true
+}
+
+// fromLimit takes the wait and the cost of a limited run from its limit record. A record that does not decode marks the cost of the line unknown and unreadable,
+// as a cost record that cannot be read does, so the caps never count it as 0.
+func (l *StepLine) fromLimit(output any) bool {
+	read := decodeThen(output, func(record limitRecord) {
+		l.Spend = l.Plus(record.Spend)
+		l.LimitWait = &record.LimitWait
+	})
+	if !read {
+		l.Spend = l.Plus(agent.Spend{Unknown: true, Unreadable: true})
+	}
+
+	return read
 }
 
 // builtinOf is the builtin that a step name belongs to: `command` for `command:lint#2`.
@@ -333,26 +468,28 @@ func decodeThen[T any](output any, use func(T)) bool {
 	return true
 }
 
-// fromPhase takes the exit code of the agent from the result of its phase, a child workflow. The result of the child workflow of a gate has no outcome.
+// fromPhase takes the stop at a cap and the exit code of the agent from the output of a phase; a gate's child output has no outcome.
 func (l *StepLine) fromPhase(phase PhaseOutput) {
+	l.CapStop = phase.CapStop
+
 	if phase.Outcome != "" {
 		l.ExitCode = &phase.ExitCode
 		l.Kind, l.Rounds = phase.Kind, phase.Rounds
+		l.Login, l.Model = phase.Login, phase.Model
 	}
 }
 
 // fromAgentRead takes the head, the cap that stopped the agent and the verdict from the read of its outputs.
 func (l *StepLine) fromAgentRead(read agentRead) {
 	l.Head, l.Stop, l.Verdict, l.Rewrote = read.Head, read.Stop, read.Verdict, read.Rewrote
-	l.Spend = l.Plus(read.Spend)
 }
 
-// fromGate takes the result of a gate: pass or fail, the head, the status of each gate step and the names of the new tests.
+// fromGate takes the result of a gate: pass or fail, the head, the status of each gate step, the names of the new tests and the revert verdict.
 func (l *StepLine) fromGate(result GateResult) {
 	l.Passed, l.Head, l.Gate = &result.Passed, cmp.Or(result.Head, l.Head), result.Steps
 
 	if result.Checks != nil {
-		l.NewTests = result.Checks.NewTests
+		l.NewTests, l.Revert = result.Checks.NewTests, result.Checks.Revert
 	}
 }
 

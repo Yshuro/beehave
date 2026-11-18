@@ -39,7 +39,7 @@ func TestRun_ListsTheOtherOrchestratorsAtTheStartAndStatusShowsThem(t *testing.T
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	infos, err := client.Status()
 	require.NoError(t, err)
@@ -49,7 +49,7 @@ func TestRun_ListsTheOtherOrchestratorsAtTheStartAndStatusShowsThem(t *testing.T
 
 	require.NoError(t, client.Cancel(testItem))
 	harness.tick(t)
-	<-done
+	receive(t, done)
 }
 
 func TestRun_WithNoOtherOrchestratorShowsNoneAndRuns(t *testing.T) {
@@ -58,7 +58,7 @@ func TestRun_WithNoOtherOrchestratorShowsNoneAndRuns(t *testing.T) {
 	harness := newHarness(t)
 	harness.others = &fakeOthers{}
 
-	outcome := <-runInBackground(harness.engine(t), testItem)
+	outcome := receive(t, runInBackground(harness.engine(t), testItem))
 
 	require.NoError(t, outcome.err)
 	assert.Len(t, harness.others.asked, 1)
@@ -99,11 +99,11 @@ func TestClient_StatusReportsOtherOrchestratorsThatAreNotText(t *testing.T) {
 
 	client := harness.client(t, testVersion)
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		_, err := client.Status()
 
 		return err != nil
-	})
+	}))
 
 	_, err = client.Status()
 	require.ErrorContains(t, err, "read the other orchestrators of "+stuckItemID)
@@ -117,7 +117,7 @@ func TestRun_FailsWhenTheOtherOrchestratorsCannotBeListed(t *testing.T) {
 	harness := newHarness(t)
 	harness.others = &fakeOthers{err: errFake}
 
-	outcome := <-runInBackground(harness.engine(t), testItem)
+	outcome := receive(t, runInBackground(harness.engine(t), testItem))
 
 	require.ErrorIs(t, outcome.err, errFake, "a failed read is not read as nobody else runs")
 }

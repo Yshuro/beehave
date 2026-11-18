@@ -88,19 +88,20 @@ const checkWorkflowLong = "Check that a workflow file and the files it loads par
 
 // runCheckedWorkflow refuses the calls that the named project cannot make, then checks the file and runs it as runDryWorkflow does.
 func runCheckedWorkflow(ctx context.Context, cmd *cobra.Command, env map[string]string, named projectCheck, args []string, item string, dry dryFlags) error {
-	file, err := named.fileOf(cmd.ErrOrStderr(), env, args)
+	file, found, err := named.fileOf(cmd.ErrOrStderr(), env, args)
 	if err != nil {
 		return err
 	}
 
-	return runDryWorkflow(ctx, cmd, env, file, item, dry)
+	return runDryWorkflow(ctx, cmd, env, file, item, dry, found.Vars)
 }
 
 // dryFlags holds the flags of a dry run: whether to run, and which fakes walk a red gate or a send-back.
 type dryFlags struct{ run, redGate, sendBack bool }
 
 // runDryWorkflow checks the file, and with the run flag set it then runs the file over fakes and prints the steps. With redGate set, the first gate of the run is red. With sendBack set, the first review sends the item back.
-func runDryWorkflow(ctx context.Context, cmd *cobra.Command, env map[string]string, file, item string, dry dryFlags) error {
+// The facts of the run hold vars, the vars of the named project. They are static config, so the dry run reads them.
+func runDryWorkflow(ctx context.Context, cmd *cobra.Command, env map[string]string, file, item string, dry dryFlags, vars map[string]any) error {
 	if err := runCheckWorkflow(cmd.ErrOrStderr(), file); err != nil || !dry.run {
 		return err
 	}
@@ -109,7 +110,7 @@ func runDryWorkflow(ctx context.Context, cmd *cobra.Command, env map[string]stri
 		return err
 	}
 
-	var options []flow.DryOption
+	options := []flow.DryOption{flow.WithVars(vars)}
 	if dry.redGate {
 		options = append(options, flow.WithRedGate())
 	}
@@ -191,34 +192,38 @@ func (p projectCheck) find(stderr io.Writer, env map[string]string) (config.Proj
 }
 
 // fileOf returns the workflow file that the arguments name, or the default file. It first refuses the calls that the named project cannot make.
-func (p projectCheck) fileOf(stderr io.Writer, env map[string]string, args []string) (string, error) {
+// It also returns the named project, which is empty when no project is named.
+func (p projectCheck) fileOf(stderr io.Writer, env map[string]string, args []string) (string, config.Project, error) {
 	file := defaultWorkflowFile
 	if len(args) > 0 {
 		file = args[0]
 	}
 
-	return file, p.run(stderr, env, file)
+	found, err := p.run(stderr, env, file)
+
+	return file, found, err
 }
 
 // run refuses each call of a builtin that needs a repository when the named project has none. It does nothing when no project is named.
-func (p projectCheck) run(stderr io.Writer, env map[string]string, file string) error {
+// It returns the named project.
+func (p projectCheck) run(stderr io.Writer, env map[string]string, file string) (config.Project, error) {
 	if p.project == "" {
-		return nil
+		return config.Project{}, nil
 	}
 
 	found, err := p.find(stderr, env)
 	if err != nil {
-		return err
+		return config.Project{}, err
 	}
 
 	calls := p.refusedCalls(found, file)
 	if len(calls) == 0 {
-		return nil
+		return found, nil
 	}
 
 	printProblems(stderr, file, calls)
 
-	return &ExitError{Code: exitWorkflowProblems}
+	return found, &ExitError{Code: exitWorkflowProblems}
 }
 
 // refusedCalls lists the calls that the named project cannot make: the git builtins of a project with no repository, and the gates that its sandbox refuses on this machine.

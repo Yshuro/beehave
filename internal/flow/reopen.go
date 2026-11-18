@@ -25,14 +25,12 @@ func (c *Client) reopen(id string, opts ...dbos.RewindWorkflowOption) error {
 	return c.rewind(id, min(from, openStart(steps)), opts...)
 }
 
-// openStart returns the step of the first start mark of the open sequence, or the length of the history when there is none. The open sequence is
-// the start marks after the last agent step. A run that stopped in the middle of the agent step, such as a canceled one, holds such a sequence, and
-// a loss in it leaves marks and loss records. Every rewind goes back to the first mark, so the whole sequence goes and a resumed phase starts clean.
+// openStart returns the first look at the caps or start mark after the last agent step, or the length of the history when there is none.
 func openStart(steps []dbos.StepInfo) int {
 	return firstOpenStart(steps, len(steps))
 }
 
-// firstOpenStart returns the step of the first start mark before the step limit that has no agent step between it and the limit, or limit when there is none.
+// firstOpenStart returns the first look at the caps or start mark before the step limit that has no agent step between it and the limit, or limit when there is none.
 func firstOpenStart(steps []dbos.StepInfo, limit int) int {
 	open := limit
 
@@ -41,7 +39,7 @@ func firstOpenStart(steps []dbos.StepInfo, limit int) int {
 		case step.StepID >= limit:
 		case step.StepName == agentStepName:
 			open = limit
-		case startNumber(step.StepName) == 1:
+		case step.StepName == capLookStepName || startNumber(step.StepName) == 1:
 			open = min(open, step.StepID)
 		}
 	}
@@ -94,8 +92,7 @@ func (c *Client) failedStep(steps []dbos.StepInfo, canceled map[string]bool, opt
 	return first, nil
 }
 
-// rewindPoint returns the step that a rewind goes back to for a failed step. A failed agent step goes back to the first start mark of its sequence,
-// so the rewind drops every mark and loss record with the step, and a rewound phase holds no start that has no end. Any other step goes back to itself.
+// rewindPoint returns the step that a rewind goes back to: the look at the caps that opens the phase of a failed agent step, else the failed step.
 func rewindPoint(steps []dbos.StepInfo, failed dbos.StepInfo) int {
 	if failed.StepName != agentStepName {
 		return failed.StepID
@@ -262,10 +259,15 @@ func rewindQueue(row dbos.WorkflowStatus) ([]dbos.RewindWorkflowOption, error) {
 
 // gateRewindTarget returns the queue and the partition that a rewound gate, merge or build job goes back to. A gate or a merge goes to the exclusive queue,
 // in the partition of its project. A build job goes to the host queue, in the partition that it recorded in its input.
+// The host job of a command call with a slot class goes to the queue of its class, in the same partition.
 func gateRewindTarget(row dbos.WorkflowStatus) (queue, partition string, err error) {
 	var in ExclusiveInput
 	if err := json.Unmarshal([]byte(fmt.Sprint(row.Input)), &in); err != nil {
 		return "", "", fmt.Errorf("read the input of %s: %w", row.ID, err)
+	}
+
+	if row.Name == hostJobName && in.Kind == kindCommand {
+		return slotQueuePrefix + in.Request.SlotClass, in.HostKey, nil
 	}
 
 	if row.Name == hostJobName {

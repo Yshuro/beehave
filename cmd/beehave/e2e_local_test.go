@@ -20,6 +20,7 @@ import (
 
 	"github.com/tobocop2/beehave/internal/cli"
 	"github.com/tobocop2/beehave/internal/config"
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/store/local"
@@ -30,7 +31,6 @@ import (
 // The agent is the fake claude program of the script, which the real agent runner starts from PATH.
 
 const (
-	e2eToolMode   = 0o700
 	e2eWorkMarker = "@WORK@"
 	e2eModeBits   = 32
 )
@@ -59,6 +59,8 @@ func e2eReal() {
 	factory := flowFactoryFrom(func(ctx context.Context, cfg config.Config, opts flow.Options) (*flow.Engine, error) {
 		return newEngineReading(ctx, cfg, opts, idle)
 	})
+	e2eRecordRun(os.Args[1:])
+
 	code := cli.Execute(ctx, os.Args[1:], buildInfo(env, e2eVersion, factory), env, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
@@ -93,6 +95,34 @@ func cmdExample(ts *testscript.TestScript, _ bool, args []string) {
 	}
 }
 
+// cmdScript is "script <name> [<to>]": it copies scripts/<name> of the repository to the path <to> in the work folder (default: <name>).
+func cmdScript(ts *testscript.TestScript, _ bool, args []string) {
+	if len(args) < 1 || len(args) > 2 {
+		ts.Fatalf("usage: script <name> [<to>]")
+	}
+
+	to := args[len(args)-1]
+
+	scripts := openRoot(ts, filepath.Join("..", ".."), "scripts")
+	defer scripts.Close()
+
+	work := openRoot(ts, ts.Getenv("WORK"), "")
+	defer work.Close()
+
+	text, err := scripts.ReadFile(args[0])
+	if err != nil {
+		ts.Fatalf("script: %v", err)
+	}
+
+	if err := work.MkdirAll(filepath.Dir(to), e2eFolderMode); err != nil {
+		ts.Fatalf("script: %v", err)
+	}
+
+	if err := work.WriteFile(to, text, e2eFileMode); err != nil {
+		ts.Fatalf("script: %v", err)
+	}
+}
+
 // cmdReplace is "replace <file> <old> <new>": it replaces the one text old in the file, and fails when the file does not hold it.
 func cmdReplace(ts *testscript.TestScript, _ bool, args []string) {
 	if len(args) != 3 {
@@ -124,6 +154,11 @@ func openRoot(ts *testscript.TestScript, parent, folder string) *os.Root {
 	}
 
 	return root
+}
+
+// writeFake writes a fake program of the script into its work folder, with the work folder in place of the marker.
+func writeFake(ts *testscript.TestScript, name string, text []byte) error {
+	return exectest.Write(filepath.Join(ts.Getenv("WORK"), name), strings.ReplaceAll(string(text), e2eWorkMarker, ts.Getenv("WORK")))
 }
 
 // cmdSubst is "subst <file>...": it replaces @WORK@ in each file with the work folder of the script.
@@ -165,7 +200,7 @@ func writeTools(t *testing.T) string {
 		require.NoError(t, err)
 
 		wrapper := "#!/bin/sh\nexec " + found + " \"$@\"\n"
-		require.NoError(t, os.WriteFile(filepath.Join(tools, name), []byte(wrapper), e2eToolMode))
+		require.NoError(t, exectest.Write(filepath.Join(tools, name), wrapper))
 	}
 
 	return tools

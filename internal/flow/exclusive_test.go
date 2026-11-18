@@ -60,30 +60,24 @@ func TestExclusive_AMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositoryEnds
 		ended <- err
 	})
 
-	<-gated.started
+	receive(t, gated.started)
 
 	group.Go(func() {
 		_, err := engine.RunFile("merge-item", testProject, mergeFile)
 		ended <- err
 	})
 
-	select {
-	case <-merged:
-		t.Fatal("the merge started while the gate of the same repository was running")
-	case <-time.After(2 * time.Second):
-	}
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
+
+	// The queue has no recorded poll, so the check spans three polls of the queue. It is a listed wall-time site.
+	require.Never(t, func() bool { return len(merged) > 0 }, 3*storePoll, 100*time.Millisecond, "the merge started while the gate of the same repository was running")
 
 	close(gated.release)
-
-	select {
-	case <-merged:
-	case <-time.After(eventTimeout):
-		t.Fatal("the merge never started after the gate ended")
-	}
+	receive(t, merged)
 
 	group.Wait()
-	require.NoError(t, <-ended)
-	require.NoError(t, <-ended)
+	require.NoError(t, receive(t, ended))
+	require.NoError(t, receive(t, ended))
 	require.Len(t, h.merge.asked, 1)
 	assert.Contains(t, h.merge.asked[0], testProject)
 }
@@ -111,22 +105,18 @@ func TestExclusive_AGateOfOneProjectDoesNotHoldTheMergeOfAnotherProject(t *testi
 		ended <- err
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	go func() {
 		_, err := engine.RunFile("merge-item", "project-b", mergeFile)
 		ended <- err
 	}()
 
-	select {
-	case <-merged:
-	case <-time.After(eventTimeout):
-		t.Fatal("the merge of project B waited for the gate of project A")
-	}
+	receive(t, merged)
 
 	close(gated.release)
-	require.NoError(t, <-ended)
-	require.NoError(t, <-ended)
+	require.NoError(t, receive(t, ended))
+	require.NoError(t, receive(t, ended))
 }
 
 type cancelGate struct {
@@ -141,7 +131,7 @@ func (cancelGate) Submit(context.Context, string, string, string, string) (GateJ
 func (g cancelGate) Run(ctx context.Context, _, _, _ string, _ GateJob) (GateResult, error) {
 	if g.runs.Add(1) == 1 {
 		g.started <- struct{}{}
-		<-ctx.Done()
+		hang(ctx.Done())
 
 		return GateResult{}, ctx.Err()
 	}
@@ -170,18 +160,13 @@ func TestExclusive_ACancelWhileTheGateRunsThenAResumeEndsTheItemWithOneMerge(t *
 		ended <- err
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	client := h.client(t, testVersion)
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
 
-	select {
-	case err := <-ended:
-		require.Error(t, err)
-	case <-time.After(20 * time.Second):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, ended))
 
 	assert.Empty(t, h.merge.asked, "no merge ran before the gate ended")
 	result, err := resumeAndJoin(t, engine, client)
@@ -214,20 +199,21 @@ func TestExclusive_ABatchMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositor
 		ended <- err
 	})
 
-	<-gated.started
+	receive(t, gated.started)
 
 	group.Go(func() {
 		_, err := engine.RunFile("batch-item", testProject, writeFlow(t, bodyFlow(rig.call("1 3", `gate_run = ["check-all"], `))))
 		ended <- err
 	})
 
-	time.Sleep(2 * time.Second)
-	assert.Empty(t, rig.h.commands.ran(), "the gate of the batch did not start while the gate of the repository ran")
-	assert.Empty(t, rig.merger.landed(), "no member was merged while the gate of the repository ran")
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
+
+	// The queue has no recorded poll, so the check spans three polls of the queue. It is a listed wall-time site.
+	require.Never(t, func() bool { return len(rig.h.commands.ran()) > 0 || len(rig.merger.landed()) > 0 }, 3*storePoll, 100*time.Millisecond, "the batch started or merged while the gate of the repository ran")
 
 	close(gated.release)
 	group.Wait()
-	require.NoError(t, <-ended)
-	require.NoError(t, <-ended)
+	require.NoError(t, receive(t, ended))
+	require.NoError(t, receive(t, ended))
 	assert.Equal(t, []string{"1", "3"}, rig.merger.landed(), "the batch merged after the gate ended")
 }

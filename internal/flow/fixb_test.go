@@ -26,7 +26,7 @@ func (hangingBeats) Renewed(context.Context, string, string, string) (time.Time,
 }
 
 func (hangingBeats) Beat(ctx context.Context, _, _ string) (string, error) {
-	<-ctx.Done()
+	hang(ctx.Done())
 
 	return "", ctx.Err()
 }
@@ -41,19 +41,13 @@ func cancelledRunWaitingForTheOwner(t *testing.T) (*harness, *Engine, *Client) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	require.NoError(t, client.Cancel(testItem))
 	harness.tick(t)
 
-	select {
-	case outcome := <-done:
-		require.Error(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the cancel")
-	}
-
-	eventually(t, func() bool { return len(harness.life.releasedBy()) == 1 })
+	require.Error(t, receive(t, done).err)
+	waitOn(t, condition(func() bool { return len(harness.life.releasedBy()) == 1 }))
 
 	return harness, engine, client
 }
@@ -67,18 +61,18 @@ func TestResume_TakesAFreshClaimAndTheRunUsesItsTokenForBeatAndRelease(t *testin
 	require.NoError(t, client.Resume(testItem))
 	assert.Equal(t, 2, countOf(harness.life.seen(), "claim"), "the resume takes a new claim")
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		harness.tick(t)
 
 		return slices.Contains(harness.beats.seen(), testProject+"/owner-12#2")
-	})
+	}))
 
 	require.NoError(t, client.Answer(testItem, "go on"))
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the run to be done", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
 		rows, err := client.Status()
 
-		return err == nil && rows[0].State == runDone
-	})
+		return struct{}{}, err == nil && rows[0].State == runDone, nil
+	}})
 
 	assert.Equal(t, []string{"owner-12", "owner-12#2"}, harness.life.releasedBy(), "the release uses the fresh token")
 }
@@ -246,7 +240,7 @@ func TestAnswer_RefusesARunThatAsksNoQuestion(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agents of the run to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	err := client.Answer(testItem, "go on")
 
@@ -254,7 +248,7 @@ func TestAnswer_RefusesARunThatAsksNoQuestion(t *testing.T) {
 	require.ErrorContains(t, err, "asks no question")
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestRun_AnEmptyLoginFailsTheAgentStepAndStartsNoAgent(t *testing.T) {
@@ -411,11 +405,13 @@ func TestRun_TheWaitForTheOwnerHasNoDeadline(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	before := len(harness.agents.seen())
+	windows, err := runOfEngine(t, engine).windowsEnded()
+	require.NoError(t, err)
 
-	time.Sleep(300 * time.Millisecond) // many waits of 20 ms end with no answer
+	waitOn(t, windowsEndedBy(runOfEngine(t, engine), windows+5)) // many waits of 20 ms end with no answer
 
 	assert.Len(t, harness.agents.seen(), before, "a wait that timed out is not an answer")
 
@@ -426,13 +422,7 @@ func TestRun_TheWaitForTheOwnerHasNoDeadline(t *testing.T) {
 	}
 
 	require.NoError(t, client.Answer(testItem, "go on"))
-
-	select {
-	case outcome := <-done:
-		require.NoError(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the answer")
-	}
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestTick_AClaimRenewalThatHangsEndsAtItsOwnTimeout(t *testing.T) {
@@ -452,7 +442,7 @@ func TestTick_AClaimRenewalThatHangsEndsAtItsOwnTimeout(t *testing.T) {
 	})
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agents of the run to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	clk.advance(trustLimit - time.Second)
 
@@ -464,11 +454,7 @@ func TestTick_AClaimRenewalThatHangsEndsAtItsOwnTimeout(t *testing.T) {
 			close(ticked)
 		}()
 
-		select {
-		case <-ticked:
-		case <-time.After(eventTimeout):
-			t.Fatal("one hanging renewal stalled the tick")
-		}
+		receive(t, ticked)
 	}
 
 	tickEnds()
@@ -481,7 +467,7 @@ func TestTick_AClaimRenewalThatHangsEndsAtItsOwnTimeout(t *testing.T) {
 
 	release()
 
-	outcome := <-done
+	outcome := receive(t, done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	require.ErrorContains(t, outcome.err, "deadline exceeded")
 }
@@ -495,7 +481,7 @@ func TestCanceledIDs_ReadsOnlyTheRunsThisEngineExecutes(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agents of the run to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 	require.NoError(t, client.Cancel(testItem))
 
 	none, err := engine.canceledIDs(nil)
@@ -512,12 +498,7 @@ func TestCanceledIDs_ReadsOnlyTheRunsThisEngineExecutes(t *testing.T) {
 
 	harness.tick(t)
 
-	select {
-	case outcome := <-done:
-		require.Error(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, done).err)
 }
 
 // launchOn builds and launches an engine over the harness with the given deps. The cleanup shuts it down; the returned function does it at once.

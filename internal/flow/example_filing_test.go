@@ -10,7 +10,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
-	"github.com/tobocop2/beehave/internal/model"
 )
 
 // settleMarker is in example_lane_test.go. parkedRig runs the example to the ruling of the owner, who parks every finding, and makes the settle agent write parked.
@@ -25,6 +24,7 @@ func parkedRigSeeded(t *testing.T, parked string, seed map[string]string) (*agen
 	t.Helper()
 
 	rig, file := exampleRig(t, func(int) string { return "changes" })
+	rig.setRound("fix_rounds", oneFixRound)
 	writer := newFakeWriter()
 	maps.Copy(writer.keys, seed)
 	rig.h.writer = writer
@@ -42,12 +42,12 @@ func parkedRigSeeded(t *testing.T, parked string, seed map[string]string) (*agen
 		return done
 	}
 
-	done := runInBackground2(rig.h.engine(t), file)
+	done := pipelineInBackground(rig.h.engine(t), file)
 
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 
-	return rig, writer, <-done
+	return rig, writer, receive(t, done)
 }
 
 const parkedOne = `[{"id":"retry-loop","title":"The retry loop never stops","body":"## Problem\nIt spins.","found":"Run go test ./retry at commit abc: it hangs.","severity":"P1","operator":true}]`
@@ -73,39 +73,19 @@ func TestExampleFiling_AReplayWithTheSameRunIDFilesNothingNew(t *testing.T) {
 	assert.Empty(t, writer.created, "the key of the first attempt is found, so no second issue is filed")
 }
 
-func TestExampleFiling_TheMergeRefusesATextThatNamesTheTrackerIDOfTheItemAndAllowsAGitHubNumber(t *testing.T) {
+func TestExampleFiling_AnItemWhoseIDIsAGitHubNumberAddsNoPatternToTheForbidTextOfTheRound(t *testing.T) {
 	t.Parallel()
 
-	for name, tc := range map[string]struct {
-		item, body, refusal string
-	}{
-		"a tracker id in the body":        {"bb-12", "Fixes the loop.\nSee bb-12 for more.", "2:See bb-12 for more."},
-		"the id in another case":          {"bb-12", "see BB-12", "1:see BB-12"},
-		"a longer id is another id":       {"bb-12", "see bb-123", ""},
-		"a GitHub number is allowed":      {"12", "Addresses #12", ""},
-		"a body without the id is merged": {"bb-12", "Fixes the loop.", ""},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
+	// The pattern match itself is the merge package's. The round passes the attribution patterns for every item, and adds a pattern only for an id that is not a GitHub number.
+	rig := newRoundRig(t, "1 3")
 
-			rig, file, world := mergingExample(t, func(head string) *shipWorld {
-				return &shipWorld{pull: shipPull(t, head, map[string]any{"body": tc.body})}
-			})
+	_, err := rig.run(t)
 
-			rig.h.items.fields["id"] = tc.item
+	require.NoError(t, err)
+	require.NotEmpty(t, rig.merger.given)
 
-			_, err := rig.h.engine(t).RunFile(tc.item, testProject, file)
-
-			if tc.refusal == "" {
-				require.NoError(t, err)
-
-				return
-			}
-
-			require.ErrorIs(t, err, errMergeRefused)
-			require.ErrorContains(t, err, tc.refusal)
-			assert.Empty(t, world.writes)
-		})
+	for _, given := range rig.merger.given {
+		assert.Len(t, given.ForbidText, 4, "an id of only digits is a GitHub number, so it adds no pattern to the four attribution patterns")
 	}
 }
 
@@ -113,36 +93,39 @@ func TestExampleChangelog_TheMergeRefusesAChangeThatLeavesTheDeclaredChangelogAl
 	t.Parallel()
 
 	for name, tc := range map[string]struct {
-		changelog, changed, refusal string
+		changelog, changed string
+		landed             []string
 	}{
-		"no changelog declared":                  {"", "a.go\n", ""},
-		"the declared changelog is in the diff":  {"CHANGELOG.md", "a.go\nCHANGELOG.md\n", ""},
-		"the declared changelog is not in diff":  {"CHANGELOG.md", "a.go\ndocs/CHANGELOG.md\n", "CHANGELOG.md"},
-		"an empty diff leaves the changelog out": {"CHANGELOG.md", "", "CHANGELOG.md"},
+		"no changelog declared":                  {"", "a.go\n", []string{"1"}},
+		"the declared changelog is in the diff":  {"CHANGELOG.md", "a.go\nCHANGELOG.md\n", []string{"1"}},
+		"the declared changelog is not in diff":  {"CHANGELOG.md", "a.go\ndocs/CHANGELOG.md\n", nil},
+		"an empty diff leaves the changelog out": {"CHANGELOG.md", "", nil},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			rig, file, world := mergingExample(t, func(head string) *shipWorld {
-				return &shipWorld{pull: shipPull(t, head, nil)}
-			})
+			rig := newRoundRig(t, "1")
+			rig.project.Changelog = tc.changelog
 
-			rig.h.facts = func(project string) model.Project {
-				return model.Project{Name: project, Changelog: tc.changelog}
-			}
-			rig.h.commands.reply = func(CommandRequest) (CommandOutput, error) { return CommandOutput{Stdout: tc.changed}, nil }
+			previous := rig.h.commands.reply
+			rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
+				if request.Run[0] == "git" {
+					return CommandOutput{Stdout: tc.changed}, nil
+				}
 
-			_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
-
-			if tc.refusal == "" {
-				require.NoError(t, err)
-
-				return
+				return previous(request)
 			}
 
-			require.ErrorContains(t, err, "the project declares the changelog "+tc.changelog)
-			assert.Contains(t, rig.h.commands.ran(), "git diff --name-only origin/"+shipBase+"..."+rig.head, "the read is from the base to the head")
-			assert.Empty(t, world.writes, "nothing is merged")
+			_, err := rig.run(t)
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.landed, rig.merger.landed())
+
+			if tc.landed == nil {
+				// The child of the item reads the changed paths at the end of its run and fails with the refusal, so the item never reaches the land phase and gets no note.
+				assert.Contains(t, gitLines(rig), "git diff --name-only origin/main..."+rig.heads["1"])
+				assert.Empty(t, notesWithKey(rig.writer, "rejected"))
+			}
 		})
 	}
 }

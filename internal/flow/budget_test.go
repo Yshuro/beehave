@@ -3,7 +3,6 @@ package flow
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -101,6 +100,7 @@ func TestAgentStep_AStepThatWouldStartPastTheRunCapWaitsBeforeItStartsAndNamesTh
 
 	stop := holdOnCap(t, rig, capFile(t, threeFlow))
 
+	assert.Contains(t, stop.Note, "the agent step agent:c#3 waits", "the phase names the call that it holds")
 	assert.Contains(t, stop.Note, "the cap for one item run is $5")
 	assert.Contains(t, stop.Note, "the agent steps of the item run spent $6")
 	assert.Contains(t, stop.Note, "the last step can pass it by its own cost")
@@ -141,18 +141,9 @@ func TestAgentStep_TheCostOfAFailedRunIsRecordedForTheRunCap(t *testing.T) {
 
 	require.ErrorContains(t, err, "ended as exited (exit 3)", "a failed run still fails the step with its own error")
 
-	steps, err := dbos.GetWorkflowSteps(engine.ctx, runID(testItem, 1), dbos.WithStepsLoadOutput(true))
+	kept, _, err := dbos.ReadStream[failedRun](engine.ctx, runID(testItem, 1), failedRunsStream, dbos.WithReadStreamSnapshot())
 	require.NoError(t, err)
-
-	var recorded string
-
-	for _, step := range steps {
-		if strings.HasSuffix(step.StepName, "/spent1") {
-			recorded, _ = step.Output.(string) //nolint:errcheck // a missing output reads as empty and fails the assertion
-		}
-	}
-
-	assert.Contains(t, recorded, `"cost_usd":6`, "the run cap counts the 6 dollars that the failed run spent")
+	assert.Equal(t, []failedRun{{Call: "agent:a#1", Spend: agent.Spend{Cost: 6}}}, kept, "the run cap counts the 6 dollars that the failed run spent")
 }
 
 func TestAgentStep_ARunWithNoRunCapStartsEveryStep(t *testing.T) {
@@ -194,12 +185,12 @@ command(run = ["done"])
 	client := rig.h.client(t, testVersion)
 	done := runInBackground2(next, file)
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
-	eventually(t, func() bool { return stoppedRun(t, client, testRun) != nil })
+	waitOn(t, waiting[struct{}]{what: "the open run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
+	waitOn(t, waiting[struct{}]{what: "the run to stop", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, stoppedRun(t, client, testRun) != nil, nil }})
 
 	assert.Contains(t, stoppedRun(t, client, testRun).Note, "the agent steps of the item run spent $13", "3 from the record of a, then 10 from b")
 	assert.Len(t, rig.h.agents.seen(), 2, "a ran once, b ran once, c never started")
 
 	require.NoError(t, next.Shutdown())
-	<-done
+	receive(t, done)
 }

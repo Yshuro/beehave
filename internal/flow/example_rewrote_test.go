@@ -32,7 +32,7 @@ func TestExample_AnImplementThatRewroteHistoryStopsTheItemBeforeTheGate(t *testi
 
 	rig, file := amendRig(t, func(int) string { return "approve" }, func(r AgentRequest) bool { return r.Model == "sonnet" && r.Resume == "" })
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -40,15 +40,16 @@ func TestExample_AnImplementThatRewroteHistoryStopsTheItemBeforeTheGate(t *testi
 	assert.Zero(t, rig.h.gate.calls, "no gate runs on a rewritten head")
 }
 
-func TestExample_AFixThatRewroteHistoryStopsTheItemBeforeTheNextGate(t *testing.T) {
+func TestExample_AFixThatRewroteHistoryStopsTheItemBeforeTheNextReviewAndAnyGate(t *testing.T) {
 	t.Parallel()
 
 	rig, file := amendRig(t, func(int) string { return "changes" }, func(r AgentRequest) bool { return r.Resume != "" })
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
 	assert.Contains(t, err.Error(), "the fix step rewrote the history")
-	assert.Equal(t, 1, rig.h.gate.calls, "the gate of the first round is the only one")
+	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet"}, rig.models(), "no review starts on the rewritten head")
+	assert.Zero(t, rig.h.gate.calls, "the scoped fix comes before the first gate, and no gate runs on a rewritten head")
 }

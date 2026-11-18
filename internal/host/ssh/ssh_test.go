@@ -56,6 +56,22 @@ func TestSubmit_RunsTheCommandAsATransientUnitThatKeepsItsResult(t *testing.T) {
 	assert.NotContains(t, strings.Join(u.Args, " "), "TasksMax")
 }
 
+func TestSubmit_ARunLimitWithAPartOfASecondGivesTheUnitTheNextWholeSecond(t *testing.T) {
+	t.Parallel()
+
+	cfg := config()
+	cfg.MaxRun = 1900 * time.Millisecond
+	m := sshtest.New(hosttest.Working)
+	h, _, _ := newHost(t, m, cfg)
+
+	_, err := h.Submit(t.Context(), model.JobSpec{Name: "gate", Command: "true"})
+
+	require.NoError(t, err)
+	require.NotNil(t, m.Units["beehave-n1"])
+	assert.Contains(t, m.Units["beehave-n1"].Args, "RuntimeMaxSec=2", "the unit never ends the job before max_run")
+	assert.NotContains(t, m.Units["beehave-n1"].Args, "RuntimeMaxSec=1")
+}
+
 func TestSubmit_RefusesWhatItCannotRun(t *testing.T) {
 	t.Parallel()
 
@@ -487,11 +503,12 @@ func TestCancel_WritesTheMarkerThenStopsThenWaitsThenBanks(t *testing.T) {
 	require.NoError(t, h.Cancel(t.Context(), id))
 
 	got := words(m)[before:]
-	require.GreaterOrEqual(t, len(got), 4)
-	assert.Equal(t, "touch "+sshtest.Root+"/work/.beehave/beehave-n1.canceled", got[0])
-	assert.Equal(t, "systemctl --user stop beehave-n1", got[1])
+	require.GreaterOrEqual(t, len(got), 5)
+	assert.Equal(t, "mkdir -p "+sshtest.Root+"/work/.beehave", got[0], "the stop makes the state folder, so the marker can be written on a fresh host")
+	assert.Equal(t, "touch "+sshtest.Root+"/work/.beehave/beehave-n1.canceled", got[1])
+	assert.Equal(t, "systemctl --user stop beehave-n1", got[2])
 	assert.Len(t, bank.calls, 1)
-	assert.GreaterOrEqual(t, bank.calls[0]-before, 2+4, "the bank waits until a unit that still runs after the stop is gone")
+	assert.GreaterOrEqual(t, bank.calls[0]-before, 3+4, "the bank waits until a unit that still runs after the stop is gone")
 
 	state, err := h.Wait(t.Context(), id)
 	require.NoError(t, err)

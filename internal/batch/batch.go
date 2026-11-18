@@ -24,9 +24,11 @@ const (
 )
 
 // Member is one pull request of a batch. Head is the full commit id that a reviewer gated.
+// Approved is true when another step accepted that head: only then does work of an own identity merge.
 type Member struct {
-	Item string `json:"item"`
-	Head string `json:"head"`
+	Item     string `json:"item"`
+	Head     string `json:"head"`
+	Approved bool   `json:"approved"`
 }
 
 // Tip is the base tip: a commit and its tree.
@@ -54,9 +56,11 @@ type Git interface {
 }
 
 // GateInput is the union to gate. The gate checks out Commit, and Tree is the tree id of that commit.
+// Step is the name of the gate step of the batch, batch:<name>.gate#<n>, which is unique in the call. A gate that records steps of its own names them after it.
 type GateInput struct {
 	Commit string
 	Tree   string
+	Step   string
 }
 
 // ErrGateVoid is a gate that gave no result about the code, for example when a pinned tool is at another version.

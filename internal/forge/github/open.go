@@ -15,7 +15,7 @@ import (
 func (f *Forge) CreatePR(ctx context.Context, req model.NewPull) (int, error) {
 	done := f.run.Run(ctx, []string{argPR, "create", "--draft", argRepo, f.repo, "--head", req.Head, "--base", req.Base, "--title", req.Title, argBody, req.Body})
 	if done.ExitCode != 0 {
-		return 0, forge.Refuse("cannot open a draft pull request for branch %s into %s. Push the branch first", req.Head, req.Base)
+		return 0, refused(done, "cannot open a draft pull request for branch %s into %s. Push the branch first", req.Head, req.Base)
 	}
 
 	number, ok := model.URLNumber(done.Stdout, "pull")
@@ -38,7 +38,7 @@ func (f *Forge) LinkStack(ctx context.Context, parent, child int, base string) e
 
 	done := f.run.Run(ctx, append(args, prefix+strconv.Itoa(parent), prefix+strconv.Itoa(child)))
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot link pull request %d into the stack of pull request %d", child, parent)
+		return refused(done, "cannot link pull request %d into the stack of pull request %d", child, parent)
 	}
 
 	return nil
@@ -53,7 +53,7 @@ func (f *Forge) Unstack(ctx context.Context, pr int) error {
 
 	done := f.run.Run(ctx, []string{"stack", "unstack", strconv.Itoa(number)})
 	if done.ExitCode != 0 {
-		return forge.Refuse("cannot unstack pull request %d", pr)
+		return refused(done, "cannot unstack pull request %d", pr)
 	}
 
 	return nil

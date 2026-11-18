@@ -137,7 +137,7 @@ func TestSpawnGather_FailRaiseCancelsTheOpenChildrenAndRaisesAfterTheStep(t *tes
 	h.commands.before = func(ctx context.Context, request CommandRequest) error {
 		switch request.Item {
 		case "22":
-			<-started
+			receive(t, started)
 
 			return errFake
 		default:
@@ -145,7 +145,7 @@ func TestSpawnGather_FailRaiseCancelsTheOpenChildrenAndRaisesAfterTheStep(t *tes
 				close(started)
 			}
 
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -167,7 +167,7 @@ func TestSpawnGather_FailRaiseCancelsTheOpenChildrenAndRaisesAfterTheStep(t *tes
 		gatherJSON(t, engine))
 
 	h.tick(t)
-	eventually(t, func() bool { return len(h.life.releasedBy()) >= 1 })
+	waitOn(t, condition(func() bool { return len(h.life.releasedBy()) >= 1 }))
 }
 
 // gatherJSON returns the recorded output of the gather step of the parent.
@@ -245,9 +245,9 @@ func TestSpawnGather_ResumeOfAFailedParentReopensTheMidListChildAndEachOutputIsI
 	// The retry route is beehave resume of the parent: it reopens the failed child and forks the parent from the step that started it.
 	failing.Store(false)
 	require.NoError(t, client.Resume(testItem))
-	if !waitUntil(func() bool { return childStatus(t, engine, testItem) == dbos.WorkflowStatusSuccess }) {
-		t.Fatal(dumpRuns(engine, testItem, "21", "22", "23"))
-	}
+	waitOn(t, waiting[struct{}]{what: "the parent to succeed", run: runOfEngine(t, engine), last: func() string { return dumpRuns(engine, testItem, "21", "22", "23") }, read: func() (struct{}, bool, error) {
+		return struct{}{}, childStatus(t, engine, testItem) == dbos.WorkflowStatusSuccess, nil
+	}})
 
 	assert.JSONEq(t, `{"outcomes":[`+
 		`{"item":"21","ok":true,"stopped":{"step":"command:w#1","rc":2,"output":"out-21"}},`+
@@ -291,7 +291,7 @@ func TestSpawnGather_ResumeOfAFailedParentReopensASiblingThatTheRaiseCancelled(t
 
 			return errFake
 		case request.Item == "23":
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -322,9 +322,9 @@ func TestSpawnGather_ResumeOfAFailedParentReopensASiblingThatTheRaiseCancelled(t
 	failing.Store(false)
 	require.NoError(t, client.Resume(testItem))
 
-	if !waitUntil(func() bool { return childStatus(t, engine, testItem) == dbos.WorkflowStatusSuccess }) {
-		t.Fatal(dumpRuns(engine, testItem, "21", "22", "23"))
-	}
+	waitOn(t, waiting[struct{}]{what: "the parent to succeed", run: runOfEngine(t, engine), last: func() string { return dumpRuns(engine, testItem, "21", "22", "23") }, read: func() (struct{}, bool, error) {
+		return struct{}{}, childStatus(t, engine, testItem) == dbos.WorkflowStatusSuccess, nil
+	}})
 
 	assert.Equal(t, []string{"after 21:out-21 22:out-22 23:out-23"}, h.commands.ranBy(testItem))
 	assert.Equal(t, dbos.WorkflowStatusSuccess, childStatus(t, engine, "23"), "the canceled sibling ran again")
@@ -351,17 +351,7 @@ func countEnqueued(engine *Engine, items []string) int {
 	return count
 }
 
-// receivedWithin reports whether the channel closes before eventTimeout passes.
-func receivedWithin(ch <-chan struct{}) bool {
-	select {
-	case <-ch:
-		return true
-	case <-time.After(eventTimeout):
-		return false
-	}
-}
-
-// waitUntil polls check until it returns true, and reports false when eventTimeout passes.
+// waitUntil polls check until it returns true, and reports false when eventTimeout passes. It serves the fake of the round rig, which runs on an engine goroutine where waitOn cannot fail the test.
 func waitUntil(check func() bool) bool {
 	deadline := time.Now().Add(eventTimeout)
 
@@ -444,11 +434,11 @@ func startOpenRun(t *testing.T, h *harness, engine *Engine, item, project string
 		done <- err
 	}()
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		last, found, err := latestRun(engine.ctx, item)
 
 		return err == nil && found && !last.terminal()
-	})
+	}))
 }
 
 func TestSpawnGather_SpawnRefusesAnItemWithAnOpenRunAndNamesHowToEndIt(t *testing.T) {
@@ -625,16 +615,16 @@ func TestSpawnGather_FiveChildrenRunAtMostMaxConcurrentAtOnce(t *testing.T) {
 		done <- err
 	}()
 
-	require.True(t, receivedWithin(full), "two children never ran at once")
+	receive(t, full)
 
 	// Two children hold the two slots. The other three wait in the queue until a slot is free: a status read shows it, with no wait on time.
 	// Spawn may not have enqueued every child when the first two start, so the count is polled.
 	items := []string{"21", "22", "23", "24", "25"}
 
-	assert.True(t, waitUntil(func() bool { return countEnqueued(engine, items) == 3 }), "three children wait while two run")
+	waitOn(t, waiting[struct{}]{what: "three children to wait while two run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, countEnqueued(engine, items) == 3, nil }})
 
 	close(release)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 
 	assert.Equal(t, int32(2), peak.Load(), "the items queue holds agents.max_concurrent runs at once")
 }
@@ -648,7 +638,7 @@ func TestSpawnGather_CancelOfTheParentWhileItGathersEndsTheChildren(t *testing.T
 			return nil
 		}
 
-		<-ctx.Done()
+		receive(t, ctx.Done())
 
 		return ctx.Err()
 	}
@@ -665,28 +655,22 @@ func TestSpawnGather_CancelOfTheParentWhileItGathersEndsTheChildren(t *testing.T
 
 	// Cancel ends the parent at its next step, so a spawn still creating children would leave the last one without a run.
 	// Wait until every child has a run, and child 22 still runs, so the cancel lands while the parent gathers.
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "every child to have a run and child 22 to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		for _, item := range []string{"21", "23"} {
 			if _, found, err := latestRun(engine.ctx, item); err != nil || !found {
-				return false
+				return struct{}{}, false, nil
 			}
 		}
 
 		last, found, err := latestRun(engine.ctx, "22")
 
-		return err == nil && found && last.Status.Status == dbos.WorkflowStatusPending
-	})
+		return struct{}{}, err == nil && found && last.Status.Status == dbos.WorkflowStatusPending, nil
+	}})
 	require.NoError(t, client.Cancel(testItem))
-
-	select {
-	case err := <-done:
-		require.Error(t, err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the parent did not end after the cancel")
-	}
+	require.Error(t, receive(t, done))
 
 	for _, item := range []string{"21", "22", "23"} {
-		eventually(t, func() bool { return childStatus(t, engine, item) == dbos.WorkflowStatusCancelled })
+		waitOn(t, condition(func() bool { return childStatus(t, engine, item) == dbos.WorkflowStatusCancelled }))
 	}
 }
 
@@ -721,7 +705,7 @@ func failedAgentSwarm(t *testing.T, h *harness) *Engine {
 
 	engine := h.engine(t)
 	_, err := engine.Run(testItem, testProject)
-	require.Error(t, err)
+	require.ErrorContains(t, err, errFake.Error(), "the run fails in the agent step of its child, after the phase is queued")
 
 	return engine
 }
@@ -758,7 +742,7 @@ func TestSpawnGather_AResumeThatCannotReopenTheFailedChildGivesItsFreshClaimBack
 		}
 	}
 
-	require.NotEmpty(t, phases)
+	require.NotEmpty(t, phases, "steps: %+v", steps)
 	require.NoError(t, dbos.DeleteWorkflows(engine.ctx, phases))
 
 	require.ErrorIs(t, client.Resume(testItem), errNoRow)
@@ -797,7 +781,11 @@ func TestSpawnGather_TheItemsQueueReportsAStoreThatIsClosed(t *testing.T) {
 }
 
 // pickFails picks a login for every item but one.
-type pickFails struct{ item string }
+type pickFails struct {
+	noReset
+
+	item string
+}
 
 func (p pickFails) Pick(_ context.Context, _, item string, _ []string, _ bool) (string, error) {
 	if item == p.item {
@@ -835,8 +823,7 @@ func TestSpawnGather_SpawnReportsAChildTheQueueCannotStart(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	engine := h.engine(t)
-	engine.itemQueue = nil
+	engine := h.engineWith(t, func(e *Engine) { e.itemQueue = nil })
 
 	_, err := engine.RunFile(testItem, testProject, writeFlow(t, swarmFile("")))
 

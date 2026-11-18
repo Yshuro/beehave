@@ -3,9 +3,17 @@ package agent
 
 import (
 	"context"
+	"strings"
+	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
 )
+
+// VersionArgs are arguments that a CLI takes from the version From on, such as "2.0.0".
+type VersionArgs struct {
+	From string
+	Args []string
+}
 
 // Profile is the command line and the login variables of one agent CLI. The prompt always goes on stdin.
 // ModelFlag is the flag that takes a model name. An empty flag means the CLI has no such option.
@@ -38,6 +46,31 @@ type Profile struct {
 	// MinVersion is the oldest version of the CLI that knows every setting of that mapping; an older CLI ignores a setting it does not know.
 	Sandbox    bool
 	MinVersion string
+	// SupportedFrom and SupportedBefore bound the versions of the CLI that the adapter has a recording of: a run on an older version, on SupportedBefore or on a
+	// later one does not start, whatever the spec sets, and neither does a run whose version cannot be read. Both are full versions such as "1.19.5", or both are
+	// empty and the profile sets no range.
+	// A CLI older than SupportedFrom can fail to load the hook of Guard, and then it runs every shell command with no check and exits with code 0.
+	SupportedFrom   string
+	SupportedBefore string
+	// VersionArgs are arguments that only a CLI of the version From or later takes. The runner adds each entry whose From is at or below the version that the
+	// CLI prints, after Args and before the model. A profile with VersionArgs sets the supported range, so the version is always read.
+	VersionArgs []VersionArgs
+	// GuardBefore is the first version of the CLI whose hook of Guard is known not to refuse a command. A step with a guard does not start on that version or a
+	// later one. It needs the supported versions, so the runner reads the version. Empty means no such version is known.
+	GuardBefore string
+	// GuardPosixOnly is true when the hook of Guard needs a POSIX shell, so a run with a guard does not start on Windows.
+	GuardPosixOnly bool
+	// NoSkillCalls is true when the CLI reports no skill calls on its output, so a step that requires skills cannot be proved and does not start.
+	NoSkillCalls bool
+	// DefaultTimeout is the total limit of a run whose spec sets no Timeout. Zero means no limit. StallNote is added to the Note of a run that a total or idle
+	// limit ended, for a CLI that prints nothing and retries when it cannot work (for example a model over its quota). It names the likely cause.
+	DefaultTimeout time.Duration
+	StallNote      string
+}
+
+// NoUsage returns the reading of an agent that cannot report usage. The pool never picks a runner with such a reading.
+func NoUsage(name model.Agent) model.Reading {
+	return model.Unknown("the " + string(name) + " agent cannot report usage")
 }
 
 // Stop names the cap that ended a run.
@@ -49,19 +82,53 @@ const (
 	StopBudget Stop = "budget"
 )
 
+// LimitKind names the provider limit that refused more work.
+type LimitKind string
+
+// The provider limits that stop a run.
+const (
+	// LimitRate is a usage window of the plan, such as five hours or seven days.
+	LimitRate LimitKind = "rate"
+	// LimitSpend is a cap on the dollars that the account spends past its plan.
+	LimitSpend LimitKind = "spend"
+	// LimitOverload is a provider that is too busy to serve the request. It has no reset time, and a short wait cures it.
+	LimitOverload LimitKind = "overload"
+)
+
+// Limit is a provider limit that refused more work. Window is the name that the CLI gives the limit, such as five_hour, or empty when it names none.
+// ResetsAt is the time when the provider takes work again, or the zero time when the line gives none.
+// The JSON form is the form that the engine records.
+type Limit struct {
+	Kind     LimitKind `json:"kind"`
+	Window   string    `json:"window,omitempty"`
+	ResetsAt time.Time `json:"resets_at,omitzero"`
+}
+
+// Name names the limit for a message, such as "rate limit five_hour", "rate limit" when the CLI names no window, or "overload".
+func (l Limit) Name() string {
+	if l.Kind == LimitOverload {
+		return string(l.Kind)
+	}
+
+	return strings.TrimSpace(string(l.Kind) + " limit " + l.Window)
+}
+
 // Launch is what an adapter adds to the start of one run, beyond the arguments of its profile.
 // Args are appended to the command line. Env is added to the environment after the allow-list; it never replaces a login variable or the token.
 // Files maps a path inside the run folder to its content. The runner writes them before the CLI starts, with mode 0600 in a folder of mode 0700.
 // A path must be local: no absolute path and no "..". The runner removes the folder when the run ends.
+// Loaded is a local path in the run folder that the hook of the launch creates when it loads. The runner looks for it when the run ends, before it removes
+// the folder, and sets Result.GuardMissing when it is not there. Empty means the launch has no proof of the load.
 type Launch struct {
-	Args  []string
-	Env   map[string]string
-	Files map[string]string
+	Args   []string
+	Env    map[string]string
+	Files  map[string]string
+	Loaded string
 }
 
 // Empty is true when the launch adds nothing to the run.
 func (l Launch) Empty() bool {
-	return len(l.Args) == 0 && len(l.Env) == 0 && len(l.Files) == 0
+	return len(l.Args) == 0 && len(l.Env) == 0 && len(l.Files) == 0 && l.Loaded == ""
 }
 
 // Tokens counts the tokens of a run. Input holds every input token, the cached ones included; Output holds every output token, the reasoning ones included.
@@ -97,6 +164,10 @@ type Call struct {
 // A line with Spent above 0 counts as priced without it. A capped run of a profile with StreamsCost ends as a budget cap only when no line was priced.
 // A CLI that reports a run total in Cost does not also set Spent for the same dollars.
 // Usage is the tokens that the line reports for the part of the run that it closes, or zero when it reports none; the caller adds the Usage of all lines.
+// Limit is the provider limit that the line reports as the reason the CLI refused more work, or nil when it reports none. A line that only warns that
+// a limit is near reports none.
+// Denied is the reason why the provider refused more work in a way that no wait cures, such as usage credits that the account does not have or a pause of
+// the organization, or empty when the line reports none. A line with Denied reports no Limit.
 type Seen struct {
 	Cost    float64
 	Spent   float64
@@ -109,11 +180,14 @@ type Seen struct {
 	Result  bool
 	Invalid bool
 	Priced  bool
+	Limit   *Limit
+	Denied  string
 }
 
 // Adapter is one agent CLI. The runner calls Profile and, when the spec sets a guard, Guard before it starts a run.
 // Call order for one run: Profile, then Guard or Sandbox, before the CLI starts, then Line and Calls for each output line while it runs, then TranscriptPath after it ends.
-// Line and Calls never see a line of an earlier run, and TranscriptPath needs the session id that Line returned.
+// Line and Calls never see a line of an earlier run, and TranscriptPath needs the session id that Line returned. A start that follows a lost run also
+// calls TranscriptPath before the CLI starts, with the session that Line returned in the lost run.
 // ReadUsage runs outside a run, when the pool or the doctor asks for the usage of one runner of this agent.
 type Adapter interface {
 	// Profile returns the command line and the login variables of the CLI.
@@ -132,6 +206,8 @@ type Adapter interface {
 	// the dollars, the caller for the calls), so a call that keeps state for a line must not change what a later reader gets for it in any field but
 	// Seen.Spent. The runner reads Seen.Spent once for each line; no other reader does, so a dedupe of the dollars by message id is allowed.
 	Calls(line string) Seen
-	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Nothing reads the file.
+	// TranscriptPath returns where the CLI keeps the transcript of a session that ran in dir with the login folder configDir. Before a start that follows
+	// a lost run, the agents resume the session of that run only when the file exists, and they do not read it. A CLI that keeps no file for one session
+	// (it keeps every session in one database) returns a distinct path inside configDir that no file holds, and a lost run of it never resumes.
 	TranscriptPath(configDir, dir, session string) string
 }

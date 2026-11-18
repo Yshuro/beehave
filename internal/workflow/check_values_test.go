@@ -62,6 +62,10 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 		{"max_new_processes with host", `command(run = ["x"], host = "h", max_new_processes = 5)`, "command: max_new_processes cannot be used together with host"},
 		{"max_new_processes none", `command(run = ["x"], max_new_processes = None)`, "command: max_new_processes must be a whole number from 1 to 100000"},
 		{"max_new_processes fraction", `command(run = ["x"], max_new_processes = 2.5)`, "command: max_new_processes must be a whole number from 1 to 100000"},
+		{"slots without host", `command(run = ["x"], slots = "mutation")`, "command: slots cannot be used without host"},
+		{"slots with an empty host", `command(run = ["x"], slots = "mutation", host = "")`, "command: slots cannot be used without host"},
+		{"slots blank", `command(run = ["x"], slots = " ", host = "h")`, "command: slots must be the name of a slot class"},
+		{"slots none", `command(run = ["x"], slots = None, host = "h")`, "command: slots must be the name of a slot class"},
 		{"timeout none", `command(run = ["x"], timeout = None)`, `command: for parameter "timeout": got NoneType, want string`},
 		{"output_tries none", `agent("p", "m", output_tries = None)`, `agent: for parameter "output_tries": got NoneType, want int`},
 		{"max_new_processes range", `command(run = ["x"], max_new_processes = 0)`, "command: max_new_processes must be a whole number from 1 to 100000"},
@@ -96,8 +100,8 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 		{"merge tree none", `merge(head = "h", merge = True, steps = x, tree = None)`, "merge: `tree` must be text, not NoneType"},
 		{"batch_merge prs empty", `batch_merge(prs = [], base = "b", repo = "r", name = "n")`, "batch_merge: `prs` is empty"},
 		{"batch_merge prs none", `batch_merge(prs = None, base = "b", repo = "r", name = "n")`, "batch_merge: `prs` is empty"},
-		{"batch_merge prs element", `batch_merge(prs = [1], base = "b", repo = "r", name = "n")`, "batch_merge: `prs` holds a int"},
-		{"batch_merge prs dict element", `batch_merge(prs = [{"item": "a", "head": "h"}], base = "b", repo = "r", name = "n")`, "batch_merge: `prs` holds a dict"},
+		{"batch_merge prs element", `batch_merge(prs = [1], base = "b", repo = "r", name = "n")`, "batch_merge: prs[0]: the member has the type int, not struct"},
+		{"batch_merge prs dict element", `batch_merge(prs = [{"item": "a", "head": "h"}], base = "b", repo = "r", name = "n")`, "batch_merge: prs[0]: the member has the type dict, not struct"},
 		{"merge own logins element", `merge(head = "h", own = {"logins": [1]})`, "merge: own.logins must hold strings only"},
 		{"merge own emails text", `merge(head = "h", own = {"emails": "a@b"})`, "merge: own.emails must be a list of strings"},
 		{"batch_merge own element", `batch_merge(prs = x, base = "b", repo = "r", name = "n", own = {"emails": [None]})`, "batch_merge: own.emails must hold strings only"},
@@ -134,6 +138,8 @@ func TestCheck_AcceptsTheLiteralValuesThatTheRunAccepts(t *testing.T) {
 		"    wait(question = \"q\", to = who, quorum = 3)\n"+
 		"    command(run = [\"x\"], host = \"h\")\n"+
 		"    command(run = [\"x\"], max_new_processes = 5, host = \"\")\n"+
+		"    command(run = [\"x\"], host = \"h\", slots = \"mutation\")\n"+
+		"    command(run = [\"x\"], host = who[0], slots = D)\n"+
 		"    merge(head = \"h\", merge = True, steps = [{\"name\": \"a\", \"status\": \"pass\"}], tree = \"abc\", own = {\"logins\": [\"me\"], \"emails\": [\"a@b\"]})\n"+
 		"    merge(head = \"h\", merge = False, steps = [1], tree = \"\", own = None)\n"+
 		"    merge(head = \"h\", hold = \"h\")\n"+
@@ -141,6 +147,15 @@ func TestCheck_AcceptsTheLiteralValuesThatTheRunAccepts(t *testing.T) {
 		"    preflight(own = {\"logins\": [\"me\"]})\n")
 
 	assert.Empty(t, got)
+}
+
+func TestCheck_ASlotsValueOfTheWrongKindGetsTheKindErrorAndNoSecondOne(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    command(run = [\"x\"], host = \"h\", slots = 5)\n")
+
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "slots must be a text, not an int")
 }
 
 func TestCheck_ReportsOneErrorForOneArgument(t *testing.T) {

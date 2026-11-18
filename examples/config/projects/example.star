@@ -33,25 +33,32 @@ project(
     # traps = ["The build cache hides a stale tree"],    # measured traps and ownership rules
     # token_rules = ["Read a log by its summary lines"],  # token discipline, the dashboard, cross-repository steps and release steps
     # changelog = "CHANGELOG.md",                  # the changelog file; the example workflow refuses a merge that leaves it untouched
+    # vars = {"mutation_command": ["sh", "scripts/mutation-pr.sh"], "labels": ["bug"]},  # free settings of your workflow; any string keys, with None, bool, string, number, list and dict values. `facts().vars` returns them as written
+    # The remediation example needs `mutation_command`: the command of your mutation tool, a list of words. It runs on the build host in the slot class "mutation" (see the host block below), with the base ref as its last word.
     # board = board(
     #     number = 3,                  # the number of the GitHub Project (v2) board; required
     #     started = "In Progress",     # the Status column that the remediation example sets when the draft pull request opens; required
     #     merged = "Done",             # the Status column that it sets after the merge; required
     #     owner = "your-org",          # the login that owns the board; the default is the owner of `repo`
     # ),                               # optional. With no board block the example makes no board call. The token needs the `project` scope
-    # rounds = rounds(
-    #     base = "integration/r2",         # the branch of the round; the round id is round/<base>; required
-    #     owner = "your-login",            # the login of the owner; required
-    #     lane_cap = 4,                    # the lanes that run at once, 1 or more; required
-    #     fix_rounds = 5,                  # the fix rounds for one item, 1 or more; required
-    #     label = "beehave-round",         # the tracker label that selects the items; set this or `items`, not both; required
-    #     # items = ["12", "15"],          # the explicit list of item ids, in place of `label`
-    #     next_base = "integration/r3",    # the branch of the next round; empty means the round does not cut
-    #     merge = False,                   # True lets the round land approved items; the default is False
-    #     integration_pr = 0,              # a number pins the integration pull request; 0 lets the round find it
-    #     wait_hours = 24,                 # the hours that the round waits for the owner, 1 or more
-    #     lane_kind = "impl",              # impl, papers or design; papers and design need `allow_paths`
-    # ),                                 # optional. Also: owner_email, source_checkout, acceptance, base_result, base_reds, base_reds_file, allow_paths
+    # The remediation example reads the settings of a round from the key `round` of `vars`. The engine reads none of them, and the example refuses a missing or wrong one. A project has one `vars`, so put the key `round` in the same dict as your other keys:
+    # vars = {"round": {
+    #     "base": "integration/r2",         # the branch of the round; the round id is round/<base>; required
+    #     "owner": "your-login",            # the login of the owner; required
+    #     "lane_cap": 4,                    # the lanes that run at once, 1 or more; required
+    #     "fix_rounds": 5,                  # the fix rounds for one item, 1 or more; required
+    #     "label": "beehave-round",         # the tracker label that selects the items; set this or "items", not both; required
+    #     # "items": ["12", "15"],          # the explicit list of item ids, in place of "label"
+    #     "next_base": "integration/r3",    # the branch of the next round; empty means the round does not cut
+    #     "merge": False,                   # True lets the round land approved items; the default is False
+    #     "integration_pr": 0,              # a number pins the integration pull request; 0 lets the round find it
+    #     "wait_hours": 24,                 # the hours that the round waits for the owner, 1 or more; the default is 24
+    #     "lane_kind": "impl",              # impl, papers or design; papers and design need "allow_paths"
+    #     "steps": {"review": {"model": "your-model", "runner": "opencode-1"}},  # the model and the runner of a step; a step left out keeps its default model and the pool pick
+    #     "design_after": 2,                # the fixes on one mechanism before the design step, 1 to 100
+    #     "void_reruns": 2, "void_asks": 3, # the reruns and the owner questions for a void gate, 0 to 100
+    #     "escalate_after": 3,              # the last fix round on the step "fix"; later rounds start fresh on "fix_late", 0 to 100
+    # }},                                 # optional. Also: owner_email, source_checkout, acceptance, base_result, base_reds, base_reds_file, allow_paths
     # schedules = [
     #     schedule(
     #         name = "weekly-bump",          # lower case letters, digits and hyphens; unique in the project; required
@@ -72,7 +79,11 @@ project(
     #     max_run = "24h",         # the host is deleted after this run time (default "24h"); SkyPilot documents this limit for GPU instances only
     #     disk_floor_gb = 50,      # a host with less free space gets no new job; required
     #     disk_wait_minutes = 10,  # a job under the floor waits this many minutes for space, then is refused (default 0: refused at once)
+    #     slots = {"mutation": 1}, # at most this many host jobs of a class at once, for a command call with slots = "<class>" (default: no class)
     #     bank_budget = "20s",     # the bank scan gives each repository this long for all its git calls; a repository that is slower counts as unbanked (default "20s")
+    #     lost_job_wait = "60m",   # how long a job that lost its link waits for the proof that it no longer runs; from "1m" to "24h" (default "60m")
+    #     lost_after = "5m",       # how long a job gets no answer to a read before the wait ends as lost; above zero (default "5m")
+    #     stop_limit = "5m",       # how long a job may take to end after a cancel; above zero (default "5m")
     #     private_remote = "git@example.com:your-org/your-repo-private.git",  # where beehave pushes unbanked work before the host goes down
     #     skypilot = skypilot(
     #         cloud = "gcp",       # empty leaves the choice to SkyPilot

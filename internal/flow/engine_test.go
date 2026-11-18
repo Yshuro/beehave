@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 const privateMode = os.FileMode(0o600)
@@ -53,6 +54,9 @@ func TestOptions_RefuseUnusableSettingsForTheEngineAndTheClient(t *testing.T) {
 		{"an_empty_version", func(o *Options) { o.Version = "" }, "build version is empty"},
 		{"a_relative_state_folder", func(o *Options) { o.StateDir = "state" }, "not an absolute path"},
 		{"no_agent_slot", func(o *Options) { o.MaxConcurrent = 0 }, "agents.max_concurrent is 0: set it to 1 or more"},
+		{"a_negative_per_login", func(o *Options) { o.PerLogin = -1 }, "agents.per_login is -1: set it to 1 or more"},
+		{"a_per_login_above_a_queue_cap", func(o *Options) { o.MaxConcurrent, o.MaxReviewConcurrent, o.PerLogin = 3, 1, 2 }, "agents.per_login is 2: set it to agents.max_concurrent (3) or agents.max_review_concurrent (1), whichever is lower, or less"},
+		{"a_negative_review_lookback", func(o *Options) { o.ReviewLookbackDays = -1 }, "agents.review_lookback_days is -1: set it to 1 or more"},
 		{"a_negative_review_poll", func(o *Options) { o.ReviewPoll = -time.Minute }, "review poll interval is -1m0s: set it to 0 or more"},
 	}
 
@@ -78,7 +82,7 @@ func TestOpenStore_RefusesAFolderOthersCanUse(t *testing.T) {
 	harness := newHarness(t)
 	harness.fresh(t)
 	require.NoError(t, os.Mkdir(harness.opts.StateDir, 0o700))
-	require.NoError(t, os.Chmod(harness.opts.StateDir, 0o777)) //nolint:gosec // the test needs an open folder to prove the refusal
+	require.NoError(t, exectest.ChmodFolder(harness.opts.StateDir, 0o777)) // the test needs an open folder to prove the refusal
 
 	_, err := NewEngine(t.Context(), harness.opts, harness.deps())
 	require.Error(t, err)
@@ -218,7 +222,7 @@ func TestRun_AnOpenRunOfTheItemIsJoinedNotStartedAgain(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	first := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	second := runInBackground(engine, testItem)
 
@@ -228,7 +232,7 @@ func TestRun_AnOpenRunOfTheItemIsJoinedNotStartedAgain(t *testing.T) {
 
 	require.NoError(t, client.Answer(testItem, "go"))
 
-	firstOutcome, secondOutcome := <-first, <-second
+	firstOutcome, secondOutcome := receive(t, first), receive(t, second)
 	require.NoError(t, firstOutcome.err)
 	require.NoError(t, secondOutcome.err)
 	assert.Equal(t, firstOutcome.result, secondOutcome.result)
@@ -275,12 +279,12 @@ func TestRun_OneAgentPerLoginAndAtMostMaxConcurrentInAll(t *testing.T) {
 			first, second := runInBackground(engine, "1"), runInBackground(engine, "2")
 
 			// Both items reach their first phase. The store shows whether the second phase waits in the queue or runs.
-			eventually(t, func() bool { return harness.agents.running() == test.wantTotal })
-			eventually(t, func() bool { return enqueuedPhases(t, engine) == 2-test.wantTotal })
+			waitOn(t, condition(func() bool { return harness.agents.running() == test.wantTotal }))
+			waitOn(t, condition(func() bool { return enqueuedPhases(t, engine) == 2-test.wantTotal }))
 			release()
 
-			require.NoError(t, (<-first).err)
-			require.NoError(t, (<-second).err)
+			require.NoError(t, receive(t, first).err)
+			require.NoError(t, receive(t, second).err)
 			assert.Equal(t, test.wantLogin, harness.agents.maxLogin)
 			assert.Equal(t, test.wantTotal, harness.agents.maxTotal)
 		})
@@ -296,7 +300,7 @@ func TestRun_AnOtherVersionStrandsTheOpenRunAndEveryCommandSaysSo(t *testing.T) 
 	same, other := harness.client(t, testVersion), harness.client(t, "v2")
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	infos, err := other.Status()
 	require.NoError(t, err)
@@ -312,7 +316,7 @@ func TestRun_AnOtherVersionStrandsTheOpenRunAndEveryCommandSaysSo(t *testing.T) 
 	require.ErrorContains(t, other.Answer(testItem, "go"), "Start version v1 to finish it")
 
 	require.NoError(t, same.Answer(testItem, "go"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestEngine_PinsTheApplicationVersionToTheBuildVersion(t *testing.T) {
@@ -325,12 +329,67 @@ func TestEngine_PinsTheApplicationVersionToTheBuildVersion(t *testing.T) {
 	_, err := engine.Run(testItem, testProject)
 	require.NoError(t, err)
 
-	assert.Equal(t, "v1.2.3-pinned+core1.agent1.tracker1.forge1.land1.gate1.host1.round1", dbos.GetApplicationVersion(engine.ctx), "the build version and one version for each step module")
+	assert.Equal(t, "v1.2.3-pinned+core3.agent8.tracker1.forge2.land4.gate5.host1.round2", dbos.GetApplicationVersion(engine.ctx), "the build version and one version for each step module")
 
 	infos, err := harness.client(t, "v1.2.3-pinned").Status()
 	require.NoError(t, err)
 	require.Len(t, infos, 1)
 	assert.Equal(t, "v1.2.3-pinned", infos[0].Version)
+}
+
+func TestEngine_ARunAfterTheShutdownIsRefusedByTheEngine(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	engine := harness.engine(t)
+	require.NoError(t, engine.Shutdown())
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.ErrorIs(t, err, errEngineShutDown)
+	require.ErrorContains(t, err, "item 12 was not started: run beehave run 12 again")
+	assert.Empty(t, rowsOf(t, harness.client(t, testVersion), testItem), "a refused run stores no row")
+}
+
+func TestEngine_TheShutdownWaitsForAStartInFlight(t *testing.T) {
+	t.Parallel()
+
+	engine := newHarness(t).engine(t)
+
+	// Hold the start as a run does between its store read and the hand-off of the run to the library.
+	engine.starts.RLock()
+
+	// The cleanup releases the start before the cleanup of the engine shuts it down, so a failed check does not hang the test.
+	release := sync.OnceFunc(engine.starts.RUnlock)
+	t.Cleanup(release)
+
+	down := make(chan error, 1)
+
+	go func() { down <- engine.Shutdown() }()
+
+	// A new reader fails only while a writer waits for the lock: the shutdown has begun and waits for the start.
+	// A stopped library also ends the poll, so a shutdown that does not wait fails the check below at once.
+	waitOn(t, condition(func() bool {
+		if engine.ctx.Err() != nil {
+			return true
+		}
+
+		if engine.starts.TryRLock() {
+			engine.starts.RUnlock()
+
+			return false
+		}
+
+		return true
+	}))
+
+	whileHeld := engine.ctx.Err()
+
+	release()
+
+	require.NoError(t, whileHeld, "the library is not stopped while a start is in flight")
+	require.NoError(t, receive(t, down))
+	assert.True(t, engine.stopped)
 }
 
 func TestEngine_RunsAsTheLocalExecutor(t *testing.T) {

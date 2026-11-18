@@ -105,6 +105,10 @@ func (m *memHost) Cancel(_ context.Context, id model.JobID) error {
 
 func (m *memHost) Log(context.Context, model.JobID) (string, error) { return "", m.fail() }
 
+func (m *memHost) LostProof(context.Context, model.JobID) (model.LostProof, error) {
+	return model.LostProof{}, m.fail()
+}
+
 func (m *memHost) WorkRoot(context.Context) (string, error) {
 	if m.root != "" {
 		return m.root, m.fail()
@@ -147,6 +151,56 @@ func (d *driftingRoot) WorkRoot(context.Context) (string, error) {
 	d.calls++
 
 	return "/home/lane" + strconv.Itoa(d.calls), nil
+}
+
+// lostHost is a host whose proof read answers from fields. up says whether the link is up.
+type lostHost struct {
+	*memHost
+
+	up       bool
+	whenDown model.LostProof
+	whenUp   model.LostProof
+	err      error
+}
+
+func (l *lostHost) LostProof(context.Context, model.JobID) (model.LostProof, error) {
+	if l.up {
+		return l.whenUp, l.err
+	}
+
+	return l.whenDown, l.err
+}
+
+func TestCheckLostProof_ReportsAProofWhileTheLinkIsDownAnErrorAndAWrongKind(t *testing.T) {
+	t.Parallel()
+
+	stopped := model.LostProof{Kind: model.LostStopped}
+
+	for name, tc := range map[string]struct {
+		host *lostHost
+		want string
+	}{
+		"a proof while the link is down": {&lostHost{memHost: newMemHost(), whenDown: stopped, whenUp: stopped}, "the proof while the link is down"},
+		"an error":                       {&lostHost{memHost: newMemHost(), whenUp: stopped, err: errDown}, "unexpected error"},
+		"another kind of proof":          {&lostHost{memHost: newMemHost(), whenUp: model.LostProof{Kind: model.LostEnded}}, "the proof once the link is back"},
+		"no proof where one is due":      {&lostHost{memHost: newMemHost()}, "the proof once the link is back"},
+	} {
+		rec := &recorder{}
+		tc.host.up = false
+
+		hosttest.CheckLostProof(rec, tc.host, hosttest.LostJob{
+			ID: "1", LinkDown: func() { tc.host.up = false }, LinkUp: func() { tc.host.up = true }, Proof: model.LostStopped,
+		})
+
+		assert.Contains(t, fmt.Sprint(rec.failures), tc.want, name)
+	}
+
+	rec := &recorder{}
+	good := &lostHost{memHost: newMemHost(), whenUp: stopped}
+
+	hosttest.CheckLostProof(rec, good, hosttest.LostJob{ID: "1", LinkDown: func() { good.up = false }, LinkUp: func() { good.up = true }, Proof: model.LostStopped})
+
+	assert.Empty(t, rec.failures, "a host that gives no proof while the link is down and its proof after passes")
 }
 
 func TestTestHost_RunsAgainstAnAdapter(t *testing.T) {

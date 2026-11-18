@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,7 +15,9 @@ import (
 
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/agent/claude"
+	"github.com/tobocop2/beehave/internal/agent/opencode"
 	"github.com/tobocop2/beehave/internal/config"
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/pool"
@@ -47,7 +50,8 @@ func (lineAdapter) Line(line string) (string, string) {
 	return "", ""
 }
 
-// Calls reads the lines "bash=<command>", "bash:<id>=<command>", "refused=<id>", "skill=<name>" and "result=end". A line that starts with "junk" is invalid.
+// Calls reads the lines "bash=<command>", "bash:<id>=<command>", "refused=<id>", "skill=<name>", "limit=<limit>" (see parseLimit), "denied=<reason>" and "result=end".
+// A line that starts with "junk" is invalid.
 func (lineAdapter) Calls(line string) agent.Seen {
 	var seen agent.Seen
 
@@ -76,6 +80,10 @@ func (lineAdapter) Calls(line string) agent.Seen {
 		seen.Failed = subtype
 	}
 
+	if limit, ok := cutPrefix(line, "limit="); ok {
+		seen.Limit = parseLimit(limit)
+	}
+
 	if dollars, ok := cutPrefix(line, "cost="); ok {
 		parsed, err := strconv.ParseFloat(dollars, 64)
 		if err != nil {
@@ -87,8 +95,27 @@ func (lineAdapter) Calls(line string) agent.Seen {
 
 	seen.Result = line == "result=end"
 	_, seen.Invalid = cutPrefix(line, "junk")
+	seen.Denied, _ = cutPrefix(line, "denied=")
 
 	return seen
+}
+
+// parseLimit reads "<kind>/<window>" or "<kind>/<window>@<unix seconds>".
+func parseLimit(text string) *agent.Limit {
+	kind, rest, _ := strings.Cut(text, "/")
+	window, unix, timed := strings.Cut(rest, "@")
+	limit := &agent.Limit{Kind: agent.LimitKind(kind), Window: window}
+
+	if timed {
+		seconds, err := strconv.ParseInt(unix, 10, 64)
+		if err != nil {
+			panic(err)
+		}
+
+		limit.ResetsAt = time.Unix(seconds, 0).UTC()
+	}
+
+	return limit
 }
 
 func (lineAdapter) TranscriptPath(configDir, dir, session string) string {
@@ -375,6 +402,55 @@ func TestAgents_ALineThatTheRunnerDroppedIsAViolationLine(t *testing.T) {
 	assert.Equal(t, []string{"a line of the output was too long to check"}, got.Violations)
 }
 
+func TestAgents_AGuardThatDidNotLoadIsAViolationLine(t *testing.T) {
+	t.Parallel()
+
+	f := newAgentFixture("session=s1\n", agent.Result{Outcome: agent.OutcomeExited, GuardMissing: true})
+	req := request()
+	req.Forbid = []model.FindingKind{model.FindingBulkStaging}
+
+	got, err := f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{guardNotLoaded}, got.Violations)
+
+	f = newAgentFixture("session=s1\n", agent.Result{Outcome: agent.OutcomeExited})
+	got, err = f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Empty(t, got.Violations)
+}
+
+func TestAgents_RequireSkillsOnACLIThatReportsNoSkillCallsDoesNotStartTheRun(t *testing.T) {
+	t.Parallel()
+
+	f := newAgentFixture("session=s1\n", agent.Result{Outcome: agent.OutcomeExited})
+	f.agents.adapter = func(model.Agent) agent.Adapter { return opencode.New() }
+	f.agents.run = func(context.Context, agent.Spec) agent.Result { t.Fatal("the paid run started"); return agent.Result{} }
+	req := request()
+	req.RequireSkills = []string{"blast"}
+
+	got, err := f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeNotStarted, got.Outcome)
+	assert.Contains(t, got.Note, "require_skills")
+	assert.Contains(t, got.Note, "opencode does not report skill calls")
+}
+
+func TestAgents_RequireSkillsOnACLIThatReportsThemStarts(t *testing.T) {
+	t.Parallel()
+
+	f := newAgentFixture("session=s1\n", agent.Result{Outcome: agent.OutcomeExited})
+	req := request()
+	req.RequireSkills = []string{"blast"}
+
+	got, err := f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeExited, got.Outcome)
+}
+
 func TestAgents_AnOutputWithNoResultLineIsAViolationLine(t *testing.T) {
 	t.Parallel()
 
@@ -615,6 +691,259 @@ func TestAgents_ACapOnTheResultLineEndsTheRunAsACapWhateverTheExitCode(t *testin
 			assert.Equal(t, "s1", got.Session)
 			assert.Equal(t, "halfway", got.Text)
 		}
+	}
+}
+
+func TestAgents_ARunThatARateLimitStoppedIsLimitedNotFailed(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		code int
+	}{
+		{"exit_code_zero", 0},
+		{"exit_code_one", 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture("session=s1\ntext=halfway\nlimit=rate/five_hour@1795006800\nlimit=spend/seven_day\nfailed=success\n", agent.Result{Outcome: agent.OutcomeExited, ExitCode: tc.code})
+			f.bash = []string{"git add -A"}
+			req := request()
+			req.Forbid = []model.FindingKind{model.FindingBulkStaging}
+
+			got, err := f.agents.Run(t.Context(), req)
+
+			require.NoError(t, err)
+			assert.Equal(t, agent.OutcomeLimited, got.Outcome)
+			assert.Equal(t, tc.code, got.ExitCode)
+			assert.Equal(t, &agent.Limit{Kind: agent.LimitRate, Window: "five_hour", ResetsAt: time.Unix(1795006800, 0).UTC()}, got.Limit, "the first limit of the output stopped the run")
+			assert.Equal(t, "the provider refused more work at its rate limit five_hour until 2026-11-18T13:00:00Z", got.Note)
+			assert.Equal(t, "s1", got.Session)
+			assert.Equal(t, "halfway", got.Text)
+			assert.Equal(t, []string{"bulk-staging: git add -A"}, got.Violations)
+		})
+	}
+}
+
+func TestAgents_ARunThatALimitStoppedBeforeItNamedASessionIsNotAnError(t *testing.T) {
+	t.Parallel()
+
+	f := newAgentFixture("limit=spend/\n", agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1})
+	f.noResult = true
+
+	got, err := f.agents.Run(t.Context(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeLimited, got.Outcome)
+	assert.Equal(t, "the provider refused more work at its spend limit, and the agent gave no reset time", got.Note)
+	assert.Empty(t, got.Session)
+}
+
+func TestAgents_ALimitedRunKeepsTheNoteOfTheRunnerAndAddsTheNoteOfTheLimit(t *testing.T) {
+	t.Parallel()
+
+	f := newAgentFixture("session=s1\nlimit=rate/five_hour\nfailed=success\n", agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1, Note: "write the output: disk full"})
+
+	got, err := f.agents.Run(t.Context(), request())
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeLimited, got.Outcome)
+	assert.Equal(t, "write the output: disk full; the provider refused more work at its rate limit five_hour, and the agent gave no reset time", got.Note)
+}
+
+func TestAgents_ALimitThatTheRunGotPastIsNoLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, output string
+		want         agent.Outcome
+	}{
+		{"success", "session=s1\nlimit=rate/five_hour\n", agent.OutcomeExited},
+		{"cap", "session=s1\nlimit=rate/five_hour\nstop=turns\n", agent.OutcomeTurnCap},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(tc.output, agent.Result{Outcome: agent.OutcomeExited})
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.Outcome)
+			assert.Nil(t, got.Limit)
+		})
+	}
+}
+
+func TestAgents_ALimitOnARunThatDidNotExitKeepsItsOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result agent.Result
+	}{
+		{"timed_out", agent.Result{Outcome: agent.OutcomeTimedOut, ExitCode: -1}},
+		{"canceled", agent.Result{Outcome: agent.OutcomeCancelled, ExitCode: -1}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture("session=s1\nlimit=rate/five_hour\nfailed=success\n", tc.result)
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.result, got)
+		})
+	}
+}
+
+// claudeStream returns the lines of a fixture of the claude adapter at the given indexes, then the error result line that ends a refused run.
+func claudeStream(t *testing.T, name string, indexes ...int) string {
+	t.Helper()
+
+	data, err := fs.ReadFile(os.DirFS(filepath.Join("..", "..", "internal", "agent", "claude", "testdata")), name)
+	require.NoError(t, err)
+
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+
+	var stream strings.Builder
+	for _, index := range indexes {
+		stream.WriteString(lines[index] + "\n")
+	}
+
+	stream.WriteString(`{"type":"result","subtype":"success","is_error":true,"session_id":"0b6e2d8a-3c51-4f7e-a9d2-6e4b1c7f3a85"}` + "\n")
+
+	return stream.String()
+}
+
+func TestAgents_AClaudeStreamOfARefusalThatNoWaitCuresEndsFailedWithTheReason(t *testing.T) {
+	t.Parallel()
+
+	const (
+		credits = "the provider asks for usage credits, and no wait buys them: add usage credits or use another model"
+		pause   = "the provider paused the usage of the organization, and no wait ends the pause: contact the support of the provider"
+	)
+
+	tests := []struct {
+		name, fixture string
+		indexes       []int
+		want          string
+	}{
+		{"credits_event_then_credits_assistant_line", "rate-limited-credits-required.jsonl", []int{2, 1}, credits},
+		{"pause_event_then_pause_assistant_line", "rate-limited-paused.jsonl", []int{0, 1}, pause},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name+"/exit_code_one", func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(claudeStream(t, tc.fixture, tc.indexes...), agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1, Note: "write the output: disk full"})
+			f.agents.adapter = func(model.Agent) agent.Adapter { return claude.Adapter{} }
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1, Note: "write the output: disk full; " + tc.want}, got, "the run fails with its exit code and waits for no reset")
+		})
+
+		t.Run(tc.name+"/exit_code_zero", func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(claudeStream(t, tc.fixture, tc.indexes...), agent.Result{Outcome: agent.OutcomeExited})
+			f.agents.adapter = func(model.Agent) agent.Adapter { return claude.Adapter{} }
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.ErrorIs(t, err, errDenied)
+			require.ErrorContains(t, err, tc.want)
+			assert.Equal(t, agent.Result{Outcome: agent.OutcomeExited, Note: tc.want}, got)
+		})
+	}
+}
+
+func TestAgents_ADeniedRunFailsAndWaitsForNoLimit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, output string
+		noResult     bool
+	}{
+		{"a_limit_came_first", "session=s1\nlimit=rate/five_hour@1795006800\ndenied=paused\nfailed=success\n", false},
+		{"the_first_reason_stays", "session=s1\ndenied=paused\ndenied=no credits\nfailed=success\n", false},
+		{"no_result_line", "denied=paused\n", true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(tc.output, agent.Result{Outcome: agent.OutcomeExited})
+			f.noResult = tc.noResult
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.ErrorIs(t, err, errDenied)
+			assert.Equal(t, agent.Result{Outcome: agent.OutcomeExited, Note: "paused"}, got)
+		})
+	}
+}
+
+func TestAgents_ADenialThatTheRunGotPastIsNoFailure(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name, output string
+		want         agent.Outcome
+	}{
+		{"success", "session=s1\ndenied=paused\n", agent.OutcomeExited},
+		{"cap", "session=s1\ndenied=paused\nstop=turns\n", agent.OutcomeTurnCap},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture(tc.output, agent.Result{Outcome: agent.OutcomeExited})
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got.Outcome)
+			assert.Empty(t, got.Note)
+		})
+	}
+}
+
+func TestAgents_ADenialOnARunThatDidNotExitKeepsItsOutcome(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result agent.Result
+	}{
+		{"timed_out", agent.Result{Outcome: agent.OutcomeTimedOut, ExitCode: -1}},
+		{"canceled", agent.Result{Outcome: agent.OutcomeCancelled, ExitCode: -1}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newAgentFixture("session=s1\ndenied=paused\nfailed=success\n", tc.result)
+
+			got, err := f.agents.Run(t.Context(), request())
+
+			require.NoError(t, err)
+			assert.Equal(t, tc.result, got)
+		})
 	}
 }
 
@@ -921,7 +1250,7 @@ func usageFixture(t *testing.T) (config.Config, flow.Options) {
 	t.Helper()
 
 	tools := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tools, "claude"), []byte("#!/bin/sh\necho fake-claude-ran >&2\nexit 7\n"), e2eToolMode))
+	require.NoError(t, exectest.Write(filepath.Join(tools, "claude"), "#!/bin/sh\necho fake-claude-ran >&2\nexit 7\n"))
 
 	cfg := config.Config{
 		Pool:    config.Pool{FiveHourMax: 90, SevenDayMax: 95},

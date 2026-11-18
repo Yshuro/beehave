@@ -19,7 +19,7 @@ func TestWaitDeadline_ReadsTheDeadlineOfTheLastReceiveRecordOnlyForAWaitWithATim
 
 	start := time.Now()
 	hour := start.Add(time.Hour).UnixMilli()
-	window := start.Add(ownerWaitLimit).UnixMilli()
+	window := start.Add(receiveWindow).UnixMilli()
 	sleep := func(output any) []dbos.StepInfo {
 		return []dbos.StepInfo{{StepName: "login#1"}, {StepName: sleepStep, StartedAt: start, Output: output}}
 	}
@@ -31,6 +31,20 @@ func TestWaitDeadline_ReadsTheDeadlineOfTheLastReceiveRecordOnlyForAWaitWithATim
 	assert.True(t, waitDeadline(sleep("soon"), "q").IsZero(), "an output that is not a time")
 	assert.True(t, waitDeadline(nil, "q").IsZero(), "a run with no record")
 	assert.True(t, waitDeadline([]dbos.StepInfo{{StepName: sleepStep, Output: "1"}, {StepName: "DBOS.recv"}}, "q").IsZero(), "an answered receive")
+}
+
+func TestWaitDeadline_ADeadlineOneMinuteBelowTheReceiveWindowIsNoDeadlineAndOneMillisecondLessIsOne(t *testing.T) {
+	t.Parallel()
+
+	start := time.UnixMilli(1_700_000_000_000)
+	sleep := func(at time.Time) []dbos.StepInfo {
+		return []dbos.StepInfo{{StepName: sleepStep, StartedAt: start, Output: strconv.FormatInt(at.UnixMilli(), 10)}}
+	}
+
+	edge := start.Add(receiveWindow - time.Minute)
+
+	assert.True(t, waitDeadline(sleep(edge), "q").IsZero(), "exactly at the edge counts as a window of a wait with no timeout")
+	assert.Equal(t, edge.Add(-time.Millisecond), waitDeadline(sleep(edge.Add(-time.Millisecond)), "q"), "just under the edge is a deadline")
 }
 
 func TestStatus_ARoundsCapThatTheRunComputesIsCheckedByTheRun(t *testing.T) {
@@ -153,16 +167,29 @@ func TestStatus_AnOpenRunNamesTheStepThatRunsNow(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	info := onlyRun(t, client)
 	assert.Equal(t, "agent:work#1", info.Now)
 	assert.Contains(t, info.Notes(), "now agent:work#1")
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.Empty(t, onlyRun(t, client).Now, "a finished run runs no step")
+}
+
+// ownerAsksWithADeadline is the fact that the open run shows its question and the deadline of its wait. The run sets the question before the receive records its deadline, so a wait on the question alone can read the run in between.
+func ownerAsksWithADeadline(t *testing.T, client *Client) waiting[struct{}] {
+	t.Helper()
+
+	read := newStatusRead(client)
+
+	return waiting[struct{}]{what: "the open run to show a question and a deadline", run: runOfClient(t, client), last: read.last, read: func() (struct{}, bool, error) {
+		infos := read.next()
+
+		return struct{}{}, read.err == nil && len(infos) == 1 && infos[0].Question != "" && !infos[0].Deadline.IsZero(), nil
+	}}
 }
 
 func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *testing.T) {
@@ -178,7 +205,7 @@ func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *test
 
 	before := time.Now()
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsksWithADeadline(t, client))
 
 	info := onlyRun(t, client)
 	assert.Equal(t, "What now?", info.Question)
@@ -190,7 +217,9 @@ func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *test
 	assert.Equal(t, info.Deadline, view.Deadline, "the run view shows the same deadline")
 
 	require.NoError(t, client.Answer(testItem, "go on"))
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent of the answered run to start", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
+		return struct{}{}, harness.agents.running() == 1, nil
+	}})
 
 	info = onlyRun(t, client)
 	assert.Equal(t, runRunning, info.State, "the run is still open")
@@ -202,7 +231,7 @@ func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *test
 	assert.True(t, view.Deadline.IsZero())
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestRunInfo_WaitingIsAnOpenRunWithAQuestion(t *testing.T) {
@@ -223,13 +252,14 @@ func TestStatus_ARunThatWaitsWithNoDeadlineShowsNone(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
+	waitOn(t, inASleep(t, engine))
 
 	info := onlyRun(t, client)
 	assert.True(t, info.Deadline.IsZero())
 
 	require.NoError(t, client.Answer(testItem, "go on"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestStatus_ARunShowsTheLastGateResultAndTheHeadItJudged(t *testing.T) {

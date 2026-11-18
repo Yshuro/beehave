@@ -31,8 +31,9 @@ When an engine already holds the state folder (`beehave serve` or another `beeha
 The workflow runs these steps in order:
 
 1. Claim the item.
-2. Run `main(item)` of the workflow file on one Starlark thread. Each builtin call runs as a recorded step, so a restart replays `main` and skips the steps that finished. Then run `finish(item)` if the file defines it, unless the run was canceled.
-3. Release the worktree, then release the claim.
+2. For a round item, make its worktree in a recorded step that stores the commit of the worktree (see "The folder of a program" in the workflow files). A resume replays the step, so the run keeps the commit that it started on, and a later step makes a removed worktree again at that commit. Any other item gets its worktree from its first `agent` call.
+3. Run `main(item)` of the workflow file on one Starlark thread. Each builtin call runs as a recorded step, so a restart replays `main` and skips the steps that finished. Then run `finish(item)` if the file defines it, unless the run was canceled.
+4. Release the worktree, then release the claim.
 
 #### The login of the run
 
@@ -93,7 +94,7 @@ Each agent step runs as a child workflow named `phase`. The phase starts the age
 
 The queue holds only phases. Phases run on the queue `agents`, or on the queue `reviews` for an agent call with `kind = "review"`.
 
-- The partition key of a phase is the login. Each partition of a queue runs one phase at a time.
+- The partition key of a phase is the login. Each partition of a queue runs at most `agents.per_login` phases at once. The default is 1.
 - Each queue has a global limit: `agents.max_concurrent` for `agents` and `agents.max_review_concurrent` for `reviews`.
 - The queues do not lend slots. The host never runs more than the sum of the two limits.
 - One login can run one review phase and one implement phase at once.
@@ -137,6 +138,39 @@ When the agent CLI stops a run at `agents.max_turns` or `agents.max_budget_usd`,
 
 `beehave resume` starts a new agent run with the same cap for each run. The cap of one agent run does not count across resumes. For the cap of an item run, see [Cost budgets](#cost-budgets).
 
+#### Provider limits
+
+When a provider limit (a rate limit or a spend limit) stops an agent run, the step does not fail. The phase ends with the outcome `limited` and records the limit in its `limit` field. The item run then waits for the reset and runs the same agent call again.
+
+- The wait is in the item run, after the phase, so it holds no slot of the agents queue.
+- The rerun is part of the same call. It uses no try of `output_tries`, and `earlier_calls` counts the call as one lane.
+- The rerun keeps the login of the limited run, because the session of the run lives in the config folder of that login. It resumes the session of the limited run, as a start after a lost step does (see [Resume or start again](#resume-or-start-again)). The saved session wins over the `resume` keyword of the call. A limited run that named no session is followed by a fresh rerun with the note of the limit in the prompt.
+- Before the rerun, the run cap and the tree cap are checked again. The limited run can spend money before the limit stops it, and that cost is in the sum.
+
+For try `t` and run `k` (from 0) inside the try, the call records these steps:
+
+| Step | When |
+|---|---|
+| `agent/caps` | In each phase, before the start marks: the look at the run cap and the tree cap. A stop ends the phase with `cap_stop` and no agent run. |
+| `…/budget<t>.<look>` | After a phase that the caps stopped: the stop. A durable sleep follows, then a new phase. The look number continues across the runs of the try. |
+| `…/limit<t>.<k>` | After a limited run. It holds `limit` (`kind`, `window`, `resets_at`), `login`, `wait_until`, `session`, `note` and the cost of the run. The `session` is the one that the limited run named, or the session that the run was given to resume when it named none: the session of a lost start, or of the limited run before it. The phase output records that session as `resume_of`. |
+| `DBOS.sleep` | After each limit step, until `wait_until`. |
+
+`wait_until` is fixed inside the limit step, so a restart during the wait sleeps only the time that is left and starts the agent once after the reset.
+
+| Case | What the step does |
+|---|---|
+| The limit has a reset time in the future | Sleeps until the reset time, then runs again. |
+| The reset time has passed | Sleeps the least wait (one minute), then runs again. |
+| The next run is limited again and its reset time has passed too | Fails. The error names the limit and the login. The reset time is wrong, and a loop on it has no end. |
+| The agent gives no reset time, and the usage read of the pool gives one for the login | The phase takes the read time as the reset time of the limit and records it. The step then waits as for any dated limit. A replay never reads the usage again. |
+| The agent gives no reset time, and the usage read gives none | Fails. The error names the limit and the login, and says to run `beehave resume <item>` when the limit is gone. |
+| The provider is overloaded (limit kind `overload`) | The pool read is not asked. The limit step sets `wait_until` to the wall clock plus a backoff of 1, 2, 4, 8 and 16 minutes, one for each overload in a row. The status shows the overload and the time of the next try. |
+| The overload goes on past the fifth wait | Fails with the error of the case with no reset time, in the limit step. A limit with a reset time between two overloads starts the backoff again. |
+| The provider refuses for a reason that no wait cures (usage credits, a pause of the organization) | Fails at once, with no limit step. |
+
+The usage read is the one that the login pick uses, over the login of the run. It dates a limit only while the login is over a usage cap of the pool. A failed read fails the phase, and the error says to run `beehave resume <item>`. In the cases that fail, the phase is the failed step, and the run records no limit step. The phase input of a rerun after a past reset holds `reset_passed`, so the phase knows that a second past reset fails. `beehave resume <item>` reopens the failed phase, as it reopens any failed agent run, and the agent runs again. The cost of the failed run counts once, in the cost record of a failed run.
+
 ### The `rewrote` output
 
 Every agent call returns `rewrote`. It is true when the commit of the item folder before the agent started is not in the history of its commit after the run, so the agent amended, squashed or reset.
@@ -161,9 +195,9 @@ Every agent call returns `cost_usd`: the total cost in dollars that the agent CL
 
 The three outputs `cost_usd`, `cost_estimated` and `cost_unknown` form one cost. Every place that shows, records or sums a cost carries all three: the step lines, the cost record of a failed run and the sum of the run. A sum that holds an estimate shows `(estimate)`. A sum that holds an unknown cost shows `(some cost unknown)`.
 
-When a run has a cost cap and its CLI does not cap dollars itself, the run does not start if its model has no price. A run cap stops the next step after a cost that is unknown, because the cap cannot be checked.
+When a run has a cost cap and its CLI does not cap dollars itself, the run does not start if its model has no price. A run cap and a tree cap stop the next step after a cost that is unknown, because the cap cannot be checked. A cost is unknown when its model has no price, or when its recorded cost cannot be read. The stop message names which.
 
-The cost is recorded in the phase and in the read step of the agent call. A replay returns the recorded cost and never asks the CLI again. A run that fails before its result line leaves no cost.
+The cost is recorded in the phase and in the read step of the agent call, and in the limit step of a run that a provider limit stopped. A replay returns the recorded cost and never asks the CLI again. A run that fails before its result line leaves no cost.
 
 #### The three caps
 
@@ -186,13 +220,14 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 **The cap of one item run: `agents.max_run_budget_usd`** (or `BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD`). It caps the sum for one item run.
 
 - A child workflow that the run spawns starts its own sum at 0. The cap applies to each sum alone.
-- Before an agent step starts, the engine adds the `cost_usd` that the earlier agent steps of the item run recorded, and the cost of each run that failed.
+- Before an agent step starts, the engine adds the `cost_usd` that the earlier agent steps of the item run recorded, the cost of each run that a provider limit stopped, and the cost of each run that failed.
 - If the sum is at or past the cap, the step waits before it starts. The run stays open and the step is not a failure. The stop names the cap and the spent sum.
 - The check runs only when a step starts, so one step can pass the cap by its own cost. The cap of the step (`max_budget_usd`) or the global cap limits that. With neither set, a step has no limit.
-- Each look at the caps is a recorded step named `budget`, and a stop is followed by a durable sleep before the next look. A step that started under the cap does not stop on a replay after the cap changes.
+- Each look at the caps is the first recorded step of the phase, `agent/caps`, after the claim and before the start marks. A stop ends the phase with no agent run. The item run records the stop in a step named `budget` and sleeps durably before it queues a new phase, which looks again. A step that started under the cap does not stop on a replay after the cap changes.
+- While a cap holds a step, the item run queues one phase with no agent run for each look: at most one a minute. The phase holds a slot of the agents queue only for the look.
 - The check reads the cap from the config of the engine that runs it. To resume a held round, raise the cap (or set it to 0) and restart the engine.
 - A cost that is unknown for an earlier step still fails the step: the cap cannot be checked against it.
-- The sum comes from recorded costs, so a replay gives the same answer. A resume does not: `beehave resume` of a failed agent step rewinds past the record of the cost of the failed run. The sum then lacks that cost, so each resume can add up to the cost of one run past the cap.
+- The sum comes from recorded costs, so a replay gives the same answer. The cost of a failed run goes to the DBOS stream `failed_runs` of the item run. A rewind keeps the entries of a stream, so after `beehave resume` the sum still holds the cost of the failed run. The resume rewinds a failed phase to its look, so the rerun of the agent step looks at the caps first and counts the cost.
 
 **The cap of an item tree: `agents.max_tree_budget_usd`** (or `BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD`). It caps the sum for the root run and every run it spawns.
 
@@ -200,7 +235,9 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 - A spawned run uses the cap of its root. It does not start a new sum and cannot raise the cap.
 - The rule and the wait are the same as for the run cap. Both caps apply when both are set.
 
-**The stop in the status.** `beehave status <run id> --json` shows `cap_stop` with `scope` (`run` or `tree`), `cap_usd`, `spent_usd` and `note` on the run, and on the line of the held agent step, while the run reads `running`.
+**The stop in the status.** `beehave status <run id> --json` shows `cap_stop` with `scope` (`run` or `tree`), `cap_usd`, `spent_usd` and `note` on the run, and on the line of the held agent step, while the run reads `running`. The stop goes away when a phase of the step finds no stop at its look, before its agent ends.
+
+**The wait for a provider limit in the status.** While an agent step waits for a provider limit to reset, `beehave status <run id> --json` shows `limit_wait` with `limit`, `login` and `wait_until` on the run and on the line of the step. The run reads `running`.
 
 #### Not covered
 
@@ -219,36 +256,86 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 
 ### Fix rounds
 
-The library `review_fix.star` sets the fix rounds. `examples/remediation/workflow.star` calls `review_fix` with the default of `rounds = 6`.
+The library `review_fix.star` sets the fix rounds. `examples/remediation/workflow.star` calls `review_fix` with `rounds` from the project setting `fix_rounds` (see [Fix caps across runs](#fix-caps-across-runs-earlier_calls)).
 
-#### Rounds
+#### Two levels: candidates and scoped fixes
 
-A round is one gate, one review and one fix. The loop starts with a review, so five fix rounds need six reviews: the sixth review reads the fifth fix. The loop leaves before the `fix` call of round 6, so the sixth pass never fixes.
+The loop has two levels. The outer level makes candidates, and `rounds` caps them. The inner level runs scoped fixes with no gate, up to `MAX_INNER = 3` times for each candidate.
 
-| Round | The `fix` agent |
+The inner level runs in this order:
+
+1. The agent `fix-scoped-<n>` fixes the open findings. It runs first only when findings are due: the violations of the implementer, or the findings that sent the last candidate back.
+2. The fresh agent `scoped-review-<n>` reads the head with the scope "the diff of the last fix". It writes only a verdict. When no findings were due, no fix ran: that first review of candidate 1 is `scoped-review-implement`, with the scope "the diff of the implementer".
+3. An approve with no violations ends the inner level. A `changes` gives the findings of the next scoped fix. After the third scoped review, the head is the candidate, whatever the verdict. The findings of that review go with any findings of the full checks to the next fix, and its violations keep the full review from a clean approve.
+
+Each candidate then gets the full checks once, in this order. The first entry with findings sends the candidate back to the inner level, and the entries after it do not run.
+
+1. The gate `candidate-gate` on the base. A void result reruns as `candidate-gate-void-<n>`. A void result with a host cause reruns as `candidate-gate-host-<k>`; see "The host loss limit".
+2. The checks before review `candidate-before-review`, which compare the head with `origin/<base>`.
+3. Each function in the list `checks` of the caller. The example passes its mutation run.
+4. The fresh agent `candidate-review` reads the whole pull request at the head that the gate passed (`pin` is that head).
+
+The loop ends when the full review approves and no lane run left a violation. If `rounds` candidates did not end it, the loop is exhausted.
+
+- A gate that ran and failed gives its report as the findings for the next scoped fix.
+- A gate that could not run stops the item with an error.
+- The fix prompt gets `round`, the fix round. The fixes after candidate k are round k, and the fixes inside candidate 1 are round 1.
+
+| Fix round | The `fix-scoped-<n>` agent |
 |---|---|
-| 1 to 3 | Resumes the session of the `implement` agent, on `sonnet`. |
-| 4 and 5 | Starts a fresh agent, on `opus`. |
+| 1 to `escalate_after` | Runs on the step `fix`. It resumes the session of the `implement` agent when `fix` and `implement` use the same runner. If the runners differ, it starts a fresh agent. |
+| After `escalate_after` | Starts a fresh agent on the step `fix_late`. With no `fix_late` entry, it starts a fresh agent on `fix`. |
 
-The loop ends when the gate passed and the review approved.
+`escalate_after` is 3 by default (`FIX_ESCALATE_AFTER`). A session belongs to one login, and a resume on another agent fails. So a fix resumes the implementer only when both steps name the same runner, or both name none and use the pool.
 
-- A gate that ran and failed gives its report as the findings of the round.
-- A gate that could not run stops the item with an error and uses no fix round.
-- The findings of round `k` go into the prompt of the `fix` call in round `k`.
+#### The steps and the limits
 
-The `review` call has a `pin` of `check.head`, the head that the gate passed, so the review reads only that head.
+The library holds no model name. The argument `steps` of `review_fix` is a dict from a step name to `{"model": text, "runner": text}`. The entries `implement`, `review` and `fix` are required. `design` is required when the call has a `design_prompt`. `fix_late` is optional. A missing or blank model is a refusal that names the step. A runner that is empty or left out means the pool pick. A step with a runner never reads the pool, so the usage caps of the pool do not apply to it, for a Claude runner too.
+
+The four limits are arguments of `review_fix`. The constants of the same names in capitals are the defaults.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `design_after` | `DESIGN_AFTER`, 2 | The fixes on one mechanism before the design step. |
+| `void_reruns` | `VOID_RERUNS`, 2 | The reruns of a void gate before the loop asks the owner. |
+| `void_asks` | `VOID_ASKS`, 3 | The questions to the owner about a void gate. |
+| `escalate_after` | `FIX_ESCALATE_AFTER`, 3 | The last fix round on the step `fix`. |
+
+`examples/remediation/workflow.star` reads both from the project file. The table `STEP_DEFAULTS` of the example is the one place that names a model: plan `opus`, implement `sonnet`, review `opus`, fix `sonnet`, fix_late `opus`, design `opus`, take_review `opus`, sync_review `opus`, sync_resolve `opus`, queue_audit `sonnet` and settle `sonnet`. `vars.round.steps` overrides the model, the runner or both of any step. `vars.round.design_after`, `void_reruns`, `void_asks` and `escalate_after` set the limits, each a whole number from its least value to 100. The example refuses an unknown step, an unknown field, a model that is not non-blank text, a runner that is not text and a limit out of range, each with the path of the key. It also refuses a review on the model of the implementer when at least two models are in use. A project on one model for every step is accepted. `beehave check workflow <file> --project <name> --dry-run` shows each refusal.
+
+The status caps follow from `rounds`: the review cap is `rounds * (MAX_INNER + 1)` and the fix cap is `rounds * MAX_INNER`.
+
+#### The `base` and `checks` arguments
+
+The keyword `base` of `review_fix` is required: the base branch of the item. The gate of each candidate runs on it.
+
+The argument `checks` is a list of functions of one argument, the passed gate. Each one returns an empty text for a clean head, or the findings as text.
+
+#### The result of the loop
+
+The result holds `head`, the commit that the last step of the loop judged. A scoped review can reject or a guard can stop before the first gate. Then `gate` is `None`, and `head` is the head of the last lane run. So a caller that holds the item reports `head`, not `gate.head`.
+
+#### The host loss limit
+
+A void gate has a host cause when its `host_loss` is not empty: the engine proved that the host job of the gate was lost. The gate gave no verdict about the code, and the host is not the fault of the item.
+
+- The loop reruns the gate as `candidate-gate-host-<k>`, with `k` from 1 for each call of the gate. The rerun takes no plain attempt: `void_reruns` and `void_asks` count only the voids with no host cause, and the fix round does not change.
+- The loop reads `host_losses` of the gate result, the count of the engine. It keeps no count of its own.
+- `HOST_LOSS_LIMIT` is 5, one constant in `review_fix.star`. A void gate whose `host_losses` is at or above the limit is not rerun. No fix agent reads its report.
+- The result of the loop then has `host_lost = true`, with no `held` reason. The caller decides what the loss costs.
+- The result always has `host_losses`, the highest count that any gate of the loop read. A passing rerun reads 0, so the loop keeps the maximum.
 
 #### Review verdicts
 
 A review verdict is `approve`, `changes` or `reject`.
 
-A `reject` ends the loop at once with no fix round, whatever the gate says. The loop returns `rejected = true`, and the example holds the item with the text of the review as the reason. The review runs only after a passing gate, so a failing gate gives no review and one fix round first. With `follow_ups = "forbid"`, open findings do not turn a `reject` into `changes`.
+A `reject` from a scoped review or the full review ends the loop at once with no more fixes. The loop returns `rejected = true`, and the example holds the item with the text of the review as the reason. The full review runs only after a passing gate, so a failing gate gives no full review and one scoped fix first. With `follow_ups = "forbid"`, open findings do not turn a `reject` into `changes`.
 
 #### The `guard` argument
 
-The argument `guard` of `review_fix` is a dict of `base`, `hold` and `own`. It turns on a `preflight` call before every review, design and fix agent. The calls are named `before-review-<round>`, `before-design-<round>` and `before-fix-<round>`.
+The argument `guard` of `review_fix` is a dict of `base`, `hold` and `own`. It turns on a `preflight` call before every review, design and fix agent. The calls are named `before-scoped-review-<candidate>`, `before-fix-<candidate>`, `before-design-<candidate>` and `before-review-<candidate>`.
 
-- The call passes the head the gate ran on, which is the head of the worktree. So a loop with a pull request needs each fix pushed before the next gate.
+- The call passes the head that the next agent reads, which is the head of the worktree. So a loop with a pull request needs each fix pushed before the next review.
 - A stop is a result. The loop returns `stopped = true` and starts no more agents.
 - The run reports the step, the exit code and the reason, as the stop at the intake does.
 
@@ -256,11 +343,19 @@ The argument `guard` of `review_fix` is a dict of `base`, `hold` and `own`. It t
 
 The builtin `earlier_calls(call = "<name>")` returns `count`: the number of `agent` calls with that `name` in the other runs of the item. It is a recorded step, so a replay keeps the count of the first start.
 
-The example lowers the fix cap by the count of its `fix` calls, so the cap holds for the pull request over every run of the item.
+A candidate counts as spent when its first agent starts: its first scoped fix `fix-scoped-1`, or `scoped-review-implement` when no findings were due. Each candidate makes one of these two calls once. The library function `candidates_spent()` adds up both calls in the other runs of the item, and the example loads it. The first candidate reviews the implementer, so `fix_rounds` fix rounds need one candidate more. The example passes:
+
+```
+rounds = max(fix_rounds + 1 - candidates_spent(), 0)
+```
+
+- An earlier run that ended early leaves the candidates that it did not start. A run that spent one candidate of `fix_rounds = 2` leaves two.
+- A run that stops after the first fix of a candidate and before its scoped review still spends that candidate.
+- After the cap, a run gets no candidate. The loop starts no review and no fix lane, and the example asks the owner to rule on the open findings.
 
 #### The `review_check` argument
 
-The argument `review_check` of `review_fix` is a function of one argument. The loop calls it with each review whose verdict is not `reject`.
+The argument `review_check` of `review_fix` is a function of one argument. The loop calls it with each full review whose verdict is not `reject`. Scoped reviews write only a verdict, so the loop does not call it for them.
 
 - An empty text goes on.
 - Any other text ends the loop at once with `held` set to it and no more fix lane. The example holds the item with that text.
@@ -274,7 +369,7 @@ The design round needs the argument `design_prompt` of `review_fix`. The default
 - Without it, the review declares only the output `verdict`, and the loop is the plain loop.
 - With it, the review also writes the output `mechanism`: the file path (it may add `:function`) that its open findings are about, or an empty text. The loop keys on the part before the first colon. A review prompt that writes no `mechanism` fails when `design_prompt` is set.
 
-The loop counts the `fix` steps of each mechanism as it runs, so no second counter exists beside the round. When a mechanism had two fix steps and the review still asks for changes on it, the next step is a `design` agent step with the prompt `design_prompt`, not a fix.
+The loop counts the scoped fix steps of each mechanism as it runs, so no second counter exists beside the candidate. When a mechanism had two fix steps and a review still asks for changes on it, the next step is a `design` agent step with the prompt `design_prompt`, not a fix. Scoped reviews write the output `mechanism` too, so the count includes the fixes inside one candidate.
 
 The design step writes a `decision` (`keep`, `replace` or `delete`) and a `reason`.
 
@@ -295,12 +390,13 @@ The argument `review_outputs` of `review_fix` (default: an empty list) names mor
 
 #### Violations of the lane runs
 
-The loop also gates on the violations of the lane runs. The latest violations are `impl.violations` in round 1, and after that the violations of the `fix` call of the round before.
+The loop also gates on the violations of the lane runs. The latest violations are `impl.violations` before the first fix, and after that the violations of the last scoped fix.
 
-- The review reads them.
-- When they are not empty, the `fix` call runs, even if the review approves. It gets them ahead of the review text as findings.
-- The loop does not end while they are not empty. So a hit in any lane run forces one more fix round and one more review of it.
-- If the violations are still not empty at round 6, the loop is exhausted and the owner rules.
+- When `impl.violations` is not empty, the first scoped fix runs before any review. It gets them as findings.
+- Each review reads the latest violations.
+- When they are not empty, the next scoped fix runs, even if the review approves. It gets them ahead of the review text as findings.
+- The loop does not end while they are not empty. So a hit in any lane run forces one more scoped fix and one more review of it.
+- If the violations are still not empty after the last candidate, the loop is exhausted and the owner rules.
 
 #### The wait for the owner
 
@@ -308,7 +404,8 @@ If the loop used all its rounds, the `exhausted` field of its result is true. Th
 
 **Deadline.**
 
-- With no `timeout` argument, the wait has no deadline. The receive starts again every seven days.
+- With no `timeout` argument, the wait keeps waiting until someone answers. It has no deadline. The engine renews the receive every seven days, and that renewal ends nothing.
+- The `timeout` argument sets the deadline of a wait. To bound the owner wait of a `wait` step, set `timeout` in that step. It does not bound the owner wait for a lost job, which `docs/design/hosts.md` describes.
 - With `timeout = "48h"`, the wait ends at the deadline. The `timed_out` field of its result is true, and the `answer` field is empty.
 - `beehave check workflow` and the run refuse a `timeout` of zero or below, because it would read as no deadline. For a wait with no deadline, leave the argument out.
 - DBOS records the deadline of the wait. A run that stops and resumes after the deadline times out at once. A run that resumes before it waits for the time left.
@@ -461,9 +558,9 @@ The release runs beside the tick, so a slow tracker delays no renewal and no sca
 
 DBOS records a step when it ends, so a step that is lost in the middle leaves no record. The phase writes its own start mark, the step `agent/start<n>`, before it starts the agent. A recovered phase finds the marks of the earlier starts. Each earlier start that has no end was lost.
 
-Every rewind that beehave does goes back to the start mark of the agent step, so the rewind drops the mark with the step. This covers a failed step and a canceled one. So a start with no end exists only after the process was lost, and a cancel followed by `beehave resume` is not a loss.
+Every rewind that beehave does goes back to the look at the caps that opens the phase, before the start marks, so the rewind drops the marks with the step. This covers a failed step and a canceled one. So a start with no end exists only after the process was lost, and a cancel followed by `beehave resume` is not a loss.
 
-A rewind of the phase, after a failure or a cancel, goes back to the first start mark that has no agent step after it. It drops every mark and loss record of that sequence, so a resumed phase starts clean.
+A rewind of the phase, after a failure or a cancel, goes back to the first look or start mark that has no agent step after it. It drops the look and every mark and loss record of that sequence, so a resumed phase looks at the caps again and starts clean.
 
 #### The loss record
 
@@ -474,16 +571,35 @@ The phase records the loss in the step `agent/lost<n>`, a recorded step in the r
 - If the store holds no claim lease for the item, the run time is unknown. The note, the record and the log say so, and no time is made up.
 - The cause is always "the process ended with no record". The agent was a child of the engine that died, and nothing it left shows an exit status or a signal.
 
+#### The saved session
+
+The agent step saves the session id of the agent while the agent runs. The tap of the output gives each new id to the engine at the line that holds it, which is the `init` line, before any tool call. The engine writes the id as the DBOS event `session` of the phase, with `SetEvent` from the context of the agent step. That write takes no step id, so the step count stays the same. A saver goroutine does the write, and the tap only gives it the newest id, so a slow write never stops the reading of the output. While the store is down, DBOS retries the write until the step ends: the agent runs on, and the idle timer still sees its output. The step waits for the saver before it records its output, so the event comes first. A saved id adds the line "saved the session of the agent" with the item and the session to `flow.log`. A refused write logs a warning and the run goes on. No side file holds the id.
+
+The `agent/lost<n>` step reads the event of the phase with the context of the engine, because DBOS refuses a read of an event inside a step. The record holds the id as `session`, so a second replay resumes the same session. A rewind of the phase drops the event with the agent step that wrote it, so a rerun after `beehave resume` starts a fresh session.
+
+The record also holds `diff_stat`: the output of `git diff --stat --stat-count=50 <start commit>` in the item folder. The start commit is the head that the render step of the call read. The summary covers the commits of the lost agent and its edits to tracked files, for any history of the folder (amend, rebase, reset). A plain folder has no start commit and no summary.
+
+The render step also writes the start commit to the per-worktree ref `refs/worktree/beehave/call-start` of the item folder. Git keeps a per-worktree ref in the admin folder of that worktree, so `git worktree remove` and `git worktree prune` delete it with the worktree. The engine reads the diff only when the folder holds the ref at the start commit. A missing ref, or a ref at another commit, means that the folder is not the one that the call started in: it was made again or removed, or someone removed the mark. The record then holds no summary. The ref also keeps the start commit reachable, so `git gc` does not remove it. Only the note uses the summary. If the engine cannot find the folder or read the diff, the step logs a warning with the reason, the note says that the engine could not read the summary, and the session still resumes. A failed read of the event fails the step.
+
+#### Resume or start again
+
+When the loss record holds a session, the agents layer decides once, before the start, whether the session can resume. It cannot resume when the CLI of the runner has no resume option, or when the transcript file of the session is missing (a moved worktree, a cleaned login folder, another login). A session that can resume starts with `--resume <id>` and a short prompt: the engine stopped after N minutes, continue the step, the brief and the output file are earlier in the session. The phase output records `resumed`. The saved session wins over the `resume` keyword of the call.
+
+The rerun after a provider limit uses the same decision. The phase input of the rerun holds `limited`: the session of the limit record, the note of the limit and the prompt of the resumed session (the limit of the login stopped you, it has reset, continue the step). The note of the limit says that the limit of the login stopped the step, then holds the same diff summary and the same request to read `git status` and `git diff` as the note of a lost step. Each rerun of a try starts from the input of the try, so two limits in a row give one note. If the rerun itself is lost after it named a session, that newer session wins. If it is lost before it named one, the note of the loss goes into the prompt and the rerun resumes the limited session. `beehave resume` of a rerun that failed keeps the phase input, so it resumes the limited session again. A run that recorded an agent step under an earlier agent module does not move to this build: `resume --on-this-build` refuses it, as it refuses any run that recorded a step of a module whose version changed. Start such an item again.
+
+A session that cannot resume, and a loss before the agent named a session, start the agent again with the prompt and the note. OpenCode never resumes a lost run: it keeps no file for one session, so the check finds none. A start that the CLI refuses at run time fails the step as any failed run does.
+
 #### The note in the prompt
 
-The second start of an agent step adds one paragraph to the prompt. The paragraph says:
+The note is one paragraph after the prompt. It says:
 
 - that the step ran before,
 - how many minutes it ran before the loss, or that the time is unknown,
-- that the work tree may hold its edits,
+- that the work tree may hold its edits, or, for a folder with no start mark at the start commit, that the work tree is not the one that the step started in and the edits of the step can be lost,
+- the diff summary in a fenced block, that the engine found no change to tracked files since the step started, or that the engine could not read the summary. The note makes the first two claims only for a folder that holds the start mark at the start commit. With no start commit (a plain folder), it says that the engine cannot say what the step changed. For a folder with no such mark, it claims nothing about the changes,
 - that the agent must read `git status` and `git diff` first.
 
-The text is the same for every workflow. It is in the record of the step `agent/lost<n>`, so a replay uses the same prompt. A first start gets no note. The agent still starts again from the beginning: the note is the only part of the resume that the engine adds.
+The text is the same for every workflow. It is in the record of the step `agent/lost<n>`, so a replay uses the same prompt. A first start gets no note.
 
 ### Ready and release
 
@@ -501,7 +617,9 @@ Before the ready step marks a pull request ready, it reads the forge. The read i
 
 The ready step refuses with the pull request and each reason. The refusal lists the reasons in this order, so its text differs from the text of the earlier flow check. A failed read refuses the step too, because an empty fact is not a clean one.
 
-The ready step reads the standing, calls ready, then reads the head again. The ready call cannot name a head. If the head moved or cannot be read, the step sets the pull request back to draft and refuses.
+The ready step reads the standing, calls ready, then reads the head again. The ready call cannot name a head. If the head moved or cannot be read, the step sets the pull request back to draft and refuses. A cancel of the run does not stop that call: it runs on a context that the cancel does not end, with a limit of 30 seconds. If the call fails, its failure is part of the error of the step, and the error says to convert the pull request to a draft by hand.
+
+When the merge after the ready step fails or is refused, or the owner cancels the run during the merge, the step makes the pull request a draft again with the same call and the same limit. A stop of the engine does not: the run resumes at the merge, and a draft would make the merge refuse the pull request. A cancel during the ready call itself makes no draft call: the pull request can stay ready, at the head that the gate and the review passed, until the owner makes it a draft.
 
 After the ready step marks the pull request ready, the item runs the watch step (see [Ready watch](#ready-watch)).
 
@@ -576,7 +694,8 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core1.agent1.tracker1.forge1.land1.gate1.host1.round1`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core3.agent8.tracker1.forge2.land4.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run is a run of a round item, and the version of the round module differs from the version in this build. The version of the round module covers the step that makes the worktree at the start of every round item, so every round run uses the module, even a run that an older build recorded with no such step. | Names the step that makes the worktree, and says to finish the run on the build that started it or to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 
 A stored version that ends in `+star30` stands for every module at version 1. A change to the recorded steps of one builtin bumps the version of its module and no other module, so a run that never used that module still moves. The first build with module versions has a new application version, so an open run of an older build moves only with this command.
@@ -587,13 +706,14 @@ A line of the list also shows these facts when the run has them. Each is a tab-s
 
 | Note | Meaning |
 |---|---|
-| `spent $S of $C` | The cost so far against `agents.max_run_budget_usd`: the sum of the `cost_usd` of the read steps and of the failed runs. It is the same sum that the run cap checks. `spent $S` when no cap is set. |
+| `spent $S of $C` | The cost so far against `agents.max_run_budget_usd`: the sum of the `cost_usd` of the read steps, of the limited runs, and of the failed runs in the stream `failed_runs`, which a resume keeps. It is the same sum that the run cap checks. `spent $S` when no cap is set. |
 | `stopped at the <scope> cap $C, spent $S` | A cap holds an agent step of the open run back. The scope is `run` or `tree`. The step waits until the cap is raised and beehave restarts. |
+| `waits for the <kind> limit <window> of login <login> until <time>` | A provider limit holds an agent step of the open run. The step runs again after that time. |
 | `now <step>` | The step that an open run is in. A run that asks a question shows the question in place of the step and, when the `wait` has a `timeout`, `answer by <time>`. |
 | `gate pass at <head>` or `gate fail at <head>` | The newest gate result and the head it judged. |
 | `fix U of C` and `review U of C` | The count of the agent calls of the lanes `rework` and `review` against the cap that those calls name with the keyword `rounds`. A call that names none shows the count alone. |
 
-The keyword `rounds` is a whole number of 1 or more, recorded in the phase. The review loop of the library sets it to its `rounds` for the review and to one less for the fix.
+The keyword `rounds` is a whole number of 1 or more, recorded in the phase. The review loop of the library sets it to `rounds * (MAX_INNER + 1)` for the reviews and to `rounds * MAX_INNER` for the fixes.
 
 Every value is read from the step records, the events and the options of the client. The store has no table for it. The deadline of a `wait` with a `timeout` is the output of the `DBOS.sleep` record that the receive of the wait writes before it waits. Status shows it only while the question is open.
 
@@ -601,11 +721,13 @@ Every value is read from the step records, the events and the options of the cli
 
 - `spent` (`cost_usd`, `cost_estimated`, `cost_unknown`)
 - `cap_usd`
+- `cap_stop` and `limit_wait`, while a cap or a provider limit holds a step
 - `now`
 - `deadline`
 - `gate` (`passed`, `head`)
 - `fix_rounds` and `review_rounds` (`used`, `cap`)
 - `cost_usd` and `rounds` on each agent step
+- `host_losses`, the number of `<call>/host-loss` steps in the item runs of the tree of the run, from its root. Only the view of one run reads the tree for it, and it is left out at 0. See "The host loss fields" in [workflow-files.md](workflow-files.md).
 
 #### The rest of a run line
 
@@ -626,7 +748,7 @@ A finished run shows the fields of its result: `sent back to draft`, `ended`, `m
 - The `runs` array has one object for each run.
 - `schedules`, `days`, `poll` and `poll_not_scheduled` hold the sections that follow the runs. A section with no content is left out.
 
-The fields of a run are `id`, `state`, `version`, `stranded`, `older_steps`, `item`, `project`, `question`, `asked` (`from`, `quorum`, `choices`, `heard`, `reminders`, `reminded`, `next_remind`), `others`, `sent_back`, `closed`, `merge`, `stopped` (`step`, `rc`, `output`, raw and in full, with no redaction), the progress fields above, and `time_left_seconds` (negative after the deadline).
+The fields of a run are `id`, `state`, `version`, `stranded`, `older_steps`, `item`, `project`, `question`, `asked` (`from`, `quorum`, `choices`, `heard`, `reminders`, `reminded`, `next_remind`), `others`, `sent_back`, `closed`, `merge`, `lost_job` (`job`, `host`, `since`, `limit`, while an open run asks the owner about a lost gate job; see [hosts.md](hosts.md)), `stopped` (`step`, `rc`, `output`, raw and in full, with no redaction), the progress fields above, and `time_left_seconds` (negative after the deadline).
 
 The time left drops the part of a unit that is not complete: 59m59s shows `59m left`.
 
@@ -657,7 +779,7 @@ A day shows the runs that started, the runs that ended as done, failed or cancel
 
 The JSON object holds the same figures in `days`: one object for each day with `day`, `started`, `done`, `failed`, `canceled` and `spent`.
 
-The figures come from the run records that DBOS keeps (the creation time, the completion time and the status) and from the `spent` of the step records. The read lists only the runs that started or ended since the start of the window.
+The figures come from the run records that DBOS keeps (the creation time, the completion time and the status) and from the `spent` of the step records and of the stream `failed_runs` of each run. The read lists only the runs that started or ended since the start of the window.
 
 #### `beehave status <run id>`: the steps of one run
 
@@ -669,6 +791,8 @@ The line then shows the fields that decide the flow, when the step has them:
 
 - `exit_code`
 - `kind`: the kind of the lane of an agent step (`fix`, `rework`, `relay`, `review` or `design`)
+- `login`: the runner that an agent step ran on. It is the runner that the call names with `runner`, or the login that the pool picked when the call names none.
+- `model`: the model that an agent step set. A record that an older version wrote has no `login` and no `model`, and its line shows neither.
 - `stop`
 - `verdict`
 - `head`
@@ -682,7 +806,7 @@ A failed step shows its error. The last line is `run`: the state of the run (run
 - A step that runs shows as running with its elapsed time.
 - A command records its row when it ends. While a command runs, the last line is `step in progress`, with the time since the last row.
 
-`--json` prints one object for scripts. Its fields are `run`, `state`, `error` (left out when empty) and `steps`. Each step has `name`, `state`, `duration_seconds` and, when it has them, `started`, `ended`, `error`, `exit_code`, `kind`, `stop`, `verdict`, `head`, `passed` and `gate` (a list of `name` and `status`).
+`--json` prints one object for scripts. Its fields are `run`, `state`, `error` (left out when empty) and `steps`. Each step has `name`, `state`, `duration_seconds` and, when it has them, `started`, `ended`, `error`, `exit_code`, `kind`, `login`, `model`, `stop`, `verdict`, `head`, `passed` and `gate` (a list of `name` and `status`).
 
 #### `beehave status --item <item>`: the lanes of one item
 
@@ -708,7 +832,7 @@ A resumed run writes these lines again for the steps it replays from the record.
 
 #### The review poll in `beehave status`
 
-When `agents.review_poll_minutes` is set, `beehave run` schedules a review poll. Each tick reads the open pull requests of every project with a forge, in read-only calls. The interval is at most 10080 minutes (one week). Under `beehave serve`, set `agents.review_poll_minutes` to 60.
+When `agents.review_poll_minutes` is set, `beehave run` schedules a review poll. Each tick reads the open pull requests of every project with a forge, in read-only calls. The interval is at most 10080 minutes (one week). The search for replies looks back `agents.review_lookback_days` days, 3 by default and 365 at most. Under `beehave serve`, set `agents.review_poll_minutes` to 60.
 
 `beehave status` lists each schedule of the store after the runs, with its last tick and whether it fires. The workflow library records the last tick, and beehave adds no record.
 
@@ -739,6 +863,8 @@ The line shows no next due time. The library counts the first tick of a fixed de
 
 `resume` reopens the cancelled or the failed run. Then `beehave run <item>` continues it from the last finished step.
 
+When the store refuses the record of a step, the step records its failure at once, under the same name at the next step id. The resume goes back to the first failed record, so the refused step runs again and no record after it stays. `beehave status <run id>` shows such a step as failed. A canceled run records no failure, and a step whose error DBOS has already recorded, also after its retries, records nothing more. If the store refuses the failure record too, the engine logs a warning. The records that DBOS writes itself (the start of a child run, `DBOS.sleep`) are outside this rule.
+
 `beehave resume <item>` first takes a fresh claim on the item, because the release of the old run gave the old claim back.
 
 - If the claim is held, `resume` refuses and names the holder.
@@ -749,7 +875,11 @@ The line shows no next due time. The library counts the first tick of a fixed de
 
 No engine renews the fresh claim between `beehave resume` and the next `beehave run`. So run the item within 5 minutes after the resume. When the lease of the fresh claim ends, any other `beehave run` can take the item.
 
-After a crash, or after Ctrl-C of `beehave run`, the run stays open. `beehave run <item>` continues it without `resume`.
+After a crash, or after Ctrl-C of `beehave run`, the run stays open. `beehave run <item>` continues it without `resume`. A second Ctrl-C during the stop exits at once with code 130.
+
+If the run has already ended when the stop begins, the next Ctrl-C exits at once with the exit code of the run: 0 for a finished run, 1 for a failed or stopped run. The line on stderr says the run had ended before the stop.
+
+The shutdown of the engine and the start of a run do not overlap. The shutdown waits for a start in flight to hand its run to DBOS, and only then stops DBOS. A start that comes after the shutdown began stores no run and fails with `the engine has shut down`. DBOS v1.8.0 does not give this order itself: its wait for the open runs races with a direct `RunWorkflow`.
 
 #### When `beehave run` starts a new run
 
@@ -771,6 +901,8 @@ So a held `engine.lock` is always one of these:
 - A `beehave cancel` that gives back a run when no engine runs. It holds both locks for the release, so a check waits for it.
 
 The client commands that join a run, show the schedules, or cancel a run take these locks for the check only. The other client commands take none.
+
+`beehave cancel` holds `probe.lock` from the cancel of the run to the end of its release. `beehave resume`, with or without `--on-this-build`, holds it while it reads and reopens the tree of the run. DBOS commits each level of a cancel in its own transaction. Without the lock, a resume that reads the tree between two levels skips a child that is still open, and the cancel then cancels that child under the reopened run. With the lock, a resume reads the tree only before or after a cancel. A child that a resume finds open under a canceled parent belongs to a cancel that stopped, and the resume leaves it running. `beehave cancel` of the canceled run cancels it.
 
 #### The file `engine.version`
 
@@ -816,18 +948,22 @@ sequenceDiagram
     A-->>F: plan
     F->>A: run the implement step with the plan
     A-->>F: output file
-    loop until the gate passed and the review approved, at most 6 passes
-        F->>K: run the gate on the worktree or the build host
-        K-->>F: passed, head and report
-        opt the gate passed
-            F->>A: run the review step, pinned to the head that passed
+    loop until the full review approved, at most 6 candidates for the pull request
+        loop up to 3 times, until a scoped review approves
+            opt findings are due
+                F->>A: run a scoped fix with the findings (resumes the implement session in fix rounds up to escalate_after, when both steps use one runner)
+            end
+            F->>A: run a scoped review of the diff, pinned to the head of the worktree
             A-->>F: verdict
         end
-        opt fix rounds 1 to 5 remain
-            F->>A: run the fix step with the findings (resumes the implement session in rounds 1 to 3)
+        F->>K: run the gate of the candidate on the base, then the checks before review and the mutation run
+        K-->>F: passed, head and report
+        opt every check passed
+            F->>A: run the full review, pinned to the head that passed
+            A-->>F: verdict
         end
     end
-    opt the loop used all of its passes
+    opt the loop used all of its candidates
         F->>O: pause with the question
         O-->>F: answer
         F->>A: run the settle step with the answer

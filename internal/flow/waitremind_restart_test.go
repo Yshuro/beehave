@@ -39,12 +39,16 @@ func TestWaitRemind_ARestartNeitherRepeatsASentReminderNorLosesAnOwedOne(t *test
 	client := h.client(t, testVersion)
 	done := runInBackground(first, testItem)
 
-	eventually(t, func() bool { a := askedNow(t, client); return a != nil && !a.NextRemind.IsZero() })
+	waitOn(t, waiting[struct{}]{what: "the run to show its next reminder", run: runOfEngine(t, first), read: func() (struct{}, bool, error) {
+		a := askedNow(t, client)
+
+		return struct{}{}, a != nil && !a.NextRemind.IsZero(), nil
+	}})
 	clk.advance(35 * time.Minute)
-	eventually(t, func() bool { return remindedIs(t, client, 1) })
+	waitOn(t, waiting[struct{}]{what: "the run to send one reminder", run: runOfEngine(t, first), read: func() (struct{}, bool, error) { return struct{}{}, remindedIs(t, client, 1), nil }})
 
 	require.NoError(t, first.Shutdown())
-	require.Error(t, (<-done).err, "the stopped engine ends the run and leaves it open")
+	require.Error(t, receive(t, done).err, "the stopped engine ends the run and leaves it open")
 
 	// The second reminder falls due while no engine runs.
 	clk.advance(20 * time.Minute)
@@ -53,11 +57,11 @@ func TestWaitRemind_ARestartNeitherRepeatsASentReminderNorLosesAnOwedOne(t *test
 	handle, err := dbos.RetrieveWorkflow[ItemResult](second.ctx, testRun)
 	require.NoError(t, err, "the launch of the second engine recovers the open run")
 
-	eventually(t, func() bool { return remindedIs(t, client, 2) })
+	waitOn(t, waiting[struct{}]{what: "the run to send two reminders", run: runOfEngine(t, second), read: func() (struct{}, bool, error) { return struct{}{}, remindedIs(t, client, 2), nil }})
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
 
-	_, err = joinRun(handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{remindStepPrefix + "1", remindStepPrefix + "2"}, remindSteps(t, client))

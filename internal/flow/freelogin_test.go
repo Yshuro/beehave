@@ -21,6 +21,8 @@ import (
 // poolLogins is the real pick of the pool over the runners names: equal use everywhere, so the first runner in config order wins a tie.
 // It records the busy logins that the engine gave for each item.
 type poolLogins struct {
+	noReset
+
 	mu      sync.Mutex
 	runners []model.Runner
 	busy    map[string][]string
@@ -154,7 +156,7 @@ func TestHeldLogins_ARowWithABadInputFailsTheWholeRead(t *testing.T) {
 		{ID: "w-2", Name: phaseName, Input: "not json"},
 	}
 
-	held, err := heldLogins(rows, nil)
+	held, err := heldLogins(rows, nil, 1)
 
 	require.ErrorContains(t, err, "read the input of workflow w-2")
 	assert.Nil(t, held)
@@ -169,10 +171,56 @@ func TestHeldLogins_TakenAndHeldLoginsJoinSortedWithoutRepeats(t *testing.T) {
 		{Name: itemName, Input: `{"login":"alice","entry":"work"}`},
 	}
 
-	held, err := heldLogins(rows, []string{"bob", "dave"})
+	held, err := heldLogins(rows, []string{"bob", "dave"}, 1)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"alice", "bob", "carol", "dave"}, held)
+}
+
+func TestHeldLogins_ALoginIsBusyOnlyWhenItHoldsAsManyAgentsAsPerLoginAllows(t *testing.T) {
+	t.Parallel()
+
+	rows := []dbos.WorkflowStatus{
+		{ID: "p-1", Name: phaseName, Input: `{"login":"alice"}`},
+		{ID: "p-2", Name: phaseName, Input: `{"login":"alice"}`},
+		{ID: "p-3", Name: phaseName, Input: `{"login":"bob"}`},
+	}
+
+	held, err := heldLogins(rows, nil, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alice"}, held, "alice holds two agents and bob holds one")
+
+	held, err = heldLogins(rows, []string{"bob"}, 2)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"alice", "bob"}, held, "a taken login counts as one more agent")
+}
+
+func TestHeldLogins_ARunAndItsOwnPhaseHoldTheLoginOnce(t *testing.T) {
+	t.Parallel()
+
+	rows := []dbos.WorkflowStatus{
+		{ID: "run-1", Name: itemName, Input: `{"login":"alice","entry":"work"}`},
+		{ID: "p-1", ParentWorkflowID: "run-1", Name: phaseName, Input: `{"login":"alice"}`},
+	}
+
+	held, err := heldLogins(rows, nil, 2)
+
+	require.NoError(t, err)
+	assert.Empty(t, held, "one agent step of one run is one hold, not two")
+}
+
+func TestFreeLogin_PerLoginTwoRunsTwoAgentStepsOfOneLoginAtOnce(t *testing.T) {
+	t.Parallel()
+
+	r := newLoopRig(t, queueItem("21", model.SeverityP0), queueItem("22", model.SeverityP1))
+	r.h.opts.PerLogin = 2
+	r.h.picker = newPoolLogins("alice")
+	seen := &overlap{window: eventTimeout}
+	r.agents.setAct(seen.act)
+
+	require.NoError(t, r.run(t))
+
+	assert.Equal(t, 2, seen.peakValue(), "per_login of 2 lets one login run both agent steps at the same time")
 }
 
 func TestFreeLogin_ALoginThatOnlyAQueuedRunHoldsIsBusy(t *testing.T) {
@@ -208,7 +256,7 @@ func TestFreeLogin_ALoginThatOnlyAQueuedRunHoldsIsBusy(t *testing.T) {
 	}
 
 	enqueue("21", "alice")
-	<-started
+	receive(t, started)
 
 	// The one slot of the items queue is taken, so the run of item 22 waits ENQUEUED. No phase and no other run holds its login.
 	enqueue("22", "bob")
@@ -217,6 +265,43 @@ func TestFreeLogin_ALoginThatOnlyAQueuedRunHoldsIsBusy(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"alice", "bob"}, busy, "a run that waits in the items queue holds its login")
+}
+
+func TestFreeLogin_PerLoginTwoKeepsALoginFreeWhileItHoldsOneRun(t *testing.T) {
+	t.Parallel()
+
+	r := newLoopRig(t)
+	r.h.opts.MaxConcurrent, r.h.opts.MaxReviewConcurrent, r.h.opts.PerLogin = 2, 2, 2
+	release := make(chan struct{})
+	started := make(chan struct{}, 1)
+
+	r.agents.setAct(func(ctx context.Context, _ string) error {
+		started <- struct{}{}
+
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+
+		return nil
+	})
+
+	engine := r.engine(t)
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+	t.Cleanup(func() { close(release) })
+
+	pinned, err := workflow.Pin(r.file)
+	require.NoError(t, err)
+
+	in := ItemInput{Item: "21", Project: testProject, File: r.file, Files: pinned, Login: "alice", Entry: "work"}
+	_, err = dbos.RunWorkflow(engine.ctx, engine.item, in, dbos.WithQueue(engine.itemQueue), dbos.WithWorkflowID(runID("21", 1)))
+	require.NoError(t, err)
+	receive(t, started)
+
+	busy, err := engine.busyLogins(nil)
+
+	require.NoError(t, err)
+	assert.Empty(t, busy, "alice holds one agent and per_login allows two, so the pick may choose her again")
 }
 
 // A run that beehave run started holds its login only while one of its phases is open. Between phases its login reads free,
@@ -245,9 +330,9 @@ func TestFreeLogin_APlainRunHoldsNoLoginBetweenPhases(t *testing.T) {
 
 	go func() { _, err := engine.RunFile(testItem, testProject, r.file); done <- err }()
 
-	require.True(t, waitUntil(func() bool { return picks.loginOf("21") != "" }), "item 21 started")
+	waitOn(t, condition(func() bool { return picks.loginOf("21") != "" }))
 	close(release)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 
 	assert.NotContains(t, picks.busyOf("21"), picks.loginOf(testItem), "the loop run that a user started has no phase open, so its login reads free")
 }
@@ -320,9 +405,9 @@ func TestFreeLogin_ALoginThatHoldsARunStaysBusyUntilItEnds(t *testing.T) {
 
 	go func() { _, err := engine.RunFile(testItem, testProject, r.file); done <- err }()
 
-	require.True(t, waitUntil(func() bool { return picks.loginOf("23") != "" }), "the third item started after the second ended")
+	waitOn(t, condition(func() bool { return picks.loginOf("23") != "" }))
 	close(release)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 
 	assert.Equal(t, picks.loginOf("22"), picks.loginOf("23"), "item 23 took the login that item 22 freed, not the login of the item that still runs")
 	assert.Contains(t, picks.busyOf("23"), picks.loginOf("21"), "the login of the running item is busy")
@@ -337,7 +422,7 @@ func TestFreeLogin_AResumeKeepsTheRecordedLogins(t *testing.T) {
 	r.h.picker = first
 	r.agents.setAct(func(ctx context.Context, item string) error {
 		if item == "21" || item == "22" {
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -349,7 +434,7 @@ func TestFreeLogin_AResumeKeepsTheRecordedLogins(t *testing.T) {
 
 	go func() { _, _ = crashed.RunFile(testItem, testProject, r.file) }() //nolint:errcheck // the crash ends the run with an error
 
-	require.True(t, waitUntil(func() bool { return len(r.agents.started()) == 2 }), "both agents run when the engine stops")
+	waitOn(t, condition(func() bool { return len(r.agents.started()) == 2 }))
 	stop()
 	require.NoError(t, crashed.Shutdown())
 

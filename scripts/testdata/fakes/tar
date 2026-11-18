@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fake tar: run the real tar. It refuses a folder or an archive outside the folder of the test.
+for arg; do
+	case $arg in
+	-*) ;;
+	*) "$FAKE_BIN/fake-path-guard" tar "$arg" || exit 1 ;;
+	esac
+done
+exec /usr/bin/tar "$@"

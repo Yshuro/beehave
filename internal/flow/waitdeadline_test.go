@@ -16,7 +16,7 @@ func TestWait_ATimeoutEndsTheWaitWithAnOutcome(t *testing.T) {
 	harness.flowIs(t, fmt.Sprintf(timedWaitFlow, "50ms"))
 	engine := harness.engine(t)
 
-	outcome := <-runInBackground(engine, testItem)
+	outcome := receive(t, runInBackground(engine, testItem))
 
 	require.ErrorContains(t, outcome.err, "TIMED OUT")
 }
@@ -30,10 +30,10 @@ func TestWait_AnAnswerBeforeTheTimeoutIsNotTimedOut(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	require.NoError(t, client.Answer(testItem, "go on"))
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 }
@@ -45,7 +45,7 @@ func TestWait_ATimeoutThatIsNotADurationIsRefused(t *testing.T) {
 	harness.flowIs(t, fmt.Sprintf(timedWaitFlow, "soon"))
 	engine := harness.engine(t)
 
-	outcome := <-runInBackground(engine, testItem)
+	outcome := receive(t, runInBackground(engine, testItem))
 
 	require.ErrorContains(t, outcome.err, "not a duration")
 }
@@ -61,7 +61,7 @@ func TestWait_ATimeoutOfZeroOrLessIsRefusedAndNotTakenAsNoDeadline(t *testing.T)
 			harness.flowIs(t, fmt.Sprintf(timedWaitFlow, text))
 			engine := harness.engine(t)
 
-			outcome := <-runInBackground(engine, testItem)
+			outcome := receive(t, runInBackground(engine, testItem))
 
 			require.ErrorContains(t, outcome.err, "wait: timeout is")
 			require.ErrorContains(t, outcome.err, "must be above zero")
@@ -77,7 +77,7 @@ func TestWait_AComputedTimeoutOfZeroIsRefusedByTheRun(t *testing.T) {
 	harness.flowIs(t, "def main(item):\n    wait(name = \"ask\", question = \"What now?\", timeout = str(1 - 1) + \"s\")\n")
 	engine := harness.engine(t)
 
-	outcome := <-runInBackground(engine, testItem)
+	outcome := receive(t, runInBackground(engine, testItem))
 
 	require.ErrorContains(t, outcome.err, `wait: timeout is "0s", which must be above zero`)
 }
@@ -91,8 +91,8 @@ func TestWait_NoTimeoutKeywordStillWaitsForTheAnswer(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	require.NoError(t, client.Answer(testItem, "go on"))
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }

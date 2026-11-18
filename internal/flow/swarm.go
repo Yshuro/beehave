@@ -45,6 +45,8 @@ const (
 	statusKeyword  = "status"
 	// maxNewProcessesKeyword is the keyword of a command call that caps the new processes of the program.
 	maxNewProcessesKeyword = "max_new_processes"
+	// slotsKeyword is the keyword of a command call that names the slot class of its host job.
+	slotsKeyword = "slots"
 )
 
 // spawnedRun is what the spawn step records for one item: the run that gather waits for, and whether spawn starts it. A run that finished before is reused, and Start is false.
@@ -551,7 +553,7 @@ func succeeded(ref spawnedRun, row dbos.WorkflowStatus) childOutcome {
 
 // cancelOpen cancels the runs that are still open, as beehave cancel does: the cancel marker first, so an engine that stops before the release leaves it for the next start.
 // The cancel reaches the phases of each run, so none waits in the queue. The tick of the engine ends each local run and gives its claim back.
-// It returns the ids of the runs it canceled.
+// It cancels the children of a canceled run again, and returns the ids of the open runs it canceled.
 func (e *Engine) cancelOpen(project string, looks []look) ([]string, error) {
 	var (
 		errs     []error
@@ -559,20 +561,34 @@ func (e *Engine) cancelOpen(project string, looks []look) ([]string, error) {
 	)
 
 	for _, l := range looks {
-		if !l.open {
-			continue
-		}
-
-		if err := e.cancelRun(project, l.ref); err != nil {
-			errs = append(errs, fmt.Errorf("cancel run %s: %w", l.ref.Run, err))
+		if err := e.cancelLook(project, l); err != nil {
+			errs = append(errs, err)
 
 			continue
 		}
 
-		canceled = append(canceled, l.ref.Run)
+		if l.open {
+			canceled = append(canceled, l.ref.Run)
+		}
 	}
 
 	return canceled, errors.Join(errs...)
+}
+
+// cancelLook cancels an open run, and the children of a canceled run: a cancel that stopped between two levels of the tree left them open.
+func (e *Engine) cancelLook(project string, l look) error {
+	switch {
+	case l.open:
+		if err := e.cancelRun(project, l.ref); err != nil {
+			return fmt.Errorf("cancel run %s: %w", l.ref.Run, err)
+		}
+	case l.canceled:
+		if err := e.cancelTree(l.ref.Run); err != nil {
+			return fmt.Errorf("cancel the children of run %s: %w", l.ref.Run, err)
+		}
+	}
+
+	return nil
 }
 
 // cancelRun writes the cancel marker of one run and cancels the run with its children.
@@ -581,5 +597,10 @@ func (e *Engine) cancelRun(project string, ref spawnedRun) error {
 		return err
 	}
 
-	return dbos.CancelWorkflow(dbos.WithoutCancel(e.ctx), ref.Run, dbos.WithCancelChildren())
+	return e.cancelTree(ref.Run)
+}
+
+// cancelTree cancels a run and its children. The store walks the tree, a canceled run included, so a second call reaches the children that a first one left open.
+func (e *Engine) cancelTree(id string) error {
+	return dbos.CancelWorkflow(dbos.WithoutCancel(e.ctx), id, dbos.WithCancelChildren())
 }

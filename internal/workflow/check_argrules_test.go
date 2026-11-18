@@ -33,7 +33,7 @@ func TestCheck_RefusesTheArgumentsOfTheRunThatAreText(t *testing.T) {
 		{"batch_merge repo", `batch_merge(prs = x, base = "b", repo = "", name = "n")`, "batch_merge: repo must not be empty"},
 		{"outputs beside a computed element", `agent("p", "m", outputs = [str(item), 1])`, "agent: outputs must hold strings only"},
 		{"stop_on_rc beside a computed element", `command(run = ["x"], stop_on_rc = [str(item), 0])`, "command: stop_on_rc must hold whole numbers from 1 to 255"},
-		{"prs beside a computed element", `batch_merge(prs = [x, 1], base = "b", repo = "r", name = "n")`, "batch_merge: `prs` holds a int"},
+		{"prs beside a computed element", `batch_merge(prs = [x, 1], base = "b", repo = "r", name = "n")`, "batch_merge: prs[1]: the member has the type int, not struct"},
 		{"own logins beside a computed element", `merge(head = "h", own = {"logins": [str(item), 1]})`, "merge: own.logins must hold strings only"},
 	}
 

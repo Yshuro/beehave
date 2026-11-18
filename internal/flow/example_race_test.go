@@ -93,6 +93,7 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 	names := []string{"racerA", "racerB"}
 	claims := sharedClaims(t, names...)
 	proceed := make(chan struct{})
+	release := sync.OnceFunc(func() { close(proceed) })
 
 	var arrived sync.WaitGroup
 
@@ -135,26 +136,21 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 		engines[i] = engineWith(t, rig, lives[i])
 	}
 
+	t.Cleanup(release) // It runs before the shutdown of the engines, so a failed wait does not leave an agent held.
+
 	for i, name := range names {
 		go func() {
-			_, err := engines[i].RunFile(testItem, testProject, files[i])
+			_, err := runPipeline(engines[i], files[i])
 			results <- raceOutcome{who: name, err: err}
 		}()
 	}
 
 	// The winner holds its agent in flight, so the one result that arrives first is the stop of the run that lost.
-	var loser raceOutcome
+	loser := waitOn(t, waiting[raceOutcome]{what: "a run to stop, since both runs hold the claim", ch: results})
 
-	select {
-	case loser = <-results:
-	case <-time.After(raceWait):
-		close(proceed)
-		require.FailNow(t, "no run stopped: both runs hold the claim")
-	}
+	release()
 
-	close(proceed)
-
-	winner := <-results
+	winner := receive(t, results)
 
 	require.NoError(t, winner.err, "the run that took the claim goes on to the end")
 	require.Error(t, loser.err)
@@ -170,7 +166,7 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 
 		if name == winner.who {
 			assert.Positive(t, started, "the winner starts its agents")
-			assert.Equal(t, []string{"claim:" + testItem, "ready:" + testItem, "release:" + testItem}, lives[i].seen())
+			assert.Equal(t, []string{"claim:" + testItem, "release:" + testItem}, lives[i].seen())
 
 			continue
 		}
@@ -189,7 +185,7 @@ func TestExampleClaim_AnItemThatAnotherRunHoldsIsRefusedAndNoAgentStarts(t *test
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	life := &claimingLife{fakeLifecycle: rig.h.life, claims: claims[1], owner: "latecomer"}
 
-	_, err := engineWith(t, rig, life).RunFile(testItem, testProject, file)
+	_, err := runPipeline(engineWith(t, rig, life), file)
 
 	var refusal *claim.Error
 

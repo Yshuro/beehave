@@ -28,14 +28,18 @@ const (
 	gateJobName = "gate:job"
 	// gateReuseName is the step that reuses an earlier pass before a gate that runs on a build host waits for the host.
 	gateReuseName = "gate:reuse"
+	// batchGateJobName is the step that checks out the union commit of a batch gate and records its tree and its host job before the gate waits.
+	batchGateJobName = "batch_gate:job"
 
 	kindGate      = "gate"
 	kindMerge     = "merge"
 	kindBatchGate = "batch_gate"
+	// kindCommand is a command call that names a slot class. It runs as a host job on the queue of its class and never on the exclusive queue.
+	kindCommand = "command"
 )
 
-// ExclusiveInput is one gate or one merge of a repository. Kind is "gate", "merge" or "batch_gate".
-// Request and Head belong to a gate. Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
+// ExclusiveInput is one gate or one merge of a repository, or the host job of a command call with a slot class. Kind is "gate", "merge", "batch_gate" or "command".
+// Request belongs to a command call. Request and Head belong to a gate. Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
 type ExclusiveInput struct {
 	Kind    string `json:"kind"`
 	Project string `json:"project"`
@@ -64,11 +68,15 @@ type ExclusiveOutput struct {
 	Outputs map[string]any    `json:"outputs,omitempty"`
 	Merge   merge.Result      `json:"merge"`
 	Batch   batch.GateOutcome `json:"batch"`
-	Failure *Failure          `json:"failure,omitempty"`
+	// Command is the output of a command call with a slot class.
+	Command CommandOutput `json:"command"`
+	Failure *Failure      `json:"failure,omitempty"`
 	// Key names the gate of a gate run that passed on every step; a later gate with the same key reuses the pass. Empty for every other run.
 	Key string `json:"key,omitempty"`
 	// Project is the project of a run that holds a Key; the lookup reads a pass only from a run of the same project.
 	Project string `json:"project,omitempty"`
+	// Lost is the host job of a gate or a batch gate whose wait ended as lost, after the wait for its proof. It is nil for every other run.
+	Lost *LostJob `json:"lost,omitempty"`
 }
 
 // exclusive runs one gate or one merge. The exclusive queue holds one run for each repository at a time,
@@ -77,23 +85,31 @@ type ExclusiveOutput struct {
 func (e *Engine) exclusive(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, error) {
 	var out ExclusiveOutput
 
-	run := ctx
+	run, stop := e.trackGate(ctx, in)
+	defer stop()
 
-	if in.Kind == kindGate {
-		var stop func()
-
-		run, stop = e.trackGate(ctx)
-		defer stop()
-	}
-
-	out.Failure = e.failureOf(e.exclusiveCall(run, in, &out))
-
-	return out, nil
+	return e.endCall(&out, e.exclusiveCall(run, in, &out))
 }
 
-// trackGate lists a running gate with the runs that the tick cancels. DBOS does not interrupt a step that runs, so a gate that a newer head canceled
-// stops when the tick cancels its context. The returned function ends the gate: it cancels the context and marks the run as ended.
-func (e *Engine) trackGate(parent dbos.Context) (dbos.Context, func()) { //nolint:ireturn // the context of a run is the interface of the workflow library
+// endCall ends an exclusive run or a host job: the error of its call is the Failure of the output, unless the engine stopped.
+func (e *Engine) endCall(out *ExclusiveOutput, err error) (ExclusiveOutput, error) {
+	if stop := engineStop(e.ctx, err); stop != nil {
+		return ExclusiveOutput{}, stop
+	}
+
+	out.Failure = e.failureOf(err)
+
+	return *out, nil
+}
+
+// trackGate lists a running gate or batch gate with the runs that the tick cancels. DBOS does not interrupt a step that runs, so a gate that a newer head
+// or a person canceled stops when the tick cancels its context, and a wait for the proof of a lost job reads the proof once more (lostStopped).
+// The returned function ends the gate: it cancels the context and marks the run as ended. A run of another kind is not listed.
+func (e *Engine) trackGate(parent dbos.Context, in ExclusiveInput) (dbos.Context, func()) { //nolint:ireturn // the context of a run is the interface of the workflow library
+	if in.Kind != kindGate && in.Kind != kindBatchGate {
+		return parent, func() {}
+	}
+
 	run, cancel := dbos.WithCancel(parent)
 
 	ended := make(chan struct{})
@@ -156,9 +172,9 @@ func (e *Engine) runCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutp
 			return e.deps.Merge.Merge(c, in.Project, in.Item, in.Head, in.Settings)
 		})
 	case kindBatchGate:
-		out.Batch, err = runStep(e, ctx, kindBatchGate, func(c context.Context) (batch.GateOutcome, error) {
-			return e.batchGateOutcome(c, in)
-		})
+		out.Batch, err = e.batchGateCall(ctx, in, out)
+	case kindCommand:
+		out.Command, err = runStep(e, ctx, kindCommand, func(c context.Context) (CommandOutput, error) { return e.deps.Commands.Run(c, in.Request) })
 	default:
 		err = fmt.Errorf("an exclusive run has no kind %q", in.Kind) //nolint:err113 // a fault of the engine, not a state that a caller tests
 	}
@@ -198,25 +214,36 @@ func (e *Engine) refuseGate(project string, program bool) error {
 	return e.deps.RefuseGate(project, program)
 }
 
-// projectGateCall is the two steps of a project gate, see gateCall.
+// projectGateCall is the two steps of a project gate, see gateCall. A gate step that recorded a lost job is followed by the wait for its proof (endLost),
+// in this run, so the host slot and the exclusive slot of the project stay held while the job may still run.
 func (e *Engine) projectGateCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) (map[string]any, error) {
-	start, err := runStep(e, ctx, gateJobName, func(c context.Context) (gateStart, error) {
+	start, err := e.gateJobStep(ctx, in, out)
+	if err != nil || start.Reused != nil {
+		return start.Reused, err
+	}
+
+	finished, err := runStep(e, ctx, kindGate, func(c context.Context) (gateFinish, error) {
+		finished, key, err := e.finishProjectGate(c, in, start)
+		out.setKey(key, in.Request.Project)
+
+		return finished, err
+	})
+	if err != nil || finished.Lost == nil {
+		return finished.Outputs, err
+	}
+
+	return e.endLost(ctx, in, *finished.Lost, out)
+}
+
+// gateJobStep is the first step of a project gate (gate:job): it reuses an earlier pass and stores its key in out, or submits the host job.
+func (e *Engine) gateJobStep(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) (gateStart, error) {
+	return runStep(e, ctx, gateJobName, func(c context.Context) (gateStart, error) {
 		started, err := e.startProjectGate(c, in.Request)
 		if started.Reused != nil {
 			out.setKey(started.Key.ID, in.Request.Project)
 		}
 
 		return started, err
-	})
-	if err != nil || start.Reused != nil {
-		return start.Reused, err
-	}
-
-	return runStep(e, ctx, kindGate, func(c context.Context) (map[string]any, error) {
-		outputs, key, err := e.finishProjectGate(c, in.Request, start)
-		out.setKey(key, in.Request.Project)
-
-		return outputs, err
 	})
 }
 
@@ -266,44 +293,31 @@ func (in ExclusiveInput) recordedHost() (string, bool) {
 func (e *Engine) hostJob(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, error) {
 	var out ExclusiveOutput
 
-	run := ctx
+	run, stop := e.trackGate(ctx, in)
+	defer stop()
 
-	if in.Kind == kindGate {
-		var stop func()
-
-		run, stop = e.trackGate(ctx)
-		defer stop()
-	}
-
-	out.Failure = e.failureOf(e.runCall(run, in, &out))
-
-	return out, nil
+	return e.endCall(&out, e.runCall(run, in, &out))
 }
 
-// stopJob cancels the build job of a gate that stopped. A cancel that fails is logged: the job then keeps its place on the host.
-func (e *Engine) stopJob(ctx context.Context, in ExclusiveInput, job string) {
-	if err := dbos.CancelWorkflows(dbos.WithoutCancel(e.ctx), []string{job}); err != nil {
-		e.logger.WarnContext(ctx, "cannot stop the build job of the gate, so it keeps its place on the host", "item", in.Item, "error", err)
-	}
-}
-
-// onHost runs the call of a gate as a job on the host queue, under the HostKey of the gate, and waits for it. A gate that stops waiting because its own run
-// was canceled cancels the job, a queued one before it starts and a running one at the next tick. A stop of the engine leaves the job for the next start.
-// A cancel of the run while no engine runs cancels the job too: WithCancelChildren of DBOS reaches every descendant of the run, grandchildren included.
+// onHost runs the call of a gate as a job on the host queue, under the HostKey of the gate, and waits for it. The job is a child run of the gate,
+// so every cancel of the gate reaches it: WithCancelChildren of DBOS cancels each level before it lists the children of that level, so a job that starts
+// during the cancel is listed and canceled, or refused by the owner check of its start. A queued job never starts, and a running one stops at the next tick. The wait itself never cancels the job: a cancel by id from a wait that stopped could land after a resume
+// reopened the job, and fail the replay of the gate. A stop of the engine leaves the job for the next start.
 func (e *Engine) onHost(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) error {
+	return e.runJob(ctx, in, e.hostQueue, out)
+}
+
+// runJob queues the host job of in on queue, under the HostKey of in, and waits for it. The error and the stop of the wait are those of onHost.
+func (e *Engine) runJob(ctx dbos.Context, in ExclusiveInput, queue dbos.Queue, out *ExclusiveOutput) error {
 	host := strings.TrimPrefix(in.HostKey, hostKeyPrefix)
 
-	handle, err := dbos.RunWorkflow(ctx, e.hostJob, in, dbos.WithQueue(e.hostQueue), dbos.WithQueuePartitionKey(in.HostKey), dbos.WithPriority(in.Priority))
+	handle, err := dbos.RunWorkflow(ctx, e.hostJob, in, dbos.WithQueue(queue), dbos.WithQueuePartitionKey(in.HostKey), dbos.WithPriority(in.Priority))
 	if err != nil {
 		return fmt.Errorf("queue the build job of item %s on host %s: %w", in.Item, host, err)
 	}
 
 	done, err := awaitResult(ctx, e.ctx, handle, e.deps.Clock.resultOptions())
 	if err != nil {
-		if ctx.Err() != nil && e.ctx.Err() == nil {
-			e.stopJob(ctx, in, handle.GetWorkflowID())
-		}
-
 		return err
 	}
 
@@ -431,7 +445,8 @@ func (e *Engine) stopOlderGates(run dbos.Context, in ExclusiveInput) error {
 // stopSuperseded cancels each gate of the same pull request that is queued or runs for another head than the tip of in, and returns their ids.
 // It reads the head again, because the read at queue time can be old: a gate cancels only while its tip is the head the forge reports now, so it never cancels
 // the gate of the head. The queue then starts the gate of the new head at once: a queued gate never starts, and a running gate stops at the next tick of this engine.
-// A cancel that fails is logged: the old gate then runs to its end.
+// The cancel reaches the build job of each old gate, a job that starts during the cancel included, so the host frees its slot too.
+// A cancel that fails is logged, and the gate of a later head cancels again (see docs/design/gate.md).
 func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string {
 	standing, read := e.gateStanding(ctx, in)
 	if !read || standing.Head != in.Tip {
@@ -440,11 +455,11 @@ func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string
 
 	old, err := e.olderGates(in)
 	if err == nil && len(old) > 0 {
-		err = dbos.CancelWorkflows(dbos.WithoutCancel(e.ctx), old)
+		err = dbos.CancelWorkflows(dbos.WithoutCancel(e.ctx), old, dbos.WithCancelChildren())
 	}
 
 	if err != nil {
-		e.logger.WarnContext(ctx, "cannot stop the old gates of the pull request, so they keep their place", "item", in.Item, "error", err)
+		e.logger.WarnContext(ctx, "cannot stop the old gates of the pull request; the gate of the next head tries again", "item", in.Item, "error", err)
 
 		return nil
 	}
@@ -452,14 +467,52 @@ func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string
 	return old
 }
 
-// olderGates lists the ids of the queued and running gates of the pull request of in that judge another head than the tip of in.
+// olderGates lists the ids of the gates of the pull request of in that judge another head than the tip of in: the queued and running ones,
+// and a canceled one whose build job is still queued or running.
 func (e *Engine) olderGates(in ExclusiveInput) ([]string, error) {
-	rows, err := dbos.ListWorkflows(dbos.WithoutCancel(e.ctx), dbos.WithFilterName(exclusiveName), dbos.WithFilterLoadInput(true),
-		dbos.WithFilterStatus(dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusPending))
+	ctx := dbos.WithoutCancel(e.ctx)
+
+	rows, err := dbos.ListWorkflows(ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterLoadInput(true), dbos.WithFilterStatus(dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusPending))
+	if err == nil {
+		var stranded []dbos.WorkflowStatus
+
+		stranded, err = canceledGatesWithAJob(ctx)
+		rows = append(rows, stranded...)
+	}
+
 	if err != nil {
 		return nil, err //nolint:wrapcheck // stopSuperseded logs the error with its context
 	}
 
+	return gatesOfOtherHeads(rows, in), nil
+}
+
+// canceledGatesWithAJob lists the canceled gates whose build job is still queued or running.
+func canceledGatesWithAJob(ctx dbos.Context) ([]dbos.WorkflowStatus, error) {
+	jobs, err := dbos.ListWorkflows(ctx, dbos.WithFilterName(hostJobName), dbos.WithFilterStatus(dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusPending))
+
+	parents := parentsOf(jobs)
+	if err != nil || len(parents) == 0 {
+		return nil, err //nolint:wrapcheck // stopSuperseded logs the error with its context
+	}
+
+	return dbos.ListWorkflows(ctx, dbos.WithFilterWorkflowIDs(parents...), dbos.WithFilterName(exclusiveName), dbos.WithFilterLoadInput(true), //nolint:wrapcheck // stopSuperseded logs the error with its context
+		dbos.WithFilterStatus(dbos.WorkflowStatusCancelled))
+}
+
+// parentsOf returns the parent ids of the rows.
+func parentsOf(rows []dbos.WorkflowStatus) []string {
+	parents := make([]string, len(rows))
+
+	for i, row := range rows {
+		parents[i] = row.ParentWorkflowID
+	}
+
+	return parents
+}
+
+// gatesOfOtherHeads returns the ids of the gate rows of the pull request of in that judge another head than the tip of in.
+func gatesOfOtherHeads(rows []dbos.WorkflowStatus, in ExclusiveInput) []string {
 	var old []string
 
 	for _, row := range rows {
@@ -468,7 +521,7 @@ func (e *Engine) olderGates(in ExclusiveInput) ([]string, error) {
 		}
 	}
 
-	return old, nil
+	return old
 }
 
 // gateInputOf reads the input of a queued run when it is the input of a gate.

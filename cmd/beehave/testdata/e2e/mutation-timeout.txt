@@ -1,0 +1,47 @@
+# scripts/mutation-pr.sh under the real timeout (or gtimeout): a gremlins run that passes MUTATION_TIMEOUT fails with its own line.
+# Only gremlins is a stub. It sleeps for longer than the limit, so the limiter stops it.
+[!exec:jq] skip
+[!exec:git] skip
+[!exec:timeout] [!exec:gtimeout] skip
+env HOME=$WORK/home
+env GIT_CONFIG_GLOBAL=/dev/null
+env GIT_CONFIG_NOSYSTEM=1
+chmod 755 fake/gremlins
+env PATH=$WORK/fake:$PATH
+
+exec git init -q -b main repo
+cp a.go repo/a.go
+cp gomod repo/go.mod
+script mutation-pr.sh repo/scripts/mutation-pr.sh
+script mutation-exec.sh repo/scripts/mutation-exec.sh
+chmod 755 repo/scripts/mutation-exec.sh
+exec git -C repo add a.go go.mod scripts
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+exec git -C repo checkout -q -b change
+cp a2.go repo/a.go
+exec git -C repo add a.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m change
+
+# The limit is 1 second and gremlins sleeps for 30. The run is a tool error: exit code 1, no counts line and no end marker.
+# The limit starts before the stub starts. The first exec of a freshly written executable file can take over 1 second
+# (1.58 s measured on a Mac), so the limit can stop the stub before its first line. The script asserts nothing about
+# the stub's own output.
+env MUTATION_TIMEOUT=1
+exitcode 1 sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: the run exceeded MUTATION_TIMEOUT=1s$'
+! stdout '^mutation-pr: applied='
+! stdout '^mutation-pr: end '
+
+-- gomod --
+module example.com/r
+
+go 1.27
+-- a.go --
+package a
+-- a2.go --
+package a
+
+func F(x int) bool { return x > 0 }
+-- fake/gremlins --
+#!/bin/sh
+exec sleep 30

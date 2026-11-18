@@ -35,7 +35,7 @@ func TestNow_ReturnsTheWallClockAsRFC3339InUTC(t *testing.T) {
 	h.flowIs(t, "def main(item):\n    fail(\"AT \" + now())\n")
 
 	before := time.Now().Truncate(time.Second)
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 	after := time.Now()
 
 	reading := readingOf(t, outcome.err)
@@ -50,7 +50,7 @@ func TestNow_TheRunRefusesAnArgument(t *testing.T) {
 	h := newHarness(t)
 	h.flowIs(t, "def main(item):\n    now(\"utc\")\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "now")
 }
@@ -74,7 +74,7 @@ func TestNow_AReplayKeepsTheFirstReading(t *testing.T) {
 		ended <- runErr
 	}()
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
 	steps, err := dbos.GetWorkflowSteps(first.ctx, testRun)
 	require.NoError(t, err)
@@ -84,9 +84,9 @@ func TestNow_AReplayKeepsTheFirstReading(t *testing.T) {
 
 	stop()
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
+	require.Error(t, receive(t, ended))
 
-	time.Sleep(1100 * time.Millisecond)
+	h.reading = func() time.Time { return recorded.Add(time.Hour) }
 
 	next := h.engine(t)
 	done := make(chan runOutcome, 1)
@@ -98,7 +98,7 @@ func TestNow_AReplayKeepsTheFirstReading(t *testing.T) {
 
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "yes"))
 
-	reading := readingOf(t, (<-done).err)
+	reading := readingOf(t, receive(t, done).err)
 
 	require.False(t, reading.After(recorded), "the replay returned a reading from after the crash")
 }

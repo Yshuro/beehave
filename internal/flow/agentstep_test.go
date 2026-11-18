@@ -56,6 +56,8 @@ type agentRig struct {
 	h    *harness
 	dir  string
 	head string
+	// project is the project facts of the run. The example rig fills it, and a test changes a field before the run starts.
+	project model.Project
 
 	mu     sync.Mutex
 	failed []error
@@ -200,23 +202,13 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 		held <- pipe
 	}()
 
-	var pipe *os.File
-	select {
-	case pipe = <-held:
-	case <-time.After(eventTimeout):
-		require.FailNow(t, "the read step did not start")
-	}
+	pipe := receive(t, held)
 
 	require.Equal(t, 1, phaseCount(t, crashed, dbos.WorkflowStatusSuccess), "the phase ended before the read step started")
 
 	require.NoError(t, crashed.Shutdown())
 
-	select {
-	case runErr := <-ran:
-		require.Error(t, runErr, "the stopped engine ends the run before it records the read step")
-	case <-time.After(eventTimeout):
-		require.FailNow(t, "the stopped engine did not end the run")
-	}
+	require.Error(t, receive(t, ran), "the stopped engine ends the run before it records the read step")
 
 	require.NoError(t, pipe.Close())
 	require.NoError(t, os.Remove(gate), "the replay reads HEAD with no gate")
@@ -592,6 +584,27 @@ func TestAgentStep_ARequiredSkillThatTheRunDidNotCallFailsTheStepAndNamesIt(t *t
 	require.ErrorContains(t, err, "list of strings")
 }
 
+func TestAgentStep_TheRequiredSkillsOfTheStepGoToTheAgentRequest(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd", "review"}})
+
+	_, err := rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "x")
+
+	require.NoError(t, err)
+	require.Len(t, rig.h.agents.seen(), 1)
+	assert.Equal(t, []string{"tdd", "review"}, rig.h.agents.seen()[0].RequireSkills, "the agent step must hand the skills to the request, or a CLI with no skill reports starts")
+
+	rig = newAgentRig(t)
+	rig.reply("", exited)
+
+	_, err = rig.run(t, agentFlow(""), "x")
+
+	require.NoError(t, err)
+	assert.Empty(t, rig.h.agents.seen()[0].RequireSkills)
+}
+
 func TestAgentStep_AnAgentThatDoesNotExitCleanlyFailsTheStep(t *testing.T) {
 	t.Parallel()
 
@@ -667,8 +680,8 @@ func TestAgentStep_AReplayKeepsTheOutputFileOfAnAgentThatAlreadyRan(t *testing.T
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
-	require.NoError(t, (<-done).err)
+	waitOn(t, waiting[struct{}]{what: "the open run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
+	require.NoError(t, receive(t, done).err)
 
 	assert.FileExists(t, outputFile(rig.h.opts.StateDir, testItem, aStep), "the replay must not remove the file")
 }
@@ -707,8 +720,7 @@ func TestAgentStep_AReplayReadsTheOutputFileThatTheRecordedPromptNames(t *testin
 	require.FileExists(t, outputFile(rig.h.opts.StateDir, testItem, aStep))
 
 	// The name function now gives another path: the engine computes the file in another folder. The record still names the first one.
-	next := rig.h.engine(t)
-	next.dir = t.TempDir()
+	next := rig.h.engineWith(t, func(e *Engine) { e.dir = t.TempDir() })
 
 	_, err := next.RunFile(testItem, testProject, file)
 
@@ -768,9 +780,9 @@ func TestAgentStep_AReplayDoesNotReadThePromptFileOrRunTheAgentAgain(t *testing.
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the open run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 	assert.Len(t, rig.h.agents.seen(), 1, "the agent ran once")
@@ -1004,4 +1016,30 @@ func TestAgentStep_AForbidCommandsKindThatTheFileDoesNotKnowIsRefusedWhenTheStep
 
 	require.ErrorContains(t, err, "list of strings")
 	assert.Empty(t, rig.h.agents.seen())
+}
+
+func TestAgentStep_TheStartMarkIsTheHeadOfTheFolderAndAMarkThatGitCannotWriteIsAnError(t *testing.T) {
+	t.Parallel()
+
+	dir, head := gitTree(t)
+
+	got, err := agentArgs{dir: dir}.writeStartMark(t.Context())
+
+	require.NoError(t, err)
+	assert.Equal(t, head, got)
+	assert.Equal(t, head, strings.TrimSpace(gitIn(t, dir, "for-each-ref", "--format=%(objectname)", callStartRef)), "the folder holds the mark at its head")
+
+	got, err = agentArgs{dir: t.TempDir(), plain: true}.writeStartMark(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, got, "a plain folder has no head and no mark")
+
+	_, err = agentArgs{dir: t.TempDir()}.writeStartMark(t.Context())
+	require.ErrorContains(t, err, "read HEAD of the item folder")
+
+	// A lock file of the ref makes git refuse the write.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "refs", "worktree", "beehave"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "worktree", "beehave", "call-start.lock"), nil, 0o600))
+
+	_, err = agentArgs{dir: dir}.writeStartMark(t.Context())
+	require.ErrorContains(t, err, "write the start mark of the item folder")
 }

@@ -21,6 +21,9 @@ const (
 	prompt   = "do the step"
 	token    = "tok-suite-value"
 	leakName = "BEEHAVE_SUITE_LEAK"
+	// session is the session whose resume option and transcript the suite checks, and other is a second session.
+	session = "suite-session"
+	other   = "suite-other"
 	// fakeCLI prints the arguments, the standard input and the environment of the run, one item for each line.
 	fakeCLI = "#!/bin/sh\necho \"args=$*\"\necho \"stdin=$(cat)\"\nenv\n"
 )
@@ -63,10 +66,54 @@ func TestAdapter(t *testing.T, make Factory, opts ...Option) {
 	t.Run("a_launch_keeps_its_files_inside_the_run_folder", func(t *testing.T) {
 		CheckLaunch(t, make())
 	})
+	testSessions(t, make)
+	testLimits(t, make, o)
+}
+
+// testSessions runs the arms for the output lines and the transcript of a session.
+func testSessions(t *testing.T, make Factory) {
+	t.Helper()
 	t.Run("a_line_with_no_call_holds_no_call", func(t *testing.T) {
 		CheckCalls(t, make())
 	})
-	testLimits(t, make, o)
+	t.Run("a_resumed_session_has_its_transcript_in_the_login_folder", func(t *testing.T) {
+		CheckTranscript(t, make(), t.TempDir())
+	})
+}
+
+// CheckTranscript checks, for a profile with a resume option, the resume option and the transcript path that the agents check before a resume: a start
+// after a lost run resumes the session only when that file exists. The option must name the session, as a token of its own or as the whole value of one
+// --opt=<id> token, and the path must be a file of that session inside the login folder. A profile with no resume option is not asked.
+func CheckTranscript(r Reporter, adapter agent.Adapter, dir string) {
+	r.Helper()
+
+	profile := adapter.Profile()
+	if profile.Resume == nil {
+		return
+	}
+
+	option := profile.Resume(session)
+	expect(r, slices.ContainsFunc(option, namesSession), "the resume option %q does not name the session %q", option, session)
+	checkTranscriptPath(r, adapter, dir)
+}
+
+// namesSession reports whether the argument is the session id, or a --opt=<id> token whose value after the first "=" is the session id. A token with
+// only dashes before the "=" has no option name and does not count.
+func namesSession(arg string) bool {
+	name, value, _ := strings.Cut(arg, "=")
+
+	return arg == session || (strings.TrimLeft(name, "-") != "" && value == session)
+}
+
+// checkTranscriptPath checks that the transcript of the session of the suite is a file inside the login folder dir, and that another session has another file.
+func checkTranscriptPath(r Reporter, adapter agent.Adapter, dir string) {
+	r.Helper()
+
+	work := filepath.Join(dir, "work")
+	path := adapter.TranscriptPath(dir, work, session)
+	rel, err := filepath.Rel(dir, path)
+	expect(r, err == nil && filepath.IsLocal(rel), "the transcript %q of a session is outside the login folder %q, where the resumed CLI reads it", path, dir)
+	expect(r, path != adapter.TranscriptPath(dir, work, other), "the transcript path %q names one file for the sessions %q and %q", path, session, other)
 }
 
 // testLimits runs the arms for the no-edit settings and the cost cap of the profile.
@@ -88,7 +135,8 @@ func expect(r Reporter, ok bool, format string, args ...any) {
 	}
 }
 
-// CheckProfile checks that the profile names a binary to find on PATH and the variables that point the CLI at its own login.
+// CheckProfile checks that the profile names a binary to find on PATH and the variables that point the CLI at its own login, and that it sets both bounds
+// of the supported versions or neither.
 func CheckProfile(r Reporter, adapter agent.Adapter) {
 	r.Helper()
 
@@ -97,6 +145,10 @@ func CheckProfile(r Reporter, adapter agent.Adapter) {
 	expect(r, profile.Binary != "", "the profile has no binary")
 	expect(r, !strings.ContainsRune(profile.Binary, filepath.Separator), "the binary %q is a path: the runner looks the name up on PATH", profile.Binary)
 	expect(r, len(profile.ConfigVars) > 0, "the profile has no login variable: the CLI would use the login of the caller")
+	expect(r, (profile.SupportedFrom == "") == (profile.SupportedBefore == ""),
+		"the profile sets one bound of the supported versions: set both SupportedFrom and SupportedBefore, or neither")
+	expect(r, (len(profile.VersionArgs) == 0 && profile.GuardBefore == "") || profile.SupportedFrom != "",
+		"the profile sets VersionArgs or GuardBefore but no supported versions: the runner reads the version only for a profile with a range")
 }
 
 // CheckRun starts a fake CLI named by the profile, in dir, and checks what it saw: the arguments of the profile, the prompt on stdin,
@@ -136,7 +188,9 @@ func runFake(adapter agent.Adapter, dir string, out io.Writer, change ...func(*a
 		set(&spec)
 	}
 
-	return agent.Runner{}.Run(context.Background(), spec)
+	version := func(context.Context, string, []string) (string, error) { return adapter.Profile().SupportedFrom, nil }
+
+	return agent.Runner{Version: version}.Run(context.Background(), spec)
 }
 
 // CheckNoEdits starts the fake CLI with NoEdits set, and checks that it got the arguments of the profile followed by NoEditArgs, with no EditArgs, and every
@@ -286,7 +340,7 @@ func CheckCalls(r Reporter, adapter agent.Adapter) {
 
 	expect(r, len(seen.Shell) == 0, "a line with no call holds the shell calls %v", seen.Shell)
 	expect(r, len(seen.Skills) == 0, "a line with no call holds the skill calls %q", seen.Skills)
-	expect(r, len(seen.Refused) == 0 && !seen.Result, "a line with no call holds a refusal or a result: %+v", seen)
+	expect(r, len(seen.Refused) == 0 && !seen.Result && seen.Limit == nil && seen.Denied == "", "a line with no call holds a refusal, a result, a limit or a denial: %+v", seen)
 }
 
 func hasPrefix(lines []string, prefix string) bool {

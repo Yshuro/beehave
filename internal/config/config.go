@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
 )
@@ -18,12 +19,14 @@ import (
 const (
 	envMaxConcurrent       = "BEEHAVE_AGENTS_MAX_CONCURRENT"
 	envMaxReviewConcurrent = "BEEHAVE_AGENTS_MAX_REVIEW_CONCURRENT"
+	envPerLogin            = "BEEHAVE_AGENTS_PER_LOGIN"
 	envMaxTurns            = "BEEHAVE_AGENTS_MAX_TURNS"
 	envMaxBudget           = "BEEHAVE_AGENTS_MAX_BUDGET_USD"
 	envMaxRunBudget        = "BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD"
 	envMaxTreeBudget       = "BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD"
 	envRetentionDays       = "BEEHAVE_AGENTS_RETENTION_DAYS"
 	envReviewPoll          = "BEEHAVE_REVIEW_POLL_MINUTES"
+	envReviewLookback      = "BEEHAVE_REVIEW_LOOKBACK_DAYS"
 	envFiveHourMax         = "BEEHAVE_POOL_FIVE_HOUR_MAX"
 	envSevenDayMax         = "BEEHAVE_POOL_SEVEN_DAY_MAX"
 )
@@ -31,11 +34,24 @@ const (
 // maxReviewPollMinutes is one week. A larger value overflows the interval of the schedule.
 const maxReviewPollMinutes = 10080
 
-// defaultRetentionDays is the age at which a finished run is deleted when no file or variable sets it. maxRetentionDays is 100 years: a larger value overflows the duration.
+// DefaultReviewLookbackDays is the default of agents.review_lookback_days: the days that the review poll looks back for replies. The engine uses it when its options give none.
+// maxReviewLookbackDays is one year.
 const (
-	defaultRetentionDays = 7
+	DefaultReviewLookbackDays = 3
+	maxReviewLookbackDays     = 365
+)
+
+// DefaultRetention is the age at which a finished run is deleted when no file or variable sets it. The engine uses it when its options give no age.
+// maxRetentionDays is 100 years: a larger value overflows the duration.
+const (
+	DefaultRetention     = 7 * hoursPerDay * time.Hour
+	hoursPerDay          = 24
+	defaultRetentionDays = int(DefaultRetention / (hoursPerDay * time.Hour))
 	maxRetentionDays     = 36500
 )
+
+// DefaultPerLogin is the default of agents.per_login: the agent steps that one login runs at once. The engine uses it when its options give none.
+const DefaultPerLogin = 1
 
 // floatBits is the bit size of a percent that the BEEHAVE_* variables give.
 const floatBits = 64
@@ -64,7 +80,7 @@ func (p Problems) Error() string {
 // DefaultConfig returns the config of an empty folder.
 func DefaultConfig() Config {
 	return Config{
-		Agents:   agents{MaxConcurrent: defaultConcurrent, MaxReviewConcurrent: defaultConcurrent, RetentionDays: defaultRetentionDays},
+		Agents:   agents{MaxConcurrent: defaultConcurrent, MaxReviewConcurrent: defaultConcurrent, PerLogin: DefaultPerLogin, ReviewLookbackDays: DefaultReviewLookbackDays, RetentionDays: defaultRetentionDays},
 		Pool:     Pool{FiveHourMax: defaultFiveHourMax, SevenDayMax: defaultSevenDayMax},
 		Projects: map[string]Project{},
 	}
@@ -177,8 +193,10 @@ func (c *Config) applyEnv(env map[string]string) error {
 	err := errors.Join(
 		overlayWhole(env, envMaxConcurrent, "for example 2.", &c.Agents.MaxConcurrent),
 		overlayWhole(env, envMaxReviewConcurrent, "for example 2.", &c.Agents.MaxReviewConcurrent),
+		overlayWhole(env, envPerLogin, "for example 2.", &c.Agents.PerLogin),
 		overlayWhole(env, envMaxTurns, "for example 40, or 0 for no cap.", &c.Agents.MaxTurns),
 		overlayWhole(env, envReviewPoll, "for example 60, or 0 for no poll.", &c.Agents.ReviewPollMinutes),
+		overlayWhole(env, envReviewLookback, "for example 3.", &c.Agents.ReviewLookbackDays),
 		overlayWhole(env, envRetentionDays, "for example 30, or 0 to keep every finished run.", &c.Agents.RetentionDays),
 		overlayDollars(env, envMaxBudget, "5", &c.Agents.MaxBudgetUSD),
 		overlayDollars(env, envMaxRunBudget, "20", &c.Agents.MaxRunBudgetUSD),
@@ -242,6 +260,20 @@ func (c Config) limitProblems(runnersPath string) Problems {
 	return problems
 }
 
+// perLoginProblems refuses a per_login below 1, and one above the cap of an agent queue: a queue cannot run more agents for one login than it runs in all.
+func (c Config) perLoginProblems(runnersPath string) Problems {
+	perLogin := c.Agents.PerLogin
+
+	switch {
+	case perLogin < 1:
+		return Problems{refuse("agents.per_login must be 1 or more. Set it in %s or in %s.", runnersPath, envPerLogin)}
+	case min(c.Agents.MaxConcurrent, c.Agents.MaxReviewConcurrent) >= 1 && perLogin > min(c.Agents.MaxConcurrent, c.Agents.MaxReviewConcurrent):
+		return Problems{refuse("agents.per_login is %d: set it to agents.max_concurrent (%d) or agents.max_review_concurrent (%d), whichever is lower, or less. Set it in %s or in %s.", perLogin, c.Agents.MaxConcurrent, c.Agents.MaxReviewConcurrent, runnersPath, envPerLogin)}
+	}
+
+	return nil
+}
+
 // Validate checks the values that no single file owns: the agent limit and the pool caps.
 func (c Config) Validate() Problems {
 	var problems Problems
@@ -250,13 +282,17 @@ func (c Config) Validate() Problems {
 
 	problems = append(problems, c.limitProblems(runnersPath)...)
 
+	problems = append(problems, c.perLoginProblems(runnersPath)...)
+
 	if c.Agents.MaxTurns < 0 {
 		problems = append(problems, refuse("agents.max_turns must be 0 (no cap) or more. Set it in %s or in %s.", runnersPath, envMaxTurns))
 	}
 
 	problems = append(problems, c.budgetProblems(runnersPath)...)
 	problems = append(problems, c.pollProblems(runnersPath)...)
+	problems = append(problems, c.lookbackProblems(runnersPath)...)
 	problems = append(problems, c.retentionProblems(runnersPath)...)
+	problems = append(problems, c.slotProblems()...)
 
 	return append(problems, c.poolProblems(runnersPath)...)
 }
@@ -287,6 +323,17 @@ func (c Config) pollProblems(runnersPath string) Problems {
 		return Problems{refuse("agents.review_poll_minutes must be 0 (no poll) or more. Set it in %s or in %s.", runnersPath, envReviewPoll)}
 	case minutes > maxReviewPollMinutes:
 		return Problems{refuse("agents.review_poll_minutes is %d: set it to %d (one week) or less. Set it in %s or in %s.", minutes, maxReviewPollMinutes, runnersPath, envReviewPoll)}
+	}
+
+	return nil
+}
+
+func (c Config) lookbackProblems(runnersPath string) Problems {
+	switch days := c.Agents.ReviewLookbackDays; {
+	case days < 1:
+		return Problems{refuse("agents.review_lookback_days must be 1 or more. Set it in %s or in %s.", runnersPath, envReviewLookback)}
+	case days > maxReviewLookbackDays:
+		return Problems{refuse("agents.review_lookback_days is %d: set it to %d (one year) or less. Set it in %s or in %s.", days, maxReviewLookbackDays, runnersPath, envReviewLookback)}
 	}
 
 	return nil

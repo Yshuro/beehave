@@ -25,9 +25,9 @@ func stoppedInTheWait(t *testing.T) *harness {
 	require.NoError(t, engine.Launch())
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.merge.askedCount() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the run to ask the merge", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.merge.askedCount() == 1, nil }})
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 
 	require.Empty(t, harness.merge.snapshot(), "an engine stop keeps the queued merge armed")
 
@@ -59,7 +59,7 @@ func TestCancel_AnEngineThatStartsLaterTurnsOffTheQueuedMergeOfACancelItMissed(t
 
 	harness.engine(t)
 
-	eventually(t, func() bool { return len(harness.merge.snapshot()) == 1 })
+	waitOn(t, condition(func() bool { return len(harness.merge.snapshot()) == 1 }))
 	assert.Equal(t, []string{testItem}, harness.merge.snapshot())
 }
 
@@ -77,7 +77,7 @@ func TestCancel_AnEngineThatCannotTurnOffTheQueuedMergeOfAMissedCancelStillGives
 
 	harness.engine(t)
 
-	eventually(t, func() bool { return countOf(harness.life.seen(), "release") == 1 })
+	waitOn(t, condition(func() bool { return countOf(harness.life.seen(), "release") == 1 }))
 	assert.Equal(t, []string{testItem}, harness.merge.snapshot(), "the disarm was tried once, and its failure did not stop the give-back")
 }
 

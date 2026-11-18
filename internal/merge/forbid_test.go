@@ -25,14 +25,30 @@ func TestForbidden_ForbiddenByFindsTheRuleOfTheFirstLineThatMatches(t *testing.T
 	t.Parallel()
 
 	rules := []*regexp.Regexp{regexp.MustCompile("one"), regexp.MustCompile("two")}
+	cases := map[string]struct {
+		rules []*regexp.Regexp
+		text  string
+		// want is the source of the rule found. Empty means no rule matches.
+		want string
+	}{
+		"the_first_line_that_matches_names_the_rule": {rules: rules, text: "clean\nsays two\nand one", want: "two"},
+		"a_line_that_only_the_first_rule_matches":    {rules: rules, text: "clean\nsays one", want: "one"},
+		"no_line_matches":         {rules: rules, text: "clean\nalso clean"},
+		"no_rules_forbid_nothing": {text: "one"},
+	}
+	for name, one := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	rule, found := merge.ForbiddenBy(rules, "clean\nsays two\nand one")
-	require.True(t, found)
-	assert.Equal(t, "two", rule.String())
+			rule, found := merge.ForbiddenBy(one.rules, one.text)
+			if one.want == "" {
+				assert.False(t, found)
 
-	_, found = merge.ForbiddenBy(rules, "clean\nalso clean")
-	assert.False(t, found)
+				return
+			}
 
-	_, found = merge.ForbiddenBy(nil, "one")
-	assert.False(t, found)
+			require.True(t, found)
+			assert.Equal(t, one.want, rule.String())
+		})
+	}
 }

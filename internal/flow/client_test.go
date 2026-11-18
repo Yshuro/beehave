@@ -4,7 +4,6 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -21,6 +20,7 @@ func TestStateOf_MapsEveryStoreStatusToARunState(t *testing.T) {
 		dbos.WorkflowStatusPending:                     runRunning,
 		dbos.WorkflowStatusEnqueued:                    runQueued,
 		dbos.WorkflowStatusDelayed:                     runQueued,
+		dbos.WorkflowStatusSuspended:                   runQueued,
 		dbos.WorkflowStatusSuccess:                     runDone,
 		dbos.WorkflowStatusError:                       runFailed,
 		dbos.WorkflowStatusMaxRecoveryAttemptsExceeded: runFailed,
@@ -30,6 +30,25 @@ func TestStateOf_MapsEveryStoreStatusToARunState(t *testing.T) {
 
 	for status, want := range tests {
 		assert.Equal(t, want, stateOf(status), status)
+	}
+}
+
+func TestRun_OnlyAnEndedRunIsTerminal(t *testing.T) {
+	t.Parallel()
+
+	tests := map[dbos.WorkflowStatusType]bool{
+		dbos.WorkflowStatusPending:                     false,
+		dbos.WorkflowStatusEnqueued:                    false,
+		dbos.WorkflowStatusDelayed:                     false,
+		dbos.WorkflowStatusSuspended:                   false,
+		dbos.WorkflowStatusSuccess:                     true,
+		dbos.WorkflowStatusError:                       true,
+		dbos.WorkflowStatusMaxRecoveryAttemptsExceeded: true,
+		dbos.WorkflowStatusCancelled:                   true,
+	}
+
+	for status, want := range tests {
+		assert.Equal(t, want, run{Status: dbos.WorkflowStatus{Status: status}}.terminal(), status)
 	}
 }
 
@@ -69,7 +88,7 @@ func TestClient_StatusListsARunThatAsksNoQuestion(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	infos, err := client.Status()
 	require.NoError(t, err, "a run in its agent step has no question and is not an error")
@@ -78,7 +97,7 @@ func TestClient_StatusListsARunThatAsksNoQuestion(t *testing.T) {
 	assert.Empty(t, infos[0].Question)
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestRunCancelled_SpellsTheWordOfTheAgentOutcome(t *testing.T) {
@@ -96,7 +115,7 @@ func TestClient_CancelStopsTheRunAndResumeReopensIt(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	infos, err := client.Status()
 	require.NoError(t, err)
@@ -114,20 +133,15 @@ func TestClient_CancelStopsTheRunAndResumeReopensIt(t *testing.T) {
 	// The tick of the running copy sees the cancel and wakes the owner wait.
 	harness.tick(t)
 
-	select {
-	case outcome := <-done:
-		require.Error(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run kept waiting for the owner after another process canceled it")
-	}
+	require.Error(t, receive(t, done).err, "the run ends after another process canceled it")
 
 	require.NoError(t, client.Resume(testItem))
 	require.NoError(t, client.Answer(testItem, "go on"))
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the resumed run to end done", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
 		rows, statusErr := client.Status()
 
-		return statusErr == nil && rows[0].State == runDone
-	})
+		return struct{}{}, statusErr == nil && rows[0].State == runDone, nil
+	}})
 }
 
 func TestLatestRun_SkipsRunsWhoseNameEndsInNoAttemptNumber(t *testing.T) {

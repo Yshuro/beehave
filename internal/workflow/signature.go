@@ -45,6 +45,9 @@ type Param struct {
 	// AsValue is true when the run reads the keyword as a Starlark value and not into a Go text, number or flag. A None then reaches Rule,
 	// and the run does not refuse it at unpack.
 	AsValue bool
+	// Members is true when Rule reads each member of the list as a struct. The check then builds each struct(...) member from its literal fields and
+	// leaves a field that is not a literal to the run.
+	Members bool
 }
 
 // StatusValues lists the values of the status argument of an item_status call.
@@ -323,6 +326,9 @@ const treeKeyword = "tree"
 // processCap is the keyword max_new_processes of command. The run reads it as a value, so a None reaches the check of the hostWithCap pair.
 func processCap() Param { return Param{Name: "max_new_processes", Kind: KindInt, AsValue: true} }
 
+// slotClass is the keyword slots of command. The run reads it as a value, so an absent keyword differs from an empty text.
+func slotClass() Param { return Param{Name: "slots", Kind: KindText, AsValue: true} }
+
 // valueSignatures holds the builtins that return text or a struct of facts and start nothing.
 func valueSignatures() map[string][]Param {
 	return map[string][]Param{
@@ -342,7 +348,7 @@ func stepSignatures() map[string][]Param {
 		commandName: {
 			runParam(),
 			opt("host", KindText), opt("stdin", KindText), ruled("env", KindDict, envRule),
-			ruled("timeout", KindText, durationRule("timeout")), ruled("stop_on_rc", KindList, stopRule), processCap(), label,
+			ruled("timeout", KindText, durationRule("timeout")), ruled("stop_on_rc", KindList, stopRule), processCap(), slotClass(), label,
 		},
 		writeName: writeParams(),
 		gateName: {
@@ -361,21 +367,22 @@ func swarmSignatures() map[string][]Param {
 
 	return map[string][]Param{
 		batchMergeName: {
-			{Name: "prs", Kind: KindList, Required: true, Rule: prsRule},
+			{Name: "prs", Kind: KindList, Required: true, Rule: prsRule, Members: true},
 			filled("base"), filled("repo"), opt("hold", KindText), ruled("own", KindDict, ownRule),
 			forbidText(), words("gate_run"), opt("integration", KindInt),
 			{Name: nameKeyword, Kind: KindText, Required: true, Why: "The name makes the step names of the call unique, so use one for each call of the run."},
 		},
 		gatherName: {req("runs", KindAny), one(failKeyword, FailModes()), one(untilKeyword, UntilModes()), label},
 		spawnName:  {{Name: "items", Kind: KindList, Required: true, Rule: wordsRule("items")}, opt(entryKeyword, KindText), label},
-		queueName:  {label, opt("hold", KindText)},
+		queueName:  {label, opt("hold", KindText), opt("label", KindText)},
 	}
 }
 
-// readSignatures holds the builtins that read the tracker or the item folder.
+// readSignatures holds the builtins that read the tracker, the forge or the item folder.
 func readSignatures() map[string][]Param {
 	return map[string][]Param{
 		itemReadName:     {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
+		prStateName:      {req("pr", KindInt), opt(nameKeyword, KindText)},
 		beforeReviewName: {filled("base"), filled("head"), ruled("allow", KindList, allowRule), opt("integration", KindBool), opt(nameKeyword, KindText)},
 	}
 }
@@ -388,7 +395,7 @@ func itemSignatures() map[string][]Param {
 		itemAssignName:  {filled("id"), filled("assignee"), label},
 		itemCommentName: {filled("id"), filled("text"), filled("key"), forbidText(), label},
 		itemCreateName: {
-			filled("title"), filled("key"), opt("body", KindText), opt("parent", KindText), opt("assignee", KindText), opt("severity", KindText), opt("operator", KindBool), forbidText(), label,
+			filled("title"), filled("key"), opt("body", KindText), opt("parent", KindText), opt("assignee", KindText), opt("severity", KindText), opt("operator", KindBool), forbidText(), opt("shared", KindBool), label,
 		},
 		itemStatusName: {filled("id"), {Name: statusField, Kind: KindText, Required: true, Values: StatusValues()}, label},
 		boardSyncName:  {req("board", KindInt), filled(statusField), opt("owner", KindText), opt("issue", KindInt), label},
@@ -550,6 +557,7 @@ func (g *graph) pairs(call *syntax.CallExpr, builtin string, params []Param) {
 		g.protection(call, params)
 	case commandName:
 		g.hostWithCap(call, params)
+		g.hostWithSlots(call, params)
 	case mergeName:
 		g.proof(call, params)
 	case waitName:
@@ -614,6 +622,30 @@ func (g *graph) hostWithCap(call *syntax.CallExpr, params []Param) {
 
 	if _, err := ProcessCap(value, host); err != nil {
 		g.report(placeOf(syntax.Start(limit)), commandName+": "+err.Error()+".")
+	}
+}
+
+// hostWithSlots checks the slots of a command call with the rule of the run. A value that is not a text literal, or a host that is neither absent nor a
+// text literal, is left to the run, and so is a value of the wrong kind, which the kind check reports.
+func (g *graph) hostWithSlots(call *syntax.CallExpr, params []Param) {
+	class := paramArg(call, params, "slots")
+	if class == nil {
+		return
+	}
+
+	if kind := kindOf(class); kind != KindText && kind != KindAny {
+		return
+	}
+
+	value, isLiteral := literalValue(class)
+	host, known := hostText(paramArg(call, params, "host"))
+
+	if !isLiteral || !known {
+		return
+	}
+
+	if _, err := SlotClass(value, host); err != nil {
+		g.report(placeOf(syntax.Start(class)), commandName+": "+err.Error()+".")
 	}
 }
 
@@ -825,7 +857,12 @@ func (g *graph) rule(builtin string, value syntax.Expr, param Param) {
 		return
 	}
 
-	v, ok := literalPart(value)
+	read := literalPart
+	if param.Members {
+		read = memberList
+	}
+
+	v, ok := read(value)
 	if !ok {
 		return
 	}

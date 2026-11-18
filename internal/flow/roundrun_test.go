@@ -50,7 +50,7 @@ func TestRoundRun_ARoundItemKeepsItsSlashesOutOfTheRunIdAndTheCancelMarkerFolder
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testRound)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	assert.Equal(t, runRunning, stateOfRun(t, client, "item-round/integration/s1-r1"), "the run id holds the round id as it is")
 	require.NoError(t, client.Cancel(testRound))
@@ -62,7 +62,7 @@ func TestRoundRun_ARoundItemKeepsItsSlashesOutOfTheRunIdAndTheCancelMarkerFolder
 	assert.False(t, markers[0].IsDir())
 
 	harness.tick(t)
-	<-done
+	receive(t, done)
 }
 
 func TestRoundRun_CancelRunStopsTheOlderRunOfAnItemAndLeavesTheNewerOpen(t *testing.T) {
@@ -74,7 +74,7 @@ func TestRoundRun_CancelRunStopsTheOlderRunOfAnItemAndLeavesTheNewerOpen(t *test
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	startUnder(t, harness, engine, testItem, "item-12-r2")
 
 	older, newer := "item-12-r1", "item-12-r2"
@@ -87,7 +87,7 @@ func TestRoundRun_CancelRunStopsTheOlderRunOfAnItemAndLeavesTheNewerOpen(t *test
 
 	require.NoError(t, client.CancelRun(newer))
 	harness.tick(t)
-	<-done
+	receive(t, done)
 }
 
 func TestRoundRun_CancelRunStopsARunUnderAPassId(t *testing.T) {
@@ -99,7 +99,7 @@ func TestRoundRun_CancelRunStopsARunUnderAPassId(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testRound)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	startUnder(t, harness, engine, testRound, testPassID)
 
 	pollRunState(t, client, testPassID, runRunning)
@@ -108,7 +108,7 @@ func TestRoundRun_CancelRunStopsARunUnderAPassId(t *testing.T) {
 
 	require.NoError(t, client.CancelRun("item-round/integration/s1-r1"))
 	harness.tick(t)
-	<-done
+	receive(t, done)
 }
 
 func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBuild(t *testing.T) {
@@ -121,7 +121,7 @@ func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBui
 	same := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 	pollRunState(t, same, "item-12-r1", runRunning)
 
 	require.ErrorIs(t, other.CancelRun("item-12-r1"), errStranded, "an open run of another build is not stopped")
@@ -129,7 +129,7 @@ func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBui
 
 	require.NoError(t, same.CancelRun("item-12-r1"))
 	harness.tick(t)
-	<-done
+	receive(t, done)
 
 	require.ErrorIs(t, other.CancelRun("item-12-r1"), errWrongState, "a finished run of another build has nothing to cancel")
 	require.ErrorIs(t, same.CancelRun("item-12-r1"), errWrongState)
@@ -170,7 +170,7 @@ func TestRoundRun_CancelRunRefusesAnIdOfNoFormTheEngineMakes(t *testing.T) {
 func pollRunState(t *testing.T, client *Client, id string, want RunState) {
 	t.Helper()
 
-	eventually(t, func() bool { return stateOfRun(t, client, id) == want })
+	waitOn(t, condition(func() bool { return stateOfRun(t, client, id) == want }))
 }
 
 // roundNamed is a workflow that registers under the pass workflow name and ends at once, as a pass run of a round does.
@@ -207,7 +207,7 @@ func TestRoundRun_CancelRunRefusesARunOfAnotherBuildAndARunThatHasEnded(t *testi
 	other := harness.client(t, "v-other")
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	require.ErrorIs(t, other.CancelRun("item-12-r1"), errStranded)
 
@@ -215,7 +215,23 @@ func TestRoundRun_CancelRunRefusesARunOfAnotherBuildAndARunThatHasEnded(t *testi
 	require.ErrorIs(t, client.CancelRun("item-12-r1"), errWrongState, "a run that ended has nothing to cancel")
 
 	harness.tick(t)
-	<-done
+	receive(t, done)
+}
+
+// A finished run is refused, and the refusal names its state.
+func TestRoundRun_CancelRunRefusesARunThatFinished(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	engine := harness.engine(t)
+	client := harness.client(t, testVersion)
+
+	_, err := engine.Run(testItem, testProject)
+	require.NoError(t, err)
+
+	err = client.CancelRun("item-12-r1")
+	require.ErrorIs(t, err, errWrongState)
+	require.ErrorContains(t, err, "item-12-r1 is done and has nothing to cancel")
 }
 
 func TestRoundRun_CancelRunReportsAStoreThatIsGone(t *testing.T) {
@@ -231,7 +247,7 @@ func TestRoundRun_CancelRunReportsAStoreThatIsGone(t *testing.T) {
 
 // blockedOnText is a workflow under the pass name whose input is not an item input and which stays open until the engine stops.
 func blockedOnText(ctx dbos.Context, _ string) (string, error) {
-	<-ctx.Done()
+	hang(ctx.Done())
 
 	return "", ctx.Err()
 }

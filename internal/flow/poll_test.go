@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,8 @@ var pollTick = time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 type fakeSource struct {
 	own    []model.OwnPull
 	ownErr error
+	// asked, when set, collects the searches that the poll makes.
+	asked *[]model.SearchRequest
 }
 
 func (s fakeSource) PRList(context.Context, int, ...string) ([]model.PullRequest, error) {
@@ -39,7 +42,13 @@ func (s fakeSource) Comments(context.Context, int) ([]model.Comment, error) { re
 
 func (s fakeSource) ReviewComments(context.Context, int) ([]model.Comment, error) { return nil, nil }
 
-func (s fakeSource) Search(context.Context, model.SearchRequest) ([]int, error) { return nil, nil }
+func (s fakeSource) Search(_ context.Context, req model.SearchRequest) ([]int, error) {
+	if s.asked != nil {
+		*s.asked = append(*s.asked, req)
+	}
+
+	return nil, nil
+}
 
 func (s fakeSource) PRChecks(context.Context, int) ([]model.Check, error) { return nil, nil }
 
@@ -75,6 +84,32 @@ func (p fakePoll) Source(_ context.Context, project string) (PollSource, string,
 	return source, pollMe, nil
 }
 
+// swapPoll is a fakePoll that a test replaces under its own lock while the engine runs. The engine holds the swapPoll from before Launch, so the test never writes an engine field.
+type swapPoll struct {
+	mu   sync.Mutex
+	poll fakePoll
+}
+
+func (s *swapPoll) set(poll fakePoll) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.poll = poll
+}
+
+func (s *swapPoll) current() fakePoll {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.poll
+}
+
+func (s *swapPoll) Projects() []string { return s.current().Projects() }
+
+func (s *swapPoll) Source(ctx context.Context, project string) (PollSource, string, error) {
+	return s.current().Source(ctx, project)
+}
+
 func ownThreads(number int) []model.OwnPull {
 	return []model.OwnPull{{Number: number, ChangesKnown: true, ThreadsKnown: true, OpenThreads: 2}}
 }
@@ -90,6 +125,29 @@ func pollOnce(t *testing.T, engine *Engine) PollOutput {
 	require.NoError(t, err)
 
 	return out
+}
+
+func TestPoll_TheSearchForRepliesLooksBackTheDaysOfTheOptionsAndThreeByDefault(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct {
+		days  int
+		since string
+	}{{0, "2026-10-28"}, {10, "2026-10-21"}} {
+		var asked []model.SearchRequest
+
+		harness := newHarness(t)
+		harness.poll = fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {asked: &asked}}}
+		harness.opts.ReviewLookbackDays = test.days
+
+		pollOnce(t, launchedWith(t, harness, func(*Deps) {}))
+
+		require.Len(t, asked, 2, "an issue search and a pull request search")
+
+		for _, req := range asked {
+			assert.Equal(t, test.since, req.Since, "%d days", test.days)
+		}
+	}
 }
 
 func TestPoll_ATickRecordsTheRowsOfEachProjectAndSkipsAProjectWithNoForge(t *testing.T) {
@@ -265,7 +323,8 @@ func TestClient_PollReturnsTheNewestFinishedPoll(t *testing.T) {
 	t.Parallel()
 
 	harness := newHarness(t)
-	harness.poll = fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {own: ownThreads(5)}}}
+	poll := &swapPoll{poll: fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {own: ownThreads(5)}}}}
+	harness.poll = poll
 	engine := launchedWith(t, harness, func(*Deps) {})
 	client := harness.client(t, testVersion)
 
@@ -274,8 +333,7 @@ func TestClient_PollReturnsTheNewestFinishedPoll(t *testing.T) {
 	assert.False(t, found, "no poll has finished")
 
 	pollOnce(t, engine)
-	harness.poll = fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {ownErr: errFake}}}
-	engine.deps.Poll = harness.poll
+	poll.set(fakePoll{names: []string{"alpha"}, sources: map[string]fakeSource{"alpha": {ownErr: errFake}}})
 
 	later := dbos.ScheduledWorkflowInput{ScheduledTime: pollTick.Add(time.Hour)}
 	handle, err := dbos.RunWorkflow(engine.ctx, engine.poll, later)
@@ -370,7 +428,7 @@ func TestClient_PollShowsAFailedPollAsTheNewestRun(t *testing.T) {
 
 // waitingPoll runs until DBOS cancels it.
 func waitingPoll(ctx dbos.Context, _ dbos.ScheduledWorkflowInput) (PollOutput, error) {
-	<-ctx.Done()
+	hang(ctx.Done())
 
 	return PollOutput{}, ctx.Err()
 }

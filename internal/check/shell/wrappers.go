@@ -330,6 +330,7 @@ func (s *scanner) scanOnce(text string, remote bool) {
 	}
 
 	s.lines[key] = true
+	s.reads++
 	s.scan(text, remote)
 }
 

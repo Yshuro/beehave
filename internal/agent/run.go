@@ -36,6 +36,9 @@ const (
 	// A cap crossed on the last line (read after the process exited) ends the run as OutcomeBudgetCap too.
 	OutcomeTurnCap   Outcome = "turn-cap"
 	OutcomeBudgetCap Outcome = "budget-cap"
+	// OutcomeLimited means a provider limit (a rate limit or a spend limit) refused more work, and Result.Limit says which. The caller sets it from the
+	// output of the CLI, whatever the exit code.
+	OutcomeLimited Outcome = "limited"
 )
 
 const (
@@ -92,6 +95,8 @@ type Spec struct {
 // that the cost is unknown.
 // Streamed is the sum of the dollars that single output lines reported (Seen.Spent), which the runner adds for a profile with StreamsCost, and 0 for any other.
 // The runner is the one reader of those dollars; the caller takes Streamed and does not read Seen.Spent itself.
+// Limit is the provider limit of a run that ended as OutcomeLimited, and nil for any other run. The caller fills it from the output lines, as Session.
+// Resumed is true for a run that resumed the session of a lost run. The caller that chose to resume sets it.
 type Result struct {
 	Spend
 	Streamed   float64
@@ -104,6 +109,18 @@ type Result struct {
 	Text       string
 	Skills     []string
 	Violations []string
+	Limit      *Limit
+	Resumed    bool
+	// GuardMissing is true when the launch named a marker file for its hook (Launch.Loaded) and the file was not there when the run ended: the hook did not load,
+	// so the CLI ran its shell commands with no check. The runner sets it; the caller turns it into a violation.
+	GuardMissing bool
+}
+
+// AddNote returns the result with note joined after its Note by "; ". An empty note on either side adds no separator.
+func (r Result) AddNote(note string) Result {
+	r.Note = strings.Join(slices.DeleteFunc([]string{r.Note, note}, func(s string) bool { return s == "" }), "; ")
+
+	return r
 }
 
 // Timer is the part of time.Timer that the idle limit and the total limit use.
@@ -133,12 +150,21 @@ func (r Runner) Run(ctx context.Context, spec Spec) Result {
 
 	after := r.after()
 
-	defer startTotalTimeout(spec.Timeout, after, cancel)()
+	defer startTotalTimeout(cmp.Or(spec.Timeout, p.DefaultTimeout), after, cancel)()
 
 	idle := newIdleTimer(spec.IdleTimeout, after, cancel)
 	defer idle.stop()
 
-	return execute(ctx, spec, p, idle, r.version())
+	return stalled(execute(ctx, spec, p, idle, r.version()), p)
+}
+
+// stalled adds the StallNote of the profile to a run that a total or idle limit ended.
+func stalled(result Result, p Profile) Result {
+	if p.StallNote != "" && (result.Outcome == OutcomeTimedOut || result.Outcome == OutcomeIdle) {
+		return result.AddNote(p.StallNote)
+	}
+
+	return result
 }
 
 // after returns the timer function of the runner, or the one of the standard library when the runner sets none.
@@ -170,7 +196,7 @@ func prepare(spec Spec, goos string) (Profile, string) {
 		return p, problem
 	}
 
-	if problem := sandboxProblem(spec, p, goos); problem != "" {
+	if problem := cmp.Or(sandboxProblem(spec, p, goos), guardProblem(spec, p, goos)); problem != "" {
 		return p, problem
 	}
 
@@ -236,16 +262,35 @@ func launchRun(ctx context.Context, spec Spec, p Profile, binary, runDir string,
 
 	env := envFor(spec, p, launch.Env)
 
-	if problem := versionProblem(ctx, spec, p, binary, env, version); problem != "" {
+	problem, printed := versionProblem(ctx, spec, p, binary, env, version)
+	if problem != "" {
 		return Result{Outcome: OutcomeNotStarted, Note: problem}
 	}
 
-	cmd := proc.GroupCommand(ctx, binary, argsOf(spec, p, launch), spec.Dir)
+	cmd := proc.GroupCommand(ctx, binary, argsOf(spec, p, launch, versionArgs(p, printed)), spec.Dir)
 
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader(spec.Prompt)
 
-	return runCommand(ctx, spec, cmd, idle)
+	return withGuardProof(runCommand(ctx, spec, cmd, idle), runDir, launch.Loaded)
+}
+
+// withGuardProof sets GuardMissing on the result when the launch named a marker file and the file is not in the run folder.
+func withGuardProof(result Result, runDir, marker string) Result {
+	result.GuardMissing = marker != "" && !loaded(runDir, marker)
+
+	return result
+}
+
+// loaded is true when the hook of the launch created its marker file in the run folder. The caller has checked that the path is local.
+func loaded(runDir, name string) bool {
+	if !filepath.IsLocal(name) {
+		return false
+	}
+
+	_, err := os.Stat(filepath.Join(runDir, name))
+
+	return err == nil
 }
 
 // runCommand starts the command, waits for it and returns what it left.
@@ -279,15 +324,15 @@ func withSpend(result Result, counter *spendCounter) Result {
 	}
 
 	result.Outcome = OutcomeBudgetCap
-	result.Note = strings.Join(slices.DeleteFunc([]string{result.Note, note}, func(s string) bool { return s == "" }), "; ")
 
-	return result
+	return result.AddNote(note)
 }
 
-// argsOf returns the arguments of the profile, then the model, the session to resume, the caps and the arguments of the launch.
+// argsOf returns the arguments of the profile, the arguments that the version reaches (later), then the model, the session to resume, the caps and the arguments of the launch.
 // A resume that opens a subcommand (Profile.ResumeLast) comes after all of them.
-func argsOf(spec Spec, p Profile, launch Launch) []string {
+func argsOf(spec Spec, p Profile, launch Launch, later []string) []string {
 	args := slices.Clone(p.Args)
+	args = append(args, later...)
 	args = append(args, editArgs(spec, p)...)
 
 	if spec.Model != "" {

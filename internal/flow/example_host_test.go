@@ -92,110 +92,59 @@ func (f *fakeHosts) Teardown(ctx context.Context, project, _ string) error {
 	return host.Teardown(ctx, f.host, git, find, f.private)
 }
 
+// LostProof gives no proof: no run of these examples loses a gate job.
+func (*fakeHosts) LostProof(context.Context, string, string, string) (model.LostProof, error) {
+	return model.LostProof{}, nil
+}
+
 var _ proc.Runner = scriptRunner(nil)
 
-func hostExample(t *testing.T, teardown string) (*agentRig, string, *fakeHosts, *fakeWriter) {
-	t.Helper()
-
-	rig, file := exampleRig(t, func(int) string { return "approve" })
-	hosts := &fakeHosts{host: &stubHost{}}
-	writer := newFakeWriter()
-
-	rig.h.hosts = hosts
-	rig.h.writer = writer
-
-	rig.h.opts.Env["HOST_UP"] = "true"
-
-	if teardown != "" {
-		rig.h.opts.Env["HOST_TEARDOWN"] = teardown
-	}
-
-	return rig, file, hosts, writer
-}
-
-func TestExample_ARunWithoutHostUpStartsNoHost(t *testing.T) {
+func TestExampleHost_ARoundStartsTheHostOnceBeforeAnyItem(t *testing.T) {
 	t.Parallel()
 
-	rig, file, hosts, _ := hostExample(t, "")
-	delete(rig.h.opts.Env, "HOST_UP")
+	rig := newRoundRig(t, "1 3")
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, "merged", result.Merge)
-	assert.Empty(t, hosts.ups, "HOST_UP is not true, so the run starts no host")
+	assert.Equal(t, []string{testProject}, rig.hosts.ups, "one host_up for the round, and none for a child")
 }
 
-func TestExample_AHostRunStopsTheHostAfterItsWorkIsBanked(t *testing.T) {
+func TestExampleHost_ARoundStopsTheHostOnceAfterItsWorkIsBanked(t *testing.T) {
 	t.Parallel()
 
-	rig, file, hosts, writer := hostExample(t, "true")
+	rig := newRoundRig(t, "1 3")
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, "merged", result.Merge)
-	assert.Equal(t, []string{testProject}, hosts.asked)
-	assert.Equal(t, 1, hosts.host.downs, "the host is deleted once")
-	assert.Empty(t, writer.notes, "a host that went down needs no warning")
+	assert.Equal(t, []string{testProject}, rig.hosts.asked, "one teardown for the round, and none for a child")
+	assert.Equal(t, 1, rig.hosts.host.downs, "the host is deleted once")
 }
 
-func TestExample_AHostWithWorkThatCannotBeBankedStaysUpAndTheRunSaysWhy(t *testing.T) {
+func TestExampleHost_AHostWithWorkThatCannotBeBankedStaysUp(t *testing.T) {
 	t.Parallel()
 
-	rig, file, hosts, writer := hostExample(t, "true")
-	hosts.unbanked = true
+	rig := newRoundRig(t, "1 3")
+	rig.hosts.unbanked = true
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
-	require.NoError(t, err, "the item itself finished")
-	assert.Equal(t, "merged", result.Merge)
-	assert.Zero(t, hosts.host.downs, "the host is not deleted while work exists only on it")
-	require.Len(t, writer.notes, 1, "the stay is reported on the item")
-	assert.Contains(t, writer.notes[0], "The build host stays up.")
-	assert.NotContains(t, writer.notes[0], "billing")
-	assert.Contains(t, writer.notes[0], "host stays up")
-	assert.Contains(t, writer.notes[0], "/work/repo refs/heads/item-7", "the note names the branch that only the host holds")
+	require.NoError(t, err, "the round itself finished")
+	assert.Zero(t, rig.hosts.host.downs, "the host is not deleted while work exists only on it")
 }
 
-func TestExample_ARunWithoutAHostCallsNoTeardown(t *testing.T) {
+func TestExampleHost_ARoundThatFoundTheHostLiveDoesNotStopIt(t *testing.T) {
 	t.Parallel()
 
-	rig, file, hosts, writer := hostExample(t, "")
+	rig := newRoundRig(t, "1 3")
+	rig.hosts.live = true
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Empty(t, hosts.asked, "no host call")
-	assert.Zero(t, hosts.host.downs)
-	assert.Empty(t, writer.notes)
-}
-
-func TestExample_AHostRunStartsTheHostOnceBeforeTheItem(t *testing.T) {
-	t.Parallel()
-
-	rig, file, hosts, _ := hostExample(t, "")
-
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
-
-	require.NoError(t, err)
-	assert.Equal(t, "merged", result.Merge)
-	assert.Equal(t, []string{testProject}, hosts.ups, "the host is started once")
-}
-
-func TestExample_ARunThatFoundTheHostLiveDoesNotStopIt(t *testing.T) {
-	t.Parallel()
-
-	rig, file, hosts, writer := hostExample(t, "true")
-	hosts.live = true
-
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
-
-	require.NoError(t, err)
-	assert.Empty(t, hosts.asked, "no teardown call for a host that another run started")
-	assert.Zero(t, hosts.host.downs)
-	require.Len(t, writer.notes, 1)
-	assert.Contains(t, writer.notes[0], "did not start the host")
+	assert.Empty(t, rig.hosts.asked, "no teardown call for a host that another run started")
+	assert.Zero(t, rig.hosts.host.downs)
 }
 
 type failingHosts struct{ err error }
@@ -204,10 +153,15 @@ func (failingHosts) Up(context.Context, string, string) (bool, string, error) { 
 
 func (f failingHosts) Teardown(context.Context, string, string) error { return f.err }
 
+func (f failingHosts) LostProof(context.Context, string, string, string) (model.LostProof, error) {
+	return model.LostProof{}, f.err
+}
+
 func TestStopHost_ACanceledRunRecordsNoResultSoAResumeStopsTheHostAgain(t *testing.T) {
 	t.Parallel()
 
-	s := &script{e: &Engine{deps: Deps{Hosts: failingHosts{err: context.Canceled}}}}
+	// The engine runs; only the context of the step ends, as it does when beehave cancels a run.
+	s := &script{e: &Engine{ctx: newHarness(t).engine(t).ctx, deps: Deps{Hosts: failingHosts{err: context.Canceled}}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 

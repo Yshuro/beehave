@@ -7,59 +7,85 @@ GO_TEST_P ?=
 # GO_TEST_DRIVER_PKGS are the fast packages that use the driver directly. The second run in "test" runs them with the pointer checks
 # on for the driver, so a driver upgrade is still checked for pointer misuse on every gate.
 GO_TEST_DRIVER_PKGS := ./internal/store/local
-# "test" starts one go test run for each flow shard, one for the rest of the flow package and one for the other packages. Each run gets a
-# share of the cores (at least one) as GOMAXPROCS, which also sets the -p and -parallel defaults, so one gate uses about the core
-# count and does not oversubscribe the host. GO_TEST_PROCS overrides the share.
+# "test" starts one go test run for each flow shard and one for the other packages, all at the same time. The CPU work of the runs adds up
+# to more than one 4-core CI runner can do in the CI job limit, so CI runs "make test" in several jobs, and GO_TEST_SLICE=<job>/<jobs> picks
+# the runs of one job: job 1 runs the other packages, and jobs 2 and up share the flow shards (shard S goes to job 2 + (S - 1) mod (jobs - 1)).
+# The default 1/1 runs everything. Each flow run gets GO_TEST_PROCS cores as GOMAXPROCS, which also sets the -p and -parallel defaults, so
+# the runs of one job share the cores of the host. The run of the other packages gets the cores that the flow runs leave (at least two).
 GO_CORES := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu)
-# The run of the other packages and the shard in FLOW_HEAVY_SHARD take about twice the CPU of the others, so each counts as two shares.
-FLOW_HEAVY_SHARD := E
-GO_TEST_UNITS = $(shell echo $$(( $(words $(FLOW_SHARDS)) + 4 )))
-GO_TEST_PROCS ?= $(shell n=$$(( $(GO_CORES) / $(GO_TEST_UNITS) )); [ $$n -ge 1 ] || n=1; echo $$n)
-GO_TEST_PROCS_HEAVY = $(shell echo $$(( 2 * $(GO_TEST_PROCS) )))
-ifneq ($(shell printf '%s' '$(GO_TEST_PROCS)' | grep -Ec '^[1-9][0-9]*$$'),1)
-$(error GO_TEST_PROCS must be a whole number of at least 1, not "$(GO_TEST_PROCS)")
-endif
-# The CPU work of a run does not change with its share, so a smaller share takes longer. The Go default timeout of 10 minutes is too short for
-# the run of the other packages at a share of 2 (a 2-core CI runner). Each run gets GO_TEST_TIMEOUT, which stays under the 30 minute limit of the CI test job.
+# The CPU work of a run does not change with its share, so a smaller share takes longer. Each run gets GO_TEST_TIMEOUT. All the runs of a job
+# start together, so a run ends at the timeout at the latest: a CI job needs a limit above the build time plus GO_TEST_TIMEOUT.
 GO_TEST_TIMEOUT ?= 18m
 GO_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0' -count=1 -timeout $(GO_TEST_TIMEOUT) $(if $(GO_TEST_P),-p $(GO_TEST_P))
-# The flow package has over 1000 tests, and under the race detector one run of it takes about 300 s on an idle host. A test binary has its own
-# 10 minute timeout, so "test" runs the package in shards, one go test run for each shard. A shard is a letter class for the first letter
-# after "Test" (a bracket range such as A-D). The last run takes every test that no shard names (a name that does not start with an
-# upper case letter, or an Example), through -skip, so no test is left out of every shard. Each shard writes its own coverage profile,
-# and "coverage" merges them with the profile of the other packages, so the gate still measures the whole package. "test" starts the
-# shards and the run of the other packages together, so the cores are shared (GO_TEST_P applies to each run), writes each output to its
-# own test-*.log file, prints the files in order, and fails if any run fails.
+# The flow package has about 1500 tests, and under the race detector the run of all of them takes far longer than one run can. "test" lists the tests
+# of the package (FLOW_LIST) and gives the test on line N of the list to shard N mod FLOW_SHARD_COUNT, so every listed test is in exactly one
+# shard and no test is left out of every shard. The tests of one family sit on neighbour lines, so each shard gets a mix of the cheap
+# and the costly tests, and a new test needs no change here. Each shard writes its own coverage profile, and "coverage" merges them
+# with the profile of the other packages (CI jobs hand their profiles on as artifacts), so the gate still measures the whole package.
+# Each run writes its own test-*.log file and prints it when it ends. "test" fails if any run fails.
+# A flow package that does not build lists no test. "test" then writes the build failure to junit-flow-build.xml and still runs the other
+# packages, so a tree with test files that do not build (the revert run of the gate) gives a report of every package. The shards then find no
+# list and fail, so "test" fails as before.
 comma := ,
 space := $() $()
 FLOW_PKG := ./internal/flow
-FLOW_SHARDS := A-D E F-L M-Q
-FLOW_LETTERS := $(subst $(space),,$(FLOW_SHARDS))
-FLOW_PROFILES := $(subst $(space),,coverage.out$(foreach s,$(FLOW_SHARDS),$(comma)coverage-flow-$(s).out)$(comma)coverage-flow-rest.out)
+FLOW_LIST := test-flow-list.log
+FLOW_SHARD_COUNT := 12
+FLOW_SHARDS := $(shell seq 1 $(FLOW_SHARD_COUNT))
+FLOW_PROFILES := $(subst $(space),,coverage.out$(foreach s,$(FLOW_SHARDS),$(comma)coverage-flow-$(s).out))
+GO_TEST_SLICE ?= 1/1
+ifneq ($(shell printf '%s' '$(GO_TEST_SLICE)' | grep -Ec '^[1-9][0-9]*/[1-9][0-9]*$$'),1)
+$(error GO_TEST_SLICE must be <job>/<jobs>, such as 2/4, not "$(GO_TEST_SLICE)")
+endif
+SLICE_JOB := $(word 1,$(subst /, ,$(GO_TEST_SLICE)))
+SLICE_JOBS := $(word 2,$(subst /, ,$(GO_TEST_SLICE)))
+ifneq ($(shell [ $(SLICE_JOB) -le $(SLICE_JOBS) ] && [ $(SLICE_JOBS) -le $(FLOW_SHARD_COUNT) ] && echo ok),ok)
+$(error GO_TEST_SLICE must name a job up to the number of jobs, and at most $(FLOW_SHARD_COUNT) jobs, not "$(GO_TEST_SLICE)")
+endif
+RUN_SHARDS := $(if $(filter 1,$(SLICE_JOBS)),$(FLOW_SHARDS),$(if $(filter 1,$(SLICE_JOB)),,$(shell seq $$(( $(SLICE_JOB) - 1 )) $$(( $(SLICE_JOBS) - 1 )) $(FLOW_SHARD_COUNT))))
+RUN_OTHER := $(if $(filter 1,$(SLICE_JOBS) $(SLICE_JOB)),yes)
+RUN_TARGETS := $(if $(RUN_OTHER),test-run-other) $(addprefix test-run-flow-,$(RUN_SHARDS))
+FLOW_RUN_TARGETS := $(addprefix test-run-flow-,$(FLOW_SHARDS))
+GO_TEST_UNITS = $(shell echo $$(( $(words $(RUN_SHARDS)) + $(if $(RUN_OTHER),2,0) )))
+GO_TEST_PROCS ?= $(shell u=$(GO_TEST_UNITS); [ $$u -ge 1 ] || u=1; n=$$(( ($(GO_CORES) + u / 2) / u )); [ $$n -ge 1 ] || n=1; echo $$n)
+GO_TEST_PROCS_HEAVY = $(shell m=$$(( 2 * $(GO_TEST_PROCS) )); n=$$(( $(GO_CORES) - $(words $(RUN_SHARDS)) * $(GO_TEST_PROCS) )); [ $$n -ge $$m ] || n=$$m; echo $$n)
+ifneq ($(shell printf '%s' '$(GO_TEST_PROCS)' | grep -Ec '^[1-9][0-9]*$$'),1)
+$(error GO_TEST_PROCS must be a whole number of at least 1, not "$(GO_TEST_PROCS)")
+endif
 GOLANGCI_LINT_VERSION := v2.15.0
 GOTESTSUM_VERSION := v1.13.0
+GO_TEST_COVERAGE_VERSION := v2.20.1
+GOVULNCHECK_VERSION := v1.9.0
+# GO_INSTALL_DIR is the folder where go install writes a binary: GOBIN when set, else the bin folder of the first GOPATH entry.
+GO_INSTALL_DIR = $(or $(shell go env GOBIN),$(firstword $(subst :, ,$(shell go env GOPATH)))/bin)
+# GO_TOOL_AT succeeds when the binary that go install writes for $(1) was built from module $(2) at version $(3). make setup reinstalls a tool
+# when it fails. It reads the file in GO_INSTALL_DIR, not the first copy on PATH, so an older copy earlier on PATH does not force a reinstall.
+GO_TOOL_AT = go version -m "$(GO_INSTALL_DIR)/$(1)" 2>/dev/null | grep -Eq '^[[:space:]]+mod[[:space:]]+$(subst .,\.,$(2))[[:space:]]+$(subst .,\.,$(3))[[:space:]]'
 # Each run of "test" goes through gotestsum, which writes one JUnit file in REPORT_DIR (the glob reports/*.xml matches them all).
 REPORT_DIR := reports
 GOTESTSUM = gotestsum --format standard-quiet --junitfile $(REPORT_DIR)
 AI_RULEZ_VERSION := v5.9.2
 # The secret scan of the candidate gate job runs gitleaks. The "git" subcommand exists from 8.19 on.
 GITLEAKS_VERSION := v8.30.1
+# make mutation and make mutation-pr run gremlins. scripts/mutation-pr.sh reads the JSON report of this version.
+GREMLINS_VERSION := v0.6.0
 BIN := bin/beehave
 REMEDY := bin/remedy
 
 DEADCODE_VERSION := golang.org/x/tools/cmd/deadcode@v0.51.0
 
-.PHONY: setup lint-version ai-rulez-version ai-rulez-install deps deadcode build release-snapshot format format-check lint vet vuln test coverage smoke smoke-agent smoke-hook smoke-sandbox mutation mutation-pr \
+.PHONY: setup lint-version ai-rulez-version ai-rulez-install contract-tools-install deps deadcode build release-snapshot format format-check lint vet vuln test coverage smoke smoke-agent smoke-hook smoke-sandbox mutation mutation-pr \
 	governance-generate governance-validate governance-verify clean check check-darwin
 
 setup:  ## Install the Go tools and generate the agent files
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 	$(MAKE) ai-rulez-install
-	command -v go-test-coverage >/dev/null 2>&1 || go install github.com/vladopajic/go-test-coverage/v2@v2.20.1
-	command -v govulncheck >/dev/null 2>&1 || go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
-	command -v gotestsum >/dev/null 2>&1 || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
-	command -v deadcode >/dev/null 2>&1 || go install $(DEADCODE_VERSION)
-	[ "$$(gitleaks version 2>/dev/null)" = "$(GITLEAKS_VERSION:v%=%)" ] || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	$(call GO_TOOL_AT,go-test-coverage,github.com/vladopajic/go-test-coverage/v2,$(GO_TEST_COVERAGE_VERSION)) || go install github.com/vladopajic/go-test-coverage/v2@$(GO_TEST_COVERAGE_VERSION)
+	$(call GO_TOOL_AT,govulncheck,golang.org/x/vuln,$(GOVULNCHECK_VERSION)) || go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION)
+	$(call GO_TOOL_AT,gotestsum,gotest.tools/gotestsum,$(GOTESTSUM_VERSION)) || go install gotest.tools/gotestsum@$(GOTESTSUM_VERSION)
+	$(call GO_TOOL_AT,deadcode,golang.org/x/tools,$(word 2,$(subst @, ,$(DEADCODE_VERSION)))) || go install $(DEADCODE_VERSION)
+	$(call GO_TOOL_AT,gitleaks,github.com/zricethezav/gitleaks/v8,$(GITLEAKS_VERSION)) || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
+	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
 	$(MAKE) governance-generate
 
 build:  ## Build bin/beehave and bin/remedy
@@ -74,6 +100,11 @@ lint-version:  ## Fail unless golangci-lint is the version CI runs
 
 ai-rulez-install:  ## Install ai-rulez $(AI_RULEZ_VERSION) into the Go bin folder
 	sh scripts/install-ai-rulez.sh $(AI_RULEZ_VERSION) "$$(go env GOPATH)/bin"
+
+CONTRACT_TOOLS_DIR ?= $(shell go env GOPATH)/bin
+
+contract-tools-install:  ## Install dolt and bd 1.3.2 (linux amd64) into CONTRACT_TOOLS_DIR for the contract tests against a real bd
+	sh scripts/install-contract-tools.sh "$(CONTRACT_TOOLS_DIR)"
 
 ai-rulez-version:  ## Fail unless ai-rulez is the version the gate expects
 	@ai-rulez --version | grep -qx "ai-rulez version $(patsubst v%,%,$(AI_RULEZ_VERSION))" || { echo "ai-rulez $(AI_RULEZ_VERSION) is required, found: $$(ai-rulez --version). Run make ai-rulez-install. A new version can add rules: change AI_RULEZ_VERSION in its own pull request."; exit 1; }
@@ -102,20 +133,23 @@ vuln:  ## Fail on a known vulnerability the code can reach
 	GOTELEMETRY=off govulncheck ./...
 
 test:  ## Run the Go tests with the race detector and write coverage.out, the flow profiles and the JUnit reports in reports/
-	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml; \
-	logs=test-other.log; \
-	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-other.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage.out $$(go list ./... | grep -v '/internal/flow$$') > test-other.log 2>&1 & pids=$$!; \
-	for s in $(FLOW_SHARDS); do \
-		procs=$(GO_TEST_PROCS); [ "$$s" != "$(FLOW_HEAVY_SHARD)" ] || procs=$(GO_TEST_PROCS_HEAVY); \
-		GOMAXPROCS=$$procs $(GOTESTSUM)/junit-flow-$$s.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-$$s.out -run "^Test[$$s]" $(FLOW_PKG) > test-flow-$$s.log 2>&1 & pids="$$pids $$!"; \
-		logs="$$logs test-flow-$$s.log"; \
-	done; \
-	GOMAXPROCS=$(GO_TEST_PROCS) $(GOTESTSUM)/junit-flow-rest.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-rest.out -skip "^Test[$(FLOW_LETTERS)]" $(FLOW_PKG) > test-flow-rest.log 2>&1 & pids="$$pids $$!"; \
-	logs="$$logs test-flow-rest.log"; \
-	rc=0; for p in $$pids; do wait $$p || rc=1; done; \
-	for l in $$logs; do echo "== $$l"; cat $$l; done; \
-	exit $$rc
-	go test -race -count=1 $(GO_TEST_DRIVER_PKGS)
+	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml coverage.out coverage-flow-*.out test-*.log
+	$(if $(RUN_SHARDS),@go test $(GO_TEST_FLAGS) -list '.*' $(FLOW_PKG) | grep -E '^(Test|Example|Fuzz)' > $(FLOW_LIST); [ -s $(FLOW_LIST) ] || { echo "make test: go test listed no flow tests" >&2; $(GOTESTSUM)/junit-flow-build.xml -- $(GO_TEST_FLAGS) -run '^$$' $(FLOW_PKG) > test-flow-build.log 2>&1; echo "== test-flow-build.log"; cat test-flow-build.log; })
+	@$(MAKE) --no-print-directory -k -j $(if $(RUN_OTHER),test-run-other) $(RUN_TARGETS)
+	$(if $(RUN_OTHER),go test -race -count=1 $(GO_TEST_DRIVER_PKGS))
+
+# One run of go test each: the other packages, and the flow tests that FLOW_LIST assigns to the shard. "test" starts the runs of the slice
+# together, and each run prints its own log when it ends. The recipe of "test" has no $(MAKE) in a line that does work, so make -n runs nothing.
+.PHONY: test-run-other $(FLOW_RUN_TARGETS)
+test-run-other:
+	GOMAXPROCS=$(GO_TEST_PROCS_HEAVY) $(GOTESTSUM)/junit-other.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage.out $$(go list ./... | grep -v '/internal/flow$$') > test-other.log 2>&1; \
+	rc=$$?; echo "== test-other.log"; cat test-other.log; exit $$rc
+
+$(FLOW_RUN_TARGETS): test-run-flow-%:
+	[ -s $(FLOW_LIST) ] || { echo "make test: no list of the flow tests in $(FLOW_LIST)" >&2; exit 1; }; \
+	names=$$(awk -v n=$(FLOW_SHARD_COUNT) -v i=$* 'NR % n == i % n { printf "%s%s", sep, $$0; sep = "|" }' $(FLOW_LIST)); \
+	GOMAXPROCS=$(GO_TEST_PROCS) $(GOTESTSUM)/junit-flow-$*.xml -- $(GO_TEST_FLAGS) -covermode=atomic -coverprofile=coverage-flow-$*.out -run "^($$names)\$$" $(FLOW_PKG) > test-flow-$*.log 2>&1; \
+	rc=$$?; echo "== test-flow-$*.log"; cat test-flow-$*.log; exit $$rc
 
 coverage:  ## Enforce the coverage gate on coverage.out and the flow profiles (run make test first)
 	go-test-coverage --config=.go-test-coverage.yml --profile=$(FLOW_PROFILES)
@@ -138,14 +172,16 @@ check-darwin:  ## On a Mac: run the Seatbelt enforcer tests and the contract sui
 	go test -count=1 -v -run 'TestEnforcer_PassesTheContractSuite' ./internal/sandbox/seatbelt | grep -v '^=== ' | grep -q -e '--- PASS: TestEnforcer_PassesTheContractSuite' || { echo "the contract suite did not pass under the real enforcer (skipped or failed)"; exit 1; }
 	go test -count=1 ./internal/sandbox/...
 
+# Both mutation targets start 4 gremlins workers, set in .gremlins.yaml. To change the count, edit that file.
 # Run on one package: make mutation PKG=./internal/cli
-# PKG is a folder, never a "..." pattern: gremlins walks the folder, so "./internal/..." finds no file and reports nothing.
+# PKG is a folder, never a "..." pattern: gremlins reads "./internal/..." as a folder name, finds no file and passes. The target refuses such a PKG.
 mutation:
+	@case "$(PKG)" in *...*) echo 'PKG=$(PKG) holds "...": gremlins reads it as a folder name and mutates nothing. Name one folder, such as PKG=./internal/cli'; exit 2;; esac
 	gremlins unleash $(or $(PKG),.)
 
 # Per-PR run: mutate only the Go lines that differ from BASE, the branch the pull request targets. BASE is required: make mutation-pr BASE=origin/integration/r1
-# Needs gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit in seconds (default 1200).
-# Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes.
+# Needs git, go, gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit, a positive whole number of seconds (default 3600 when the diff changes a non-test Go file in internal/flow or below it, otherwise 1200).
+# Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes. A diff whose changed lines hold no operator that gremlins mutates is "no candidate" and passes.
 mutation-pr:
 	sh scripts/mutation-pr.sh "$(BASE)"
 

@@ -206,6 +206,8 @@ func TestRun_AChildOfThePullRequestRefusesTheMergeUnlessOrphansAreAllowed(t *tes
 	result = w.run(req)
 
 	assert.Equal(t, merge.Done, result.Stop)
+	assert.Contains(t, result.Lines, "REFUSE: #5 is the base of #7. A squash merge orphans them.", "the reasons are said on the allowed path too")
+	assert.Contains(t, result.Lines, "        or merge the children before the parent, or use a merge commit so their base survives.")
 	assert.Contains(t, result.Lines, "        --allow-orphans is set; merging and orphaning #7 is now a stated decision.")
 }
 

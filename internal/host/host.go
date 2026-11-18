@@ -10,8 +10,8 @@ import (
 
 // Host is a machine that runs the gate jobs of a project. SkyPilot is the first provider.
 //
-// Up is the first call. Status, Submit, Wait, Cancel, Drain and Resume need a host that Up made.
-// Down is the last call. Wait may run while Cancel or Drain runs. A Wait and a Cancel of one job may both bank at once;
+// Up is the first call. Status, Submit, Wait and Cancel need a host that Up made.
+// Down is the last call. Wait may run while Cancel runs. A Wait and a Cancel of one job may both bank at once;
 // one of the two pushes can then fail on a ref lock, and that call returns the bank error with the state. A caller retries it: the bank is idempotent.
 //
 // Invariant: a job holds its slot until its work is banked, for at most max_run. The provider deletes an idle host with no beehave code alive,
@@ -23,6 +23,9 @@ import (
 // A provider's Up turns on the provider-side idle delete only when its Submit and Wait hold that invariant.
 // A provider that does not own its machine (ssh and slurm: the owner provides it) has no idle delete, so the invariant holds without a slot.
 // Its Down sends nothing and its Teardown banks the work and leaves the machine up.
+//
+// Drain and Resume are not part of Host, because no run calls them. Every provider has both, and Wait may run while Drain runs.
+// The conformance suite (hosttest) asserts them on each adapter. The disk-floor wrapper does not keep them.
 type Host interface {
 	Up(ctx context.Context) error
 	Status(ctx context.Context) (model.HostStatus, error)
@@ -32,10 +35,14 @@ type Host interface {
 	Cancel(ctx context.Context, id model.JobID) error
 	// WorkRoot is the one absolute path under which the host keeps its repositories. It is the same in every call.
 	WorkRoot(ctx context.Context) (string, error)
+	// LostProof stops a job whose wait ended as lost, then reads whether the job can no longer run.
+	// It never waits for the job and never banks. It is safe to call again.
+	// No proof is not a failed call: a link that is down gives an empty Kind and a nil error, and Note holds the reason.
+	// An error is a fault that the read cannot recover from, such as an id that Submit did not return.
+	// It runs after Wait returned an error that wraps ErrLost, at any time and from any handle of the host.
+	LostProof(ctx context.Context, id model.JobID) (model.LostProof, error)
 	// Log is the end of the log of a job: the last part of what the job wrote.
 	Log(ctx context.Context, id model.JobID) (string, error)
-	Drain(ctx context.Context) error
-	Resume(ctx context.Context) error
 }
 
 // The refusals of the guards.

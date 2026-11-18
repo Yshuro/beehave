@@ -29,12 +29,20 @@ func (r *recorder) Errorf(format string, args ...any) {
 // fakeAdapter is a correct adapter. Each field of a flawed one switches on one wrong behavior.
 type fakeAdapter struct {
 	profile agent.Profile
-	// invent makes Calls report a call on every line.
+	// invent makes Calls report a call and a limit on every line.
 	invent bool
+	// denies makes Calls report a denial, and nothing else, on every line.
+	denies bool
+	// refuses makes Calls report a refused call, and nothing else, on every line.
+	refuses bool
+	// resulting makes Calls report a result line, and nothing else, on every line.
+	resulting bool
 	// reads makes Calls read dollars from a line "spent <n>".
 	reads bool
 	// files is the Files of the launch of the guard and of the sandbox.
 	files map[string]string
+	// transcript replaces the transcript path, <configDir>/<session>, when it is set.
+	transcript func(configDir, session string) string
 }
 
 func (a fakeAdapter) Profile() agent.Profile { return a.profile }
@@ -51,7 +59,11 @@ func (fakeAdapter) ReadUsage(context.Context, model.Runner) model.Reading {
 	return model.Unknown("the fake agent cannot report usage")
 }
 
-func (fakeAdapter) TranscriptPath(configDir, _, session string) string {
+func (a fakeAdapter) TranscriptPath(configDir, _, session string) string {
+	if a.transcript != nil {
+		return a.transcript(configDir, session)
+	}
+
 	return filepath.Join(configDir, session)
 }
 
@@ -61,7 +73,19 @@ func (a fakeAdapter) Calls(line string) agent.Seen {
 	}
 
 	if a.invent {
-		return agent.Seen{Shell: []agent.Call{{Text: "ls"}}, Skills: []string{"s"}}
+		return agent.Seen{Shell: []agent.Call{{Text: "ls"}}, Skills: []string{"s"}, Limit: &agent.Limit{Kind: agent.LimitRate}}
+	}
+
+	if a.denies {
+		return agent.Seen{Denied: "paused"}
+	}
+
+	if a.refuses {
+		return agent.Seen{Refused: []string{"rm -rf"}}
+	}
+
+	if a.resulting {
+		return agent.Seen{Result: true}
 	}
 
 	return agent.Seen{}
@@ -78,6 +102,33 @@ func TestTestAdapter_PassesACorrectAdapter(t *testing.T) {
 
 	agenttest.TestAdapter(t, func() agent.Adapter { return good() })
 }
+
+func TestTestAdapter_PassesAnAdapterWithASupportedVersionRange(t *testing.T) {
+	t.Parallel()
+
+	// The fake CLI prints no version, so the suite must answer the version check with the first supported version, or no run would start.
+	agenttest.TestAdapter(t, func() agent.Adapter {
+		a := good()
+		a.profile.SupportedFrom, a.profile.SupportedBefore = "3.0.0", "4.0.0"
+
+		return a
+	})
+}
+
+func TestCheckRun_AnAdapterWhoseRangeTheSuiteVersionMissesDoesNotRun(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.profile.SupportedFrom, a.profile.SupportedBefore = "3.0.0", "3.0.0"
+
+	var r recorder
+
+	agenttest.CheckRun(&r, a, t.TempDir())
+
+	require.NotEmpty(t, r.failures, "a range that holds no version stops every run")
+}
+
+const rangeFailure = "the profile sets one bound of the supported versions: set both SupportedFrom and SupportedBefore, or neither"
 
 func TestCheckProfile(t *testing.T) {
 	t.Parallel()
@@ -97,6 +148,21 @@ func TestCheckProfile(t *testing.T) {
 		{"a_correct_profile", good(), ""},
 		{"no_binary", flawed(func(p *agent.Profile) { p.Binary = "" }), "the profile has no binary"},
 		{"a_binary_that_is_a_path", flawed(func(p *agent.Profile) { p.Binary = "/usr/bin/fake" }), `the binary "/usr/bin/fake" is a path: the runner looks the name up on PATH`},
+		{"both_bounds_of_a_range", flawed(func(p *agent.Profile) { p.SupportedFrom, p.SupportedBefore = "1.0.0", "2.0.0" }), ""},
+		{"only_the_first_supported_version", flawed(func(p *agent.Profile) { p.SupportedFrom = "1.0.0" }), rangeFailure},
+		{"only_the_first_unsupported_version", flawed(func(p *agent.Profile) { p.SupportedBefore = "2.0.0" }), rangeFailure},
+		{"version_arguments_with_a_range", flawed(func(p *agent.Profile) {
+			p.SupportedFrom, p.SupportedBefore = "1.0.0", "3.0.0"
+			p.VersionArgs = []agent.VersionArgs{{From: "2.0.0", Args: []string{"--x"}}}
+		}), ""},
+		{
+			"version_arguments_with_no_range", flawed(func(p *agent.Profile) { p.VersionArgs = []agent.VersionArgs{{From: "2.0.0", Args: []string{"--x"}}} }),
+			"the profile sets VersionArgs or GuardBefore but no supported versions: the runner reads the version only for a profile with a range",
+		},
+		{
+			"a_guard_limit_with_no_range", flawed(func(p *agent.Profile) { p.GuardBefore = "2.0.0" }),
+			"the profile sets VersionArgs or GuardBefore but no supported versions: the runner reads the version only for a profile with a range",
+		},
 		{"no_login_variable", flawed(func(p *agent.Profile) { p.ConfigVars = nil }), "the profile has no login variable: the CLI would use the login of the caller"},
 	}
 
@@ -332,9 +398,166 @@ func TestCheckCalls(t *testing.T) {
 
 	agenttest.CheckCalls(&r, a)
 
-	require.Len(t, r.failures, 2)
+	require.Len(t, r.failures, 3)
 	assert.Contains(t, r.failures[0], "shell calls")
 	assert.Contains(t, r.failures[1], "skill calls")
+	assert.Contains(t, r.failures[2], "a limit")
+}
+
+func TestTestAdapter_PassesAnAdapterThatResumesASession(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.profile.Resume = func(id string) []string { return []string{"--resume", id} }
+
+	agenttest.TestAdapter(t, func() agent.Adapter { return a })
+}
+
+func TestCheckTranscript(t *testing.T) {
+	t.Parallel()
+
+	resumes := func(transcript func(configDir, session string) string) fakeAdapter {
+		a := good()
+		a.profile.Resume = func(id string) []string { return []string{"--resume", id} }
+		a.transcript = transcript
+
+		return a
+	}
+	option := func(resume func(id string) []string) fakeAdapter {
+		a := resumes(nil)
+		a.profile.Resume = resume
+
+		return a
+	}
+
+	const unnamed = "does not name the session"
+
+	cases := []struct {
+		name    string
+		adapter fakeAdapter
+		want    string
+	}{
+		{"a_resumable_session_with_its_transcript_in_the_login_folder", resumes(nil), ""},
+		{"a_resume_option_of_one_token_names_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--resume=" + id} }
+
+			return a
+		}(), ""},
+		{"a_profile_with_no_resume_option_is_not_asked", func() fakeAdapter {
+			a := good()
+			a.transcript = func(string, string) string { return "/elsewhere" }
+
+			return a
+		}(), ""},
+		{"a_transcript_outside_the_login_folder", resumes(func(_, session string) string { return filepath.Join("/elsewhere", session) }), "is outside the login folder"},
+		{"one_transcript_for_every_session", resumes(func(configDir, _ string) string { return filepath.Join(configDir, "transcript") }), "names one file for the sessions"},
+		{"a_resume_option_that_does_not_name_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(string) []string { return []string{"--continue"} }
+
+			return a
+		}(), unnamed},
+		{"a_resume_option_with_the_file_name_of_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--resume", id + ".jsonl"} }
+
+			return a
+		}(), unnamed},
+		{"a_resume_option_with_a_prefix_on_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--resume", "ses_" + id} }
+
+			return a
+		}(), unnamed},
+		{"a_resume_option_of_one_token_with_the_file_name_of_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--resume=" + id + ".jsonl"} }
+
+			return a
+		}(), unnamed},
+		{"an_option_whose_value_after_the_first_equals_sign_is_not_the_session", func() fakeAdapter {
+			a := resumes(nil)
+			a.profile.Resume = func(id string) []string { return []string{"--a=b=" + id} }
+
+			return a
+		}(), unnamed},
+		{"a_resume_option_with_an_argument_after_the_session", option(func(id string) []string { return []string{"--resume", id, "--fork-session"} }), ""},
+		{"a_resume_option_with_the_session_in_another_case", option(func(id string) []string { return []string{"--resume", strings.ToUpper(id)} }), unnamed},
+		{"a_resume_option_of_one_token_with_the_session_in_another_case", option(func(id string) []string { return []string{"--resume=" + strings.ToUpper(id)} }), unnamed},
+		{"a_resume_option_with_a_space_before_the_session", option(func(id string) []string { return []string{"--resume", " " + id} }), unnamed},
+		{"a_resume_option_with_a_space_after_the_session", option(func(id string) []string { return []string{"--resume", id + " "} }), unnamed},
+		{"a_resume_option_of_one_token_with_a_space_before_the_session", option(func(id string) []string { return []string{"--resume= " + id} }), unnamed},
+		{"a_resume_option_of_one_token_with_a_space_after_the_session", option(func(id string) []string { return []string{"--resume=" + id + " "} }), unnamed},
+		{"a_resume_option_and_the_session_in_one_token_with_a_space", option(func(id string) []string { return []string{"--resume " + id} }), unnamed},
+		{"a_resume_option_of_one_token_with_quotation_marks_on_the_session", option(func(id string) []string { return []string{`--resume="` + id + `"`} }), unnamed},
+		{"a_resume_option_with_a_part_of_the_session", option(func(id string) []string { return []string{"--resume", id[:len(id)-1]} }), unnamed},
+		{"a_resume_option_of_one_token_with_a_part_of_the_session", option(func(id string) []string { return []string{"--resume=" + id[:len(id)-1]} }), unnamed},
+		{"the_session_with_the_dashes_of_an_option", option(func(id string) []string { return []string{"--" + id} }), unnamed},
+		{"an_option_with_no_name_before_the_equals_sign", option(func(id string) []string { return []string{"=" + id} }), unnamed},
+		{"an_option_with_dashes_and_no_name_before_the_equals_sign", option(func(id string) []string { return []string{"--=" + id} }), unnamed},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var r recorder
+
+			agenttest.CheckTranscript(&r, tc.adapter, t.TempDir())
+
+			if tc.want == "" {
+				assert.Empty(t, r.failures)
+
+				return
+			}
+
+			require.Len(t, r.failures, 1)
+			assert.Contains(t, r.failures[0], tc.want)
+		})
+	}
+}
+
+func TestCheckCalls_ADenialAloneIsAFailure(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.denies = true
+
+	var r recorder
+
+	agenttest.CheckCalls(&r, a)
+
+	require.Len(t, r.failures, 1)
+	assert.Contains(t, r.failures[0], "Denied:paused")
+}
+
+func TestCheckCalls_ARefusedCallAloneIsAFailure(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.refuses = true
+
+	var r recorder
+
+	agenttest.CheckCalls(&r, a)
+
+	require.Len(t, r.failures, 1)
+	assert.Contains(t, r.failures[0], "Refused:[rm -rf]")
+}
+
+func TestCheckCalls_AResultLineAloneIsAFailure(t *testing.T) {
+	t.Parallel()
+
+	a := good()
+	a.resulting = true
+
+	var r recorder
+
+	agenttest.CheckCalls(&r, a)
+
+	require.Len(t, r.failures, 1)
+	assert.Contains(t, r.failures[0], "Result:true")
 }
 
 func TestTheSuiteReportsAFakeCLIThatCannotBeWritten(t *testing.T) {

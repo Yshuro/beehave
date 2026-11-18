@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"sync"
@@ -89,19 +88,19 @@ func TestExclusiveHost_TwoProjectsOnOneHostRunOneGateAtATime(t *testing.T) {
 
 	first := queueHostGate(engine, "project-one", "1", "A", "box")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	second := queueHostGate(engine, "project-two", "2", "A", "box")
 
-	eventually(t, waitsOnHost(engine, 1))
+	waitOn(t, condition(waitsOnHost(engine, 1)))
 
 	// The queue polls once for each second, so the second job would have started within three polls had its host been free.
 	require.Never(t, func() bool { return gated.started.Load() > 1 }, 3*storePoll, 100*time.Millisecond, "the second gate waits while the first runs on the same host")
 
 	close(gated.release)
 
-	require.NoError(t, (<-first).err)
-	require.NoError(t, (<-second).err)
+	require.NoError(t, receive(t, first).err)
+	require.NoError(t, receive(t, second).err)
 	assert.EqualValues(t, 2, gated.started.Load())
 }
 
@@ -114,13 +113,13 @@ func TestExclusiveHost_TwoHostsRunTheirGatesTogether(t *testing.T) {
 	first := queueHostGate(engine, "project-one", "1", "A", "box-one")
 	second := queueHostGate(engine, "project-two", "2", "A", "box-two")
 
-	eventually(t, startedCount(gated, 2))
+	waitOn(t, condition(startedCount(gated, 2)))
 	assert.True(t, waitsOnHost(engine, 0)(), "no gate waits when each host has one")
 
 	close(gated.release)
 
-	require.NoError(t, (<-first).err)
-	require.NoError(t, (<-second).err)
+	require.NoError(t, receive(t, first).err)
+	require.NoError(t, receive(t, second).err)
 }
 
 func TestExclusiveHost_AGateWithNoHostKeepsTheQueueOfItsProject(t *testing.T) {
@@ -132,16 +131,16 @@ func TestExclusiveHost_AGateWithNoHostKeepsTheQueueOfItsProject(t *testing.T) {
 	first := queueHostGate(engine, "project-one", "1", "A", "")
 	second := queueHostGate(engine, "project-two", "2", "A", "")
 
-	eventually(t, startedCount(gated, 2))
+	waitOn(t, condition(startedCount(gated, 2)))
 
 	third := queueHostGate(engine, "project-one", "3", "A", "")
 
-	eventually(t, waitsInTheQueue(engine, 1))
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
 
 	close(gated.release)
 
 	for _, ended := range []<-chan gateEnd{first, second, third} {
-		require.NoError(t, (<-ended).err)
+		require.NoError(t, receive(t, ended).err)
 	}
 }
 
@@ -168,19 +167,19 @@ func TestExclusiveHost_ThePersonWaitingGateGoesFirstOnItsHost(t *testing.T) {
 
 	first := queueHostGate(engine, "project-one", "first", "A", "box")
 
-	eventually(t, func() bool { return len(gate.started()) == 1 })
+	waitOn(t, condition(func() bool { return len(gate.started()) == 1 }))
 
 	usual := queueHostGate(engine, "project-two", "usual", "A", "box")
 
-	eventually(t, waitsOnHost(engine, 1))
+	waitOn(t, condition(waitsOnHost(engine, 1)))
 
 	urgent := queueHostGate(engine, "project-three", "urgent", "A", "box")
 
-	eventually(t, waitsOnHost(engine, 2))
+	waitOn(t, condition(waitsOnHost(engine, 2)))
 	close(gate.release)
 
 	for _, ended := range []<-chan gateEnd{first, usual, urgent} {
-		require.NoError(t, (<-ended).err)
+		require.NoError(t, receive(t, ended).err)
 	}
 
 	assert.Equal(t, []string{"project-one/first", "project-three/urgent", "project-two/usual"}, gate.started())
@@ -194,7 +193,7 @@ func TestExclusiveHost_ANewHeadStopsTheOldGateOnTheSameHost(t *testing.T) {
 
 	old := queueHostGate(engine, testProject, testItem, "A", "box")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 	setHead(h, "B")
 
 	current := queueHostGate(engine, testProject, testItem, "B", "box")
@@ -202,14 +201,14 @@ func TestExclusiveHost_ANewHeadStopsTheOldGateOnTheSameHost(t *testing.T) {
 	require.ErrorIs(t, endsAfterTicks(t, h, old).err, errSuperseded)
 
 	// The job of the old gate stops at a tick after its gate canceled it, and a tick of the engine here comes only from the test.
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		h.tick(t)
 
 		return gated.stopped.Load() == 1
-	})
+	}))
 	close(gated.release)
 
-	require.NoError(t, (<-current).err)
+	require.NoError(t, receive(t, current).err)
 }
 
 // launchHostEngine starts an engine over the harness with gate as the gate of every project, and the workflow that queues one gate or merge.
@@ -251,19 +250,101 @@ func TestExclusiveHost_ReportsABuildJobThatTheStoreRefuses(t *testing.T) {
 	require.ErrorContains(t, err, "queue the build job of item 12 on host box")
 }
 
-func TestExclusiveHost_SaysSoWhenItCannotStopTheBuildJobOfAGate(t *testing.T) {
+// The cancel of an old gate cancels its build job in the same call, before any tick of the engine, so no later write by id can reach a reopened job.
+// DBOS commits each level of the cancel on its own, so the test waits for the job to show the cancel and does not read it once.
+func TestExclusiveHost_ANewHeadCancelsTheBuildJobOfTheOldGateWithTheGate(t *testing.T) {
 	t.Parallel()
 
-	engine, err := NewEngine(t.Context(), newHarness(t).opts, Deps{})
+	gated := newSupersedeGate("")
+	h, engine := supersedeEngine(t, gated, "A")
+
+	old := queueHostGate(engine, testProject, testItem, "A", "box")
+
+	waitOn(t, condition(startedCount(gated, 1)))
+	setHead(h, "B")
+
+	current := queueHostGate(engine, testProject, testItem, "B", "box")
+
+	var oldGate string
+
+	waitOn(t, condition(func() bool {
+		rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterStatus(dbos.WorkflowStatusCancelled))
+		if err == nil && len(rows) == 1 {
+			oldGate = rows[0].ID
+		}
+
+		return oldGate != ""
+	}))
+
+	// The gate of the new head starts its own job once the old gate is canceled, so the read names the parent.
+	waitOn(t, waiting[struct{}]{what: "the cancel of the old gate to reach its build job without a tick", read: func() (struct{}, bool, error) {
+		jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName), dbos.WithFilterParentWorkflowID(oldGate))
+
+		return struct{}{}, err == nil && len(jobs) == 1 && jobs[0].Status == dbos.WorkflowStatusCancelled, nil
+	}})
+
+	require.ErrorIs(t, endsAfterTicks(t, h, old).err, errSuperseded)
+	close(gated.release)
+	require.NoError(t, receive(t, current).err)
+}
+
+// jobWaiter is a run that waits for one build job as a gate does, and stops its wait when stop closes. Only the wait stops: the store marks no cancel.
+type jobWaiter struct {
+	engine *Engine
+	stop   <-chan struct{}
+}
+
+func (w jobWaiter) wait(ctx dbos.Context, in ExclusiveInput) (string, error) {
+	run, cancel := dbos.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-w.stop:
+			cancel()
+		case <-run.Done():
+		}
+	}()
+
+	var out ExclusiveOutput
+
+	return "", w.engine.runJob(run, in, w.engine.hostQueue, &out)
+}
+
+// A wait that stops writes nothing to its build job. Only a cancel of the gate in the store reaches the job, so the stop of a wait that ends after a resume
+// reopened the job cannot cancel the job again and fail the replay of the gate.
+func TestExclusiveHost_AWaitThatStopsLeavesTheBuildJobToTheCancelOfTheGate(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Done})
+	gated := newHostGate()
+	deps := h.deps()
+	deps.Gate = gated
+
+	engine, err := NewEngine(t.Context(), h.opts, deps)
 	require.NoError(t, err)
-	require.NoError(t, engine.Shutdown())
 
-	var logged bytes.Buffer
+	stop := make(chan struct{})
+	waiter := jobWaiter{engine: engine, stop: stop}
+	dbos.RegisterWorkflow(engine.ctx, waiter.wait, dbos.WithWorkflowName("test-wait-job"))
+	require.NoError(t, engine.Launch())
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
-	engine.logger = newLogger(&logged)
-	engine.stopJob(t.Context(), ExclusiveInput{Item: "12"}, "job-1")
+	in := ExclusiveInput{Kind: kindGate, Project: testProject, Item: testItem, HostKey: hostKeyPrefix + "box", Request: CommandRequest{Project: testProject, Item: testItem, BuildHost: "box"}}
 
-	assert.Contains(t, logged.String(), "cannot stop the build job of the gate")
+	handle, err := dbos.RunWorkflow(engine.ctx, waiter.wait, in)
+	require.NoError(t, err)
+
+	receive(t, gated.started)
+	close(stop)
+
+	_, err = resultOfHandle(t, handle)
+	require.ErrorIs(t, err, context.Canceled)
+
+	jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName))
+	require.NoError(t, err)
+	require.Len(t, jobs, 1)
+	assert.Equal(t, dbos.WorkflowStatusPending, jobs[0].Status, "the wait that stopped left the job running")
 }
 
 func TestExclusiveHost_AReopenReportsABuildJobThatIsGone(t *testing.T) {
@@ -288,12 +369,12 @@ func TestExclusiveHost_AReopenReportsABuildJobThatIsGone(t *testing.T) {
 		ended <- runErr
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	client := h.client(t, testVersion)
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
-	require.Error(t, <-ended)
+	require.Error(t, receive(t, ended))
 
 	itemSteps, err := dbos.GetWorkflowSteps(client.flow, "item-12-r1")
 	require.NoError(t, err)
@@ -341,9 +422,9 @@ func TestExclusiveHost_ACancelWithNoEngineCancelsTheBuildJobOfTheGate(t *testing
 		ended <- runErr
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 	require.NoError(t, engine.Shutdown())
-	require.Error(t, <-ended, "the stop of the engine ends the run with an error")
+	require.Error(t, receive(t, ended), "the stop of the engine ends the run with an error")
 
 	client := h.client(t, testVersion)
 	jobs, err := dbos.ListWorkflows(client.flow, dbos.WithFilterName(hostJobName))
@@ -390,27 +471,22 @@ func TestExclusiveHost_AGateThatReusesAPassNeverWaitsForTheHost(t *testing.T) {
 	h.forge.state = review.Standing{Number: testPull, Head: "A"}
 	engine := launchHostEngine(t, h, gated)
 
-	require.NoError(t, (<-queueHostGate(engine, "project-two", "early", "A", "box")).err)
+	require.NoError(t, receive(t, queueHostGate(engine, "project-two", "early", "A", "box")).err)
 
 	busy := queueHostGate(engine, "project-one", "hold", "A", "box")
 
-	eventually(t, startedCount(gated.supersedeGate, 1))
+	waitOn(t, condition(startedCount(gated.supersedeGate, 1)))
 
 	late := queueHostGate(engine, "project-two", "late", "A", "box")
 
-	select {
-	case end := <-late:
-		require.NoError(t, end.err)
-	case <-time.After(10 * storePoll):
-		t.Fatal("the gate that reuses a pass waits for the host of the gate that runs")
-	}
+	require.NoError(t, receive(t, late).err)
 
 	assert.EqualValues(t, 1, gated.quick.Load(), "the late gate did not run: the earlier pass stands in for it")
 	assert.EqualValues(t, 1, gated.started.Load(), "the first gate still holds the host")
 
 	close(gated.release)
 
-	require.NoError(t, (<-busy).err)
+	require.NoError(t, receive(t, busy).err)
 }
 
 func TestExclusiveHost_TheHostOfAGateIsRecordedWhenItIsQueued(t *testing.T) {
@@ -423,7 +499,7 @@ func TestExclusiveHost_TheHostOfAGateIsRecordedWhenItIsQueued(t *testing.T) {
 	engine := launchHostEngine(t, h, gated)
 
 	close(gated.release)
-	require.NoError(t, (<-queueHostGate(engine, "project-one", "1", "A", "")).err)
+	require.NoError(t, receive(t, queueHostGate(engine, "project-one", "1", "A", "")).err)
 
 	rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterLoadInput(true))
 	require.NoError(t, err)
@@ -482,7 +558,7 @@ func TestExclusiveHost_AMergeWaitsForAGateOfItsProjectThatRunsOnAHost(t *testing
 
 	gate := queueHostGate(engine, testProject, "1", "A", "box")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	merged := make(chan gateEnd, 1)
 	id := "queue-host-merge"
@@ -493,7 +569,7 @@ func TestExclusiveHost_AMergeWaitsForAGateOfItsProjectThatRunsOnAHost(t *testing
 	_, err := dbos.RunWorkflow(engine.ctx, gateQueuer{engine}.queue, ExclusiveInput{Kind: kindMerge, Project: testProject, Item: "2", Head: "A"}, dbos.WithWorkflowID(id))
 	require.NoError(t, err)
 
-	eventually(t, waitsInTheQueue(engine, 1))
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
 
 	// The queue polls once for each second, so the merge would have started within three polls had its partition been free.
 	mergeAsked := func() bool {
@@ -507,8 +583,8 @@ func TestExclusiveHost_AMergeWaitsForAGateOfItsProjectThatRunsOnAHost(t *testing
 
 	close(gated.release)
 
-	require.NoError(t, (<-gate).err)
-	require.NoError(t, (<-merged).err)
+	require.NoError(t, receive(t, gate).err)
+	require.NoError(t, receive(t, merged).err)
 }
 
 func TestExclusiveHost_AProjectThatNamesNoHostRunsOnItsDefaultHost(t *testing.T) {
@@ -522,15 +598,15 @@ func TestExclusiveHost_AProjectThatNamesNoHostRunsOnItsDefaultHost(t *testing.T)
 
 	first := queueHostGate(engine, "project-one", "1", "A", "")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, condition(startedCount(gated, 1)))
 
 	second := queueHostGate(engine, "project-two", "2", "A", "")
 
-	eventually(t, waitsOnHost(engine, 1))
+	waitOn(t, condition(waitsOnHost(engine, 1)))
 	close(gated.release)
 
-	require.NoError(t, (<-first).err)
-	require.NoError(t, (<-second).err)
+	require.NoError(t, receive(t, first).err)
+	require.NoError(t, receive(t, second).err)
 }
 
 func TestExclusiveHost_TheHostOfAGateIsNamedOnlyWhenTheGateRunsThere(t *testing.T) {
