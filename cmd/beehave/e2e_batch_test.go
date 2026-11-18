@@ -39,6 +39,10 @@ func (t workTree) Path(context.Context, string, string) (string, error) {
 	return filepath.Join(t.dir, "tree"), nil
 }
 
+func (t workTree) Ensure(ctx context.Context, project, item, _ string) (string, error) {
+	return t.Path(ctx, project, item)
+}
+
 // e2eBatch returns the merger, the batch host and the command runner of the batch scripts, or false when the script made no forge folder.
 func e2eBatch(dir string, cfg config.Config) (pulls, batchHost, programs, bool) {
 	if _, err := os.Stat(filepath.Join(dir, e2eForgeFolder)); err != nil {

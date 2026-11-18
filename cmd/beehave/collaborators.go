@@ -34,12 +34,17 @@ var (
 	errNoHost       = errors.New("the step names a host, and the project has no host block")
 	errHostJob      = errors.New("the host job did not succeed")
 	errNotListed    = errors.New("the folder of the item exists and git does not list it as a worktree")
+	errKeptChanges  = errors.New("a fresh run of a round item does not reuse a worktree with changes")
 )
 
 // folderMode is the mode of a folder that holds worktrees or clones.
 const (
 	folderMode  = 0o700
 	gitWorktree = "worktree"
+	gitAdd      = "add"
+	// placedMarks is the folder of the per-worktree ref that marks the commit that beehave placed a round worktree at. Git deletes it with the worktree.
+	placedMarks = "refs/worktree/beehave/placed"
+	placedMark  = placedMarks + "/tree"
 	// lockRetry is how often a start that waits for the lock of a clone tries it again.
 	lockRetry = 25 * time.Millisecond
 )
@@ -57,15 +62,12 @@ type worktrees struct {
 
 // Ensure returns the worktree of the item. An item with no worktree gets one, cut from the base branch of the project on a new branch named for the item.
 // If the branch of the item exists, the worktree uses it as it is, so earlier commits stay. A resume finds the worktree again and changes nothing.
-// A folder that git does not list as a worktree is an error. Ensure never deletes it.
-func (w worktrees) Ensure(ctx context.Context, project, item string) (string, error) {
+// A round item gets a detached worktree at start, or at the tip of its own base branch on the remote when start is empty.
+// With an empty start, a round worktree that exists moves to that tip when it is clean and is refused when it holds changes. Any other item ignores start.
+// A folder that git does not list as a worktree is an error. Ensure never deletes it. The lookup and the add run under the lock of the clone.
+func (w worktrees) Ensure(ctx context.Context, project, item, start string) (string, error) {
 	if w.plain(project) {
 		return w.ensurePlain(project, item)
-	}
-
-	dir, err := w.Path(ctx, project, item)
-	if err != nil || dir != "" {
-		return dir, err
 	}
 
 	found, err := w.project(project)
@@ -73,12 +75,117 @@ func (w worktrees) Ensure(ctx context.Context, project, item string) (string, er
 		return "", err
 	}
 
-	dir = filepath.Join(w.root, model.SafeName(project), model.SafeName(item))
-	if err = absent(dir); err != nil {
+	var dir string
+
+	if err := (cloneLock{repos: w.repos}).hold(ctx, project, func(clone string) (held error) {
+		dir, held = w.ensureLocked(ctx, found, clone, item, start)
+
+		return held
+	}); err != nil {
 		return "", err
 	}
 
-	return w.create(ctx, found, dir, item)
+	return dir, nil
+}
+
+// ensureLocked finds or adds the worktree of the item while Ensure holds the lock of the clone.
+func (w worktrees) ensureLocked(ctx context.Context, project config.Project, clone, item, start string) (string, error) {
+	dir, err := w.lookup(ctx, project.Name, item)
+	if err != nil {
+		return "", err
+	}
+
+	if dir == "" {
+		return w.addLocked(ctx, project, clone, item, start)
+	}
+
+	if base, round := model.RoundBase(item); round && start == "" {
+		if err := w.moveToTip(ctx, clone, dir, base, item); err != nil {
+			return "", err
+		}
+	}
+
+	return dir, nil
+}
+
+// moveToTip moves the kept worktree of a round item to the tip of its base on the remote. A worktree with tracked or untracked changes, or with commits
+// that no remote branch holds, is refused, and the error names it, the commits and how to remove it.
+func (w worktrees) moveToTip(ctx context.Context, clone, dir, base, item string) error {
+	status := w.git(dir).Run(ctx, []string{"status", "--porcelain"})
+	if err := gitExit("status", dir, status); err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(status.Stdout) != "" {
+		return keptTree(clone, dir, item, "changes that an earlier run left. Save what you need")
+	}
+
+	if err := w.fetchBase(ctx, clone, base, item); err != nil {
+		return err
+	}
+
+	if err := w.refuseUnpushed(ctx, clone, dir, item); err != nil {
+		return err
+	}
+
+	return w.moveTo(ctx, dir, "origin/"+base)
+}
+
+// moveTo checks the worktree out detached at revision and marks that commit as the one that beehave placed the worktree at.
+func (w worktrees) moveTo(ctx context.Context, dir, revision string) error {
+	if err := w.run(ctx, dir, "checkout", "--quiet", "--detach", revision); err != nil {
+		return err
+	}
+
+	return w.markPlaced(ctx, dir)
+}
+
+// markPlaced marks the commit at HEAD of the worktree as the one that beehave placed it at.
+func (w worktrees) markPlaced(ctx context.Context, dir string) error {
+	return w.run(ctx, dir, "update-ref", placedMark, "HEAD")
+}
+
+// refuseUnpushed fails when the worktree holds commits that no remote branch holds, and the error names each commit and how to remove the worktree.
+// The commit that beehave placed the worktree at, and its history, are no work of the item, also after a force-push of the base took them off the remote.
+func (w worktrees) refuseUnpushed(ctx context.Context, clone, dir, item string) error {
+	unpushed := w.git(dir).Run(ctx, []string{"log", "--format=%h %s", "HEAD", "--not", "--remotes", "--glob=" + placedMarks})
+	if err := gitExit("log", dir, unpushed); err != nil {
+		return err
+	}
+
+	if commits := strings.TrimSpace(unpushed.Stdout); commits != "" {
+		return keptTree(clone, dir, item, "commits that are on no remote branch ("+strings.ReplaceAll(commits, "\n", "; ")+"). Push or save them")
+	}
+
+	return nil
+}
+
+// keptTree is the error for a kept worktree that a fresh run refuses: it names the worktree, what it holds and the command that removes it.
+func keptTree(clone, dir, item, holds string) error {
+	return fmt.Errorf("%w: the worktree %s of item %s holds %s, remove the worktree with git -C %s worktree remove --force %s, then run the item again",
+		errKeptChanges, dir, item, holds, clone, dir)
+}
+
+// cloneLock is the file lock of the clone of each project under the folder repos. Every git worktree command on a clone runs under it, so no two of them
+// race. A file lock also holds across engines that share the repos folder.
+type cloneLock struct{ repos string }
+
+// hold runs fn while it holds the lock of the clone of the project.
+func (l cloneLock) hold(ctx context.Context, project string, fn func(clone string) error) (err error) {
+	if err = os.MkdirAll(l.repos, folderMode); err != nil {
+		return fmt.Errorf("make the folder for the clone of project %s: %w", project, err)
+	}
+
+	clone := filepath.Join(l.repos, model.SafeName(project))
+
+	held := lockfile.Open(clone + ".lock")
+	if _, err = held.TryLockContext(ctx, lockRetry); err != nil {
+		return fmt.Errorf("lock the clone of project %s: %w", project, err)
+	}
+
+	defer func() { err = errors.Join(err, held.Unlock()) }()
+
+	return fn(clone)
 }
 
 // plain reports whether the named project has no repository. Its item folder is then a plain folder that beehave makes, and git never reads it.
@@ -99,30 +206,60 @@ func (w worktrees) ensurePlain(project, item string) (string, error) {
 	return dir, nil
 }
 
-// create refreshes the clone of the project and adds the worktree dir of the item from it.
-// It holds a file lock of the project for the whole call. The clone and every worktree add of one project run one at a time,
-// so the first start makes the clone and each later start finds it ready. A file lock also holds across engines that share the repos folder.
-func (w worktrees) create(ctx context.Context, project config.Project, dir, item string) (added string, err error) {
-	if err = os.MkdirAll(w.repos, folderMode); err != nil {
-		return "", fmt.Errorf("make the folder for the clone of project %s: %w", project.Name, err)
-	}
-
-	clone := filepath.Join(w.repos, model.SafeName(project.Name))
-
-	held := lockfile.Open(clone + ".lock")
-	if _, err = held.TryLockContext(ctx, lockRetry); err != nil {
-		return "", fmt.Errorf("lock the clone of project %s: %w", project.Name, err)
-	}
-
-	defer func() { err = errors.Join(err, held.Unlock()) }()
-
-	// The lock also covers the fetch, because two fetches into one clone race on its ref locks.
-
-	if err = w.refresh(ctx, project, clone); err != nil {
+// addLocked refreshes the clone and adds the worktree of the item while Ensure holds the lock of the clone, so the first start makes the clone and each
+// later start finds it ready. The lock also covers the fetch, because two fetches into one clone race on its ref locks.
+func (w worktrees) addLocked(ctx context.Context, project config.Project, clone, item, start string) (string, error) {
+	dir := filepath.Join(w.root, model.SafeName(project.Name), model.SafeName(item))
+	if err := absent(dir); err != nil {
 		return "", err
 	}
 
-	return w.add(ctx, clone, dir, item, project.BaseBranch)
+	revision, err := w.refresh(ctx, project, clone, item, start)
+	if err != nil {
+		return "", err
+	}
+
+	return w.add(ctx, clone, dir, item, revision)
+}
+
+// refresh makes the clone of the project if it is missing, fetches the branch of the item into it, and returns the revision to add the worktree at.
+// The branch is the base of a round item, and else the base branch of the project. A base that the remote lacks gives an error that names it.
+// A round item with a start fetches nothing and returns start: the clone holds the commit that the worktree was first made at.
+func (w worktrees) refresh(ctx context.Context, project config.Project, clone, item, start string) (string, error) {
+	if err := w.clone(ctx, project, clone); err != nil {
+		return "", err
+	}
+
+	branch, round := model.RoundBase(item)
+	if round && start != "" {
+		return start, w.holds(ctx, project, clone, item, start)
+	}
+
+	if round {
+		return "origin/" + branch, w.fetchBase(ctx, clone, branch, item)
+	}
+
+	return "origin/" + project.BaseBranch, w.run(ctx, clone, "fetch", "origin", project.BaseBranch)
+}
+
+// fetchBase fetches the base branch of a round item into the clone. A base that the remote lacks gives an error that names it.
+func (w worktrees) fetchBase(ctx context.Context, clone, base, item string) error {
+	if err := w.run(ctx, clone, "fetch", "origin", base); err != nil {
+		return fmt.Errorf("fetch the base branch %q of round item %s. Push the base branch to the remote, then run the item again: %w", base, item, err)
+	}
+
+	return nil
+}
+
+// holds checks that the clone has the commit that the worktree of a round item was first made at. A clone that was made again, or a commit that git pruned
+// after a push rewrote the base, gives an error that says so and how to go on.
+func (w worktrees) holds(ctx context.Context, project config.Project, clone, item, start string) error {
+	if err := w.run(ctx, clone, "cat-file", "-e", start+"^{commit}"); err != nil {
+		return fmt.Errorf("the clone of project %s does not hold the commit %s that the worktree of item %s was made at, so the worktree cannot be made again. "+
+			"Start the item again: beehave run %s: %w", project.Name, start, item, item, err)
+	}
+
+	return nil
 }
 
 // project returns the config of the named project.
@@ -135,7 +272,7 @@ func (w worktrees) project(name string) (config.Project, error) {
 	return found, nil
 }
 
-// absent fails if dir exists. Ensure calls it for a folder that Path did not find, so git does not list the folder.
+// absent fails if dir exists. addLocked calls it for a folder that the lookup did not find, so git does not list the folder.
 func absent(dir string) error {
 	if _, err := os.Lstat(dir); err == nil {
 		return fmt.Errorf("%w: %s. Move it away, then run the item again", errNotListed, dir)
@@ -144,31 +281,38 @@ func absent(dir string) error {
 	return nil
 }
 
-// add makes the worktree dir from the clone. It uses the branch named item if the clone has one, and else starts that branch at the base branch. It returns dir.
-func (w worktrees) add(ctx context.Context, clone, dir, item, base string) (string, error) {
+// add makes the worktree dir from the clone. A round item gets a detached worktree at revision, with --force, so git replaces the record of a round
+// worktree whose folder someone removed and forgets no other record. Any other item uses the branch named item if the clone has one, and else starts
+// that branch at revision. It returns dir.
+func (w worktrees) add(ctx context.Context, clone, dir, item, revision string) (string, error) {
 	if err := os.MkdirAll(filepath.Dir(dir), folderMode); err != nil {
 		return "", fmt.Errorf("make the folder for the worktree of item %s: %w", item, err)
 	}
 
-	args := []string{gitWorktree, "add", "-b", item, dir, "origin/" + base}
-	if w.git(clone).Run(ctx, []string{"rev-parse", "--verify", "--quiet", "refs/heads/" + item}).ExitCode == 0 {
-		args = []string{gitWorktree, "add", dir, item}
+	if err := w.run(ctx, clone, w.addArgs(ctx, clone, dir, item, revision)...); err != nil {
+		return "", err
 	}
 
-	if err := w.run(ctx, clone, args...); err != nil {
-		return "", err
+	if _, round := model.RoundBase(item); round {
+		if err := w.markPlaced(ctx, dir); err != nil {
+			return "", err
+		}
 	}
 
 	return dir, nil
 }
 
-// refresh makes the clone of the project if it is missing, and fetches the base branch into it.
-func (w worktrees) refresh(ctx context.Context, project config.Project, clone string) error {
-	if err := w.clone(ctx, project, clone); err != nil {
-		return err
+// addArgs returns the git arguments that add the worktree dir of the item at revision.
+func (w worktrees) addArgs(ctx context.Context, clone, dir, item, revision string) []string {
+	if _, round := model.RoundBase(item); round {
+		return []string{gitWorktree, gitAdd, "--force", "--detach", dir, revision}
 	}
 
-	return w.run(ctx, clone, "fetch", "origin", project.BaseBranch)
+	if w.git(clone).Run(ctx, []string{"rev-parse", "--verify", "--quiet", "refs/heads/" + item}).ExitCode == 0 {
+		return []string{gitWorktree, gitAdd, dir, item}
+	}
+
+	return []string{gitWorktree, gitAdd, "-b", item, dir, revision}
 }
 
 // clone makes the clone of the repository of the project in dir, unless it is there. The clone comes from the source of the project, or else from its forge.
@@ -220,22 +364,68 @@ func gitExit(name, dir string, out model.CommandResult) error {
 	return nil
 }
 
-// Path returns the worktree of the item, or an empty path when the item has none.
+// Path returns the worktree of the item, or an empty path when the item has none. The git call that lists the worktrees runs under the lock of the clone.
 func (w worktrees) Path(ctx context.Context, project, item string) (string, error) {
-	dir := filepath.Join(w.root, model.SafeName(project), model.SafeName(item))
+	var found string
 
-	want, err := filepath.EvalSymlinks(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
-	} else if err != nil {
-		return "", fmt.Errorf("read the folder %s: %w", dir, err)
+	if err := w.WithTree(ctx, project, item, func(dir string) { found = dir }); err != nil {
+		return "", err
 	}
 
-	if w.plain(project) {
-		return dir, nil
+	return found, nil
+}
+
+// WithTree runs fn with the worktree of the item, or with an empty path when the item has none. The lookup and fn run under the lock of the clone, so
+// the release can remove the worktree while no sibling item adds or lists one.
+func (w worktrees) WithTree(ctx context.Context, project, item string, fn func(dir string)) error {
+	dir, want, err := w.folder(project, item)
+	if err != nil {
+		return err
+	}
+
+	if dir == "" || w.plain(project) {
+		fn(dir)
+
+		return nil
+	}
+
+	return cloneLock{repos: w.repos}.hold(ctx, project, func(string) error { return w.withListed(ctx, dir, want, fn) })
+}
+
+// withListed runs fn with dir when git lists the folder want as a worktree, and with an empty path when it does not.
+func (w worktrees) withListed(ctx context.Context, dir, want string, fn func(dir string)) error {
+	found, err := w.ifListed(ctx, dir, want)
+	if err != nil {
+		return err
+	}
+
+	fn(found)
+
+	return nil
+}
+
+// lookup is Path for a caller that holds the lock of the clone.
+func (w worktrees) lookup(ctx context.Context, project, item string) (string, error) {
+	dir, want, err := w.folder(project, item)
+	if err != nil || dir == "" {
+		return dir, err
 	}
 
 	return w.ifListed(ctx, dir, want)
+}
+
+// folder returns the item folder and its real path, or empty paths when the folder does not exist.
+func (w worktrees) folder(project, item string) (dir, resolved string, err error) {
+	dir = filepath.Join(w.root, model.SafeName(project), model.SafeName(item))
+
+	resolved, err = filepath.EvalSymlinks(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", "", nil
+	} else if err != nil {
+		return "", "", fmt.Errorf("read the folder %s: %w", dir, err)
+	}
+
+	return dir, resolved, nil
 }
 
 // ifListed returns dir when git lists the folder want as a worktree, and an empty path when it does not.
@@ -284,10 +474,16 @@ type treeFinder interface {
 	Path(ctx context.Context, project, item string) (string, error)
 }
 
+// programTrees is what the command runner needs of the worktrees: it finds the tree of an item, and makes the tree of a round item again at its start commit when it is gone.
+type programTrees interface {
+	treeFinder
+	Ensure(ctx context.Context, project, item, start string) (string, error)
+}
+
 // programs runs the programs of command steps. A step with no host runs in the worktree of the item, or in a new empty folder that beehave removes afterwards when the item has none.
 // A step with a host runs as one job on the host of the project. A host job that succeeds has no output to read. A host job that fails has the end of its log as stdout, and its code is 1.
 type programs struct {
-	trees treeFinder
+	trees programTrees
 	// local runs a program with the environment of the process. The gate uses it.
 	local func(binary, dir string, timeout time.Duration) proc.Runner
 	// exec runs the program of a command step. Its spec holds the whole environment of the program (Only) and its stdin.
@@ -322,7 +518,7 @@ func (p programs) Run(ctx context.Context, request flow.CommandRequest) (flow.Co
 		return p.onHost(ctx, request)
 	}
 
-	dir, err := p.trees.Path(ctx, request.Project, request.Item)
+	dir, err := p.folder(ctx, request)
 	if err != nil {
 		return flow.CommandOutput{}, fmt.Errorf("find the folder of item %s: %w", request.Item, err)
 	}
@@ -332,6 +528,16 @@ func (p programs) Run(ctx context.Context, request flow.CommandRequest) (flow.Co
 	}
 
 	return p.inFolder(ctx, request, dir)
+}
+
+// folder returns the worktree of the item of the request. A request with a tree start is of a round item, whose worktree someone may have removed:
+// it is made again at that commit. Any other item may have no worktree.
+func (p programs) folder(ctx context.Context, request flow.CommandRequest) (string, error) {
+	if request.TreeStart != "" {
+		return p.trees.Ensure(ctx, request.Project, request.Item, request.TreeStart)
+	}
+
+	return p.trees.Path(ctx, request.Project, request.Item)
 }
 
 // sandboxed runs the program of a gate under the sandbox of its project. Stdin and the process cap of the request do not apply to a sandboxed gate.

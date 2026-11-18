@@ -3,7 +3,6 @@ package flow
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -141,18 +140,9 @@ func TestAgentStep_TheCostOfAFailedRunIsRecordedForTheRunCap(t *testing.T) {
 
 	require.ErrorContains(t, err, "ended as exited (exit 3)", "a failed run still fails the step with its own error")
 
-	steps, err := dbos.GetWorkflowSteps(engine.ctx, runID(testItem, 1), dbos.WithStepsLoadOutput(true))
+	kept, _, err := dbos.ReadStream[failedRun](engine.ctx, runID(testItem, 1), failedRunsStream, dbos.WithReadStreamSnapshot())
 	require.NoError(t, err)
-
-	var recorded string
-
-	for _, step := range steps {
-		if strings.HasSuffix(step.StepName, "/spent1") {
-			recorded, _ = step.Output.(string) //nolint:errcheck // a missing output reads as empty and fails the assertion
-		}
-	}
-
-	assert.Contains(t, recorded, `"cost_usd":6`, "the run cap counts the 6 dollars that the failed run spent")
+	assert.Equal(t, []failedRun{{Call: "agent:a#1", Spend: agent.Spend{Cost: 6}}}, kept, "the run cap counts the 6 dollars that the failed run spent")
 }
 
 func TestAgentStep_ARunWithNoRunCapStartsEveryStep(t *testing.T) {

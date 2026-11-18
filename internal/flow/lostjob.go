@@ -178,12 +178,14 @@ func (e *Engine) treeHostLosses(ctx dbos.Context, item string) (int, error) {
 func hostLossesBelow(ctx dbos.Client, id string) (int, error) {
 	count := 0
 
-	err := walkTree(ctx, id, dbos.WithStepsLoadOutput(false), func(records []dbos.StepInfo) {
+	err := walkTree(ctx, id, dbos.WithStepsLoadOutput(false), func(_ string, records []dbos.StepInfo) error {
 		for _, record := range records {
 			if _, sub, split := strings.Cut(record.StepName, "/"); split && sub == hostLossName {
 				count++
 			}
 		}
+
+		return nil
 	})
 
 	return count, err

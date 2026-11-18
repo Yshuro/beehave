@@ -162,7 +162,7 @@ func (s *script) batchGit(call batchCall) (batch.Git, error) { //nolint:ireturn 
 		return nil, err
 	}
 
-	dir, err := s.e.deps.Trees.Ensure(s.ctx, s.in.Project, s.in.Item)
+	dir, err := s.tree(s.ctx)
 	if err != nil {
 		return nil, fmt.Errorf("find the folder of item %s: %w", s.in.Item, err)
 	}

@@ -13,11 +13,18 @@ import (
 func resumeRun(t *testing.T, engine *Engine, client *Client) dbos.WorkflowHandle[ItemResult] {
 	t.Helper()
 
-	last, found, err := latestRun(engine.ctx, testItem)
+	return resumeRunOf(t, engine, client, testItem)
+}
+
+// resumeRunOf is resumeRun for the item named.
+func resumeRunOf(t *testing.T, engine *Engine, client *Client, item string) dbos.WorkflowHandle[ItemResult] {
+	t.Helper()
+
+	last, found, err := latestRun(engine.ctx, item)
 	require.NoError(t, err)
 	require.True(t, found, "no run to resume")
 
-	require.NoError(t, client.Resume(testItem))
+	require.NoError(t, client.Resume(item))
 
 	handle, err := dbos.RetrieveWorkflow[ItemResult](engine.ctx, last.Status.ID)
 	require.NoError(t, err)

@@ -222,16 +222,27 @@ func TestLostDiff_ReportsAFolderThatCannotBeFoundAndADiffThatGitRefuses(t *testi
 
 	t.Cleanup(func() { assert.NoError(t, engine.Shutdown()) })
 
-	summary, err := engine.lostDiff(t.Context(), PhaseInput{Item: testItem})
-	require.NoError(t, err, "a folder with no start commit has no summary")
+	summary, view, err := engine.lostDiff(t.Context(), PhaseInput{Item: testItem})
+	require.NoError(t, err, "a call with no start commit has no summary")
 	assert.Empty(t, summary)
+	assert.Equal(t, viewNoStart, view)
 
-	_, err = engine.lostDiff(t.Context(), PhaseInput{Item: testItem, StartHead: "abc"})
+	_, view, err = engine.lostDiff(t.Context(), PhaseInput{Item: testItem, StartHead: "abc"})
 	require.ErrorContains(t, err, "find the folder of item "+testItem)
+	assert.Equal(t, viewUnread, view)
 
 	engine.deps.Trees = &fakeTrees{dir: t.TempDir()}
-	_, err = engine.lostDiff(t.Context(), PhaseInput{Item: testItem, StartHead: "abc"})
-	require.ErrorContains(t, err, "read the diff summary of the item folder")
+	_, view, err = engine.lostDiff(t.Context(), PhaseInput{Item: testItem, StartHead: "abc"})
+	require.ErrorContains(t, err, "read the start mark of the item folder", "the folder is not a repository")
+	assert.Equal(t, viewUnread, view)
+
+	dir, head := gitTree(t)
+	gitIn(t, dir, "update-ref", callStartRef, head)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("not an index"), 0o600))
+	engine.deps.Trees = &fakeTrees{dir: dir}
+	_, view, err = engine.lostDiff(t.Context(), PhaseInput{Item: testItem, StartHead: head})
+	require.ErrorContains(t, err, "read the diff summary of the item folder", "the folder holds the mark, and git cannot read its index")
+	assert.Equal(t, viewUnread, view)
 }
 
 func TestLoss_ALossStepThatCannotReadTheDiffSaysSoAndOneThatCannotReadTheSessionFails(t *testing.T) {
@@ -433,10 +444,35 @@ func TestLostNote_SaysThatNoTrackedFileChangedForAnEmptySummary(t *testing.T) {
 
 	lost := LostStep{Started: time.Unix(0, 0), Lost: time.Unix(0, 0).Add(5 * time.Minute)}
 
-	assert.Contains(t, lost.note(false), "The engine found no change to tracked files since the step started.")
+	assert.Contains(t, lost.note(viewDiff), "The engine found no change to tracked files since the step started.")
 	assert.Contains(t, lost.continued(), "after 5 minutes")
 
 	lost.DiffStat = " a.txt | 1 +\n 1 file changed, 1 insertion(+)"
-	assert.Contains(t, lost.note(false), "The engine read this summary of the changes since the step started:\n\n```\n"+lost.DiffStat+"\n```\n\n")
+	assert.Contains(t, lost.note(viewDiff), "The engine read this summary of the changes since the step started:\n\n```\n"+lost.DiffStat+"\n```\n\n")
 	assert.Contains(t, LostStep{Started: time.Unix(100, 0)}.continued(), "after an unknown time")
+}
+
+func TestLostNote_ClaimsNoChangeAndNoSummaryWithoutTheStartMarkOrTheStartCommit(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		view lostView
+		says string
+	}{
+		{name: "no_start_commit", view: viewNoStart, says: "The engine has no start commit of the step, so it cannot say what the step changed."},
+		{name: "other_tree", view: viewOtherTree, says: "The work tree is not the one that the step started in"},
+		{name: "unread", view: viewUnread, says: "The engine could not read the diff summary of the changes since the step started."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// A summary in the record stays out of the note: only the view of a folder that holds the mark quotes it.
+			note := LostStep{Started: time.Unix(0, 0), DiffStat: " a.txt | 1 +"}.note(tc.view)
+
+			assert.Contains(t, note, tc.says)
+			assert.NotContains(t, note, "found no change")
+			assert.NotContains(t, note, "a.txt")
+		})
+	}
 }

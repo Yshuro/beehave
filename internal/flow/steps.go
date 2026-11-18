@@ -111,13 +111,12 @@ func (c *Client) runSteps(id string) (RunSteps, error) {
 		return RunSteps{}, err
 	}
 
-	records, err := c.records(id)
+	state := stateOf(row.Status)
+
+	records, lines, err := c.runView(id, state, !run{Status: row}.terminal())
 	if err != nil {
 		return RunSteps{}, err
 	}
-
-	state := stateOf(row.Status)
-	lines := stepLines(records, state, !run{Status: row}.terminal(), time.Now())
 
 	progress := progressOf(lines, c.maxRunBudget, !run{Status: row}.terminal())
 	progress.Deadline, err = c.waitDeadlineOf(row, records)
@@ -211,6 +210,54 @@ func (c *Client) outputsOf(ids []string) (map[string]any, error) {
 	}
 
 	return outputs, nil
+}
+
+// failedRunsStream is the stream of an item run that holds the cost of each agent run that failed. A rewind keeps the entries of a stream,
+// so beehave resume keeps the cost of the failed run that it runs again.
+const failedRunsStream = "failed_runs"
+
+// failedRun is one entry of the stream of failed runs: the agent call and the cost of the run.
+type failedRun struct {
+	Call string `json:"call"`
+	agent.Spend
+}
+
+// runView reads the step records of a run and makes its step lines with runLines. Each view of the client reads a run here.
+func (c *Client) runView(id string, state RunState, open bool) ([]dbos.StepInfo, []StepLine, error) {
+	records, err := c.records(id)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	lines, err := runLines(c.flow, id, records, state, open, time.Now())
+
+	return records, lines, err
+}
+
+// runLines makes the step lines of a run from its records and adds the cost of each failed agent run from its stream. Every total of a cost reads
+// its lines here. The read of the stream is a snapshot, because a plain read waits until the run ends. The lines come back with an error of the read too.
+func runLines(ctx dbos.Client, id string, records []dbos.StepInfo, state RunState, open bool, now time.Time) ([]StepLine, error) {
+	runs, _, err := dbos.ReadStream[failedRun](ctx, id, failedRunsStream, dbos.WithReadStreamSnapshot())
+	if err != nil {
+		err = fmt.Errorf("read the cost of the failed agent runs of %s: %w", id, err)
+	}
+
+	return withFailedRuns(stepLines(records, state, open, now), runs), err
+}
+
+// withFailedRuns adds the cost of each failed run to the line of its call. A call that the run has not reached again since a resume gets a line of its own.
+func withFailedRuns(lines []StepLine, runs []failedRun) []StepLine {
+	for _, run := range runs {
+		at := slices.IndexFunc(lines, func(line StepLine) bool { return line.Name == run.Call })
+		if at < 0 {
+			lines = append(lines, StepLine{Name: run.Call, State: stepFailed})
+			at = len(lines) - 1
+		}
+
+		lines[at].Spend = lines[at].Plus(run.Spend)
+	}
+
+	return lines
 }
 
 // errorText is the text of an error, and empty for no error.
@@ -307,7 +354,8 @@ func (l *StepLine) decode(record dbos.StepInfo) bool {
 	return true
 }
 
-// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a look at the caps, the cost record of a failed run,
+// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a look at the caps, the cost record of a run whose limit step failed
+// (and of a failed run that agent module 3 or an earlier one recorded),
 // or the limit record of a run that a provider limit stopped. The look that follows a limit ends its wait. Any other sub-step decodes nothing.
 func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {

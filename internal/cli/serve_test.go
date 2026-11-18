@@ -220,6 +220,17 @@ func TestRun_AnInterruptDuringASlowStopAfterAFinishedRunKeepsTheRunError(t *test
 	assert.NotContains(t, got.stderr, "stays open")
 }
 
+func TestRun_AnInterruptDuringASlowStopAfterADoneRunExitsZeroAndDoesNotSayTheRunIsOpen(t *testing.T) { //nolint:paralleltest // a signal reaches every running command
+	rig := newRig(t)
+
+	got := runThenSlowStop(t, rig)
+
+	assert.Equal(t, 0, got.code, got.stderr)
+	assert.Contains(t, got.stderr, "the run had ended before the stop")
+	assert.NotContains(t, got.stderr, "stays open")
+	assert.Equal(t, 1, rig.runner.count())
+}
+
 func TestServe_AFolderThatAnotherEngineOwnsIsRefusedWithTheLockText(t *testing.T) {
 	t.Parallel()
 
