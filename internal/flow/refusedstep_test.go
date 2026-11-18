@@ -33,6 +33,15 @@ func refuseOutcome(t *testing.T, db *sql.DB, name string) {
 	require.NoError(t, err)
 }
 
+// refuseLook makes the store refuse the record of look number n (from 1) at the caps, a step of a phase: a record that holds no error.
+func refuseLook(t *testing.T, db *sql.DB, n int) {
+	t.Helper()
+
+	_, err := db.ExecContext(t.Context(), fmt.Sprintf("CREATE TRIGGER refuse_outcome BEFORE INSERT ON operation_outputs WHEN NEW.function_name = '%s' AND NEW.error IS NULL "+
+		"AND (SELECT count(*) FROM operation_outputs WHERE function_name = '%s') = %d BEGIN SELECT RAISE(ABORT, '%s'); END", capLookStepName, capLookStepName, n-1, refusedText))
+	require.NoError(t, err)
+}
+
 // refusedFlow is a flow of the resume table: its harness, its file (empty for the fix lane of the harness) and its control result.
 type refusedFlow struct {
 	results []agent.Result
@@ -48,8 +57,8 @@ type refusedOutcome struct {
 	cost           float64
 }
 
-// runRefusedFlow runs the flow once with the store refusing the outcome record of the step name, and resumes it with the store healed.
-func runRefusedFlow(t *testing.T, f refusedFlow, name string) refusedOutcome {
+// runRefusedFlow runs the flow once with the store refusing the outcome record that refuse names, and resumes it with the store healed.
+func runRefusedFlow(t *testing.T, f refusedFlow, refuse func(*sql.DB)) refusedOutcome {
 	t.Helper()
 
 	var (
@@ -67,8 +76,7 @@ func runRefusedFlow(t *testing.T, f refusedFlow, name string) refusedOutcome {
 	inTurn(h, f.results...)
 
 	engine := h.engine(t)
-	db := sqlOf(t, h)
-	refuseOutcome(t, db, name)
+	refuse(sqlOf(t, h))
 
 	var out refusedOutcome
 
@@ -100,37 +108,44 @@ func TestRunStep_AResumeAfterTheStoreRefusedTheRecordOfAnyStepEndsAsTheRunWithNo
 		body: bodyFlow("agent(model = \"m\", prompt = \"prompts/a.md\", name = \"a\")\nagent(model = \"m\", prompt = \"prompts/a.md\", name = \"b\")\n"),
 	}
 
+	// A step names an item step; a look names the look at the caps of the nth phase of the run.
 	cases := map[string]struct {
 		flow refusedFlow
 		step string
+		look int
 	}{
-		"one_call_claim":          {one, "claim"},
-		"one_call_item":           {one, "item"},
-		"one_call_login":          {one, "login#1"},
-		"one_call_render":         {one, "agent:fix#1/render"},
-		"one_call_clear":          {one, "agent:fix#1/clear1"},
-		"one_call_budget":         {one, "agent:fix#1/budget1.0"},
-		"one_call_read":           {one, "agent:fix#1/read1"},
-		"one_call_worktree":       {one, "worktree"},
-		"one_call_release":        {one, "release"},
-		"limited_limit":           {limitedOnce, "agent:fix#1/limit1.0"},
-		"limited_second_budget":   {limitedOnce, "agent:fix#1/budget1.1"},
-		"limited_read":            {limitedOnce, "agent:fix#1/read1"},
-		"two_calls_first_render":  {two, "agent:a#1/render"},
-		"two_calls_first_clear":   {two, "agent:a#1/clear1"},
-		"two_calls_first_budget":  {two, "agent:a#1/budget1.0"},
-		"two_calls_first_read":    {two, "agent:a#1/read1"},
-		"two_calls_second_render": {two, "agent:b#2/render"},
-		"two_calls_second_clear":  {two, "agent:b#2/clear1"},
-		"two_calls_second_budget": {two, "agent:b#2/budget1.0"},
-		"two_calls_second_read":   {two, "agent:b#2/read1"},
+		"one_call_claim":          {one, "claim", 0},
+		"one_call_item":           {one, "item", 0},
+		"one_call_login":          {one, "login#1", 0},
+		"one_call_render":         {one, "agent:fix#1/render", 0},
+		"one_call_clear":          {one, "agent:fix#1/clear1", 0},
+		"one_call_look":           {one, "", 1},
+		"one_call_read":           {one, "agent:fix#1/read1", 0},
+		"one_call_worktree":       {one, "worktree", 0},
+		"one_call_release":        {one, "release", 0},
+		"limited_limit":           {limitedOnce, "agent:fix#1/limit1.0", 0},
+		"limited_second_look":     {limitedOnce, "", 2},
+		"limited_read":            {limitedOnce, "agent:fix#1/read1", 0},
+		"two_calls_first_render":  {two, "agent:a#1/render", 0},
+		"two_calls_first_clear":   {two, "agent:a#1/clear1", 0},
+		"two_calls_first_look":    {two, "", 1},
+		"two_calls_first_read":    {two, "agent:a#1/read1", 0},
+		"two_calls_second_render": {two, "agent:b#2/render", 0},
+		"two_calls_second_clear":  {two, "agent:b#2/clear1", 0},
+		"two_calls_second_look":   {two, "", 2},
+		"two_calls_second_read":   {two, "agent:b#2/read1", 0},
 	}
 
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			got := runRefusedFlow(t, tc.flow, tc.step)
+			refuse := func(db *sql.DB) { refuseOutcome(t, db, tc.step) }
+			if tc.look > 0 {
+				refuse = func(db *sql.DB) { refuseLook(t, db, tc.look) }
+			}
+
+			got := runRefusedFlow(t, tc.flow, refuse)
 
 			require.ErrorContains(t, got.first, refusedText, "the first run fails at the refused record")
 			require.NoError(t, got.resumed, "the resume reruns the refused step and keeps no record after it")
