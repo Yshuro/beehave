@@ -97,6 +97,25 @@ func TestWait_AnSSHFailureIsNotAnOrdinaryFailure(t *testing.T) {
 	assert.False(t, ssh.Called("sacct"), "sacct never answers for a host that ssh cannot reach")
 }
 
+func TestWait_TheLostAfterOfTheHostConfigSetsWhenAnUnansweredReadEndsTheWait(t *testing.T) {
+	t.Parallel()
+
+	clock := &fakeClock{now: time.Unix(1_000_000, 0)}
+	start := clock.now
+	ssh := &proctest.Scripted{}
+	ssh.PlanResult(model.CommandResult{ExitCode: sshFailed, Stderr: "no route"}, "squeue")
+
+	cfg := queueConfig()
+	cfg.LostAfter = time.Minute
+	h := New(link.New("lane-host", ssh), cfg, stubSlot{}, WithClock(jobwait.Clock{Poll: clockPoll, Now: clock.read, Sleep: clock.sleep}), WithBank(noBank), WithNonce(fixedNonce))
+
+	state, err := h.Wait(deadline(t), "5-n")
+
+	require.ErrorIs(t, err, host.ErrLost)
+	assert.Equal(t, model.JobLost, state)
+	assert.Less(t, clock.now.Sub(start), 2*time.Minute, "the wait ended at the one minute of the config and not at the default of five")
+}
+
 func TestDrain_RefusesANodeNameThatCouldChangeACommandAndRunsNothing(t *testing.T) {
 	t.Parallel()
 

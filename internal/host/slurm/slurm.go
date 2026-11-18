@@ -78,7 +78,7 @@ func New(l *link.Link, config model.HostConfig, slot Slot, opts ...Option) *Queu
 	}
 
 	q.nonce, q.limit, q.bank = s.nonce, s.limit, s.bank
-	q.engine = jobwait.New(scheduler{l}, slot.Release, s.clock, s.bank, time.Duration(config.StaleMinutes)*time.Minute)
+	q.engine = jobwait.New(scheduler{l}, slot.Release, s.clock, s.bank, time.Duration(config.StaleMinutes)*time.Minute, jobwait.Limits{LostAfter: config.LostAfter, StopLimit: config.StopLimit})
 
 	return q
 }

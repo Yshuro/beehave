@@ -96,7 +96,7 @@ func New(target string, config model.HostConfig, ssh proc.Runner, opts ...Option
 	set := h.settingsOf(opts)
 
 	h.nonce, h.bank = set.nonce, set.bank
-	h.engine = jobwait.New(scheduler{h}, h.release, set.clock, set.bank, time.Duration(config.StaleMinutes)*time.Minute)
+	h.engine = jobwait.New(scheduler{h}, h.release, set.clock, set.bank, time.Duration(config.StaleMinutes)*time.Minute, jobwait.Limits{LostAfter: config.LostAfter, StopLimit: config.StopLimit})
 
 	return h, nil
 }
