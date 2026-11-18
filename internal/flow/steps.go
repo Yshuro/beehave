@@ -13,6 +13,7 @@ import (
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -72,6 +73,8 @@ type StepLine struct {
 	Gate    []GateStep `json:"gate,omitempty"`
 	// NewTests holds the names of the new tests that the gate of a candidate head found. It is empty for any other step.
 	NewTests []string `json:"new_tests,omitempty"`
+	// Revert is the verdict of the revert run of a candidate gate: pass or fail. It is empty for any other step.
+	Revert model.RevertVerdict `json:"revert,omitempty"`
 	// OutputUnreadable is set when a recorded output of the step did not decode into the type the engine wrote. The other fields are then incomplete.
 	OutputUnreadable bool `json:"output_unreadable,omitempty"`
 }
@@ -396,12 +399,12 @@ func (l *StepLine) fromAgentRead(read agentRead) {
 	l.Head, l.Stop, l.Verdict, l.Rewrote = read.Head, read.Stop, read.Verdict, read.Rewrote
 }
 
-// fromGate takes the result of a gate: pass or fail, the head, the status of each gate step and the names of the new tests.
+// fromGate takes the result of a gate: pass or fail, the head, the status of each gate step, the names of the new tests and the revert verdict.
 func (l *StepLine) fromGate(result GateResult) {
 	l.Passed, l.Head, l.Gate = &result.Passed, cmp.Or(result.Head, l.Head), result.Steps
 
 	if result.Checks != nil {
-		l.NewTests = result.Checks.NewTests
+		l.NewTests, l.Revert = result.Checks.NewTests, result.Checks.Revert
 	}
 }
 

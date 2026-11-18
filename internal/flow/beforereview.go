@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"go.starlark.net/starlark"
 
 	"github.com/tobocop2/beehave/internal/merge"
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -27,6 +29,7 @@ var errNoGateAtHead = errors.New("before_review needs a gate call with `base` in
 type reviewVerdict struct {
 	findings []string
 	newTests []string
+	revert   model.RevertVerdict
 	base     bool
 	keywords []string
 }
@@ -90,9 +93,12 @@ func (s *script) gateAt(head string) (gatedCall, error) {
 	return gatedCall{}, errNoGateAtHead
 }
 
-// judgeHead makes the verdict of before_review for the head.
+// judgeHead makes the verdict of before_review for the head. The revert verdict is the one of the gate record, which is never empty:
+// gateOutputs records fail for a gate with no verdict.
 func judgeHead(ctx context.Context, dir string, call reviewCall, checks GateChecks) (reviewVerdict, error) {
-	verdict := reviewVerdict{findings: checkFindings(checks), newTests: append([]string{}, checks.NewTests...), keywords: []string{}}
+	verdict := reviewVerdict{
+		findings: checkFindings(checks), newTests: append([]string{}, checks.NewTests...), revert: checks.Revert, keywords: []string{},
+	}
 
 	descends, err := descendsFrom(ctx, dir, call.base, call.head)
 	if err != nil {
@@ -149,7 +155,33 @@ func checkFindings(checks GateChecks) []string {
 		findings = append(findings, fmt.Sprintf("%d new tests failed a check in all, and the log names the first %d", checks.FailedCount, len(checks.Failed)))
 	}
 
+	findings = append(findings, revertFindings(checks)...)
+
 	return append(findings, secretFinding(checks.Secrets)...)
+}
+
+// revertFindings are the findings of the revert run, for a head with new tests: one for each new test that passed or was skipped on the base
+// code, one for the count past the names in the log, and one for a run that proves nothing. A head with no new test already has its finding.
+func revertFindings(checks GateChecks) []string {
+	if !checks.Complete || checks.New == 0 || checks.Revert == model.RevertPass {
+		return nil
+	}
+
+	findings := []string{}
+
+	for _, name := range checks.RevertPassed {
+		findings = append(findings, "the new test "+name+" passes or is skipped on the base code. A test must fail without the change")
+	}
+
+	if checks.RevertPassedCount > len(checks.RevertPassed) {
+		findings = append(findings, fmt.Sprintf("%d new tests pass or are skipped on the base code in all, and the log names the first %d", checks.RevertPassedCount, len(checks.RevertPassed)))
+	}
+
+	if len(findings) == 0 {
+		findings = append(findings, "the revert run proves nothing: "+cmp.Or(checks.RevertProblem, "the log of the gate job has no end marker of the revert run"))
+	}
+
+	return findings
 }
 
 // secretFinding is the finding of the secret scan: none for a clean exit, one for any other exit or for a log that holds no single exit code.
@@ -216,5 +248,5 @@ func (v *reviewVerdict) holdKeywords(ctx context.Context, dir, base, head string
 
 // outputs are the result fields of before_review. A call is ok when it has no finding.
 func (v reviewVerdict) outputs() map[string]any {
-	return map[string]any{"ok": len(v.findings) == 0, "findings": v.findings, "new_tests": v.newTests, "base": v.base, "keywords": v.keywords}
+	return map[string]any{"ok": len(v.findings) == 0, "findings": v.findings, "new_tests": v.newTests, revertField: string(v.revert), "base": v.base, "keywords": v.keywords}
 }
