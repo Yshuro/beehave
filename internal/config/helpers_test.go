@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/config"
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -58,5 +59,5 @@ func writeFile(t *testing.T, path string, content string) string {
 
 func chmod(t *testing.T, path string, mode os.FileMode) {
 	t.Helper()
-	require.NoError(t, os.Chmod(path, mode))
+	require.NoError(t, exectest.ChmodFolder(path, mode))
 }
