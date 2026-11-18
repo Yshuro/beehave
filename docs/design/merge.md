@@ -406,12 +406,13 @@ The round of `examples/remediation/workflow.star` runs the sync at the start of 
 | `sync-again-<n>` | Runs `remedy sync` again after the agent. A second `conflict` ends the pass. |
 | `sync-fetch-<n>`, `sync-checkout-<n>` | Put the folder of the round at the head of a `synced` line, so the gate and the review read that head. |
 | `sync-gate-<n>` | The gate with no base: the gate command only, with no new-tests check and no mutation step. |
+| `sync-gate-<n>-host-<k>` | Runs only when `sync-gate-<n>` is void with a host cause (the engine proved a lost host job). The gate runs again, k from 1, until the engine counts 5 host losses in the tree of the run. |
 | `sync-review-<n>` | A read-only review (`prompts/sync_review.md`) pinned to the gated head. It writes the verdict `approve` or `changes`. |
 | `sync-land-<n>` | Runs `remedy sync land` pinned to the gated head and the base tip of the line. `stale` and `head-moved` land nothing, and the next pass syncs again. |
 
 A line with no `state` reads as `current`: the tool prints a state on every exit 0, and a dry run prints nothing. Any other exit code but 0 and 2, a state that the round does not know, or a line that lacks a field that its state needs, stops the run.
 
-Four results hold the round. Each has a reason:
+Five results hold the round. Each has a reason:
 
 | Reason | Cause |
 |---|---|
@@ -419,6 +420,9 @@ Four results hold the round. Each has a reason:
 | `sync-refused` | The forge refused the merge for the workflow permission. |
 | `sync-red` | The gate did not pass on the sync head. |
 | `sync-review` | The review did not approve the sync pull request. Its findings are in the reply of the step `sync-review-<n>`. |
+| `host-loss` | The engine counted 5 host losses or more in the tree of the run, and a loss came after the last answer of the owner. The sync gate can give it, and so can a child result or the landing. |
+
+The round reads the count of the engine: the `host_losses` of each child value, of the landing and of the sync gate. It keeps the highest as `seen`, and no count of its own. A child that stopped at the limit returns the reason `host-loss` and its count, and its item gets no comment and no hold status. After the answer CONTINUE to a `host-loss` hold, the round asks again only when `seen` is higher than it was at the answer.
 
 A landing that ends `stale` or `head-moved` holds nothing: the same pass goes on to `queue-audit-<n>` on the round base as it is, with the folder of the round still at the sync head, and the next pass syncs again.
 
