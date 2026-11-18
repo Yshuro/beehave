@@ -790,7 +790,7 @@ func runOfClient(t *testing.T, client *Client) *runRef {
 	return &runRef{ctx: t.Context(), flow: client.flow, id: testRun, database: filepath.Join(client.dir, databaseFile)}
 }
 
-// messagePending says whether a message that was sent to the run waits unconsumed. DBOS wakes a receive for such a message at its next one-second poll, so the receive is not parked.
+// messagePending says whether a message that the run receives (on the owner topic or the voice topic) waits unconsumed. DBOS wakes a receive for such a message at its next one-second poll, so the receive is not parked.
 func (r *runRef) messagePending() (bool, error) {
 	db, err := sql.Open("sqlite", r.database+"?_pragma=busy_timeout(30000)")
 	if err != nil {
@@ -801,7 +801,7 @@ func (r *runRef) messagePending() (bool, error) {
 
 	var pending bool
 
-	err = db.QueryRowContext(r.ctx, "SELECT EXISTS (SELECT 1 FROM notifications WHERE destination_uuid = ? AND consumed = 0)", r.id).Scan(&pending)
+	err = db.QueryRowContext(r.ctx, "SELECT EXISTS (SELECT 1 FROM notifications WHERE destination_uuid = ? AND topic IN (?, ?) AND consumed = 0)", r.id, ownerTopic, voiceTopic).Scan(&pending)
 
 	return pending, err
 }
