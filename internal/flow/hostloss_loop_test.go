@@ -17,9 +17,10 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-// lossyGate loses the host job of its first `lose` runs and passes every later run, on the head that it is given.
+// lossyGate gives a void result with no host cause for its first `void` runs, loses the host job of the next `lose` runs, and passes every later run, on the head that it is given.
 type lossyGate struct {
 	head string
+	void int32
 	lose int32
 	runs atomic.Int32
 	jobs atomic.Int32
@@ -34,7 +35,12 @@ func (g *lossyGate) Submit(context.Context, string, string, string, string) (Gat
 }
 
 func (g *lossyGate) Run(context.Context, string, string, string, GateJob) (GateResult, error) {
-	if g.runs.Add(1) <= g.lose {
+	run := g.runs.Add(1)
+	if run <= g.void {
+		return GateResult{Head: g.head, Steps: []GateStep{{Name: "command", Status: "unknown"}}}, nil
+	}
+
+	if run <= g.void+g.lose {
 		return GateResult{}, lostError()
 	}
 
@@ -62,15 +68,15 @@ type loopValue struct {
 	Held       string `json:"held"`
 }
 
-// lossyLoop runs loopFlow over a gate that loses its first `lose` jobs, with a review that approves everything. It returns the result and the names of the steps of the run.
-func lossyLoop(t *testing.T, lose int32) (loopValue, []string) {
+// lossyLoop runs loopFlow over a gate that gives `void` plain voids, then loses `lose` jobs, with a review that approves everything. It returns the result and the names of the steps of the run.
+func lossyLoop(t *testing.T, void, lose int32) (loopValue, []string) {
 	t.Helper()
 
 	rig := newAgentRig(t)
 	clock := newReadingClock()
 	hosts := &upHosts{started: true, proofs: []model.LostProof{{Kind: model.LostStopped}}, afterProof: func() { clock.advance(time.Minute) }}
 	rig.h.hosts, rig.h.reading, rig.h.facts = hosts, clock.read, lostFacts(time.Hour)
-	rig.h.gate.via = &lossyGate{head: rig.head, lose: lose}
+	rig.h.gate.via = &lossyGate{head: rig.head, void: void, lose: lose}
 	rig.h.gate.checks = cleanChecks()
 	rig.baseAt(t, "main")
 	rig.reply(`{"verdict":"approve"}`, exited)
@@ -106,7 +112,7 @@ func stepsNamed(names []string, part string) int {
 func TestHostLoss_AGateVoidWithAHostCauseRerunsAndLeavesTheFixCountAndTheVoidCountAlone(t *testing.T) {
 	t.Parallel()
 
-	value, steps := lossyLoop(t, 2)
+	value, steps := lossyLoop(t, 0, 2)
 
 	assert.True(t, value.Approved, "the third gate passed and the loop went on to the review")
 	assert.Equal(t, 2, value.HostLosses, "the loop keeps the highest count that a gate read: the passing rerun reads 0")
@@ -119,10 +125,10 @@ func TestHostLoss_AGateVoidWithAHostCauseRerunsAndLeavesTheFixCountAndTheVoidCou
 	assert.Zero(t, stepsNamed(steps, "fix-scoped-"), "a host loss starts no fix")
 }
 
-func TestRound_AChildThatStoppedOnTheHostLossLimitReturnsItsCountAndLeavesTheItemUnheld(t *testing.T) {
+func TestReviewFix_ALoopThatStoppedOnTheHostLossLimitReturnsItsCountAndLeavesTheItemUnheld(t *testing.T) {
 	t.Parallel()
 
-	value, steps := lossyLoop(t, 100)
+	value, steps := lossyLoop(t, 0, 100)
 
 	assert.True(t, value.HostLost, "the fifth loss of the tree stops the loop")
 	assert.Equal(t, hostLossLimit, value.HostLosses)
@@ -131,4 +137,16 @@ func TestRound_AChildThatStoppedOnTheHostLossLimitReturnsItsCountAndLeavesTheIte
 	assert.Equal(t, hostLossLimit, stepsNamed(steps, "gate:candidate-gate"), "one gate for each loss, and no gate after the limit")
 	assert.Zero(t, stepsNamed(steps, "fix-scoped-"), "no fix agent reads the host report")
 	assert.Zero(t, stepsNamed(steps, "gate-void-"), "the limit asks the owner nothing: the caller does")
+}
+
+func TestReviewFix_AGateVoidWithNoHostCauseIsAPlainVoidRerunAndNeverAHostRerun(t *testing.T) {
+	t.Parallel()
+
+	value, steps := lossyLoop(t, 1, 0)
+
+	assert.True(t, value.Approved, "the plain rerun passed and the loop went on to the review")
+	assert.Zero(t, value.HostLosses, "a void with no host cause is no host loss")
+	assert.False(t, value.HostLost)
+	assert.Equal(t, 1, stepsNamed(steps, "gate:candidate-gate-void-1#"), "the plain rerun")
+	assert.Zero(t, stepsNamed(steps, "candidate-gate-host-"), "a void with no host cause takes no host rerun")
 }
