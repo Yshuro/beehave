@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites tests="0" failures="1" errors="1" time="0.003007">
+	<testsuite tests="0" failures="0" time="0.000000" name="" timestamp="0001-01-01T00:00:00Z">
+		<properties>
+			<property name="go.version" value="go1.27.1 darwin/arm64"></property>
+		</properties>
+	</testsuite>
+	<testsuite tests="0" failures="0" time="0.003000" name="example.com/demo/calc" timestamp="2026-11-17T18:00:04-05:00">
+		<properties>
+			<property name="go.version" value="go1.27.1 darwin/arm64"></property>
+		</properties>
+		<testcase classname="" name="TestMain" time="0.000000">
+			<failure message="Failed" type="">FAIL&#x9;example.com/demo/calc [build failed]&#xA;</failure>
+		</testcase>
+	</testsuite>
+</testsuites>

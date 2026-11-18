@@ -19,6 +19,22 @@ const (
 	agentStepName   = "agent"
 	// noRecord is the cause of a loss. The engine that died took its child processes with it, and nothing it left shows an exit status or a signal.
 	noRecord = "the process ended with no record"
+	// callStartRef is the per-worktree ref that the render step of an agent call writes at the start commit. Git deletes it with the worktree.
+	callStartRef = "refs/worktree/beehave/call-start"
+)
+
+// lostView is what the note of a lost step can say about the changes of the step.
+type lostView int
+
+const (
+	// viewDiff is a folder that holds the start mark of the call: DiffStat holds its changes since the start commit, empty for none.
+	viewDiff lostView = iota
+	// viewNoStart is a call with no start commit.
+	viewNoStart
+	// viewOtherTree is a folder whose start mark is missing or names another commit: it is not the folder that the call started in.
+	viewOtherTree
+	// viewUnread is a folder that git could not read.
+	viewUnread
 )
 
 // LostStep records an agent step that started and did not finish, because the engine stopped. It is the record of the step that ran again.
@@ -26,7 +42,7 @@ const (
 // Lost is the zero time when the store held no claim lease for the item: the run time is then unknown.
 // Session is the session id that the lost agent named, empty when the loss came before the agent named one.
 // DiffStat is the diff summary of the item folder since the start commit of the call (git diff --stat), empty when nothing tracked changed,
-// when the folder has no start commit, or when the engine could not read the diff.
+// when the call has no start commit, when the folder does not hold the start mark of the call, or when the engine could not read the diff.
 type LostStep struct {
 	Started  time.Time `json:"started"`
 	Lost     time.Time `json:"lost"`
@@ -53,25 +69,35 @@ func (l LostStep) Ran() time.Duration {
 	return max(l.Lost.Sub(l.Started), 0)
 }
 
-// note is the paragraph that the prompt of a fresh run of the step gets. It quotes the diff summary, or says that the engine could not read it
-// when unread is true. The text is the same for every workflow.
-func (l LostStep) note(unread bool) string {
+// note is the paragraph that the prompt of a fresh run of the step gets. It says what the view lets the engine say about the changes of the step.
+// The text is the same for every workflow.
+func (l LostStep) note(view lostView) string {
 	ran := "ran before for an unknown time and was lost"
 	if l.Known() {
 		ran = "ran before and was lost after " + minutes(l.Ran())
 	}
 
-	changes := "The engine found no change to tracked files since the step started. "
+	return "This step " + ran + ". " + l.changes(view) + "Read `git status` and `git diff` before you start, and keep what is right."
+}
 
-	switch {
-	case unread:
-		changes = "The engine could not read the diff summary of the changes since the step started. "
-	case l.DiffStat != "":
-		changes = "The engine read this summary of the changes since the step started:\n\n```\n" + l.DiffStat + "\n```\n\n"
+// changes is the part of the note about the changes of the step. Only a folder that holds the start mark of the call gets a claim about its changes.
+func (l LostStep) changes(view lostView) string {
+	switch view {
+	case viewNoStart:
+		return "The work tree may hold its edits. The engine has no start commit of the step, so it cannot say what the step changed. "
+	case viewOtherTree:
+		return "The work tree is not the one that the step started in: it was made again or removed, or its start mark was removed. " +
+			"The edits of the step can be lost, and the engine cannot say what the step changed. "
+	case viewUnread:
+		return "The work tree may hold its edits. The engine could not read the diff summary of the changes since the step started. "
+	case viewDiff:
 	}
 
-	return "This step " + ran + ". The work tree may hold its edits. " + changes +
-		"Read `git status` and `git diff` before you start, and keep what is right."
+	if l.DiffStat == "" {
+		return "The work tree may hold its edits. The engine found no change to tracked files since the step started. "
+	}
+
+	return "The work tree may hold its edits. The engine read this summary of the changes since the step started:\n\n```\n" + l.DiffStat + "\n```\n\n"
 }
 
 // continued is the prompt of a resumed session of the step. The brief and the output file are in the session already.
@@ -193,13 +219,13 @@ func (e *Engine) lostRecord(ctx context.Context, in PhaseInput, phaseID string, 
 	}
 
 	// Only the note uses the diff summary, so a diff that cannot be read changes the note and keeps the session.
-	stat, unread := e.lostDiff(ctx, in)
+	stat, view, unread := e.lostDiff(ctx, in)
 	if unread != nil {
 		e.logger.WarnContext(ctx, "cannot read the diff summary of the lost agent step", "item", in.Item, "error", unread)
 	}
 
 	lost.Session, lost.DiffStat = session, stat
-	lost.Note = lost.note(unread != nil)
+	lost.Note = lost.note(view)
 
 	return lost, nil
 }
@@ -221,24 +247,48 @@ func (e *Engine) savedSession(phaseID string) (string, error) {
 	return session, nil
 }
 
-// lostDiff returns the diff summary of the item folder since the start commit of the call.
-func (e *Engine) lostDiff(ctx context.Context, in PhaseInput) (string, error) {
+// lostDiff returns the diff summary of the item folder since the start commit of the call, and what the note can say about it.
+// An error comes with viewUnread.
+func (e *Engine) lostDiff(ctx context.Context, in PhaseInput) (string, lostView, error) {
 	if in.StartHead == "" {
-		return "", nil
+		return "", viewNoStart, nil
 	}
 
-	// The folder comes from the same call as the folder of the agent call, whose head the render step read.
-	dir, err := e.deps.Trees.Ensure(ctx, in.Project, in.Item)
-	if err != nil {
-		return "", fmt.Errorf("find the folder of item %s: %w", in.Item, err)
+	dir, view, err := e.lostFolder(ctx, in)
+	if view != viewDiff {
+		return "", view, err
 	}
 
 	out, err := git(ctx, dir, "diff", "--stat", "--stat-count="+strconv.Itoa(diffStatFiles), in.StartHead)
 	if err != nil {
-		return "", fmt.Errorf("read the diff summary of the item folder: %w", err)
+		return "", viewUnread, fmt.Errorf("read the diff summary of the item folder: %w", err)
 	}
 
-	return strings.TrimRight(out, "\n"), nil
+	return strings.TrimRight(out, "\n"), viewDiff, nil
+}
+
+// lostFolder returns the folder of the lost call with viewDiff when it holds the start mark of the call at the start commit. The folder comes from
+// the same call as the folder of the agent call, so a removed worktree of a round item is made again at its tree start here, without the mark.
+func (e *Engine) lostFolder(ctx context.Context, in PhaseInput) (string, lostView, error) {
+	dir, err := e.deps.Trees.Ensure(ctx, in.Project, in.Item, in.TreeStart)
+	if err != nil {
+		return "", viewUnread, fmt.Errorf("find the folder of item %s: %w", in.Item, err)
+	}
+
+	if dir == "" {
+		return "", viewOtherTree, nil
+	}
+
+	mark, err := git(ctx, dir, "for-each-ref", "--format=%(objectname)", callStartRef)
+	if err != nil {
+		return "", viewUnread, fmt.Errorf("read the start mark of the item folder: %w", err)
+	}
+
+	if strings.TrimSpace(mark) != in.StartHead {
+		return "", viewOtherTree, nil
+	}
+
+	return dir, viewDiff, nil
 }
 
 // resumeWord says in the log how the step starts again.

@@ -68,6 +68,7 @@ func repositoryDefs() []builtinDef {
 		{name: "pr_assign", call: (*script).prAssign, repository: true},
 		{name: "pr_comment", call: (*script).prComment, repository: true},
 		{name: "pr_open", call: (*script).prOpen, repository: true},
+		{name: prStateKind, call: (*script).prState, repository: true},
 		{name: "preflight", call: (*script).preflight, repository: true},
 	}
 }

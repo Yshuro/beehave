@@ -38,6 +38,8 @@ type PhaseInput struct {
 	Forbid []model.FindingKind `json:"forbid,omitempty"`
 	// Protect lists the directories of the kind protected-path. It is empty, and so left out of a recorded phase, for a step that does not use the kind.
 	Protect []string `json:"protect,omitempty"`
+	// RequireSkills is the require_skills of the step. It is left out of a recorded phase for a step that names none, so a stored phase keeps its form.
+	RequireSkills []string `json:"require_skills,omitempty"`
 
 	// MaxBudget is the max_budget_usd of the step. It is left out of a recorded phase for a step that sets none.
 	MaxBudget float64 `json:"max_budget_usd,omitempty"`
@@ -63,6 +65,10 @@ type PhaseInput struct {
 	// StartHead is the commit of the item folder when the render step of the call ran. The record of a lost start holds the diff summary since that commit.
 	// It is empty for a plain folder.
 	StartHead string `json:"start_head,omitempty"`
+
+	// TreeStart is the commit that the run made the worktree of a round item at. The diff of a lost start makes a removed worktree again there.
+	// It is left out of a recorded phase for any other item.
+	TreeStart string `json:"tree_start,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
@@ -157,7 +163,7 @@ func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, lost *LostRun,
 	return AgentRequest{
 		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: named, Lost: lost,
 		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
-		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
+		Forbid: in.Forbid, Protect: in.Protect, RequireSkills: in.RequireSkills, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
 	}
 }
 

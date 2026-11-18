@@ -215,8 +215,9 @@ func walkExampleMerge(t *testing.T, visit func(map[string]syntax.Expr)) {
 	calls, err := workflowtest.Calls("workflow.star", text)
 	require.NoError(t, err)
 
+	// The round of the example lands its approved items with one batch merge, which runs the guards of the merge for each item.
 	for _, call := range calls {
-		if call.Builtin == "merge" {
+		if call.Builtin == "batch_merge" {
 			visit(call.Args)
 		}
 	}
@@ -588,22 +589,18 @@ func TestMerge_TheValuesRowTheExampleHoldsEverySettingAndNoIdentity(t *testing.T
 	walkExampleMerge(t, func(ship map[string]syntax.Expr) {
 		seen = true
 
-		for _, name := range []string{"repo", "base", "hold", "own", "approved", "forbid_text", "children"} {
+		for _, name := range []string{"repo", "base", "hold", "own", "forbid_text", "integration"} {
 			assert.NotNil(t, ship[name], "%s is set in the example", name)
 		}
 
-		assert.NotNil(t, ship["tree"], "the example passes the tree of the gate, so a merge proves the merged tree")
-
-		assert.Equal(t, []string{"BASE"}, workflowtest.Literals(ship["base"]), "base is the integration branch, read from the environment")
-		assert.Equal(t, []string{"REPO"}, workflowtest.Literals(ship["repo"]))
-		assert.Equal(t, []string{"retarget"}, workflowtest.Literals(ship["children"]))
+		// The base, the repository, the logins and the address come from the project file, so the example names none of them.
+		assert.Empty(t, workflowtest.Literals(ship["base"]), "base is the round base, read from vars.round.base")
+		assert.Empty(t, workflowtest.Literals(ship["repo"]), "repo is the repository of the project")
 		assert.Equal(t, []string{"hold"}, workflowtest.Literals(ship["hold"]))
 
 		for _, text := range workflowtest.Literals(ship["own"]) {
 			assert.NotContains(t, text, "@", "the file holds no address")
 		}
-
-		assert.Equal(t, []string{"approve"}, workflowtest.Literals(ship["approved"]))
 	})
 	assert.True(t, seen)
 }

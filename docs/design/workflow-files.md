@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -35,10 +35,51 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `command`, `earl
 - The step is recorded under the name `<builtin>:<name>#<n>`. `name` is the argument of the call. `n` counts the calls of that builtin, whatever their names, so a call in a loop gets a new record in each round.
 - Every `merge` and `wait` call also records a step under this name, after the work of the call.
 - A restart replays `main` from the top. Each call finds its record and returns the recorded outputs, so a finished step never runs again. The same code makes the same calls in the same order.
+- A step that was running when the engine stopped has no record, so it runs again on resume. The next subsection says what that means for each builtin.
+
+#### A step that ran when the engine stopped
+
+DBOS records a step only when the step ends. If the engine stops after the effect of a step and before its record, the resume runs the step again. A step is safe to run twice when the tracker, the forge or the host answers the repeat. Four bases make a step safe, and each row names the one it uses.
+
+1. Check first. The step reads the state and sends no second write.
+2. A cited rule. The call is documented to treat a repeat as no change, and a test pins the exact call.
+3. The same value. A repeat sets the value that is set already, and no page states that this is a no-op. The edit half of `board_sync`, the beads `item_assign` and the status and comment writes of the `local` tracker use this basis.
+4. The library. DBOS replays the step and not beehave: `spawn` and `wait`.
+
+Four cases are not safe today, and a later change fixes each of them.
+
+| Builtin | A repeat after a crash | Why |
+| --- | --- | --- |
+| `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. With `shared = True` the key is the `key` of the call alone. |
+| `item_comment` | Safe. | GitHub and beads read the comments first and find the key. The `local` tracker inserts the comment under its key and ignores a second insert of that key. |
+| `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
+| `item_assign` | Safe. | On GitHub the tracker reads the assignees first and sends no edit for a login that is on the issue. A test with a repeated call shows one edit. Beads reads the assignee and refuses a different login, but for the same login it sends the same update again, and it keeps one assignee. The local tracker refuses an assignee. |
+| `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
+| `pr_assign` | Safe. | The call is a POST that adds a login, and GitHub says: "Users already assigned to an issue are not replaced." ([Assignees](https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue)). A test pins the exact call of two runs, so a change to a call that replaces the assignees turns it red. |
+| `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
+| `board_sync` | Safe. | The call adds the card by its address, and GitHub says: "If you try to add an item that already exists, the existing item ID is returned instead." ([Using the API to manage Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)). The step from `gh project item-add` to that mutation rests on the same page, which does not name the command. The edit then sets the Status field to the same option. This half rests on the call that sets the same value, and no GitHub page states that a repeat is a no-op. A test pins the exact calls of two runs. No test uses a real board. |
+| `merge`: the ready mark | Safe. | The step reads the draft state first and makes no `gh pr ready` call for a pull request that is ready. A test with a ready pull request shows no call. |
+| `merge`: the merge | Safe when a batch host is set, which the real build always does. | The step `merge:intent` is recorded before the merge. The forge shows the pull request as merged at the gated head, and the intent shows the merge is ours. A build with no batch host has no intent step. |
+| `batch_merge`: each member | Safe. | The step `batch:<name>.intent#<item>` does the same for each member. |
+| `spawn` | Safe. It rests on the library. | The child run has a fixed workflow id, and DBOS returns the recorded child for it. A test stops the parent while it waits in `gather`, after `spawn` returned, and shows one child run with the same id after the resume. No test reaches the window inside the start call, between the child row and the record of it in the parent. |
+| `wait` | Safe. It rests on the library, and no test in this table stops a wait. | The deadline is the output of a recorded DBOS sleep, and the answer is a durable receive. A resume waits for the same answer. |
+| `write` with `read_back` | Safe. | The read-back runs first and finds a write that is done. |
+| `write` with no `read_back` | Not safe today. The program runs again with the same key. | Neither beehave nor the forge can tell if the outside system dropped the repeat. A later change asks the owner before the repeat. |
+| `write` undo | The undo is a recorded step named `undo:<write step>`. A crash during the undos runs the one that has no record again with the same key. | The undo must be safe when nothing happened (see `undo`). A repeat after the effect depends on the program. |
+| `command` with no `host`, and `gate` with a program on this machine | Runs again. | By design. Put an outside effect in `write`. |
+| `sandbox` | Safe. | The call builds a setting value and changes nothing outside the run. |
+| `gate` with a host job, `command` with `host` or `slots`, and the gate of `batch_merge` | Not safe today. A crash after the host accepts the job and before the record submits a second job. | The job has no key that the host honors. A later change adds one. |
+| `host_up` | Not safe today. If the crash came after the launch, the repeat finds the host up and reports `started` false, so `host_teardown` does not stop it. | The step cannot tell its own launch from a host that was up already. A later change adds a start mark. |
+| `host_teardown` on SkyPilot | Not safe today. If the crash came after the delete, the repeat cannot read the work root of the deleted cluster and reports `down` false with a reason. | The step reads the host before it checks that the host exists. A later change makes a missing host count as down. |
+| `host_teardown` on ssh and Slurm | Safe. | The step banks the work and leaves the machine up. The bank reads first and pushes only what is not banked, so a repeat pushes nothing. A test runs the bank once, and none runs it twice. |
+| `agent` | The step is a lost step. It resumes the session or runs again with a note. | `durable-loop.md` describes the start mark of a phase. |
+
+The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `before_review`, `earlier_calls`, `gather`) change nothing outside the run, so a repeat is safe.
 
 #### The folder of a program
 
 - A `command` call, and a `gate` call that names a program, run in the worktree of the item.
+- A round item (`round/<base>`) always has a worktree. The engine makes it after the claim and before `main` runs. The worktree is detached at the tip of `origin/<base>`, and every step of the item uses this one folder. If the remote has no branch `<base>`, the item stops and the error names the base. The worktree is made in a recorded step, which stores the commit that the worktree starts at. A resumed run does not make it again and keeps that commit, even when the base moved. A fresh run that finds the worktree that an earlier run kept moves it to the tip of `origin/<base>` when it is clean. If the kept worktree has tracked or untracked changes, or commits that no remote branch holds, the fresh run stops, and the error names the worktree, those commits and the `git worktree remove --force` command that removes it. The commit that the engine placed the worktree at, and its history, are not work of the item: a force-push of the base alone does not stop the fresh run. Nothing else moves the worktree. If someone removed the worktree, the next step of the item that uses the folder makes it again, detached at the stored commit, never at the newer tip of the base. The commits of earlier steps went with the removed worktree. If the clone no longer holds the stored commit, the step stops with an error that says to start the item again. Two steps that find it removed at the same time make it once. A worktree made again holds no start mark of a lost agent step, so the note to the agent says that the worktree is not the one that the step started in, and claims no change: the work of the step went with the removed worktree. A run of a round item that an older build started does not move to this build with `resume --on-this-build`. A step that needs the newest tip of the base runs `git fetch` itself. A round item of a project with no repository gets no worktree: its programs run in a new empty folder, as below.
 - An item with no worktree, such as the parent of the swarm example, gets a new empty folder in the temporary folder of the system. Beehave removes it when the program ends, so the program never reads or writes the folder where `beehave` started. Such a program reads a repository by its address (`git ls-remote <url>`) or through `gh`.
 - A `gate` call with no program, and an `agent` call, need a worktree and refuse an item that has none.
 
@@ -113,13 +154,13 @@ The `item_` builtins change or read the tracker of the project.
 
 | Call | Returns |
 | --- | --- |
-| `item_create(title, key, body, parent, assignee, severity, operator, forbid_text, name)` | `id`, `created` |
+| `item_create(title, key, body, parent, assignee, severity, operator, forbid_text, shared, name)` | `id`, `created` |
 | `item_status(id, status, name)` | `id`, `status` |
 | `item_comment(id, text, key, forbid_text, name)` | `id` |
 | `item_assign(id, assignee)` | `id` |
 | `item_read(of, name)` | `found`, `id`, `fields`, `comments`, `parent` |
 
-The `key` is required, and the engine joins it to the run id.
+The `key` is required, and the engine joins it to the run id. `item_create` with `shared = True` is the one exception.
 
 #### `item_create`
 
@@ -127,6 +168,7 @@ The `key` is required, and the engine joins it to the run id.
 - `assignee` is optional. The default is no assignee.
 - `severity` is optional, one of `P0` to `P3`. The call refuses any other text before it writes.
 - `operator` is an optional bool.
+- `shared` is an optional bool. The default is false: the engine joins the `key` to the run id, so two runs never share an item. With `shared = True` the engine uses the `key` as it is, and it holds a file lock of the key in the state folder around the lookup and the create, so two runs of the project on this host that give the same key at the same time get one item. The lock does not reach another host: two hosts that share one tracker can still file two items for one key. Put in the key what makes the item unique in the project, such as the repository and a pull request number.
 
 | Tracker | `severity` | `operator` |
 | --- | --- | --- |
@@ -204,6 +246,16 @@ The `parent` argument:
 | The pull request of `parent` merged. | The base stays as given, and the call links nothing. |
 | `parent` has no pull request. | An error. |
 
+#### `pr_state`
+
+`pr_state(pr, name)` reads the state of the pull request with the number `pr` and returns `state`: `OPEN`, `CLOSED` or `MERGED`.
+
+- The call reads that number. It looks no pull request up by the branch of the item, so a pull request of another author on any branch and any base reads the same.
+- A `pr` below 1 is refused before any read. So is a project with no repository.
+- The read is a recorded step, so a resumed run replays the first state.
+- A read that fails ends the step with an error. A project with no forge cannot show a state, which is an error too.
+- A build with no queue reader fails the call. A dry run does not fake the read: it reports the step as not run and ends there.
+
 #### Closing keywords in posted text
 
 `pr_comment` and `pr_open` refuse text with a closing keyword (`Closes`, `Fixes`, `Resolves` and their forms, with an issue). The check reads the text of the comment, and the title and the body of the pull request. It uses the same keywords as the guard of `merge`. The refusal happens before the post and names the argument and the issue.
@@ -231,8 +283,8 @@ The four steps that post public text (`item_create`, `item_comment`, `pr_comment
 - The step records the cluster, so a replay returns the first choice.
 - A gate, its key and a `command` call with a `host` run on that recorded cluster. A run that did not call `host_up` uses the first declared host.
 - A project with no host, and a build with no host keeper, start nothing and give `started` false.
-- The start is a recorded step, so a replay does not launch again.
-- The example calls `host_up` first in `main` only when `HOST_UP` is "true".
+- The start is a recorded step, so a replay of a recorded start does not launch again. A crash after the launch and before the record is not covered today: the repeat finds the host up and gives `started` false, so `host_teardown` does not stop it. A crash during the launch fails the repeat, because the host is in a launching state. A later change fixes both cases.
+- The example calls `host_up` first in the round, with the `build_host` of the project file.
 
 `host_up` reads the host first:
 
@@ -253,6 +305,7 @@ The four steps that post public text (`item_create`, `item_comment`, `pr_comment
 - A build with no host stopper fails the call.
 - A stop deletes the host, so use `host_teardown` only for one item on the host.
 - Two runs that start together can both report `started`, and then both stop the host. Teardown for a shared host is not done.
+- On SkyPilot, a crash after the delete and before the record is not covered today: the repeat cannot read the work root of the deleted cluster, and it gives `down` false with a reason. A later change makes a missing host count as down. On ssh and Slurm the repeat is safe.
 - The example calls it in `finish`.
 
 ### `preflight`
@@ -300,7 +353,7 @@ At the start of a run, the engine lists the other orchestrators that hold items 
 
 ### `before_review`
 
-`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `base` and `keywords`.
+`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `revert`, `base` and `keywords`.
 
 The call needs a `gate` call in the same run with `base`, at the same `head`. It reads the checks of that gate: the new tests and the secret scan. Without that gate call, the step fails with an error that says so. A gate without `base` holds no checks, so the call refuses it as a cut log.
 
@@ -309,12 +362,13 @@ A finding is a result, not an error. `ok` is true when `findings` is empty. The 
 - the log of the gate job has no end line (a cut log),
 - the head adds no new test,
 - a new test failed or was skipped on the head,
+- a new test passed or was skipped on the base code, or the revert run proves nothing (see the revert run in `gate.md`),
 - the secret scan did not exit with 0, or left no single exit code,
 - the head is not a descendant of `base`, by `git merge-base --is-ancestor`,
 - the head changed a path that `allow` does not allow (a list of globs, as `allow_paths` of `agent`),
 - a commit message between `base` and `head` has a closing keyword, unless `integration` is true.
 
-`new_tests` lists the new tests of the gate. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
+`new_tests` lists the new tests of the gate. `revert` is the verdict of the revert run of the gate, `pass` or `fail`; the result of `gate` carries the same field. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
 
 ### `queue`
 
@@ -383,6 +437,16 @@ A gate gives these steps:
 
 A gate that runs a program gives the step `command` only.
 
+#### The host loss fields
+
+A `gate` result has two fields for a host job that was lost. See "The wait for a proof" in [hosts.md](hosts.md).
+
+- `host_loss` holds `kind`, `job`, `host`, `head_or_commit`, `proof`, `note` and `at` when the gate lost its job and a proof came. It is an empty dict when the gate lost nothing.
+- `host_losses` is the number of host losses in the item tree of the run, this one included. It is 0 when the gate lost nothing, and the engine then reads no other run.
+- The item run records each loss as the step `<call>/host-loss`, with the loss and the count. The step counts the `/host-loss` steps of every item run of the tree from its root, so a replay reads the recorded count. If two runs of the tree record a loss at the same time, each count can leave out the other loss. The status reads the count again and holds both.
+- `beehave status <run id> --json` shows `host_losses` for the tree of the run, and leaves it out at 0.
+- The engine sets no limit on the count. A workflow reads `host_losses` and decides when to ask the owner.
+
 #### The pinned head
 
 The step pins the merge to the head of the pull request, not to `head`, when a rewrite left that head with the same tree as the reviewed `head`: the review stands for it. A head with another tree is refused.
@@ -414,6 +478,8 @@ A value of another type fails the step and names the value. An environment name 
 `batch_merge(prs, base, repo, hold, own, forbid_text, gate_run, integration, name)` lands a list of `struct(item, head, approved)` with one gate run on the union tree of the base tip and all heads. It splits the list when the gate is red. A forge with a native merge queue needs no `batch_merge`.
 
 `approved` is an optional bool of each member, and a member that leaves it out is not approved. It is the `approved` of `merge` for that member only: a pull request of an `own` identity merges only when its own member sets `approved = True`. The call has no `approved` of its own, so the approval of one member never reaches another. A value that is not a bool fails the call and names the field.
+
+`beehave check workflow` reads each `struct(...)` member of a `prs` list with the parser that the run uses, so a wrong field is a problem before the run. The error names the member and the field, for example ``prs[1]: `approved` of a member of `prs` must be a bool, not string``, and is the same text that the run gives. The check reads the first wrong field of a member. A member that is a literal but not a struct, such as `1`, a dict or a list, is refused. A list, a dict or a struct that a field or a member holds counts as that type, whatever it contains. A value that only the run knows, such as a variable or a call, is left to the run: the check skips that field or that member and still reads the other fields. A file that defines its own `struct` is not read as the builtin.
 
 It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note` and `unproven`.
 
@@ -502,6 +568,8 @@ The resume also reopens each sibling that the raise canceled while it was open, 
 
 A `command` step has five settings besides `run`, `timeout`, `host` and `name`: `max_new_processes`, `slots`, `stdin`, `env` and `stop_on_rc`.
 
+A `command` can run twice after a crash that cuts the step before its record. Put a program that changes a system outside the run in `write`. A `command` with `host` or `slots` can also submit its host job twice today. A later change fixes this.
+
 #### `slots`
 
 `slots` is the name of a slot class, such as `slots = "mutation"`. It limits the host jobs of one kind.
@@ -582,6 +650,8 @@ A `gate` step keeps the environment of the process.
 
 The engine puts a key in the variable `BEEHAVE_WRITE_KEY` of the program, the read-back and the undo. The key is the SHA-256 hash of the run id and the step name, cut to 32 hexadecimal characters. A replay has the same run id and the same step name, so it has the same key, and the outside system can drop a repeat. If the engine stops after the write and before the step is recorded, the replay runs the step again with the same key.
 
+A rerun is safe when the call has a `read_back`: the read-back finds the finished write. A rerun with no `read_back` is not safe today. The program runs again with the same key, and neither beehave nor the forge can tell if the outside system dropped the repeat. A later change asks the owner before the program runs again.
+
 #### `read_back`
 
 `read_back` is an optional program. It runs first in the same step, on a first run and on a replay.
@@ -655,7 +725,7 @@ One workflow written in this form, with five prompt files. The method lives in t
 
 1. A plan.
 2. An implement step.
-3. A review and fix loop of up to five fix rounds (six passes, so the sixth reviews the fifth fix). After each green gate, the loop runs the mutation step before the review.
+3. A review and fix loop of up to `fix_rounds + 1` candidates. Before each candidate, up to three scoped fixes and scoped reviews run with no gate. Each candidate gets the gate on the base, the checks before review, the mutation step and one full review, in that order.
 4. A wait for the owner.
 5. A settle step.
 6. A merge step.
@@ -665,7 +735,7 @@ One workflow written in this form, with five prompt files. The method lives in t
 The engine has no mutation builtin. The project owns the tool and the workflow runs it as a host command.
 
 - The project file sets `vars.mutation_command`: a list of words, such as `["sh", "scripts/mutation-pr.sh"]`. A run with no such key, or a value that is not a list of words, is refused before the first agent starts. The message names the key.
-- After each green gate, `check_mutation` runs the command with `host` and `slots = "mutation"`. It adds one word at the end: the base ref, `origin/<BASE>`. The command mutates only the lines that differ from that ref.
+- After the gate and the checks before review of each candidate pass, `check_mutation` runs the command with `host` and `slots = "mutation"`. It adds one word at the end: the base ref, `origin/` and the base of the round (`vars.round.base`). The command mutates only the lines that differ from that ref.
 - The `host` block of the project lists the class: `slots = {"mutation": 1}`.
 - The command exits with code 0 when the head is clean, and with another code when the run fails. A run that applied no mutant is a failed run, and the command says so.
 - A failed run prints one finding per line on its standard output, as `finding: path:line: text`, for example `finding: internal/cli/check.go:112: a mutant lived: CONDITIONALS_NEGATION`. The output of a failed host job is the end of its log, so it can hold other lines of the tool, such as the `KILLED <TYPE> at file:line:col` lines of gremlins. Only a line that starts with the literal prefix `finding: ` is a finding, and the finding is the text after the prefix. A failed run with no such line gives each non-blank line, the last 20 at most.
@@ -684,6 +754,8 @@ A project with another mutation tool sets another command. This repository uses 
 - The script gives the git of gremlins the settings `diff.noprefix=false` and `diff.mnemonicPrefix=false`, so a repository that sets `diff.noprefix` gets the same result.
 - A run that exceeds `MUTATION_TIMEOUT` fails with its own line and no end marker.
 - `MUTATION_TIMEOUT` accepts only a positive whole number of seconds. Any other value fails before the run starts.
+- With no `MUTATION_TIMEOUT`, the limit is 3600 seconds when the diff changes a non-test Go file in `internal/flow` or below it, and 1200 seconds otherwise. A flow run with 4 workers took 2478 seconds for 21 mutants.
+- The file `.gremlins.yaml` at the module root sets 4 gremlins workers for `make mutation`, `make mutation-pr` and a direct run. Gremlins starts one worker for each core by default, and each worker runs a test binary that runs tests in parallel. On a 16-core host that load made the mutants of `internal/flow` time out. To change the count, edit that file.
 
 `examples/remediation/CONFORMANCE.md` has one row for each rule of the method, with its home (`core`, `file`, `skill` or `drop`) and its status (`gap`, `expressed`, `proven` or `n/a`). A row moves to `proven` when a behavior test runs it. A test in the `workflow` package fails when:
 

@@ -74,12 +74,14 @@ type forgeAdapter struct {
 }
 
 // agentAdapter is the registration of an agent: its constructor and its doctor fix texts. The usage read is a method of the adapter that build returns.
-// An agent with no constructor has no adapter yet: its runners are valid in the config and do not start.
+// An agent with no constructor has no adapter: its runners are valid in the config and do not start.
+// reportsUsage is true when the CLI reports the plan limits of a login, so the doctor checks them for a runner of the agent.
 type agentAdapter struct {
 	registration
-	build     func() agent.Adapter
-	configFix func(string) string
-	tokenFix  func(string) string
+	build        func() agent.Adapter
+	reportsUsage bool
+	configFix    func(string) string
+	tokenFix     func(string) string
 }
 
 // hostAdapter is the registration of a host provider: the constructor and the sentinel errors of a failed run.
@@ -115,15 +117,16 @@ const skyTimeout = 30 * time.Minute
 const stepAgent = claude.Name
 
 // agentEntries returns the agent entries. env is the environment of the caller, which the usage read of an agent passes to its CLI.
-// The opencode agent has no adapter yet, so its entry has no constructor.
+// The opencode entry has no doctor fix text.
 func agentEntries(env map[string]string) map[model.Agent]agentAdapter {
 	return map[model.Agent]agentAdapter{
 		claude.Name: {
-			build:     func() agent.Adapter { return claude.New(env) },
-			configFix: claude.ConfigFix,
-			tokenFix:  claude.TokenFix,
+			build:        func() agent.Adapter { return claude.New(env) },
+			reportsUsage: true,
+			configFix:    claude.ConfigFix,
+			tokenFix:     claude.TokenFix,
 		},
-		opencode.Name: {},
+		opencode.Name: {build: func() agent.Adapter { return opencode.New() }},
 	}
 }
 
@@ -316,9 +319,9 @@ func newSkyPilotHost(project model.Project) (host.Host, error) { //nolint:iretur
 	return h, nil
 }
 
-// slurmQueue builds the Slurm queue that SkyPilot runs its jobs on.
+// slurmQueue builds the Slurm queue that SkyPilot runs its jobs on. Every job it submits ends at `host.max_run`, as on the Slurm host.
 func slurmQueue(l *link.Link, config model.HostConfig, slot skypilot.Slot) skypilot.Queue { //nolint:ireturn // SkyPilot takes the queue as a builder that returns the interface it owns
-	return slurm.New(l, config, slot)
+	return slurm.New(l, config, slot, slurm.WithLimit(config.MaxRun))
 }
 
 // newSSHHost builds the host of a machine that the owner provides. It runs no ssh: the first call to the machine is Up.
@@ -413,7 +416,7 @@ func (a adapters) host(project model.Project) (host.Host, error) { //nolint:iret
 	return host.WithDiskWait(built, project.Host.DiskFloorGB, wait, a.diskPoll), nil
 }
 
-// agent builds the adapter of the agent. It returns nil for an agent that has no adapter yet, and a run with no adapter does not start.
+// agent builds the adapter of the agent. It returns nil for an agent that has no adapter, and a run with no adapter does not start.
 func (a adapters) agent(name model.Agent) agent.Adapter { //nolint:ireturn // the table builds whichever adapter the runner names
 	entry, found := a.agents[name]
 	if !found || entry.build == nil {
@@ -438,12 +441,12 @@ func (a adapters) toolVersions() map[string]func(context.Context) error {
 	return checks
 }
 
-// logins returns the usage read of each agent that has an adapter, by agent.
+// logins returns the usage read of each agent that has an adapter and reports usage, by agent.
 func (a adapters) logins() map[model.Agent]func(context.Context, model.Runner) model.Reading {
 	logins := map[model.Agent]func(context.Context, model.Runner) model.Reading{}
 
 	for name, entry := range a.agents {
-		if entry.build != nil {
+		if entry.build != nil && entry.reportsUsage {
 			logins[name] = entry.build().ReadUsage
 		}
 	}
@@ -482,7 +485,7 @@ func readUsage(entries map[model.Agent]agentAdapter) pool.Reader {
 	return func(ctx context.Context, runner model.Runner) model.Reading {
 		entry, found := entries[runner.Agent]
 		if !found || entry.build == nil {
-			return model.Unknown(fmt.Sprintf("the %s agent cannot report usage", runner.Agent))
+			return agent.NoUsage(runner.Agent)
 		}
 
 		return entry.build().ReadUsage(ctx, runner)

@@ -270,7 +270,7 @@ func TestRateLimit_TheCostOfARunThatFailedAtALimitCountsOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.InDelta(t, 0.7, steps.Spent.Cost, 1e-9, "the status view")
 
-	tree, err := runSpend(engine.ctx, testRun)
+	tree, err := runAndBelowSpend(engine.ctx, testRun)
 	require.NoError(t, err)
 	assert.InDelta(t, 0.7, tree.Cost, 1e-9, "the sum that the tree cap reads")
 
@@ -297,7 +297,7 @@ func TestRateLimit_AStoreThatRefusesTheLimitRecordFailsTheStepAndTheCostOfTheLim
 	require.ErrorContains(t, err, "the store refused the record")
 	assert.Len(t, h.agents.seen(), 1, "no rerun after a failed limit record")
 
-	tree, err := runSpend(engine.ctx, testRun)
+	tree, err := runAndBelowSpend(engine.ctx, testRun)
 	require.NoError(t, err)
 	assert.InDelta(t, 0.7, tree.Cost, 1e-9, "the cost of the limited run is recorded by the step of the failed run")
 }

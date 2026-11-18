@@ -82,7 +82,8 @@ func TestDoctor_TheLoginsAndTheFixesComeFromTheAgentsOfTheTable(t *testing.T) {
 
 	doctor := newDoctor(newAdapters(nil, nil, nil), nil)
 
-	require.Len(t, doctor.Logins, 1)
+	require.Len(t, doctor.Logins, 1, "the OpenCode agent reports no plan limits, so the doctor reads no login for it")
+	require.NotContains(t, doctor.Logins, opencode.Name)
 	require.Equal(t, "Log in to it: CLAUDE_CONFIG_DIR=/login claude", doctor.ConfigDirFixes[claude.Name]("/login"))
 	require.Equal(t, "Run `claude setup-token`, then: security add-generic-password -s entry -a $USER -w", doctor.TokenFixes[claude.Name]("entry"))
 	require.Nil(t, doctor.ConfigDirFixes[opencode.Name])
@@ -93,7 +94,7 @@ func TestDoctor_AnAgentEntryWithNoFixTextAddsNoFix(t *testing.T) {
 	t.Parallel()
 
 	table := newAdapters(nil, nil, nil)
-	table.agents = map[model.Agent]agentAdapter{opencode.Name: {build: table.agents[claude.Name].build}}
+	table.agents = map[model.Agent]agentAdapter{opencode.Name: {build: table.agents[claude.Name].build, reportsUsage: true}}
 	doctor := newDoctor(table, nil)
 
 	require.Empty(t, doctor.ConfigDirFixes)

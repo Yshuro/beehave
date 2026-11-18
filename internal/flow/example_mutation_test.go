@@ -117,10 +117,10 @@ func TestReviewFix_ALivedMutantOnAChangedLineIsAFinding(t *testing.T) {
 		CommandOutput{RC: 0, Stdout: "mutation-pr: applied=2 killed=2 lived=0 timed_out=0\n"},
 	)
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved, "the review approves the fixed head")
 
 	runs := mutationRuns(rig)
 	require.Len(t, runs, 2, "the mutation run follows each green gate")
@@ -137,7 +137,7 @@ func TestReviewFix_ALivedMutantOnAChangedLineIsAFinding(t *testing.T) {
 	assert.NotContains(t, fixes[0], "a:b: c", "a line of the shape a:b: c with no prefix is no finding")
 	assert.NotContains(t, fixes[0], "x.go:9: not prefixed", "a line of the shape path:line: text with no prefix is no finding")
 	assert.NotContains(t, fixes[0], "zzz-midline", "a line that holds the prefix in the middle is no finding: the prefix must start the line")
-	assert.Equal(t, []string{"opus", "sonnet", "sonnet", "opus"}, rig.models(), "the plan, the implement step, a fix, then the one review of the fixed head: no review judges a head with a lived mutant")
+	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "opus"}, rig.models(), "the plan, the implement step, its scoped review, a fix, the scoped review of the fix, then the one full review of the fixed head: no full review judges a head with a lived mutant")
 }
 
 func TestReviewFix_AMutationRunThatFailsSendsTheLaneBack(t *testing.T) {
@@ -155,7 +155,7 @@ func TestReviewFix_AMutationRunThatFailsSendsTheLaneBack(t *testing.T) {
 			rig, file := exampleRig(t, func(int) string { return "approve" })
 			replyInOrder(rig, out, CommandOutput{RC: 0})
 
-			_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+			_, err := runPipeline(rig.h.engine(t), file)
 
 			require.NoError(t, err)
 			require.Len(t, mutationRuns(rig), 2)
@@ -184,7 +184,7 @@ func TestReviewFix_AFailedRunWithNoFindingLineGivesTheLast20LinesOfItsOutput(t *
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	replyInOrder(rig, CommandOutput{RC: 1, Stdout: log.String()}, CommandOutput{RC: 0})
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 
@@ -202,7 +202,7 @@ func TestReviewFix_ARunWithNoMutationCommandInTheVarsIsRefusedBeforeAnyAgentStar
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	rig.h.mutation = nil
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "vars.mutation_command")
@@ -219,11 +219,9 @@ func TestReviewFix_AMutationCommandThatIsNotAListOfWordsIsRefused(t *testing.T) 
 
 			rig, file := exampleRig(t, func(int) string { return "approve" })
 			rig.h.mutation = nil
-			rig.h.facts = func(project string) model.Project {
-				return model.Project{Name: project, Vars: map[string]any{mutationKey: value}}
-			}
+			rig.project.Vars[mutationKey] = value
 
-			_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+			_, err := runPipeline(rig.h.engine(t), file)
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "vars.mutation_command")
@@ -238,13 +236,13 @@ func TestReviewFix_ACleanMutationRunLetsTheReviewJudgeTheHead(t *testing.T) {
 	rig, file := exampleRig(t, approveAfter(0))
 	replyInOrder(rig, CommandOutput{RC: 0, Stdout: "mutation-pr: applied=3 killed=3 lived=0 timed_out=0\n"})
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, "merged", result.Merge)
+	assert.True(t, childOf(t, result).Approved, "the review approves the head")
 	assert.Len(t, mutationRuns(rig), 1)
 	assert.Empty(t, fixPrompts(rig))
-	assert.Equal(t, []string{"opus", "sonnet", "opus"}, rig.models(), "the plan, the implement step and one review")
+	assert.Equal(t, []string{"opus", "sonnet", "opus", "opus"}, rig.models(), "the plan, the implement step, the scoped review and one full review")
 }
 
 func TestBuiltins_NoneIsNamedMutation(t *testing.T) {

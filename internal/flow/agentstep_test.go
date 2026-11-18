@@ -56,6 +56,8 @@ type agentRig struct {
 	h    *harness
 	dir  string
 	head string
+	// project is the project facts of the run. The example rig fills it, and a test changes a field before the run starts.
+	project model.Project
 
 	mu     sync.Mutex
 	failed []error
@@ -592,6 +594,27 @@ func TestAgentStep_ARequiredSkillThatTheRunDidNotCallFailsTheStepAndNamesIt(t *t
 	require.ErrorContains(t, err, "list of strings")
 }
 
+func TestAgentStep_TheRequiredSkillsOfTheStepGoToTheAgentRequest(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd", "review"}})
+
+	_, err := rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "x")
+
+	require.NoError(t, err)
+	require.Len(t, rig.h.agents.seen(), 1)
+	assert.Equal(t, []string{"tdd", "review"}, rig.h.agents.seen()[0].RequireSkills, "the agent step must hand the skills to the request, or a CLI with no skill reports starts")
+
+	rig = newAgentRig(t)
+	rig.reply("", exited)
+
+	_, err = rig.run(t, agentFlow(""), "x")
+
+	require.NoError(t, err)
+	assert.Empty(t, rig.h.agents.seen()[0].RequireSkills)
+}
+
 func TestAgentStep_AnAgentThatDoesNotExitCleanlyFailsTheStep(t *testing.T) {
 	t.Parallel()
 
@@ -1003,4 +1026,30 @@ func TestAgentStep_AForbidCommandsKindThatTheFileDoesNotKnowIsRefusedWhenTheStep
 
 	require.ErrorContains(t, err, "list of strings")
 	assert.Empty(t, rig.h.agents.seen())
+}
+
+func TestAgentStep_TheStartMarkIsTheHeadOfTheFolderAndAMarkThatGitCannotWriteIsAnError(t *testing.T) {
+	t.Parallel()
+
+	dir, head := gitTree(t)
+
+	got, err := agentArgs{dir: dir}.writeStartMark(t.Context())
+
+	require.NoError(t, err)
+	assert.Equal(t, head, got)
+	assert.Equal(t, head, strings.TrimSpace(gitIn(t, dir, "for-each-ref", "--format=%(objectname)", callStartRef)), "the folder holds the mark at its head")
+
+	got, err = agentArgs{dir: t.TempDir(), plain: true}.writeStartMark(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, got, "a plain folder has no head and no mark")
+
+	_, err = agentArgs{dir: t.TempDir()}.writeStartMark(t.Context())
+	require.ErrorContains(t, err, "read HEAD of the item folder")
+
+	// A lock file of the ref makes git refuse the write.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "refs", "worktree", "beehave"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "worktree", "beehave", "call-start.lock"), nil, 0o600))
+
+	_, err = agentArgs{dir: dir}.writeStartMark(t.Context())
+	require.ErrorContains(t, err, "write the start mark of the item folder")
 }

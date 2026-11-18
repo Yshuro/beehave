@@ -50,6 +50,9 @@ type script struct {
 	ctx   dbos.Context
 	in    ItemInput
 	login string
+	// treeStart is the commit that the recorded step made the worktree of a round item at. A step that finds the worktree removed makes it again there.
+	// It is empty for any other item.
+	treeStart string
 	// severity is the severity that the tracker gave the item, from the recorded fields of the run. It sets the place of the gates and the agent steps of the run in their queues.
 	severity model.Severity
 
@@ -123,8 +126,15 @@ func countedStep[T any](s *script, kind, label string, fn func(context.Context) 
 }
 
 func (s *script) countedName(builtin, label string) string {
+	name := s.nextName(builtin, label)
 	s.counts[builtin]++
-	n := strconv.Itoa(s.counts[builtin])
+
+	return name
+}
+
+// nextName is the name that the next call of builtin with label records, `<builtin>:<label>#<n>`. It counts nothing.
+func (s *script) nextName(builtin, label string) string {
+	n := strconv.Itoa(s.counts[builtin] + 1)
 
 	if label != "" {
 		builtin += ":" + label

@@ -54,35 +54,139 @@ func sandboxProblem(spec Spec, p Profile, goos string) string {
 	return ""
 }
 
-// versionProblem runs the CLI with --version and says why the sandbox cannot start, or returns "" when the version is new enough.
-// A CLI that ignores a sandbox setting it does not know runs with no sandbox and exits with code 0, so an old or unreadable version stops the run.
-func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, env []string, version versionOf) string {
-	if spec.Sandbox == nil {
-		return ""
+// guardProblem says why a run with a guard cannot start on this system, or returns "" when it can.
+func guardProblem(spec Spec, p Profile, goos string) string {
+	if spec.Guard != "" && p.GuardPosixOnly && goos == "windows" {
+		return p.Binary + " checks commands with a POSIX shell, so a step with forbid_commands does not start on Windows. Remove forbid_commands from the step, or run it on Linux or macOS."
+	}
+
+	return ""
+}
+
+// versionNeed is one reason to read the version of the CLI: the oldest version that the reason needs, what stops when the version is not enough, and how
+// the step author turns the reason off.
+type versionNeed struct{ least, subject, stop, off string }
+
+// versionNeeds lists what the spec needs from the version of the CLI. A sandbox needs MinVersion.
+func versionNeeds(spec Spec, p Profile) []versionNeed {
+	var needs []versionNeed
+
+	if spec.Sandbox != nil {
+		needs = append(needs, versionNeed{p.MinVersion, "the sandbox", "the sandbox is not started", "set sandbox = None on the step to run it with no sandbox"})
+	}
+
+	return needs
+}
+
+// rangeText names the versions of the CLI that the adapter supports, such as "1.19.5 up to but not including 2.0.0".
+func rangeText(p Profile) string {
+	return p.SupportedFrom + " up to but not including " + p.SupportedBefore
+}
+
+// versionProblem runs the CLI with --version and says why the run cannot start, or returns "" when the version is in the supported range of the profile and
+// new enough for the sandbox. A CLI that ignores a sandbox setting or a hook it does not know runs with no sandbox or no guard and exits with code 0, and a
+// CLI of a line that the adapter has no recording of can print a shape that the adapter reads wrong, so an old, new or unreadable version stops the run.
+// It also returns what the CLI printed, which is "" when the version was not read.
+func versionProblem(ctx context.Context, spec Spec, p Profile, binary string, env []string, version versionOf) (string, string) {
+	needs := versionNeeds(spec, p)
+	ranged := p.SupportedFrom != ""
+
+	if len(needs) == 0 && !ranged {
+		return "", ""
 	}
 
 	out, err := version(ctx, binary, env)
 	if err != nil {
-		return fmt.Sprintf("cannot read the version of %s (%v), so the sandbox is not started. Set sandbox = None on the step to run it with no sandbox.", p.Binary, err)
+		return unreadable(p, err, needs, ranged), ""
 	}
 
-	return versionText(p, out)
+	problems := []string{rangeProblem(p, out), guardVersionProblem(spec, p, out)}
+
+	for _, need := range needs {
+		problems = append(problems, versionText(p, out, need))
+	}
+
+	return cmp.Or(problems...), out
 }
 
-// versionText says why the version that the CLI printed is not enough for the sandbox, or returns "" when it is enough.
-func versionText(p Profile, out string) string {
+// guardVersionProblem says why a step with a guard does not start on the version that the CLI printed, or returns "" when the step has no guard, the profile
+// names no version from which the guard fails, or the version is below it.
+func guardVersionProblem(spec Spec, p Profile, out string) string {
 	found := versionNumber.FindStringSubmatch(out)
-	if found == nil {
-		return fmt.Sprintf("the version of %s is not readable from %q, so the sandbox is not started. Update it to %s or later.", p.Binary, out, p.MinVersion)
+	if spec.Guard == "" || p.GuardBefore == "" || found == nil {
+		return ""
 	}
 
-	least := versionNumber.FindStringSubmatch(p.MinVersion)
+	if semver.Compare(semverOf(found), "v"+p.GuardBefore) < 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("%s is at version %s.%s.%s, and the guard of forbid_commands does not work from version %s on, so a step with forbid_commands is not started. Remove forbid_commands from the step, or install a version below %s.",
+		p.Binary, found[1], found[2], found[3], p.GuardBefore, p.GuardBefore)
+}
+
+// versionArgs returns the arguments of the entries of Profile.VersionArgs that the version in out reaches. It returns none when out holds no version.
+func versionArgs(p Profile, out string) []string {
+	found := versionNumber.FindStringSubmatch(out)
+	if found == nil {
+		return nil
+	}
+
+	var args []string
+
+	for _, entry := range p.VersionArgs {
+		if semver.Compare(semverOf(found), "v"+entry.From) >= 0 {
+			args = append(args, entry.Args...)
+		}
+	}
+
+	return args
+}
+
+// unreadable says why a run does not start when the version of the CLI cannot be read.
+func unreadable(p Profile, err error, needs []versionNeed, ranged bool) string {
+	if ranged {
+		return fmt.Sprintf("cannot read the version of %s (%v), so the step is not started. Install a version in the range that beehave supports: %s.", p.Binary, err, rangeText(p))
+	}
+
+	return fmt.Sprintf("cannot read the version of %s (%v), so %s. To go on, %s.", p.Binary, err, needs[0].stop, needs[0].off)
+}
+
+// rangeProblem says why the version that the CLI printed is outside the supported range of the profile, or returns "" when it is inside.
+func rangeProblem(p Profile, out string) string {
+	if p.SupportedFrom == "" {
+		return ""
+	}
+
+	found := versionNumber.FindStringSubmatch(out)
+	if found == nil {
+		return fmt.Sprintf("the version of %s is not readable from %q, so the step is not started. Install a version in the range that beehave supports: %s.", p.Binary, out, rangeText(p))
+	}
+
+	got := semverOf(found)
+
+	if semver.Compare(got, "v"+p.SupportedFrom) < 0 || semver.Compare(got, "v"+p.SupportedBefore) >= 0 {
+		return fmt.Sprintf("%s is at version %s.%s.%s, which beehave does not support. It supports %s, so the step is not started. Install a version in that range.",
+			p.Binary, found[1], found[2], found[3], rangeText(p))
+	}
+
+	return ""
+}
+
+// versionText says why the version that the CLI printed is not enough for the need, or returns "" when it is enough.
+func versionText(p Profile, out string, need versionNeed) string {
+	found := versionNumber.FindStringSubmatch(out)
+	if found == nil {
+		return fmt.Sprintf("the version of %s is not readable from %q, so %s. Update it to %s or later.", p.Binary, out, need.stop, need.least)
+	}
+
+	least := versionNumber.FindStringSubmatch(need.least)
 	if least == nil {
-		return fmt.Sprintf("the profile of %s names the minimum version %q, which is not a version number, so the sandbox is not started.", p.Binary, p.MinVersion)
+		return fmt.Sprintf("the profile of %s names the minimum version %q, which is not a version number, so %s.", p.Binary, need.least, need.stop)
 	}
 
 	if semver.Compare(semverOf(found), semverOf(least)) < 0 {
-		return fmt.Sprintf("%s is at version %s.%s.%s and the sandbox needs %s or later. Update it, or set sandbox = None on the step.", p.Binary, found[1], found[2], found[3], p.MinVersion)
+		return fmt.Sprintf("%s is at version %s.%s.%s and %s needs %s or later, so %s. Update it, or %s.", p.Binary, found[1], found[2], found[3], need.subject, need.least, need.stop, need.off)
 	}
 
 	return ""

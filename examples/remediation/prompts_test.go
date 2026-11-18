@@ -22,7 +22,6 @@ const (
 	fix       = "fix"
 	plan      = "plan"
 	review    = "review"
-	integrate = "integrate"
 )
 
 // everyLane lists the prompts of the agents that change or judge the product.
@@ -219,24 +218,17 @@ func mergeRules() []rule {
 		{"merge_rules", "Push the branch when the first commit is green", []string{implement}},
 		{"merge_rules", "the engine does these after this step", []string{implement}},
 		{"merge_rules", "the engine owns both", []string{fix}},
-		{"merge_rules", "Never use the merge queue of GitHub", []string{implement, fix, review, integrate}},
+		{"merge_rules", "Never use the merge queue of GitHub", []string{implement, fix, review}},
 		{"merge_rules", "Known base reds are in one file", workAndReview()},
 		{"merge_rules", "A finding that survives the review is filed before the merge", []string{review}},
-		{"integrate_rules", "Add the integration row", []string{integrate}},
-		{"integrate_rules", "Recount the heading and the title from the rows", []string{integrate}},
-		{"integrate_rules", "Add a closing row for each issue that the merge resolves", []string{integrate}},
-		{"integrate_rules", "Close each resolved issue with the evidence", []string{integrate}},
 		{"merge_rules", "a commit that stays local is lost with the lane", workLanes()},
-		{"integrate_rules", "Never close an issue with no such comment", []string{integrate}},
-		{"integrate_rules", "Closing keywords belong to the integration pull request only", []string{integrate}},
-		{"integrate_rules", "A finding that survives is filed before the merge", []string{integrate}},
-		{"integrate_rules", "fails when the heading or the title says another number than the rows, or when the row count did not change", []string{integrate}},
 	}
 }
 
 func laneLayoutRules() []rule {
 	return []rule{
 		{"lane_layout", "A fix lane is not a proof lane and not a review lane", workLanes()},
+		{"lane_layout", "Run the scoped tests, not the full gate. Before you push, run the red test of each finding and the tests of the packages that your diff reaches", []string{fix}},
 		{"lane_layout", "One reviewer judges one pull request", []string{review}},
 		{"lane_layout", "A rise in the regression count blocks the lane", workAndReview()},
 		{"lane_layout", "Patch rounds are bounded for each pull request", workLanes()},
@@ -267,7 +259,7 @@ func TestPrompts_HoldEveryRuleOfTheBriefText(t *testing.T) {
 	texts := map[string]string{}
 	folder := os.DirFS("prompts")
 
-	for _, name := range append(everyLane(), integrate, "take_review") {
+	for _, name := range append(everyLane(), "take_review") {
 		raw, err := fs.ReadFile(folder, name+".md")
 		require.NoError(t, err)
 
@@ -294,7 +286,7 @@ func TestPrompts_HoldEveryRuleOfTheBriefText(t *testing.T) {
 	}
 
 	// One phrase for each mapped or added row of the proof table that has a phrase of its own: a dropped phrase fails here.
-	assert.Equal(t, 150, counted)
+	assert.Equal(t, 143, counted)
 	assert.Positive(t, held)
 }
 

@@ -11,7 +11,7 @@ exec beehave run 7 --workflow flow/workflow.star
 stdout 'item 7 finished'
 
 exec beehave status
-stdout '^item-7-r1\tdone\tmerge: merged'
+stdout '^item-7-r1\tdone\tgate pass at [0-9a-f]+\tfix 1 of 18\treview 2 of 24'
 
 # The replay of the implement step got the resume flag with the saved id, once, and the continue prompt in place of the brief and the note.
 # The fix round resumes the implementer as the example says, which is now the session s-lost too.

@@ -215,6 +215,7 @@ thing not to redo; and these lines:
 ## Lane layout
 
 **A fix lane is not a proof lane and not a review lane.** The gate is the proof and a fresh review lane judges the change. You write the change; you do not review it as the verdict, and you do not approve it.
+**Run the scoped tests, not the full gate.** Before you push, run the red test of each finding and the tests of the packages that your diff reaches. The loop runs the full gate once for each candidate, after a scoped review approves.
 **A rise in the regression count blocks the lane.** End your report with the line `Regressions of this pull request so far: <n>`. If n is higher than in the handoff you started from, write REGRESSION RISE on the verdict line and do not push. The run holds the item.
 **Patch rounds are bounded for each pull request.** After the last round, no fix lane starts for this pull request. A person rules on each open finding, and then one settle lane applies the ruling. The settle lane is the only edit after the last round: it runs once, no review follows it, and nothing merges. Do not start a second fix lane for a pull request yourself.
 

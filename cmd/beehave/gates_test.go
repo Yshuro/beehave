@@ -125,7 +125,7 @@ func localProject() map[string]config.Project {
 }
 
 func clusterProject() map[string]config.Project {
-	return map[string]config.Project{"p": {Project: model.Project{Name: "p", Gate: "make check", BuildHost: "cluster", Host: &model.HostConfig{}}}}
+	return map[string]config.Project{"p": {Project: model.Project{Name: "p", Gate: "make check", BuildHost: "cluster", Host: loaderHost()}}}
 }
 
 func TestProjectGate_ALocalGateReportsAPassOnTheHeadOfTheWorktree(t *testing.T) {
@@ -397,7 +397,7 @@ func TestProjectGate_RefusesWhatItCannotRunWithoutRunningTheGate(t *testing.T) {
 		name     string
 		projects map[string]config.Project
 		project  string
-		trees    treeFinder
+		trees    programTrees
 		head     model.CommandResult
 		forge    func(model.Project) (forge.Forge, error)
 		wantErr  string

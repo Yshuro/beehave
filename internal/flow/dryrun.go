@@ -33,6 +33,7 @@ const (
 	dryOwner    = "dry-run-owner"
 	dryPull     = 1
 	dryTree     = "dry-run-tree"
+	dryNewTest  = "dry TestDryRun"
 	dryOutLimit = 160
 	dryPoll     = 25 * time.Millisecond
 	dryWait     = time.Millisecond
@@ -68,6 +69,7 @@ func dryReading() func() time.Time {
 type dryChoice struct {
 	redGate, sendBack bool
 	vars              map[string]any
+	entry             string
 }
 
 // DryOption is a choice for a dry run.
@@ -81,6 +83,10 @@ func WithSendBack() DryOption { return func(c *dryChoice) { c.sendBack = true } 
 
 // WithVars gives the facts of the dry run the vars of a project. The vars are static config, so the dry run reads them as a real run does. Every other fact stays empty.
 func WithVars(vars map[string]any) DryOption { return func(c *dryChoice) { c.vars = vars } }
+
+// WithEntry starts the dry run at the named entry of the file, as a run of the engine does, so that a test walks the file it tests.
+// An entry run skips the finish function. The command beehave check has no flag for it: the option is for tests of the library.
+func WithEntry(name string) DryOption { return func(c *dryChoice) { c.entry = name } }
 
 // chooseDry applies the options of a dry run in order.
 func chooseDry(options []DryOption) dryChoice {
@@ -115,7 +121,7 @@ func DryRun(ctx context.Context, file, item string, env map[string]string, out i
 		return err
 	}
 
-	runErr := dryWalk(ctx, opts, deps, item, file)
+	runErr := dryWalk(ctx, opts, deps, item, file, chosen.entry)
 	last, printErr := printDrySteps(ctx, opts, out)
 
 	return errors.Join(printErr, dryFailure(out, last, runErr))
@@ -139,7 +145,7 @@ func dryPrepare(ctx context.Context, root, file, item string, chosen dryChoice) 
 }
 
 // dryWalk opens an engine over the deps, takes the item through the file and stops the engine.
-func dryWalk(ctx context.Context, opts Options, deps Deps, item, file string) error {
+func dryWalk(ctx context.Context, opts Options, deps Deps, item, file, entry string) error {
 	engine, err := NewEngine(ctx, opts, deps)
 	if err != nil {
 		return err
@@ -147,7 +153,7 @@ func dryWalk(ctx context.Context, opts Options, deps Deps, item, file string) er
 
 	err = engine.Launch() //nolint:contextcheck // the engine owns the context of its runs
 	if err == nil {
-		_, err = engine.RunFile(item, dryProject, file)
+		_, err = engine.runEntry(item, dryProject, file, entry)
 	}
 
 	return errors.Join(err, engine.Shutdown())
@@ -200,7 +206,7 @@ func dryDeps(tree, head, item string, skills []string, chosen dryChoice) Deps {
 	}
 
 	return Deps{
-		Agents: agents, Gate: newDryGate(head, chosen.redGate), Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
+		Agents: agents, Gate: newDryGate(tree, head, chosen.redGate), Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
 		Forge: dryForge{head: head}, Watch: dryWatch{}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
 		Writer: dryWriter{}, Reader: dryReader{}, Preflight: dryPreflight{}, Slots: drySlots,
 		Facts: func(string) model.Project { return model.Project{Vars: chosen.vars} },
@@ -208,8 +214,8 @@ func dryDeps(tree, head, item string, skills []string, chosen dryChoice) Deps {
 	}
 }
 
-// dryRepo makes the folder of the item: a git repository with one empty commit, and a second, empty bare repository that is its origin.
-// The origin lets the cleanup steps read the branches of a remote. Both folders sit in the folder of the run. It returns the commit.
+// dryRepo makes the folder of the item: a git repository with two empty commits, and a bare repository that is its origin.
+// The first commit is the base that the dry gate gives the remote branch of a base. Both folders sit in the folder of the run. It returns the second commit.
 func dryRepo(ctx context.Context, dir, remote string) (string, error) {
 	for _, folder := range []string{dir, remote} {
 		if err := os.MkdirAll(folder, dryDirMode); err != nil {
@@ -236,11 +242,14 @@ type dryGitStep struct {
 
 // dryRepoSteps lists the git commands that make the repositories. The last one prints the commit.
 func dryRepoSteps(dir, remote string) []dryGitStep {
+	commit := []string{"-c", "user.name=dry", "-c", "user.email=dry@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m"}
+
 	return []dryGitStep{
 		{remote, []string{"init", "-q", "--bare", "--template="}},
 		{dir, []string{"init", "-q", "--template="}},
 		{dir, []string{"remote", "add", remoteName, remote}},
-		{dir, []string{"-c", "user.name=dry", "-c", "user.email=dry@example.com", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "dry run"}},
+		{dir, append(slices.Clone(commit), "dry run base")},
+		{dir, append(slices.Clone(commit), "dry run")},
 		{dir, []string{"show", "-s", "--format=%H"}},
 	}
 }
@@ -379,28 +388,42 @@ func dryOutput(name string) string {
 }
 
 // dryGate runs on the commit of the dry-run folder and passes. With red set, its first run is red, with one failed step, so that a dry run walks the fix round of a workflow.
+// A gate with a base gets a clean check record: one new test and a clean secret scan.
 type dryGate struct {
-	head string
-	red  bool
-	runs *atomic.Int32
+	dir, head string
+	red       bool
+	runs      *atomic.Int32
 }
 
-func newDryGate(head string, red bool) dryGate {
-	return dryGate{head: head, red: red, runs: new(atomic.Int32)}
+func newDryGate(dir, head string, red bool) dryGate {
+	return dryGate{dir: dir, head: head, red: red, runs: new(atomic.Int32)}
 }
 
 func (dryGate) Key(context.Context, string, string, string) (GateKey, error) { return GateKey{}, nil }
 
-func (dryGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
-	return GateJob{}, nil
-}
-
-func (g dryGate) Run(context.Context, string, string, string, GateJob) (GateResult, error) {
-	if g.runs.Add(1) == 1 && g.red {
-		return GateResult{Passed: false, Head: g.head, Tree: dryTree, Steps: []GateStep{{Name: gatepkg.StepCommand, Status: failStatus}}}, nil
+// Submit records the base in the plan of the job, as the host gate does. As a fetch of the base would, it points the remote branch of the base
+// at the parent of the head, so the checks before review find a head that descends from the base.
+func (g dryGate) Submit(ctx context.Context, _, _, _, base string) (GateJob, error) {
+	if base != "" {
+		if _, err := dryGit(ctx, g.dir, []string{"update-ref", "refs/remotes/" + remoteName + "/" + base, g.head + "^"}); err != nil {
+			return GateJob{}, err
+		}
 	}
 
-	return GateResult{Passed: true, Head: g.head, Tree: dryTree, Steps: []GateStep{{Name: gatepkg.StepCommand, Status: passStatus}}}, nil
+	return GateJob{Plan: gatepkg.Plan{Base: base}}, nil
+}
+
+func (g dryGate) Run(_ context.Context, _, _, _ string, job GateJob) (GateResult, error) {
+	result := GateResult{Passed: true, Head: g.head, Tree: dryTree, Steps: []GateStep{{Name: gatepkg.StepCommand, Status: passStatus}}}
+	if g.runs.Add(1) == 1 && g.red {
+		result.Passed, result.Steps = false, []GateStep{{Name: gatepkg.StepCommand, Status: failStatus}}
+	}
+
+	if job.Plan.Base != "" {
+		result.Checks = &GateChecks{NewTests: []string{dryNewTest}, New: 1, Secrets: new(int), Complete: true, Revert: model.RevertPass, RevertCases: 1}
+	}
+
+	return result, nil
 }
 
 type dryLogins struct{}
@@ -476,9 +499,13 @@ func (dryWatch) SetDraft(context.Context, string, int, bool) error { return nil 
 
 type dryTrees struct{ dir string }
 
-func (t dryTrees) Path(context.Context, string, string) (string, error) { return t.dir, nil }
+func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {
+	fn(t.dir)
 
-func (t dryTrees) Ensure(context.Context, string, string) (string, error) { return t.dir, nil }
+	return nil
+}
+
+func (t dryTrees) Ensure(context.Context, string, string, string) (string, error) { return t.dir, nil }
 
 // dryCommands runs no program: each command call exits with code 0 and prints nothing.
 type dryCommands struct{}

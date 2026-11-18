@@ -7,6 +7,7 @@ import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -19,6 +20,9 @@ import (
 type hostKeeper interface {
 	Up(ctx context.Context, project, cluster string) (started bool, chosen string, err error)
 	Teardown(ctx context.Context, project, cluster string) error
+	// LostProof stops the host job of a gate whose wait ended as lost, on the cluster that the job ran on, then reads whether the job can no longer run.
+	// It never waits for the job and never banks. It is safe to call again. A project with no host gives no proof and no error.
+	LostProof(ctx context.Context, project, cluster, job string) (model.LostProof, error)
 }
 
 var errNoHosts = &absentError{message: "this build cannot stop a host. Use a build that sets a host keeper", step: "stop the build host"}

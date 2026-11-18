@@ -16,6 +16,7 @@ import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
 
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/review"
 	trackerstore "github.com/tobocop2/beehave/internal/store"
 	"github.com/tobocop2/beehave/internal/workflow"
@@ -273,6 +274,24 @@ var goldenSteps = []string{
 // goldenGateSteps are the steps of the exclusive run that the gate of goldenFlow queues. They are in the child run, so goldenSteps does not list them.
 // The step gate:job holds the host job, and a replay that finds it waits on that job.
 var goldenGateSteps = []string{"gate:job", "gate"}
+
+// goldenLostGateSteps are the steps of the exclusive run of a gate whose job was lost. The wait records when it started, then one look for each poll,
+// with a durable sleep between two looks. The second look proves the loss here.
+var goldenLostGateSteps = []string{"gate:job", "gate", "gate:lost-start", "gate:lost-look.0", "DBOS.sleep", "gate:lost-look.1"}
+
+func TestRunStar_TheStepNamesOfTheWaitForALostGateJobMatchTheGoldenList(t *testing.T) {
+	t.Parallel()
+
+	h, hosts, _ := lostHarness(t, time.Hour)
+	hosts.proofs = []model.LostProof{{Note: "the link is down"}, {Kind: model.LostStopped}}
+	engine := h.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow("gate(name = \"g\")\n")))
+	require.NoError(t, err)
+
+	_, child := gateChildSteps(t, engine)
+	assert.Equal(t, goldenLostGateSteps, child, "the steps of the wait for a lost gate job changed: bump the version of the gate module in moduleTable (stepmodules.go) and update the list")
+}
 
 func TestRunStar_TheStepNamesOfEveryBuiltinMatchTheGoldenListOfTheStepsVersion(t *testing.T) {
 	t.Parallel()

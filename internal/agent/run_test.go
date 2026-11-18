@@ -371,6 +371,56 @@ func TestRunner_TheRealIdleTimerStopsASilentAgent(t *testing.T) { //nolint:paral
 	assert.Equal(t, agent.OutcomeIdle, got.Outcome)
 }
 
+type stallNoteAdapter struct{ agent.Adapter }
+
+func (a stallNoteAdapter) Profile() agent.Profile {
+	profile := a.Adapter.Profile()
+	profile.StallNote = "the model may be over its quota"
+
+	return profile
+}
+
+func TestRunner_ATimeoutAddsTheStallNoteOfTheProfile(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	f := newFixture(t, "claude", claude.Name, "silent")
+	f.spec.Adapter = stallNoteAdapter{claude.New(nil)}
+	f.spec.Timeout = 300 * time.Millisecond
+
+	got := agent.Runner{}.Run(context.Background(), f.spec)
+
+	assert.Equal(t, agent.OutcomeTimedOut, got.Outcome)
+	assert.Contains(t, got.Note, "the model may be over its quota")
+}
+
+func TestRunner_AnIdleStopAddsTheStallNoteOfTheProfile(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	f := newFixture(t, "claude", claude.Name, "silent")
+	f.spec.Adapter = stallNoteAdapter{claude.New(nil)}
+	f.spec.IdleTimeout = 7 * time.Second
+	clock := &fakeClock{}
+
+	go func() {
+		for !fileExists(filepath.Join(f.records, "args")) { // the agent is running
+			time.Sleep(10 * time.Millisecond)
+		}
+
+		clock.fireNow()
+	}()
+
+	got := agent.Runner{AfterFunc: clock.AfterFunc}.Run(context.Background(), f.spec)
+
+	assert.Equal(t, agent.OutcomeIdle, got.Outcome)
+	assert.Contains(t, got.Note, "the model may be over its quota")
+}
+
+func TestRunner_ARunThatNoLimitStoppedGetsNoStallNote(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	f := newFixture(t, "claude", claude.Name, "")
+	f.spec.Adapter = stallNoteAdapter{claude.New(nil)}
+
+	got := agent.Runner{}.Run(context.Background(), f.spec)
+
+	assert.Equal(t, agent.OutcomeExited, got.Outcome)
+	assert.NotContains(t, got.Note, "the model may be over its quota")
+}
+
 func TestRunner_ACancelKillsTheAgentAndItsChildren(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	f := newFixture(t, "claude", claude.Name, "holdgrand")
 	ctx, cancel := context.WithCancel(context.Background())
@@ -483,7 +533,7 @@ func TestRunner_DoesNotStart(t *testing.T) { //nolint:paralleltest // t.Setenv c
 		assert.Contains(t, got.Note, `agent "pi" cannot be started yet`)
 	})
 
-	t.Run("opencode_is_not_supported_yet", func(t *testing.T) { //nolint:paralleltest // the parent test sets PATH
+	t.Run("opencode_with_no_adapter_in_the_spec_does_not_start", func(t *testing.T) { //nolint:paralleltest // the parent test sets PATH
 		f := newFixture(t, "opencode", opencode.Name, "")
 
 		got := agent.Runner{}.Run(context.Background(), f.spec)

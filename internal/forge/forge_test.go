@@ -45,3 +45,13 @@ func TestRefusal_AddsTheCommandOnlyForAnAnswerOfTheWrongShape(t *testing.T) {
 		})
 	}
 }
+
+func TestError_ShowsTheMessageOfTheForgeAfterItsOwnMessage(t *testing.T) {
+	t.Parallel()
+
+	err := forge.Refuse("cannot merge pull request %d", 4)
+	require.EqualError(t, err, "cannot merge pull request 4")
+
+	err.Detail = "head branch was modified"
+	require.EqualError(t, err, "cannot merge pull request 4: head branch was modified")
+}

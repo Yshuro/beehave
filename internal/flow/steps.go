@@ -13,6 +13,7 @@ import (
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -72,6 +73,8 @@ type StepLine struct {
 	Gate    []GateStep `json:"gate,omitempty"`
 	// NewTests holds the names of the new tests that the gate of a candidate head found. It is empty for any other step.
 	NewTests []string `json:"new_tests,omitempty"`
+	// Revert is the verdict of the revert run of a candidate gate: pass or fail. It is empty for any other step.
+	Revert model.RevertVerdict `json:"revert,omitempty"`
 	// OutputUnreadable is set when a recorded output of the step did not decode into the type the engine wrote. The other fields are then incomplete.
 	OutputUnreadable bool `json:"output_unreadable,omitempty"`
 }
@@ -91,7 +94,18 @@ type RunSteps struct {
 
 // Steps lists the steps of one run from the store, with the outputs decoded. It reads the step listing of the workflow library and copies nothing.
 // A builtin call is one line, however many records it left. A step that runs now shows its elapsed time.
+// It is the view of one run, so it also counts the host losses of the tree of the run.
 func (c *Client) Steps(id string) (RunSteps, error) {
+	view, err := c.runSteps(id)
+	if err != nil {
+		return view, err
+	}
+
+	return view, c.addHostLosses(id, &view.RunProgress)
+}
+
+// runSteps is the view of one run with the figures that its own records give. The view of the lanes of an item reads each run with it and walks no tree.
+func (c *Client) runSteps(id string) (RunSteps, error) {
 	row, err := c.runRow(id)
 	if err != nil {
 		return RunSteps{}, err
@@ -109,6 +123,18 @@ func (c *Client) Steps(id string) (RunSteps, error) {
 	progress.Deadline, err = c.waitDeadlineOf(row, records)
 
 	return RunSteps{Run: id, State: state, Error: errorText(row.Error), Steps: lines, RunProgress: progress}, err
+}
+
+// addHostLosses counts the host losses of the item tree of the run id into the progress, from the root of the tree, with the walk of the engine (walkTree).
+func (c *Client) addHostLosses(id string, progress *RunProgress) error {
+	root, err := rootRun(c.flow, id)
+	if err != nil {
+		return err
+	}
+
+	progress.HostLosses, err = hostLossesBelow(c.flow, root)
+
+	return err
 }
 
 // waitDeadlineOf reads the question of an open run once and returns the deadline of its wait. A finished run has none and reads nothing.
@@ -373,12 +399,12 @@ func (l *StepLine) fromAgentRead(read agentRead) {
 	l.Head, l.Stop, l.Verdict, l.Rewrote = read.Head, read.Stop, read.Verdict, read.Rewrote
 }
 
-// fromGate takes the result of a gate: pass or fail, the head, the status of each gate step and the names of the new tests.
+// fromGate takes the result of a gate: pass or fail, the head, the status of each gate step, the names of the new tests and the revert verdict.
 func (l *StepLine) fromGate(result GateResult) {
 	l.Passed, l.Head, l.Gate = &result.Passed, cmp.Or(result.Head, l.Head), result.Steps
 
 	if result.Checks != nil {
-		l.NewTests = result.Checks.NewTests
+		l.NewTests, l.Revert = result.Checks.NewTests, result.Checks.Revert
 	}
 }
 

@@ -13,7 +13,7 @@ func TestExample_TheDraftPullRequestIsOpenedOnceAfterTheImplementStepWithTheIssu
 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	require.Len(t, rig.h.forge.opened, 1)
@@ -24,9 +24,9 @@ func TestExample_ADependentItemOpensItsPullRequestIntoTheStackOfItsParent(t *tes
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
-	rig.h.opts.Env["PARENT"] = "bb-4"
+	rig.h.reader = &fakeReader{parents: map[string]string{testItem: "bb-4"}}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	require.Len(t, rig.h.forge.opened, 1)

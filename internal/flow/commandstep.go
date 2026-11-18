@@ -11,6 +11,7 @@ import (
 
 	"github.com/tobocop2/beehave/internal/agent"
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
+	"github.com/tobocop2/beehave/internal/host"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -75,7 +76,7 @@ func limitsOf(c commandRaw) (processes int, class string, err error) {
 
 // request makes the request of a call from its program, host and timeout. The caller adds stdin and the environment.
 func (s *script) request(run starlark.Value, host, timeout string) (CommandRequest, error) {
-	request := CommandRequest{Project: s.in.Project, Item: s.in.Item, Host: host, BuildHost: s.hostChosen}
+	request := CommandRequest{Project: s.in.Project, Item: s.in.Item, Host: host, BuildHost: s.hostChosen, TreeStart: s.treeStart}
 
 	var err error
 	if request.Run, err = workflow.Words("run", run); err != nil {
@@ -185,18 +186,35 @@ func (s *script) gate(b *starlark.Builtin, args starlark.Tuple, kwargs []starlar
 		return nil, err
 	}
 
-	// The gate runs as a child workflow on the exclusive queue, so no merge of the repository starts while it runs.
-	// The call records its outputs as its own step, so a replay reads them and runs no gate again.
-	ran, err := s.e.queueExclusive(s.ctx, ExclusiveInput{Kind: kindGate, Project: request.Project, Item: request.Item, Head: head, Request: request, Severity: string(s.severity)})
+	outputs, err := s.exclusiveGate(request, head, label)
 	if err != nil {
-		return nil, fmt.Errorf("gate %q could not run: %w", label, err)
+		return nil, err
 	}
 
 	if err := s.fixScope(label); err != nil {
 		return nil, err
 	}
 
-	return s.recordGate(label, ran.Outputs)
+	return s.recordGate(label, outputs)
+}
+
+// exclusiveGate runs the gate of a call as a child workflow on the exclusive queue, so no merge of the repository starts while it runs,
+// and returns its outputs. The gate call records them as its own step, so a replay reads them and runs no gate again.
+func (s *script) exclusiveGate(request CommandRequest, head, label string) (map[string]any, error) {
+	in := ExclusiveInput{Kind: kindGate, Project: request.Project, Item: request.Item, Head: head, Request: request, Severity: string(s.severity)}
+
+	ran, err := s.e.queueExclusive(s.ctx, in)
+	if err != nil {
+		return nil, fmt.Errorf("gate %q could not run: %w", label, err)
+	}
+
+	// A lost job with no proof at the limit asks the owner here, in the item run, under the name of the gate call that comes next.
+	outputs, err := s.e.lostOutputs(s.ctx, in, s.nextName(kindGate, label), ran)
+	if err != nil {
+		return nil, fmt.Errorf("gate %q lost its job: %w", label, err)
+	}
+
+	return outputs, nil
 }
 
 // programGateOutputs runs the program that a gate call names, with the exit code as the verdict. It has no key: no pass of it stands in for a later gate.
@@ -230,6 +248,10 @@ type gateStart struct {
 // reuseProjectGate reads the key of the project gate and reuses the pass of an earlier gate with the same key. With no such pass, the start has the key and no Reused.
 func (e *Engine) reuseProjectGate(ctx context.Context, request CommandRequest) (gateStart, error) {
 	if err := e.refuseGate(request.Project, false); err != nil {
+		return gateStart{}, err
+	}
+
+	if err := e.remakeTree(ctx, request); err != nil {
 		return gateStart{}, err
 	}
 
@@ -271,13 +293,39 @@ func (e *Engine) requiredOf(job GateJob, project string) []string {
 
 // finishProjectGate waits for the host job of the project gate and judges it. The key it returns is empty unless the gate passed on every step
 // and read the tree it judged: only such a pass may stand in for a later gate. The key to compare with is the one that the first step read and recorded.
-func (e *Engine) finishProjectGate(ctx context.Context, request CommandRequest, start gateStart) (map[string]any, string, error) {
-	gated, err := e.deps.Gate.Run(ctx, request.Project, request.Item, request.BuildHost, start.Job)
-	if err != nil {
-		return nil, "", err
+// A wait that ended as lost while the run still runs gives the lost job and no outputs. A wait that a cancel stopped stays an error.
+func (e *Engine) finishProjectGate(ctx context.Context, in ExclusiveInput, start gateStart) (gateFinish, string, error) {
+	request := in.Request
+	if err := e.remakeTree(ctx, request); err != nil {
+		return gateFinish{}, "", err
 	}
 
-	return gateOutputs(gated.Passed, gated.Head, gated.Tree, gated.Report, gated.Steps, start.Required, gated.Checks), recordedKey(gated, start.Key), nil
+	gated, err := e.deps.Gate.Run(ctx, request.Project, request.Item, request.BuildHost, start.Job)
+	if errors.Is(err, host.ErrLost) && ctx.Err() == nil {
+		return gateFinish{Lost: lostJobOf(in, start, err)}, "", nil
+	}
+
+	if err != nil {
+		return gateFinish{}, "", err
+	}
+
+	outputs := gateOutputs(gated.Passed, gated.Head, gated.Tree, gated.Report, gated.Steps, start.Required, gated.Checks)
+
+	return gateFinish{Outputs: outputs}, recordedKey(gated, start.Key), nil
+}
+
+// remakeTree makes the worktree of a round item again at its tree start when someone removed it, so the project gate, which reads the folder by its path, finds it.
+// A request with no tree start makes nothing.
+func (e *Engine) remakeTree(ctx context.Context, request CommandRequest) error {
+	if request.TreeStart == "" {
+		return nil
+	}
+
+	if _, err := e.deps.Trees.Ensure(ctx, request.Project, request.Item, request.TreeStart); err != nil {
+		return fmt.Errorf("find the folder of item %s: %w", request.Item, err)
+	}
+
+	return nil
 }
 
 // gateKey reads the key of the project gate. A key that cannot be read is an empty key: the gate then runs and reports the same problem.

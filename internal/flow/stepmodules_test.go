@@ -74,8 +74,15 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core3.agent3.tracker1.forge1.land3.gate1.host1.round1", applicationVersion("v1"))
-	assert.Equal(t, "v1+core3.agent3.tracker1.forge1.land3.gate2.host1.round1", versionWithModule("v1", moduleGate, 2))
+	assert.Equal(t, "v1+core3.agent4.tracker1.forge2.land3.gate5.host1.round2", applicationVersion("v1"))
+	assert.Equal(t, "v1+core3.agent4.tracker1.forge2.land3.gate6.host1.round2", versionWithModule("v1", moduleGate, 6))
+}
+
+func TestStepModules_TheGateModuleIsAtVersionFive(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "gate5", "the gate step records a lost job and host_losses, the wait for its proof records gate:lost-start and gate:lost-look.<k>, "+
+		"the owner wait records <call>/lost-ask.<n>, the item run records a lost job with a proof as <call>/host-loss, and gate and before_review record the revert field")
 }
 
 func TestParseVersions_TheSingleVersionOfTheStepsIsEveryModuleAtVersionOne(t *testing.T) {
@@ -157,7 +164,7 @@ func TestChangedModule_OnlyAModuleThatTheRunUsedCounts(t *testing.T) {
 	t.Parallel()
 
 	was, _ := parseVersions(stepsVersion)
-	now, _ := parseVersions(versionWithModule("", moduleGate, 2)[1:])
+	now, _ := parseVersions(versionWithModule("", moduleGate, gateVersion+1)[1:])
 
 	_, changed := changedModule(modulesUsed([]string{"item_read:own#1", "item_comment:c#2"}), was, now)
 	assert.False(t, changed, "a run that recorded only tracker steps does not use the gate module")

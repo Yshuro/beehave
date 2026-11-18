@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -35,6 +36,25 @@ func loadHostProject(t *testing.T, call string) (config.Project, config.Problems
 
 	return cfg.Projects["p"], problems
 }
+
+// loaderHost returns the host block of a project that sets only the keys that a host needs, as the config load fills it: every other key holds
+// its default. A fixture that needs a host block uses it, so no test runs a host that the loader never produces. Each call returns a new block.
+func loaderHost() *model.HostConfig {
+	loaded := loadedDefaultHost()
+
+	return &loaded
+}
+
+// loadedDefaultHost loads the fixture folder testdata/loaderhost the first time a test asks for it. The folder is part of the source tree, so
+// the load makes no temp folder and does not depend on TMPDIR. A re-executed test binary never calls it.
+var loadedDefaultHost = sync.OnceValue(func() model.HostConfig {
+	cfg, problems := config.LoadFolder(filepath.Join("testdata", "loaderhost"), nil, newAdapters(nil, nil, nil).registry())
+	if len(problems) > 0 {
+		panic(problems)
+	}
+
+	return *cfg.Projects["p"].Host
+})
 
 // everyKey writes each key that a block declares as a call argument, with a value that the adapter of the block accepts.
 func everyKey(declared config.Block, values map[string]string) string {

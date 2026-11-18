@@ -913,6 +913,8 @@ func (f flowCommands) withClient(cmd *cobra.Command, flag string, fn func(Steeri
 		return err
 	}
 
+	opts.Progress = cmd.ErrOrStderr()
+
 	client, err := f.factory.Client(f.ctx, cfg, opts)
 	if err != nil {
 		return err
@@ -1180,7 +1182,8 @@ func (f flowCommands) cancelCommand() *cobra.Command {
 		Use:   "cancel <item> | --run <run id>",
 		Short: "Stop the open run of an item, or one run by its id",
 		Long: "Stop the open run of an item. With --run, stop the one run with that id, even when it is not the latest run of its item. " +
-			"Use --run for the pass run of a round: beehave status lists the run ids.",
+			"Use --run for the pass run of a round: beehave status lists the run ids. " +
+			"A canceled run whose phases an earlier cancel left running is canceled again, and the phases it stops are named.",
 		Args: func(cmd *cobra.Command, args []string) error { return cancelArgs(cmd, args, runID) },
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return f.withClient(cmd, flag, func(client Steering) error { return cancelOne(cmd, client, args, runID) })

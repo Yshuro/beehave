@@ -107,3 +107,23 @@ func (s hostStop) Teardown(ctx context.Context, project, cluster string) error {
 
 	return banking.Teardown(ctx)
 }
+
+// LostProof stops the job of a gate whose wait ended as lost, on the cluster that the job ran on, and reads whether it can no longer run.
+// It gets the host as Teardown does, and asks the provider. A project with no host block has no job that can run: no proof and no error.
+func (s hostStop) LostProof(ctx context.Context, project, cluster, job string) (model.LostProof, error) {
+	chosen, err := s.programs.resolve(project, cluster)
+	if err != nil {
+		return model.LostProof{}, err
+	}
+
+	h, err := s.programs.hosts(project, chosen)
+	if errors.Is(err, errNoHost) {
+		return model.LostProof{Note: fmt.Sprintf("project %s has no host, so it has no host job", project)}, nil
+	}
+
+	if err != nil {
+		return model.LostProof{}, err
+	}
+
+	return h.LostProof(ctx, model.JobID(job))
+}

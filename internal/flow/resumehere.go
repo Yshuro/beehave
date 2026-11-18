@@ -107,7 +107,23 @@ func (c *Client) requireUsedModulesSame(item string, last run, was, current map[
 			errStranded, last.Status.ID, module, describeModule(module, was), describeModule(module, current), item)
 	}
 
-	return nil
+	return requireSameRoundModule(item, last, was, current)
+}
+
+// requireSameRoundModule refuses a run of a round item when the round module changed. Every round run uses the module, because its version covers the step
+// that makes the worktree at the start of the run, so the refusal does not wait for a recorded step: a run of an older build has none.
+func requireSameRoundModule(item string, last run, was, current map[string]int) error {
+	if model.ItemKind(item) != model.KindRound {
+		return nil
+	}
+
+	if _, changed := changedModule([]string{moduleRound}, was, current); !changed {
+		return nil
+	}
+
+	return fmt.Errorf("%w: %s is a run of a round item, recorded with the round module at %s, and this build has %s. This build makes the worktree in the step %q "+
+		"before the workflow file runs, so the run cannot replay here. Finish the run on the build that started it, or start the item again: beehave run %s",
+		errStranded, last.Status.ID, describeModule(moduleRound, was), describeModule(moduleRound, current), treeMakeStepName, item)
 }
 
 // stepNames reads the names of the steps that a run recorded.
@@ -201,11 +217,15 @@ func (c *Client) reopenHere(item string, last run) error {
 
 	restamp := dbos.WithRewindApplicationVersion(c.version)
 
-	err = c.reopenCanceledPhases(last.Status.ID, restamp)
-	if err == nil {
-		err = c.reopen(last.Status.ID, restamp)
-	}
+	// probe.lock keeps a cancel of the tree out while the reopen reads it (see docs/design/durable-loop.md).
+	err = c.underProbe(func() error {
+		err := c.reopenCanceledPhases(last.Status.ID, restamp)
+		if err == nil {
+			err = c.reopen(last.Status.ID, restamp)
+		}
 
+		return err
+	})
 	if err != nil {
 		return errors.Join(err, c.dropClaim(project, item, last.Status.ID, owner))
 	}

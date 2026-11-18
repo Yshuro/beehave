@@ -375,6 +375,39 @@ func checkMergeFail(r Reporter, target forge.Forge) {
 	})
 }
 
+// What the fake behind a Syncer serves: the count of commits that SyncHead has and SyncBase lacks, and the merge commit of the merge.
+const (
+	SyncBase  = "sync/round"
+	SyncHead  = "main"
+	SyncAhead = 3
+	SyncMerge = "89abcdef0123456789abcdef0123456789abcdef"
+)
+
+// CheckSyncer runs the rules of a Syncer whose fake serves SyncAhead commits and answers a merge with SyncMerge.
+func CheckSyncer(r Reporter, target forge.Syncer) {
+	r.Helper()
+
+	c, ctx := check{r: r}, context.Background()
+
+	ahead, err := target.CommitsAhead(ctx, SyncBase, SyncHead)
+	c.noError(err, "CommitsAhead")
+	c.equal(ahead, SyncAhead, "commits ahead")
+
+	merge, err := target.MergeBranch(ctx, SyncBase, SyncHead)
+	c.noError(err, "MergeBranch")
+	c.equal(merge, SyncMerge, "merge commit")
+}
+
+// CheckSyncerFails runs both methods of a Syncer whose commands all fail. Each must return an error and never a guess.
+func CheckSyncerFails(r Reporter, target forge.Syncer) {
+	r.Helper()
+
+	check{r: r}.allFail([]call{
+		{"CommitsAhead", func(ctx context.Context) error { _, err := target.CommitsAhead(ctx, SyncBase, SyncHead); return err }},
+		{"MergeBranch", func(ctx context.Context) error { _, err := target.MergeBranch(ctx, SyncBase, SyncHead); return err }},
+	})
+}
+
 func pick[T, V any](rows []T, field func(T) V) []V {
 	out := make([]V, len(rows))
 	for i, row := range rows {

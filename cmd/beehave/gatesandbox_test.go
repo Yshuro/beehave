@@ -13,7 +13,7 @@ import (
 
 func sandboxedProject(mode model.SandboxMode, host string) map[string]config.Project {
 	return map[string]config.Project{"p": {Project: model.Project{
-		Name: "p", Gate: "make check", BuildHost: host, Sandbox: mode, Host: &model.HostConfig{},
+		Name: "p", Gate: "make check", BuildHost: host, Sandbox: mode, Host: loaderHost(),
 		GateNetwork: []string{"proxy.golang.org"}, GateAllowWrite: []string{"cache"},
 	}}}
 }

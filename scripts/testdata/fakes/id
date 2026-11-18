@@ -1,0 +1,10 @@
+#!/bin/sh
+# Fake id: the login user builder, with the user id from FAKE_UID.
+case $1 in
+-u) echo "${FAKE_UID:-1000}" ;;
+-un | -gn) echo builder ;;
+*)
+	echo "fake id: unexpected $*" >&2
+	exit 1
+	;;
+esac

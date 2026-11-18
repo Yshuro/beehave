@@ -28,6 +28,10 @@ type hostTrees struct {
 
 func (t hostTrees) Path(context.Context, string, string) (string, error) { return t.dir, t.err }
 
+func (t hostTrees) Ensure(context.Context, string, string, string) (string, error) {
+	return t.dir, t.err
+}
+
 // hostForge is the forge of the host tests: the tip of the base, and one pull request in a given state.
 type hostForge struct {
 	forge.Forge

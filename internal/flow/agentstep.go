@@ -236,7 +236,7 @@ func (s *script) agent(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 		return nil, err
 	}
 
-	done, err := s.attempts(name, a, a.phase(s.in, login, prompt))
+	done, err := s.attempts(name, a, a.phase(s.in, login, prompt, s.treeStart))
 	if err != nil {
 		return nil, err
 	}
@@ -293,7 +293,7 @@ func (a *agentArgs) recall(outputs map[string]any) (err error) {
 	return err
 }
 
-// renderStep returns the step that renders the prompt of an agent call and records the sandbox of the call.
+// renderStep returns the step that renders the prompt of an agent call, records the sandbox of the call and marks its start commit.
 func (s *script) renderStep(a agentArgs) func(context.Context) (stepResult, error) {
 	return func(ctx context.Context) (stepResult, error) {
 		prompt, err := s.render(ctx, a)
@@ -301,7 +301,7 @@ func (s *script) renderStep(a agentArgs) func(context.Context) (stepResult, erro
 			return stepResult{Note: prompt}, err
 		}
 
-		head, err := a.currentHead(ctx)
+		head, err := a.writeStartMark(ctx)
 		if err != nil {
 			return stepResult{Note: prompt}, err
 		}
@@ -315,7 +315,7 @@ func (s *script) renderStep(a agentArgs) func(context.Context) (stepResult, erro
 
 // prepare finds the folder and the output file of an agent call.
 func (s *script) prepare(a *agentArgs, name string) (err error) {
-	if a.dir, err = s.e.deps.Trees.Ensure(s.ctx, s.in.Project, s.in.Item); err != nil {
+	if a.dir, err = s.tree(s.ctx); err != nil {
 		return fmt.Errorf("find the folder of item %s: %w", s.in.Item, err)
 	}
 
@@ -353,12 +353,12 @@ func (a agentArgs) refusePlain(project string) error {
 	return nil
 }
 
-// phase makes the input of the phase that runs the agent.
-func (a agentArgs) phase(in ItemInput, login, prompt string) PhaseInput {
+// phase makes the input of the phase that runs the agent. treeStart is the commit of the worktree of a round item that the run made.
+func (a agentArgs) phase(in ItemInput, login, prompt, treeStart string) PhaseInput {
 	return PhaseInput{
 		Item: in.Item, Project: in.Project, Login: login, Kind: a.kind, Lane: a.lane, Prompt: prompt,
-		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, MaxBudget: a.maxBudget,
-		Rounds: a.rounds, NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead,
+		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, RequireSkills: a.requireSkills, MaxBudget: a.maxBudget,
+		Rounds: a.rounds, NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart,
 	}
 }
 
@@ -660,13 +660,23 @@ func stringOutput(written map[string]any, name string) (string, string) {
 	return text, ""
 }
 
-// currentHead reads the commit at HEAD of the item folder. A plain folder has no commit, so it reads nothing and returns an empty head.
-func (a agentArgs) currentHead(ctx context.Context) (string, error) {
+// writeStartMark reads the commit at HEAD of the item folder and writes it to the start mark of the call. A plain folder has no commit, so it reads
+// and writes nothing and returns an empty head.
+func (a agentArgs) writeStartMark(ctx context.Context) (string, error) {
 	if a.plain {
 		return "", nil
 	}
 
-	return folderHead(ctx, a.dir)
+	head, err := folderHead(ctx, a.dir)
+	if err != nil {
+		return "", err
+	}
+
+	if _, err = git(ctx, a.dir, "update-ref", callStartRef, head); err != nil {
+		return "", fmt.Errorf("write the start mark of the item folder: %w", err)
+	}
+
+	return head, nil
 }
 
 // checkEnd reads the head of the folder, checks the paths the agent changed against the scope and tells whether it rewrote the history.

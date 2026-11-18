@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/store"
@@ -32,6 +33,15 @@ type ghState struct {
 	Labels []ghLabel `json:"labels"`
 }
 
+// ghAssigned is the assignees of `gh issue view --json assignees`.
+type ghAssigned struct {
+	Assignees []ghAssignee `json:"assignees"`
+}
+
+type ghAssignee struct {
+	Login string `json:"login"`
+}
+
 // ghComment is one comment of `gh api repos/<repo>/issues/<n>/comments`.
 type ghComment struct {
 	Body string `json:"body"`
@@ -39,8 +49,8 @@ type ghComment struct {
 
 // Create files an issue for the key. It writes the line `beehave-key: <key>` at the end of the body and, before it writes, searches all issues for that line, so a repeated key returns the first issue.
 // The search index of GitHub can lag behind a create, so a search that finds nothing is followed by a read of the newest issues, which does not use the index.
-// A parent is set with --parent, which needs gh 2.101 or newer. The step record of the engine is the first guard
-// against a second write, and the key covers the window in which a crash comes between the create and the record.
+// A parent is set with --parent, which needs gh 2.101 or newer. The key makes a repeated call safe, as after a crash between the create and the step record.
+// The search and the create are separate calls, so two writers of one key at the same time need the key lock of the caller (see store.Writer).
 func (s *Store) Create(ctx context.Context, key string, item store.NewItem) (string, bool, error) {
 	found, err := s.keyed(ctx, key)
 	if err != nil || found != "" {
@@ -223,9 +233,16 @@ func (s *Store) step(ctx context.Context, run bool, command, id string, extra ..
 	return nil
 }
 
-// Assign adds the assignee to the issue. The forge keeps one entry for a login, so the same call twice changes nothing.
+// Assign adds the assignee to the issue. It reads the assignees first and runs the edit only when the login is not among them, so a repeated call sends no write.
 func (s *Store) Assign(ctx context.Context, id, assignee string) error {
-	return s.step(ctx, true, argEdit, id, "--add-assignee", assignee)
+	now, err := read[ghAssigned](ctx, s, id, "assignees")
+	if err != nil {
+		return err
+	}
+
+	held := slices.ContainsFunc(now.Assignees, func(a ghAssignee) bool { return strings.EqualFold(a.Login, assignee) })
+
+	return s.step(ctx, !held, argEdit, id, "--add-assignee", assignee)
 }
 
 // Comment adds a comment with the marker line of the key at its end, once for each key: it reads the comments of the issue first and returns when one holds the marker.

@@ -1,0 +1,50 @@
+# scripts/mutation-pr.sh leaves the worker count to the .gremlins.yaml at the module root, so it passes no --workers.
+# Only gremlins and timeout are stubs. The stub gremlins writes its arguments to args.
+[!exec:jq] skip
+[!exec:git] skip
+env HOME=$WORK/home
+env GIT_CONFIG_GLOBAL=/dev/null
+env GIT_CONFIG_NOSYSTEM=1
+chmod 755 fake/gremlins
+chmod 755 fake/timeout
+env PATH=$WORK/fake:$PATH
+
+exec git init -q -b main repo
+cp a.go repo/a.go
+cp gomod repo/go.mod
+script mutation-pr.sh repo/scripts/mutation-pr.sh
+exec git -C repo add a.go go.mod scripts
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+exec git -C repo checkout -q -b change
+cp a2.go repo/a.go
+exec git -C repo add a.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m change
+
+# The run starts gremlins on the diff, and the arguments hold no --workers: the config file sets the count.
+env GREMLINS_REPORT=$WORK/clean.json
+exec sh repo/scripts/mutation-pr.sh main
+grep '^unleash ' args
+grep ' --diff main ' args
+! grep '[-][-]workers' args
+
+-- gomod --
+module example.com/r
+
+go 1.27
+-- a.go --
+package a
+-- a2.go --
+package a
+
+func F(x int) bool { return x > 0 }
+-- fake/gremlins --
+#!/bin/sh
+echo "the stub gremlins started"
+echo "$*" > "$WORK/args"
+cp "$GREMLINS_REPORT" "$5"
+-- fake/timeout --
+#!/bin/sh
+shift 3
+exec "$@"
+-- clean.json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
