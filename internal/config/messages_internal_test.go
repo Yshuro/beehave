@@ -40,6 +40,7 @@ func TestApplyEnv_ExplainsEachWholeNumberVariableWithItsOwnHint(t *testing.T) {
 		envMaxReviewConcurrent: "for example 2.",
 		envMaxTurns:            "for example 40, or 0 for no cap.",
 		envReviewPoll:          "for example 60, or 0 for no poll.",
+		envReviewLookback:      "for example 3.",
 	} {
 		cfg := DefaultConfig()
 

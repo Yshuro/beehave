@@ -44,7 +44,7 @@ const (
 
 	shutdownTimeout  = 10 * time.Second
 	partitionLimit   = 1
-	ownerWaitLimit   = 7 * 24 * time.Hour
+	receiveWindow    = 7 * 24 * time.Hour
 	beatLimit        = 30 * time.Second
 	minMaxConcurrent = 1
 )
@@ -72,6 +72,8 @@ type Options struct {
 	MaxTreeBudget float64
 	// ReviewPoll is the time between two review polls. 0 means no poll.
 	ReviewPoll time.Duration
+	// ReviewLookbackDays is agents.review_lookback_days: the days that the review poll looks back for replies. 0 means config.DefaultReviewLookbackDays.
+	ReviewLookbackDays int
 	// PerLogin is agents.per_login, the agent steps that one login runs at once in each agent queue. 0 means config.DefaultPerLogin.
 	PerLogin int
 	// Retention is the age at which Launch deletes a finished run: agents.retention_days. 0 means config.DefaultRetention.
@@ -104,11 +106,25 @@ func (o Options) validate() error {
 		return fmt.Errorf("%w: agents.max_concurrent is %d: set it to 1 or more", errBadOptions, o.MaxConcurrent)
 	case o.MaxReviewConcurrent < minMaxConcurrent:
 		return fmt.Errorf("%w: agents.max_review_concurrent is %d: set it to 1 or more", errBadOptions, o.MaxReviewConcurrent)
-	case o.ReviewPoll < 0:
-		return fmt.Errorf("%w: the review poll interval is %s: set it to 0 or more", errBadOptions, o.ReviewPoll)
+	}
+
+	if err := o.validateReviewPoll(); err != nil {
+		return err
 	}
 
 	return o.validatePerLogin()
+}
+
+// validateReviewPoll refuses a negative poll interval and a negative look-back.
+func (o Options) validateReviewPoll() error {
+	switch {
+	case o.ReviewPoll < 0:
+		return fmt.Errorf("%w: the review poll interval is %s: set it to 0 or more", errBadOptions, o.ReviewPoll)
+	case o.ReviewLookbackDays < 0:
+		return fmt.Errorf("%w: agents.review_lookback_days is %d: set it to 1 or more", errBadOptions, o.ReviewLookbackDays)
+	}
+
+	return nil
 }
 
 // validatePerLogin refuses a negative per_login, and one above the cap of an agent queue: DBOS refuses a queue whose partition limit is above its global limit.
@@ -174,6 +190,8 @@ type Engine struct {
 	maxTreeBudget float64
 	// reviewPoll is the time between two review polls. 0 means no poll.
 	reviewPoll time.Duration
+	// reviewLookbackDays is the days that the review poll looks back for replies: Options.ReviewLookbackDays, or the default of the config.
+	reviewLookbackDays int
 	// retention and keepRuns are Options.Retention and Options.KeepRuns.
 	retention time.Duration
 	keepRuns  bool
@@ -284,7 +302,7 @@ func claimFolder(dir, version, mode string) (*flock.Flock, error) {
 // newEngine makes the engine value for an opened store and a held folder lock.
 func newEngine(opts Options, deps Deps, state store, held *flock.Flock, registry step.Registry) *Engine {
 	engine := &Engine{
-		registry: registry, deps: deps, maxConcurrent: opts.MaxConcurrent, perLogin: cmp.Or(opts.PerLogin, config.DefaultPerLogin), maxRunBudget: opts.MaxRunBudget, maxTreeBudget: opts.MaxTreeBudget, reviewPoll: opts.ReviewPoll, retention: opts.Retention, keepRuns: opts.KeepRuns, overCap: opts.OverCap, setSchedule: (*Engine).schedulePoll, env: opts.Env, version: applicationVersion(opts.Version), dir: state.dir, log: state.log, lock: held, logger: newLogger(state.log), redact: agent.Redactor(),
+		registry: registry, deps: deps, maxConcurrent: opts.MaxConcurrent, perLogin: cmp.Or(opts.PerLogin, config.DefaultPerLogin), maxRunBudget: opts.MaxRunBudget, maxTreeBudget: opts.MaxTreeBudget, reviewPoll: opts.ReviewPoll, reviewLookbackDays: cmp.Or(opts.ReviewLookbackDays, config.DefaultReviewLookbackDays), retention: opts.Retention, keepRuns: opts.KeepRuns, overCap: opts.OverCap, setSchedule: (*Engine).schedulePoll, env: opts.Env, version: applicationVersion(opts.Version), dir: state.dir, log: state.log, lock: held, logger: newLogger(state.log), redact: agent.Redactor(),
 		procs: &groups{path: groupsFile(opts.StateDir)}, tickEnd: make(chan struct{}), progress: &progress{out: opts.Progress},
 	}
 	engine.progress.redact = engine.redact

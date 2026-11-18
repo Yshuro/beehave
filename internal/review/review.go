@@ -14,7 +14,6 @@ import (
 const (
 	ListLimit   = 1000
 	SearchLimit = 200
-	RecentDays  = 3
 
 	// FollowUpWindow is how long after our review a FOLLOW-UP row waits before it is due.
 	FollowUpWindow = 24 * time.Hour
