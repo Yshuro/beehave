@@ -36,7 +36,7 @@ type limitRecord struct {
 	Passed bool `json:"reset_passed,omitempty"`
 }
 
-// waitOutLimit records the limit that stopped run number run of a try, adds the cost of that run to the sum of the run cap, and sleeps until the limit resets.
+// waitOutLimit records the limit that stopped run number run of a try, with the cost of that run that the caps read, and sleeps until the limit resets.
 // It reports whether the reset time had passed, so the next run of the try fails its phase when its limit has a past reset time too.
 func (s *script) waitOutLimit(name string, in PhaseInput, ended PhaseOutput, try, run int) (bool, error) {
 	record, err := runStep(s.e, s.ctx, name+"/limit"+strconv.Itoa(try)+"."+strconv.Itoa(run), func(context.Context) (limitRecord, error) {
@@ -48,12 +48,12 @@ func (s *script) waitOutLimit(name string, in PhaseInput, ended PhaseOutput, try
 		}, nil
 	})
 	if err != nil {
-		s.countFailedRun(name, try, ended.Spend)
+		if s.running() {
+			s.countFailedRun(name, try, ended.Spend)
+		}
 
 		return false, err
 	}
-
-	s.spent = s.spent.Plus(record.Spend)
 
 	return record.Passed, s.waitForReset(record.WaitUntil)
 }
