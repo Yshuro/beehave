@@ -104,7 +104,7 @@ func swarmHelper(t *testing.T, mode, stateDir string) {
 	h.commands.reply = ownOutput
 	h.commands.before = func(ctx context.Context, request CommandRequest) error {
 		if mode == swarmFirst && request.Item == "22" {
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}

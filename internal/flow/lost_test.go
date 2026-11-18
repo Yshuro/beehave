@@ -274,7 +274,7 @@ func TestPhase_ACanceledAgentStepThatResumesInTheSameEngineGetsNoNoteAndNoLostRe
 	eventually(t, func() bool { return harness.agents.running() == 1 })
 	require.NoError(t, client.Cancel(testItem))
 	harness.tick(t)
-	<-done
+	receive(t, done)
 
 	close(harness.agents.gate)
 	_, err := resumeAndJoin(t, engine, client)

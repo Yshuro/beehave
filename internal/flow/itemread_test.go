@@ -210,7 +210,7 @@ func TestItemRead_AReplayReadsTheRecordedAnswerAndNotTheTrackerAgain(t *testing.
 	}()
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.Equal(t, 1, r.reads("comments"), "the replay does not read the comments again")
 	assert.Equal(t, 1, r.reads("parent"), "the replay does not read the parent again")

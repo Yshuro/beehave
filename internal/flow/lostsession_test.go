@@ -59,7 +59,7 @@ func TestPhase_TheSessionIdIsSavedAsAnEventWhileTheAgentRuns(t *testing.T) {
 	})
 
 	close(harness.agents.gate)
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestPhase_ALostStepThatNamedASessionResumesItOnTheReplay(t *testing.T) {
@@ -296,7 +296,7 @@ func TestSessionSaver_ANewIdNeverWaitsForAStoreThatBlocksAndTheNewestIdIsWritten
 
 	// The store is down: each write waits until the test lets it go.
 	saver := startSessionSaver(func(session string) {
-		<-release
+		receive(t, release)
 		mu.Lock()
 		defer mu.Unlock()
 
@@ -341,7 +341,7 @@ func TestSessionSaver_TheStopWritesTheIdThatWaitsBehindAWriteThatBlocks(t *testi
 		)
 
 		saver := startSessionSaver(func(session string) {
-			<-release
+			receive(t, release)
 			mu.Lock()
 			defer mu.Unlock()
 
@@ -363,7 +363,7 @@ func TestSessionSaver_TheStopWritesTheIdThatWaitsBehindAWriteThatBlocks(t *testi
 
 		synctest.Wait() // the stop is closed, and both the stop and the signal of s-2 wait
 		close(release)
-		<-finished
+		receive(t, finished)
 
 		mu.Lock()
 		defer mu.Unlock()
@@ -384,7 +384,7 @@ func (h heldSaveHandler) Enabled(context.Context, slog.Level) bool { return true
 func (h heldSaveHandler) Handle(_ context.Context, record slog.Record) error {
 	if record.Message == "cannot save the session of the agent" {
 		h.once.Do(func() { close(h.entered) })
-		<-h.release
+		hang(h.release)
 	}
 
 	return nil
@@ -419,7 +419,7 @@ func TestRunAgent_TheAgentStepWaitsForTheWriteOfTheLastSessionIdBeforeItReturns(
 		}()
 
 		synctest.Wait() // the saver waits in the held write, and the step waits for the saver unless it returned already
-		<-held.entered
+		receive(t, held.entered)
 
 		select {
 		case <-returned:
@@ -428,7 +428,7 @@ func TestRunAgent_TheAgentStepWaitsForTheWriteOfTheLastSessionIdBeforeItReturns(
 		}
 
 		close(held.release)
-		<-returned
+		receive(t, returned)
 	})
 }
 

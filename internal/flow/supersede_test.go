@@ -206,7 +206,7 @@ func TestSuperseded_AGateThatRunsForAnOldHeadStopsWhenTheGateOfTheNewHeadIsQueue
 	eventually(t, startedCount(gated, 2))
 	close(gated.release)
 
-	newer := <-fresh
+	newer := receive(t, fresh)
 	require.NoError(t, newer.err)
 	assert.Equal(t, true, newer.out.Outputs["passed"])
 }
@@ -239,7 +239,7 @@ func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
 	eventually(t, startedCount(gated, 2))
 	close(gated.release)
-	require.NoError(t, (<-last).err)
+	require.NoError(t, receive(t, last).err)
 	assert.EqualValues(t, 2, gated.started.Load(), "the gate of head B never started")
 }
 
@@ -258,8 +258,8 @@ func TestSuperseded_AGateOfTheSameHeadIsNotStopped(t *testing.T) {
 	time.Sleep(3 * time.Second)
 	close(gated.release)
 
-	require.NoError(t, (<-first).err)
-	require.NoError(t, (<-second).err)
+	require.NoError(t, receive(t, first).err)
+	require.NoError(t, receive(t, second).err)
 	assert.Zero(t, gated.stopped.Load())
 }
 
@@ -284,8 +284,8 @@ func TestSuperseded_AGateOfAnOldHeadThatQueuesLateStopsNoGateOfTheCurrentHead(t 
 
 	close(gated.release)
 
-	require.NoError(t, (<-current).err)
-	require.NoError(t, (<-late).err)
+	require.NoError(t, receive(t, current).err)
+	require.NoError(t, receive(t, late).err)
 	assert.Zero(t, gated.stopped.Load())
 }
 

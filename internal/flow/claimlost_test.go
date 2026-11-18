@@ -173,7 +173,7 @@ func TestTrust_AGoodRenewalArmsANewTimerAndStopsTheOldOne(t *testing.T) {
 	assert.NotEmpty(t, run.engine.holds.snapshot())
 
 	run.finish()
-	require.NoError(t, (<-run.done).err)
+	require.NoError(t, receive(t, run.done).err)
 }
 
 func TestTrust_ARenewalOfARunThatIsGoneLeavesNoTimerBehind(t *testing.T) {
@@ -207,7 +207,7 @@ func TestTrust_ARenewalIsStampedAtItsStartNotAtItsEnd(t *testing.T) {
 	}
 
 	run.finish()
-	require.NoError(t, (<-run.done).err)
+	require.NoError(t, receive(t, run.done).err)
 }
 
 func TestTrust_AHangingRenewalCannotHoldTheCancelPastTheDeadline(t *testing.T) {
@@ -225,7 +225,7 @@ func TestTrust_AHangingRenewalCannotHoldTheCancelPastTheDeadline(t *testing.T) {
 
 	go run.engine.beatClaims()
 
-	deadline := <-beats.deadlines
+	deadline := receive(t, beats.deadlines)
 	assert.LessOrEqual(t, time.Until(deadline), time.Second, "the renewal gets the time left to the deadline, not its 30 second limit")
 
 	run.clock.advance(time.Second)
@@ -233,7 +233,7 @@ func TestTrust_AHangingRenewalCannotHoldTheCancelPastTheDeadline(t *testing.T) {
 
 	requireDies(t, run.agent)
 
-	outcome := <-run.done
+	outcome := receive(t, run.done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	require.ErrorContains(t, outcome.err, "its lease can end")
 }
@@ -248,7 +248,7 @@ func TestTrust_ASleepOfTheMachineEndsTheTrustAtTheNextTick(t *testing.T) {
 
 	requireDies(t, run.agent)
 
-	outcome := <-run.done
+	outcome := receive(t, run.done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	assert.Empty(t, run.harness.beats.seen(), "the claim is lost at once; no renewal runs")
 }
@@ -265,7 +265,7 @@ func TestTrust_TheReasonOfALostDeadlineNamesTheLastFailure(t *testing.T) {
 
 	requireDies(t, run.agent)
 
-	outcome := <-run.done
+	outcome := receive(t, run.done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	require.ErrorContains(t, outcome.err, "the last renewal failed with: "+errFake.Error())
 }
@@ -386,16 +386,16 @@ func TestRunAgent_NoAgentStartsAfterTheClaimIsLostWhileThePhaseWaitsToStart(t *t
 	engine := launchedWith(t, harness, func(deps *Deps) { deps.Agents = gated })
 	done := runInBackground(engine, testItem)
 
-	<-gated.entered
+	receive(t, gated.entered)
 
 	harness.beats.fail(testOwner+testItem, "heartbeat for session-x failed: it holds no claim row", nil)
 	harness.tick(t)
 
-	outcome := <-done
+	outcome := receive(t, done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 
 	close(gated.hold)
-	<-gated.returned
+	receive(t, gated.returned)
 	eventually(t, func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 })
 
 	assert.Empty(t, harness.agents.seen(), "the phase read the lost claim and started no agent")
@@ -425,19 +425,19 @@ func TestRunAgent_AnOrphanPhaseOfALostRunStartsNoAgentWhenANewRunHoldsTheItem(t 
 	})
 	done := runInBackground(engine, testItem)
 
-	<-gated.entered
+	receive(t, gated.entered)
 
 	harness.beats.fail(testOwner+testItem, "heartbeat for session-x failed: it holds no claim row", nil)
 	harness.tick(t)
 
-	outcome := <-done
+	outcome := receive(t, done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 
 	// A new run takes the item and holds a trusted claim on it. The orphan phase belongs to the lost run, not to this one.
 	engine.holds.add("item-"+testItem+"-r2", claimHold{project: testProject, owner: testOwner + testItem + "#2", renewed: time.Now()})
 
 	close(gated.hold)
-	<-gated.returned
+	receive(t, gated.returned)
 	eventually(t, func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 })
 
 	assert.Empty(t, harness.agents.seen(), "the claim of the new run is not the claim of the orphan")
@@ -463,14 +463,14 @@ func TestRunAgent_APhaseReopenedByResumeWaitsForTheFirstTrustOfItsRunBeforeItSta
 	release := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(release) })
 	t.Cleanup(unblock)
-	harness.beats.hook(func() { <-release })
+	harness.beats.hook(func() { receive(t, release) })
 
 	handle := resumeRun(t, engine, harness.client(t, testVersion))
 
 	done := make(chan runOutcome, 1)
 
 	go func() {
-		result, err := joinRun(handle)
+		result, err := joinRun(t, handle)
 		done <- runOutcome{result: result, err: err}
 	}()
 
@@ -480,7 +480,7 @@ func TestRunAgent_APhaseReopenedByResumeWaitsForTheFirstTrustOfItsRunBeforeItSta
 
 	unblock()
 
-	outcome := <-done
+	outcome := receive(t, done)
 	require.NoError(t, outcome.err)
 	assert.Equal(t, ItemResult{Item: testItem}, outcome.result)
 	assert.Greater(t, len(harness.agents.seen()), started, "the phase started its agent once the run held a trusted claim")
@@ -557,7 +557,7 @@ func TestAwaitClaim_TheGraceTimeCountsOnTheClockOfTheEngine(t *testing.T) {
 
 	clk.advance(time.Minute)
 
-	require.ErrorIs(t, <-done, errClaimLost)
+	require.ErrorIs(t, receive(t, done), errClaimLost)
 }
 
 func TestAwaitClaim_AGraceTimeLetsARunThatIsNotOpenYetTakeItsClaim(t *testing.T) {

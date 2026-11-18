@@ -36,7 +36,7 @@ func interruptedAfterTheDeadlineIsRecorded(t *testing.T, h *harness, file string
 
 	stop()
 	require.NoError(t, engine.Shutdown())
-	require.Error(t, <-ended, "the stopped engine ends the run")
+	require.Error(t, receive(t, ended), "the stopped engine ends the run")
 }
 
 func hasStep(steps []dbos.StepInfo, name string) bool {
@@ -114,7 +114,7 @@ func TestWait_ARecordedWaitWithoutTimedOutReplays(t *testing.T) {
 
 	waitForTheOwner(t, h)
 	require.NoError(t, client.Answer(testItem, "go on"))
-	require.ErrorContains(t, (<-done).err, "release")
+	require.ErrorContains(t, receive(t, done).err, "release")
 
 	dropTimedOutFromTheRecord(t, h)
 

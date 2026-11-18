@@ -189,7 +189,7 @@ func watchSockets(t *testing.T, work func()) []string {
 
 	work()
 	close(stop)
-	<-finished
+	receive(t, finished)
 	sample()
 
 	require.NoError(t, failure)

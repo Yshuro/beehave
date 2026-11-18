@@ -154,7 +154,7 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 
 	close(proceed)
 
-	winner := <-results
+	winner := receive(t, results)
 
 	require.NoError(t, winner.err, "the run that took the claim goes on to the end")
 	require.Error(t, loser.err)

@@ -200,7 +200,7 @@ func (b blockingAgents) Run(ctx context.Context, request AgentRequest) (agent.Re
 
 	request.Started(cmd.Process.Pid)
 	b.pid <- cmd.Process.Pid
-	<-b.proceed
+	hang(b.proceed)
 
 	return agent.Result{Outcome: agent.OutcomeExited}, nil
 }
@@ -241,11 +241,11 @@ func TestRunAgent_AGroupDiesWhenThePhaseIsCancelled(t *testing.T) {
 		done <- err
 	}()
 
-	pid := <-agents.pid
+	pid := receive(t, agents.pid)
 	cancel()
 	requireDies(t, pid)
 	close(agents.proceed)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 }
 
 func TestRunAgent_AGroupDiesWhenThePhaseTimesOut(t *testing.T) {
@@ -264,9 +264,9 @@ func TestRunAgent_AGroupDiesWhenThePhaseTimesOut(t *testing.T) {
 		done <- err
 	}()
 
-	requireDies(t, <-agents.pid)
+	requireDies(t, receive(t, agents.pid))
 	close(agents.proceed)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 }
 
 func TestRunAgent_APhaseThatEndsEmptiesTheFileAndTheEndOfItsContextKillsTheGroup(t *testing.T) {
@@ -281,7 +281,7 @@ func TestRunAgent_APhaseThatEndsEmptiesTheFileAndTheEndOfItsContextKillsTheGroup
 
 	require.NoError(t, err)
 
-	requireDies(t, <-agents.pid)
+	requireDies(t, receive(t, agents.pid))
 
 	data, err := os.ReadFile(engine.procs.path)
 	require.NoError(t, err)
@@ -336,14 +336,14 @@ func TestRunAgent_ALostClaimKillsTheGroupWhileTheRunStaysOpen(t *testing.T) {
 		done <- err
 	}()
 
-	pid := <-agents.pid
+	pid := receive(t, agents.pid)
 
 	// The run is not dropped and the phase does not end: only the loss ends the context of the claim.
 	engine.holds.fail(procRun, "the claim is lost")
 	requireDies(t, pid)
 
 	close(agents.proceed)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 }
 
 func TestHolds_AddEndsTheContextOfTheRowItReplaces(t *testing.T) {

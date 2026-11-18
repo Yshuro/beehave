@@ -59,7 +59,7 @@ func TestAgentKind_ARunOfAKindWaitsWhenTheCapOfItsQueueIsFull(t *testing.T) {
 			release()
 
 			for _, run := range runs {
-				require.NoError(t, (<-run).err)
+				require.NoError(t, receive(t, run).err)
 			}
 
 			assert.Equal(t, 2, harness.agents.maxTotal)
@@ -89,7 +89,7 @@ func TestAgentQueue_AnItemThatWaitsForTheOwnerHoldsNoAgentSlot(t *testing.T) {
 	}
 
 	eventually(t, func() bool { return client.Answer(testItem, "go") == nil })
-	require.NoError(t, (<-run).err)
+	require.NoError(t, receive(t, run).err)
 }
 
 func activePhases(t *testing.T, engine *Engine) int {

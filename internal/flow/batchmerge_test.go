@@ -563,7 +563,7 @@ func TestBatchMerge_ACanceledRunStopsTheWaitBetweenReadsOfAnUnknownMergeableStat
 	require.NoError(t, rig.h.client(t, testVersion).Cancel(testItem))
 	rig.h.tick(t)
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.Error(t, outcome.err)
 	assert.Len(t, rig.merger.landed(), 1, "the run ends in the wait and reads no more")

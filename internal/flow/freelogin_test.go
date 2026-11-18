@@ -208,7 +208,7 @@ func TestFreeLogin_ALoginThatOnlyAQueuedRunHoldsIsBusy(t *testing.T) {
 	}
 
 	enqueue("21", "alice")
-	<-started
+	receive(t, started)
 
 	// The one slot of the items queue is taken, so the run of item 22 waits ENQUEUED. No phase and no other run holds its login.
 	enqueue("22", "bob")
@@ -247,7 +247,7 @@ func TestFreeLogin_APlainRunHoldsNoLoginBetweenPhases(t *testing.T) {
 
 	require.True(t, waitUntil(func() bool { return picks.loginOf("21") != "" }), "item 21 started")
 	close(release)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 
 	assert.NotContains(t, picks.busyOf("21"), picks.loginOf(testItem), "the loop run that a user started has no phase open, so its login reads free")
 }
@@ -322,7 +322,7 @@ func TestFreeLogin_ALoginThatHoldsARunStaysBusyUntilItEnds(t *testing.T) {
 
 	require.True(t, waitUntil(func() bool { return picks.loginOf("23") != "" }), "the third item started after the second ended")
 	close(release)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 
 	assert.Equal(t, picks.loginOf("22"), picks.loginOf("23"), "item 23 took the login that item 22 freed, not the login of the item that still runs")
 	assert.Contains(t, picks.busyOf("23"), picks.loginOf("21"), "the login of the running item is busy")
@@ -337,7 +337,7 @@ func TestFreeLogin_AResumeKeepsTheRecordedLogins(t *testing.T) {
 	r.h.picker = first
 	r.agents.setAct(func(ctx context.Context, item string) error {
 		if item == "21" || item == "22" {
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}

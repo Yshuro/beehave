@@ -27,7 +27,7 @@ func stoppedInTheWait(t *testing.T) *harness {
 	done := runInBackground(engine, testItem)
 	eventually(t, func() bool { return harness.merge.askedCount() == 1 })
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 
 	require.Empty(t, harness.merge.snapshot(), "an engine stop keeps the queued merge armed")
 

@@ -26,7 +26,7 @@ type gateInAgents struct {
 func (g *gateInAgents) Run(ctx context.Context, request AgentRequest) (agent.Result, error) {
 	g.once.Do(func() {
 		g.entered <- struct{}{}
-		<-g.hold
+		hang(g.hold)
 	})
 
 	result, err := g.inner.Run(ctx, request)
@@ -47,16 +47,16 @@ func TestRunAgent_AClaimLostBeforeTheAgentStartsStartsNoAgent(t *testing.T) {
 	})
 	done := runInBackground(engine, testItem)
 
-	<-gated.entered
+	receive(t, gated.entered)
 
 	clk.advance(trustLimit)
 	engine.beatClaims()
 
-	outcome := <-done
+	outcome := receive(t, done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 
 	close(gated.hold)
-	<-gated.returned
+	receive(t, gated.returned)
 
 	assert.Empty(t, harness.agents.seen(), "the claim was lost before the agent started, so the start found its context done")
 }
@@ -96,7 +96,7 @@ func TestRunAgent_TheAgentRunsUnderTheContextOfTheClaim(t *testing.T) {
 	requireDies(t, harness.agents.pid)
 	finish()
 
-	<-done
+	receive(t, done)
 }
 
 func TestLose_KillsNoAgentOfAnotherRunOfTheSameItem(t *testing.T) {

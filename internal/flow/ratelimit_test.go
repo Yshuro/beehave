@@ -99,7 +99,7 @@ func TestRateLimit_ARestartDuringTheWaitSleepsTheRestAndStartsTheAgentOnceMore(t
 
 	waitForTheSleep(t, first)
 	require.NoError(t, first.Shutdown())
-	<-done
+	receive(t, done)
 	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
 
 	second := h.engine(t)
@@ -325,7 +325,7 @@ func TestRateLimit_TheSleepLastsUntilTheRecordedReset(t *testing.T) {
 	assert.InDelta(t, time.Hour.Seconds(), sleep.CompletedAt.Sub(sleep.StartedAt).Seconds(), time.Minute.Seconds(), "the sleep ends at the reset, one hour after the wall clock")
 
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 }
 
 func TestRateLimit_TheCostOfTheLimitedRunCountsInTheRunCapAndTheTreeSum(t *testing.T) {
@@ -424,7 +424,7 @@ func TestRateLimit_TheStatusOfAWaitingRunNamesTheLoginAndTheReset(t *testing.T) 
 	assert.Contains(t, infos[0].Notes(), note, "the list of runs shows the wait too")
 
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 }
 
 func TestRateLimit_TheLookAtTheCapsAfterALimitEndsItsWaitOnTheLine(t *testing.T) {
