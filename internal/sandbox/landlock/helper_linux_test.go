@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -18,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/sandbox"
 )
 
@@ -124,8 +124,7 @@ func script(t *testing.T, dir, name string) string {
 	t.Helper()
 
 	path := filepath.Join(dir, name)
-	require.NoError(t, os.WriteFile(path, []byte("#!/bin/sh\n"), scriptMode))
-	require.NoError(t, os.Chmod(path, scriptMode))
+	require.NoError(t, exectest.Write(path, "#!/bin/sh\n"))
 
 	return path
 }

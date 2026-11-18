@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/config"
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -72,7 +73,7 @@ func runCandidateOf(t *testing.T, project model.Project, root, repo, head string
 	if scan < 0 {
 		bin = gitleaksFolder(t)
 	} else {
-		require.NoError(t, os.WriteFile(filepath.Join(bin, "gitleaks"), []byte(fmt.Sprintf("#!/bin/sh\nexit %d\n", scan)), 0o700)) //nolint:gosec // a stub program
+		require.NoError(t, exectest.Write(filepath.Join(bin, "gitleaks"), fmt.Sprintf("#!/bin/sh\nexit %d\n", scan)))
 	}
 
 	command := hostCommand(project, nil, repo, head, root+"/beehave-gate-demo-"+head, "main")

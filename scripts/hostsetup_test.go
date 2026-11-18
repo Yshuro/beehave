@@ -19,6 +19,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 const (
@@ -102,12 +104,12 @@ func newFakeHost(t *testing.T) *fakeHost {
 	}
 
 	for _, script := range []string{"host-setup.sh", "host-tools.sh"} {
-		h.copy(script, filepath.Join(h.clone, "scripts", script), 0o644)
+		h.copy(script, filepath.Join(h.clone, "scripts", script), h.write)
 	}
 
-	h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain "+pinnedGo+"\n", 0o644)
-	h.write(filepath.Join(h.clone, "Makefile"), fakeMakefile, 0o644)
-	h.write(h.log, "", 0o644)
+	h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain "+pinnedGo+"\n")
+	h.write(filepath.Join(h.clone, "Makefile"), fakeMakefile)
+	h.write(h.log, "")
 	h.installFakes()
 	h.installUbuntuEnvironmentFiles()
 
@@ -148,7 +150,7 @@ func (h *fakeHost) owns(uid, path string) {
 		text = h.read(owners)
 	}
 
-	h.write(owners, text+uid+" "+path+"\n", 0o644)
+	h.write(owners, text+uid+" "+path+"\n")
 }
 
 // rootActions lists the sudo calls of the log, other than the check that sudo needs no password.
@@ -184,7 +186,7 @@ func (h *fakeHost) installFakes() {
 	require.NoError(h.t, err)
 
 	for _, fake := range fakes {
-		h.copy(filepath.Join("testdata/fakes", fake.Name()), filepath.Join(h.bin, fake.Name()), 0o755)
+		h.copy(filepath.Join("testdata/fakes", fake.Name()), filepath.Join(h.bin, fake.Name()), h.program)
 	}
 
 	for name, line := range goInstalledTools {
@@ -195,21 +197,21 @@ func (h *fakeHost) installFakes() {
 		h.tool(filepath.Join(h.bin, name), line)
 	}
 
-	h.write(filepath.Join(h.sysroot, "usr/local/go/bin/go"), fakeGo(pinnedGo), 0o755)
+	h.program(filepath.Join(h.sysroot, "usr/local/go/bin/go"), fakeGo(pinnedGo))
 }
 
 // installUbuntuEnvironmentFiles writes the two environment.d files of a stock Ubuntu 24.04: the link to /etc/environment, which sets
 // an absolute quoted PATH, and the file of snapd, which appends to PATH. Both sort after a file with a number prefix below 990.
 func (h *fakeHost) installUbuntuEnvironmentFiles() {
 	h.t.Helper()
-	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/99-environment.conf"), "PATH=\""+h.bin+":/usr/bin:/bin\"\n", 0o644)
-	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/990-snapd.conf"), "PATH=$PATH:/snap/bin\n", 0o644)
+	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/99-environment.conf"), "PATH=\""+h.bin+":/usr/bin:/bin\"\n")
+	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/990-snapd.conf"), "PATH=$PATH:/snap/bin\n")
 }
 
 // tool writes a fake tool that prints its version text.
 func (h *fakeHost) tool(path, text string) {
 	h.t.Helper()
-	h.write(path, "#!/bin/sh\nprintf '%s\\n' '"+text+"'\n", 0o755)
+	h.program(path, "#!/bin/sh\nprintf '%s\\n' '"+text+"'\n")
 }
 
 func openRoot(t *testing.T, dir string) *os.Root {
@@ -232,10 +234,17 @@ func (h *fakeHost) rel(path string) string {
 	return name
 }
 
-func (h *fakeHost) write(path, text string, mode os.FileMode) {
+func (h *fakeHost) write(path, text string) {
 	h.t.Helper()
 	require.NoError(h.t, h.root.MkdirAll(filepath.Dir(h.rel(path)), 0o750))
-	require.NoError(h.t, h.root.WriteFile(h.rel(path), []byte(text), mode))
+	require.NoError(h.t, h.root.WriteFile(h.rel(path), []byte(text), 0o644))
+}
+
+// program writes a program that the script starts, through the helper that holds the fork lock.
+func (h *fakeHost) program(path, text string) {
+	h.t.Helper()
+	require.NoError(h.t, h.root.MkdirAll(filepath.Dir(h.rel(path)), 0o750))
+	require.NoError(h.t, exectest.Write(path, text))
 }
 
 func (h *fakeHost) read(path string) string {
@@ -247,13 +256,13 @@ func (h *fakeHost) read(path string) string {
 	return string(data)
 }
 
-// copy copies a file of the scripts folder to a path under the temporary folder.
-func (h *fakeHost) copy(from, to string, mode os.FileMode) {
+// copy copies a file of the scripts folder to a path under the temporary folder, with write or program.
+func (h *fakeHost) copy(from, to string, put func(path, text string)) {
 	h.t.Helper()
 
 	data, err := h.source.ReadFile(from)
 	require.NoError(h.t, err)
-	h.write(to, string(data), mode)
+	put(to, string(data))
 }
 
 // run runs the script of the clone with the arguments and the extra environment, and returns its output.
@@ -296,7 +305,7 @@ func (h *fakeHost) envFile() string {
 // setModule makes the fake go print another module and version, split by a space, on the mod line of a tool. The text "-" prints no mod line.
 func (h *fakeHost) setModule(tool, module string) {
 	h.t.Helper()
-	h.write(filepath.Join(h.state, "mod-"+tool), module+"\n", 0o644)
+	h.write(filepath.Join(h.state, "mod-"+tool), module+"\n")
 }
 
 // fakeGo is a go command of a version. With `version -m` it prints what go prints for a binary: the Go version, the path line,
@@ -468,11 +477,11 @@ func TestHostSetup_RefusesAWorkRootThatIsNotTheLoginUsers(t *testing.T) {
 			case "a_link_to_the_root_folder":
 				require.NoError(t, h.root.Symlink("/", "link"))
 			case "a_file", "a_missing_folder_whose_parent_is_a_file":
-				h.write(filepath.Join(h.base, "file"), "", 0o644)
+				h.write(filepath.Join(h.base, "file"), "")
 			case "a_folder_of_another_user":
 				h.owns("0", h.workRoot)
 			case "a_folder_the_login_user_cannot_write":
-				require.NoError(t, h.root.Chmod(h.rel(h.workRoot), 0o500))
+				require.NoError(t, exectest.ChmodFolder(h.workRoot, 0o500))
 			case "a_missing_folder_whose_parent_is_owned_by_root":
 				require.NoError(t, h.root.Mkdir("theirs", 0o755))
 				h.owns("0", filepath.Dir(workRoot))
@@ -514,7 +523,7 @@ func TestHostSetup_MakesOnlyAMissingWorkRoot(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, info.IsDir(), "the mkdir makes the work root")
 
-	h.write(h.log, "", 0o644)
+	h.write(h.log, "")
 	out, err = h.run(nil, "--work-root", workRoot, "--watchdog", watchdogUnit)
 	require.NoError(t, err, out)
 	assert.NotContains(t, h.read(h.log), "mkdir -m 0755 -- "+workRoot+"\n", "an existing work root is left as it is")
@@ -546,8 +555,8 @@ func TestHostSetup_TheFakesRefuseAPathOutsideTheTestFolder(t *testing.T) {
 			t.Parallel()
 
 			h := newFakeHost(t)
-			h.write(filepath.Join(h.base, "file"), "", 0o644)
-			h.write(filepath.Join(h.down, "file"), "", 0o644)
+			h.write(filepath.Join(h.base, "file"), "")
+			h.write(filepath.Join(h.down, "file"), "")
 
 			args := make([]string, 0, len(tc.args))
 			for _, arg := range tc.args {
@@ -629,7 +638,7 @@ func TestHostSetup_PutsAStrayGoBackBeforeItReadsTheGoVersion(t *testing.T) {
 
 	h := newFakeHost(t)
 	goRoot := h.sysroot + "/usr/local/go"
-	h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n", 0o644)
+	h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n")
 	require.NoError(t, h.root.Rename(h.rel(goRoot), h.rel(goRoot+".old")))
 
 	out, err := h.setup()
@@ -660,7 +669,7 @@ func TestHostSetup_RefusesAUvArchiveWhoseChecksumDiffers(t *testing.T) {
 
 	h := newFakeHost(t)
 	require.NoError(t, h.root.Remove(h.rel(filepath.Join(h.bin, "uv"))))
-	h.write(filepath.Join(h.down, "uv-x86_64-unknown-linux-gnu.tar.gz"), "not the pinned uv", 0o644)
+	h.write(filepath.Join(h.down, "uv-x86_64-unknown-linux-gnu.tar.gz"), "not the pinned uv")
 
 	out, err := h.setup()
 
@@ -689,7 +698,7 @@ func TestHostSetup_ReadsTheGoVersionFromGoMod(t *testing.T) {
 
 			h := newFakeHost(t)
 			goRoot := h.sysroot + "/usr/local/go"
-			h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\n"+tc.toolchain, 0o644)
+			h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\n"+tc.toolchain)
 			h.serveGo("go1.27.9", tc.sha, tc.broken)
 
 			out, err := h.setup()
@@ -742,8 +751,8 @@ func (h *fakeHost) serveGo(version, sha string, broken bool) {
 	}
 
 	file := version + ".linux-amd64.tar.gz"
-	h.write(filepath.Join(h.down, file), archive.String(), 0o644)
-	h.write(filepath.Join(h.down, "go.json"), `[{"version":"`+version+`","files":[{"filename":"`+file+`","sha256":"`+sha+`"}]}]`, 0o644)
+	h.write(filepath.Join(h.down, file), archive.String())
+	h.write(filepath.Join(h.down, "go.json"), `[{"version":"`+version+`","files":[{"filename":"`+file+`","sha256":"`+sha+`"}]}]`)
 }
 
 func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
@@ -754,7 +763,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 
 		h := newFakeHost(t)
 		goRoot := h.sysroot + "/usr/local/go"
-		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n", 0o644)
+		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n")
 		h.serveGo("go1.27.9", "", false)
 
 		for run := 1; run <= 2; run++ {
@@ -776,7 +785,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 
 		h := newFakeHost(t)
 		goRoot := h.sysroot + "/usr/local/go"
-		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n", 0o644)
+		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n")
 		h.serveGo("go1.27.9", "", false)
 
 		for run := 1; run <= 2; run++ {
@@ -797,11 +806,11 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 
 		h := newFakeHost(t)
 		goRoot := h.sysroot + "/usr/local/go"
-		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n", 0o644)
+		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n")
 		h.serveGo("go1.27.9", "", false)
 
 		for run := 1; run <= 2; run++ {
-			h.write(h.log, "", 0o644)
+			h.write(h.log, "")
 			out, err := h.setup("FAKE_MV_SPOIL=" + goRoot + ".new/go")
 
 			require.Error(t, err, "run %d", run)
@@ -826,7 +835,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 
 		h := newFakeHost(t)
 		goRoot := h.sysroot + "/usr/local/go"
-		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n", 0o644)
+		h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain go1.27.9\n")
 		h.serveGo("go1.27.9", "", false)
 
 		// The new Go fails its check after the swap, and it does not move out again: the old Go stays in the backup.
@@ -837,7 +846,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		assert.Contains(t, h.read(goRoot+".old/bin/go"), pinnedGo, "the old Go is in the backup")
 		assert.Contains(t, h.read(goRoot+"/bin/go"), "spoiled", "the Go that failed its check is in place")
 
-		h.write(h.log, "", 0o644)
+		h.write(h.log, "")
 		out, err = h.setup()
 
 		require.Error(t, err)
@@ -865,7 +874,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 
 		h := newFakeHost(t)
 		goRoot := h.sysroot + "/usr/local/go"
-		h.write(goRoot+".old/bin/go", fakeGo("go1.27.0"), 0o755)
+		h.program(goRoot+".old/bin/go", fakeGo("go1.27.0"))
 
 		out, err := h.setup()
 
@@ -881,7 +890,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		goRoot := h.sysroot + "/usr/local/go"
 		h.serveGo(pinnedGo, "", false)
 		require.NoError(t, h.root.RemoveAll(h.rel(goRoot)))
-		h.write(goRoot+".old/bin/go", fakeGo(pinnedGo), 0o755)
+		h.program(goRoot+".old/bin/go", fakeGo(pinnedGo))
 
 		out, err := h.setup()
 
@@ -925,7 +934,7 @@ func TestHostSetup_ProvesEachToolThroughAUserUnit(t *testing.T) {
 		t.Parallel()
 
 		h := newFakeHost(t)
-		h.write(filepath.Join(h.home, "go/bin/dolt"), "#!/bin/sh\ncat >/dev/null\necho 'dolt version 1.82.4'\n", 0o755)
+		h.program(filepath.Join(h.home, "go/bin/dolt"), "#!/bin/sh\ncat >/dev/null\necho 'dolt version 1.82.4'\n")
 
 		out, err := h.setup()
 
@@ -1005,7 +1014,7 @@ func TestHostSetup_PutsTheToolFoldersOnThePathOfTheUserManager(t *testing.T) {
 	t.Parallel()
 
 	h := newFakeHost(t)
-	h.write(h.envFile(), "PATH=/stale\n", 0o644)
+	h.write(h.envFile(), "PATH=/stale\n")
 
 	out, err := h.setup()
 
@@ -1052,7 +1061,7 @@ func TestHostSetup_ASecondRunChangesNothing(t *testing.T) {
 	firstLog := h.read(h.log)
 	assert.Contains(t, firstLog, "\nsudo loginctl enable-linger builder\n", "the first run turns on linger")
 	assert.Contains(t, firstLog, "\nsystemctl --user daemon-reload\n", "the first run writes the environment file")
-	h.write(h.log, "", 0o644)
+	h.write(h.log, "")
 
 	out, err = h.setup()
 	require.NoError(t, err, out)
@@ -1097,7 +1106,7 @@ func TestHostSetup_AKernelWithoutLandlockIsAWarning(t *testing.T) {
 
 			h := newFakeHost(t)
 			if tc.lsm != "" {
-				h.write(filepath.Join(h.sysroot, "sys/kernel/security/lsm"), tc.lsm+"\n", 0o644)
+				h.write(filepath.Join(h.sysroot, "sys/kernel/security/lsm"), tc.lsm+"\n")
 			}
 
 			out, err := h.setup("FAKE_KERNEL=" + tc.kernel)
@@ -1127,11 +1136,11 @@ func TestHostSetup_TheFakeUserManagerReadsTheEnvironmentFilesInNameOrder(t *test
 		require.NoError(t, h.root.Remove(h.rel(filepath.Join(h.sysroot, "usr/lib/environment.d", name))))
 	}
 
-	h.write(filepath.Join(h.sysroot, "etc/environment.d/20-a.conf"), "A=1\nPATH=/one\n", 0o644)
-	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/30-b.conf"), "PATH=\"/two:${PATH}\"\n", 0o644)
-	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/40-c.conf"), "C=system\n", 0o644)
-	h.write(filepath.Join(h.home, ".config/environment.d/40-c.conf"), "C=home\n", 0o644)
-	h.write(filepath.Join(h.home, ".config/environment.d/50-d.conf"), "PATH=$PATH:/dollar\n", 0o644)
+	h.write(filepath.Join(h.sysroot, "etc/environment.d/20-a.conf"), "A=1\nPATH=/one\n")
+	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/30-b.conf"), "PATH=\"/two:${PATH}\"\n")
+	h.write(filepath.Join(h.sysroot, "usr/lib/environment.d/40-c.conf"), "C=system\n")
+	h.write(filepath.Join(h.home, ".config/environment.d/40-c.conf"), "C=home\n")
+	h.write(filepath.Join(h.home, ".config/environment.d/50-d.conf"), "PATH=$PATH:/dollar\n")
 
 	assert.Equal(t, "A=1\nC=home\nPATH=/two:/one:/dollar\n", h.unitEnvironment(),
 		"files apply in name order across folders, a home file hides the system file of its name, and both forms of $PATH expand")
@@ -1154,7 +1163,7 @@ func TestHostSetup_FailsWhenALaterFileReplacesThePath(t *testing.T) {
 	t.Parallel()
 
 	h := newFakeHost(t)
-	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:/usr/bin:/bin\n", 0o644)
+	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:/usr/bin:/bin\n")
 
 	out, err := h.setup()
 
@@ -1174,7 +1183,7 @@ func TestHostSetup_FailsWhenALaterFilePrependsToThePath(t *testing.T) {
 	t.Parallel()
 
 	h := newFakeHost(t)
-	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:${PATH}\n", 0o644)
+	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:${PATH}\n")
 
 	out, err := h.setup()
 
@@ -1191,7 +1200,7 @@ func TestHostSetup_ChecksThePathAgainOnASecondRun(t *testing.T) {
 	require.NoError(t, err, out)
 	require.Equal(t, done, lastLine(out))
 
-	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:/usr/bin:/bin\n", 0o644)
+	h.write(filepath.Join(h.sysroot, "etc/environment.d/zzz-site.conf"), "PATH=/opt/site/bin:/usr/bin:/bin\n")
 
 	out, err = h.setup()
 
