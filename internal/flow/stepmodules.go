@@ -35,8 +35,8 @@ const coreVersion = 3
 
 // agentVersion is the version of the agent module. Version 2 added the limit field to the phase output, and the limit step and the later looks at the caps
 // that an agent call records when a provider limit stops its run. Version 3 added the start_head field to the phase input, the session and diff_stat fields
-// to the record of a lost step, and the resumed field to the phase output.
-const agentVersion = 3
+// to the record of a lost step, and the resumed field to the phase output. Version 4 added the tree_start field to the phase input.
+const agentVersion = 4
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
@@ -51,6 +51,10 @@ const forgeVersion = 2
 // Version 4 records a lost job that has a proof in the item run (<call>/host-loss), and the gate step records host_losses, the count of the host losses of the item tree.
 // Version 5 added the revert field to the results of gate and before_review, and the revert run to the checks of a candidate gate.
 const gateVersion = 5
+
+// roundVersion is the version of the round module. Version 2 added the step of the engine that makes the worktree at the start of every round item.
+// No builtin records that step, so a move to this build compares the round module for every run of a round item (requireSameRoundModule).
+const roundVersion = 2
 
 // stepModule is one module of the table: its version and the step kinds that it records.
 type stepModule struct {
@@ -69,7 +73,7 @@ func moduleTable() []stepModule {
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, mergeKey, kindPreflight}},
 		{name: moduleGate, version: gateVersion, kinds: []string{"before_review", kindGate}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
-		{name: moduleRound, version: 1, kinds: []string{kindQueue, scopeStep, scopeCheckStep}},
+		{name: moduleRound, version: roundVersion, kinds: []string{kindQueue, scopeStep, scopeCheckStep}},
 	}
 }
 
@@ -84,7 +88,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core3.agent3.tracker1.forge2.land3.gate5.host1.round1.
+// moduleVersions is the list of module versions of this build, such as core3.agent4.tracker1.forge2.land3.gate5.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

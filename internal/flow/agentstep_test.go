@@ -1027,3 +1027,29 @@ func TestAgentStep_AForbidCommandsKindThatTheFileDoesNotKnowIsRefusedWhenTheStep
 	require.ErrorContains(t, err, "list of strings")
 	assert.Empty(t, rig.h.agents.seen())
 }
+
+func TestAgentStep_TheStartMarkIsTheHeadOfTheFolderAndAMarkThatGitCannotWriteIsAnError(t *testing.T) {
+	t.Parallel()
+
+	dir, head := gitTree(t)
+
+	got, err := agentArgs{dir: dir}.writeStartMark(t.Context())
+
+	require.NoError(t, err)
+	assert.Equal(t, head, got)
+	assert.Equal(t, head, strings.TrimSpace(gitIn(t, dir, "for-each-ref", "--format=%(objectname)", callStartRef)), "the folder holds the mark at its head")
+
+	got, err = agentArgs{dir: t.TempDir(), plain: true}.writeStartMark(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, got, "a plain folder has no head and no mark")
+
+	_, err = agentArgs{dir: t.TempDir()}.writeStartMark(t.Context())
+	require.ErrorContains(t, err, "read HEAD of the item folder")
+
+	// A lock file of the ref makes git refuse the write.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "refs", "worktree", "beehave"), 0o750))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "worktree", "beehave", "call-start.lock"), nil, 0o600))
+
+	_, err = agentArgs{dir: dir}.writeStartMark(t.Context())
+	require.ErrorContains(t, err, "write the start mark of the item folder")
+}

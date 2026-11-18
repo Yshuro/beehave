@@ -50,6 +50,9 @@ type script struct {
 	ctx   dbos.Context
 	in    ItemInput
 	login string
+	// treeStart is the commit that the recorded step made the worktree of a round item at. A step that finds the worktree removed makes it again there.
+	// It is empty for any other item.
+	treeStart string
 	// severity is the severity that the tracker gave the item, from the recorded fields of the run. It sets the place of the gates and the agent steps of the run in their queues.
 	severity model.Severity
 

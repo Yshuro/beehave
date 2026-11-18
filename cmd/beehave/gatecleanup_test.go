@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -207,4 +208,19 @@ func TestOwnerAlive(t *testing.T) {
 	assert.False(t, ownerAlive("999999999-x"))
 	assert.False(t, ownerAlive("stray"))
 	assert.False(t, ownerAlive("0-x"))
+}
+
+func TestForgetCopies_AListThatFailsRemovesNoRecord(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	root := t.TempDir()
+	calls := filepath.Join(t.TempDir(), "calls")
+	// The failed listing still prints the path of a gate copy that is gone. A listing that failed is not trusted, so no record goes.
+	putGitOnPath(t, "#!/bin/sh\necho \"$*\" >> '"+calls+"'\necho 'worktree "+filepath.Join(root, "gone")+"'\necho 'fatal: not a git repository' >&2\nexit 128\n")
+
+	forgetCopies(t.Context(), t.TempDir(), root)
+
+	text, err := os.ReadFile(calls) //nolint:gosec // a file of the test
+	require.NoError(t, err)
+	lines := strings.Split(strings.TrimSpace(string(text)), "\n")
+	require.Len(t, lines, 1, "git ran the listing and nothing else")
+	assert.Contains(t, lines[0], "worktree list --porcelain")
 }

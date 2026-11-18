@@ -397,7 +397,7 @@ func TestProjectGate_RefusesWhatItCannotRunWithoutRunningTheGate(t *testing.T) {
 		name     string
 		projects map[string]config.Project
 		project  string
-		trees    treeFinder
+		trees    programTrees
 		head     model.CommandResult
 		forge    func(model.Project) (forge.Forge, error)
 		wantErr  string

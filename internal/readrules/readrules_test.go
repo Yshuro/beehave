@@ -168,7 +168,6 @@ var rules = map[string]rule{
 	"internal/flow.forge.PlaceCard":               {NotHeld: inAdapter},
 	"internal/flow.forge.ReadCard":                {NotHeld: inAdapter},
 	"internal/flow.forge.Assign":                  {NotHeld: inAdapter},
-	"internal/flow.trees.Path":                    {NotHeld: inAdapter},
 	"internal/flow.watcher.Watch":                 {NotHeld: inAdapter},
 	"internal/forge.Boarder.CardStatus":           {NotHeld: inAdapter},
 	"internal/forge.Syncer.CommitsAhead":          {NotHeld: inAdapter},
@@ -214,6 +213,7 @@ var rules = map[string]rule{
 	"internal/store.ClaimRows.HeldRows":           {NotHeld: inAdapter},
 	"internal/store.ClaimRows.Reclaim":            {NotHeld: inAdapter},
 	"cmd/beehave.treeFinder.Path":                 {NotHeld: inAdapter},
+	"cmd/beehave.programTrees.Ensure":             {Exempt: doesWork},
 	"cmd/beehave.loginReader.Login":               {NotHeld: noEngine},
 }
 

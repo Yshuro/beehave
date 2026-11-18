@@ -282,6 +282,8 @@ type CommandRequest struct {
 	Stdin string
 	// Env is the whole environment of the program as NAME=value pairs. It is nil for a request that keeps the environment of the process.
 	Env []string
+	// TreeStart is the commit that the recorded step made the worktree of a round item at. A worktree that someone removed is made again there. It is empty for any other item.
+	TreeStart string
 }
 
 // CommandOutput is what a program printed and its exit code. A non-zero RC is data, not an error.
