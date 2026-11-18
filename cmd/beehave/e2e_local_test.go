@@ -59,6 +59,8 @@ func e2eReal() {
 	factory := flowFactoryFrom(func(ctx context.Context, cfg config.Config, opts flow.Options) (*flow.Engine, error) {
 		return newEngineReading(ctx, cfg, opts, idle)
 	})
+	e2eRecordRun(os.Args[1:])
+
 	code := cli.Execute(ctx, os.Args[1:], buildInfo(env, e2eVersion, factory), env, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
