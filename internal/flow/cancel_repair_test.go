@@ -46,7 +46,7 @@ var errPauseFunction = sqlite.RegisterScalarFunction("pause_cancel", 1, func(_ *
 	if found, ok := storePauses.Load(fmt.Sprint(args[0])); ok {
 		if pause, ok := found.(*storePause); ok { // the map holds only pauses
 			pause.enter()
-			<-pause.out
+			hang(pause.out)
 		}
 	}
 
@@ -274,7 +274,7 @@ func resumeDuringACancel(t *testing.T, version string, resume func(c *Client) er
 		ended <- runErr
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName))
 	require.NoError(t, err)
@@ -321,7 +321,7 @@ func resumeDuringACancel(t *testing.T, version string, resume func(c *Client) er
 	eventually(t, blockedIn(<-ids, "flock.(*Flock).Lock", "dbos.RewindWorkflow", "dbos.ResumeWorkflow"))
 	release()
 
-	require.NoError(t, <-canceled)
-	require.NoError(t, <-resumed)
+	require.NoError(t, receive(t, canceled))
+	require.NoError(t, receive(t, resumed))
 	assert.NotEqual(t, dbos.WorkflowStatusCancelled, statusIn(t, h, job), "the resume reopened the job that the cancel reached")
 }

@@ -232,7 +232,7 @@ func TestQueueLoop_ReadyItemsStartInFreeSlotsWhileOneItemLoops(t *testing.T) {
 	assert.False(t, itemEnded(engine, "21"), "the item that loops keeps its run open")
 
 	close(loops)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 	assert.ElementsMatch(t, []string{"21", "22", "23", "24"}, r.agents.started())
 }
 
@@ -319,7 +319,7 @@ func TestQueueLoop_OnePassStartsNoMoreRunsThanFreeSlots(t *testing.T) {
 	assert.Equal(t, slots, spawned, "the first pass spawns one run for each free slot and no more")
 
 	close(loops)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 }
 
 func TestQueueLoop_ACrashAfterSpawnAndAResumeStartNoItemTwice(t *testing.T) {
@@ -328,7 +328,7 @@ func TestQueueLoop_ACrashAfterSpawnAndAResumeStartNoItemTwice(t *testing.T) {
 	r := newLoopRig(t, queueItem("21", model.SeverityP1), queueItem("22", model.SeverityP1), queueItem("23", model.SeverityP1))
 	r.agents.setAct(func(ctx context.Context, item string) error {
 		if item == "21" || item == "22" {
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}

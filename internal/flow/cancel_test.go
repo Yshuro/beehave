@@ -27,10 +27,10 @@ func shutdownOpeningGate(t *testing.T, engine *Engine, gate chan struct{}) {
 
 	go func() { stopped <- engine.Shutdown() }()
 
-	<-engine.ctx.Done()
+	receive(t, engine.ctx.Done())
 	close(gate)
 
-	require.NoError(t, <-stopped)
+	require.NoError(t, receive(t, stopped))
 }
 
 func TestCancel_AnEngineThatRunsTheItemReleasesTheClaimOnItsNextTick(t *testing.T) {

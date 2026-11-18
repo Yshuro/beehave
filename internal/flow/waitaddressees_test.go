@@ -57,7 +57,7 @@ func TestWait_AQuorumOfNamedPeopleEndsTheWait(t *testing.T) {
 
 	require.NoError(t, client.AnswerAs(testItem, "cy", "no"))
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 }
@@ -80,7 +80,7 @@ func TestWait_AnAnswerFromSomeoneNotNamedIsRefused(t *testing.T) {
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
 	require.NoError(t, client.AnswerAs(testItem, "bo", "no"))
-	<-done
+	receive(t, done)
 }
 
 func TestWait_AnAnswerOutsideTheChoicesIsRefused(t *testing.T) {
@@ -100,7 +100,7 @@ func TestWait_AnAnswerOutsideTheChoicesIsRefused(t *testing.T) {
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
 	require.NoError(t, client.AnswerAs(testItem, "bo", "no"))
-	<-done
+	receive(t, done)
 }
 
 func TestWait_ASecondAnswerOfOnePersonReplacesTheFirstAndCountsOnce(t *testing.T) {
@@ -131,7 +131,7 @@ func TestWait_ASecondAnswerOfOnePersonReplacesTheFirstAndCountsOnce(t *testing.T
 
 	require.NoError(t, client.AnswerAs(testItem, "bo", "ok"))
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestWait_AnAnswerWithNoNamesNeedsNoName(t *testing.T) {
@@ -154,7 +154,7 @@ func TestWait_AnAnswerWithNoNamesNeedsNoName(t *testing.T) {
 	require.ErrorContains(t, client.AnswerAs(testItem, "ana", "b"), "this wait names no people")
 	require.NoError(t, client.Answer(testItem, "b"))
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestWait_AWaitWithNoNamesRefusesAName(t *testing.T) {
@@ -170,7 +170,7 @@ func TestWait_AWaitWithNoNamesRefusesAName(t *testing.T) {
 
 	require.ErrorContains(t, client.AnswerAs(testItem, "ana", "yes"), "this wait names no people")
 	require.NoError(t, client.Answer(testItem, "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestWait_ADeadlineEndsAQuorumThatNobodyReached(t *testing.T) {
@@ -208,7 +208,7 @@ func TestWait_ADeadlineEndsAQuorumThatNobodyReached(t *testing.T) {
 
 	stop()
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
+	require.Error(t, receive(t, ended))
 
 	past := base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(time.Now().Add(-time.Second).UnixMilli(), 10)))
 	// The deadline of the wait and the end of the receive that DBOS recorded for the second voice are both moved.
@@ -218,7 +218,7 @@ func TestWait_ADeadlineEndsAQuorumThatNobodyReached(t *testing.T) {
 	require.NoError(t, err)
 	require.GreaterOrEqual(t, rows, int64(2), "the wait recorded its deadline and the end of its receive")
 
-	require.NoError(t, (<-runInBackground(h.engine(t), testItem)).err)
+	require.NoError(t, receive(t, runInBackground(h.engine(t), testItem)).err)
 }
 
 func TestWait_AReplayCountsTheSameAnswers(t *testing.T) {
@@ -249,7 +249,7 @@ func TestWait_AReplayCountsTheSameAnswers(t *testing.T) {
 	// The engine stops as a crash would, with the first answer recorded and the quorum not reached.
 	stop()
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
+	require.Error(t, receive(t, ended))
 
 	next := h.engine(t)
 	done := runInBackground(next, testItem)
@@ -257,7 +257,7 @@ func TestWait_AReplayCountsTheSameAnswers(t *testing.T) {
 	eventually(t, func() bool { a := askedOf(t, client); return a != nil && len(a.Heard) == 1 })
 	require.NoError(t, client.AnswerAs(testItem, "cy", "no"))
 
-	require.NoError(t, (<-done).err, "the replay counts the answer of ana from its record and the new answer of cy")
+	require.NoError(t, receive(t, done).err, "the replay counts the answer of ana from its record and the new answer of cy")
 }
 
 func TestWait_ARecordFromBeforeTheChangeReadsAnswersAsEmpty(t *testing.T) {
@@ -291,7 +291,7 @@ func TestWait_TheAskEventHoldsTheQuestionToo(t *testing.T) {
 	require.NotNil(t, askedOf(t, client))
 	assert.Equal(t, "Ship it?", askedOf(t, client).Question)
 	require.NoError(t, client.AnswerAs(testItem, "", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 // A wait that asks people opens with one write and ends with one write, both to the ask event. It never writes the question event, so no moment shows
@@ -313,7 +313,7 @@ func TestWait_AWaitWithPeopleOpensAndEndsInOneEvent(t *testing.T) {
 	require.NotEmpty(t, askedOf(t, client).Wait, "the ask event names its wait")
 
 	require.NoError(t, client.AnswerAs(testItem, "", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	asked, err := dbos.GetEvent[Asked](client.flow, testRun, askKey, time.Second)
 	require.NoError(t, err)
@@ -357,7 +357,7 @@ func TestWait_ALateVoiceOfAnEarlierWaitIsNotCounted(t *testing.T) {
 	assert.Empty(t, askedOf(t, client).Heard, "the vote of the first wait is not a vote of the second")
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "second"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestStatus_AWaitThatNamesPeopleShowsItsDeadline(t *testing.T) {
@@ -376,5 +376,5 @@ func TestStatus_AWaitThatNamesPeopleShowsItsDeadline(t *testing.T) {
 	assert.WithinDuration(t, before.Add(time.Hour), onlyRun(t, client).Deadline, time.Minute)
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }

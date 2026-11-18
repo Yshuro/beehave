@@ -44,7 +44,7 @@ func TestWaitRemind_ARestartNeitherRepeatsASentReminderNorLosesAnOwedOne(t *test
 	eventually(t, func() bool { return remindedIs(t, client, 1) })
 
 	require.NoError(t, first.Shutdown())
-	require.Error(t, (<-done).err, "the stopped engine ends the run and leaves it open")
+	require.Error(t, receive(t, done).err, "the stopped engine ends the run and leaves it open")
 
 	// The second reminder falls due while no engine runs.
 	clk.advance(20 * time.Minute)
@@ -57,7 +57,7 @@ func TestWaitRemind_ARestartNeitherRepeatsASentReminderNorLosesAnOwedOne(t *test
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
 
-	_, err = joinRun(handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{remindStepPrefix + "1", remindStepPrefix + "2"}, remindSteps(t, client))

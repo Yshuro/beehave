@@ -63,7 +63,7 @@ func TestSpawnGather_AResumeKeepsAChildThatTheUserCanceledByHand(t *testing.T) {
 		switch {
 		case request.Item == "23" && failing.Load():
 			once.Do(func() { close(held) })
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		case request.Item == testItem && failing.Load():
@@ -79,13 +79,13 @@ func TestSpawnGather_AResumeKeepsAChildThatTheUserCanceledByHand(t *testing.T) {
 	canceled := make(chan error, 1)
 
 	go func() {
-		<-held
+		receive(t, held)
 		canceled <- handCancel(resumer, "23")
 	}()
 
 	_, err := engine.RunFile(testItem, testProject, writeFlow(t, afterFails))
 	require.ErrorIs(t, err, errFake)
-	require.NoError(t, <-canceled)
+	require.NoError(t, receive(t, canceled))
 	require.Equal(t, dbos.WorkflowStatusCancelled, childStatus(t, engine, "23"))
 
 	failing.Store(false)
@@ -113,7 +113,7 @@ func TestSpawnGather_TheGatherRecordsTheRunsThatTheRaiseCanceled(t *testing.T) {
 
 	h.commands.before = func(ctx context.Context, request CommandRequest) error {
 		if request.Item == "22" {
-			<-started
+			receive(t, started)
 
 			return errFake
 		}
@@ -122,7 +122,7 @@ func TestSpawnGather_TheGatherRecordsTheRunsThatTheRaiseCanceled(t *testing.T) {
 			close(started)
 		}
 
-		<-ctx.Done()
+		receive(t, ctx.Done())
 
 		return ctx.Err()
 	}
@@ -240,11 +240,11 @@ func TestSpawnGather_AResumeThatFailsOnTheSecondChildLeavesTheParentAndLetsTheFi
 			return nil
 		case request.Item == "22":
 			once.Do(func() { close(held) })
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		case request.Item == "21":
-			<-held
+			receive(t, held)
 
 			return errFake
 		}
@@ -300,7 +300,7 @@ func TestSpawnGather_ARaiseOnAChildCanceledByHandSaysThatResumeKeepsItCanceled(t
 	h.commands.before = func(ctx context.Context, request CommandRequest) error {
 		if request.Item == "23" {
 			once.Do(func() { close(held) })
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -314,12 +314,12 @@ func TestSpawnGather_ARaiseOnAChildCanceledByHandSaysThatResumeKeepsItCanceled(t
 	canceled := make(chan error, 1)
 
 	go func() {
-		<-held
+		receive(t, held)
 		canceled <- handCancel(resumer, "23")
 	}()
 
 	_, err := engine.RunFile(testItem, testProject, writeFlow(t, swarmFile(`fail = "raise", `)))
-	require.NoError(t, <-canceled)
+	require.NoError(t, receive(t, canceled))
 	require.ErrorContains(t, err, "item 23 did not finish")
 	require.ErrorContains(t, err, "It was canceled by hand, and beehave resume 12 does not reopen a child canceled by hand")
 }

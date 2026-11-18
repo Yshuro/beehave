@@ -47,7 +47,7 @@ func parkedRigSeeded(t *testing.T, parked string, seed map[string]string) (*agen
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 
-	return rig, writer, <-done
+	return rig, writer, receive(t, done)
 }
 
 const parkedOne = `[{"id":"retry-loop","title":"The retry loop never stops","body":"## Problem\nIt spins.","found":"Run go test ./retry at commit abc: it hangs.","severity":"P1","operator":true}]`

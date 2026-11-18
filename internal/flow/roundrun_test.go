@@ -62,7 +62,7 @@ func TestRoundRun_ARoundItemKeepsItsSlashesOutOfTheRunIdAndTheCancelMarkerFolder
 	assert.False(t, markers[0].IsDir())
 
 	harness.tick(t)
-	<-done
+	receive(t, done)
 }
 
 func TestRoundRun_CancelRunStopsTheOlderRunOfAnItemAndLeavesTheNewerOpen(t *testing.T) {
@@ -87,7 +87,7 @@ func TestRoundRun_CancelRunStopsTheOlderRunOfAnItemAndLeavesTheNewerOpen(t *test
 
 	require.NoError(t, client.CancelRun(newer))
 	harness.tick(t)
-	<-done
+	receive(t, done)
 }
 
 func TestRoundRun_CancelRunStopsARunUnderAPassId(t *testing.T) {
@@ -108,7 +108,7 @@ func TestRoundRun_CancelRunStopsARunUnderAPassId(t *testing.T) {
 
 	require.NoError(t, client.CancelRun("item-round/integration/s1-r1"))
 	harness.tick(t)
-	<-done
+	receive(t, done)
 }
 
 func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBuild(t *testing.T) {
@@ -129,7 +129,7 @@ func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBui
 
 	require.NoError(t, same.CancelRun("item-12-r1"))
 	harness.tick(t)
-	<-done
+	receive(t, done)
 
 	require.ErrorIs(t, other.CancelRun("item-12-r1"), errWrongState, "a finished run of another build has nothing to cancel")
 	require.ErrorIs(t, same.CancelRun("item-12-r1"), errWrongState)
@@ -215,7 +215,7 @@ func TestRoundRun_CancelRunRefusesARunOfAnotherBuildAndARunThatHasEnded(t *testi
 	require.ErrorIs(t, client.CancelRun("item-12-r1"), errWrongState, "a run that ended has nothing to cancel")
 
 	harness.tick(t)
-	<-done
+	receive(t, done)
 }
 
 // A finished run is refused, and the refusal names its state.
@@ -247,7 +247,7 @@ func TestRoundRun_CancelRunReportsAStoreThatIsGone(t *testing.T) {
 
 // blockedOnText is a workflow under the pass name whose input is not an item input and which stays open until the engine stops.
 func blockedOnText(ctx dbos.Context, _ string) (string, error) {
-	<-ctx.Done()
+	hang(ctx.Done())
 
 	return "", ctx.Err()
 }

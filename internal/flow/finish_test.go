@@ -64,7 +64,7 @@ func TestFinish_DoesNotRunWhenTheRunIsCanceled(t *testing.T) {
 	require.NoError(t, h.client(t, testVersion).Cancel(testItem))
 	h.tick(t) // the engine of the run learns of the cancel from its tick, which the harness sends
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.Error(t, outcome.err)
 	assert.NotContains(t, outcome.err.Error(), "finish: ", "a cancel does not call finish, so finish reports nothing")

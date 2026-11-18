@@ -174,7 +174,7 @@ func TestLostJob_TheLimitIsReadFromTheConfigAtTheTimeOfTheLook(t *testing.T) {
 	eventually(t, func() bool { return hosts.proofReads() >= 2 })
 	stop()
 	require.NoError(t, first.Shutdown())
-	<-ended
+	receive(t, ended)
 
 	// The old limit has passed. The config of the next engine raises it, so the looks go on.
 	clock.advance(5 * time.Minute)
@@ -187,7 +187,7 @@ func TestLostJob_TheLimitIsReadFromTheConfigAtTheTimeOfTheLook(t *testing.T) {
 	eventually(t, func() bool { return hosts.proofReads() >= before+2 })
 	hosts.prove(model.LostProof{Kind: model.LostStopped})
 
-	outcome := <-done
+	outcome := receive(t, done)
 	require.ErrorContains(t, outcome.err, "proof=stopped", "the wait went on past the old limit and ended with the proof")
 	assert.EqualValues(t, 1, h.gate.submits.Load())
 }
@@ -250,7 +250,7 @@ func TestLostJob_ACanceledWaitReadsTheProofOnceAndNeverCancelsTheJob(t *testing.
 
 		return hosts.proofReads() == 2
 	})
-	require.NoError(t, (<-current).err, "the gate of the new head runs once the wait has ended")
+	require.NoError(t, receive(t, current).err, "the gate of the new head runs once the wait has ended")
 
 	assert.Equal(t, 2, hosts.proofReads(), "the canceled wait reads the proof once more, and never again")
 	assert.Equal(t, []string{"box/job-1", "box/job-1"}, hosts.proved)
@@ -273,7 +273,7 @@ func (g *lostOnCancelGate) Run(ctx context.Context, project, item, host string, 
 
 	g.runs.Add(1)
 	g.waiting.Store(true)
-	<-ctx.Done()
+	hang(ctx.Done())
 
 	return GateResult{}, lostError()
 }
@@ -314,7 +314,7 @@ func TestLostJob_ALossThatACancelEndedStartsNoWaitAndReadsNoProof(t *testing.T) 
 	current := queueHostGate(engine, testProject, testItem, "B", "box")
 
 	require.ErrorIs(t, endsAfterTicks(t, h, old).err, errSuperseded)
-	require.NoError(t, (<-current).err, "the gate of the new head runs once the canceled gate has ended")
+	require.NoError(t, receive(t, current).err, "the gate of the new head runs once the canceled gate has ended")
 
 	names, runs := everyHostJobStep(t, engine)
 	require.Equal(t, 2, runs, "one host job run for each head")
@@ -350,11 +350,11 @@ func TestLostJob_TheWaitHoldsTheHostSoASecondGateOnItStartsOnlyAfterTheProof(t *
 
 	hosts.prove(model.LostProof{Kind: model.LostStopped})
 
-	end := <-first
+	end := receive(t, first)
 	require.NoError(t, end.err)
 	require.NotNil(t, end.out.Lost, "the first gate ended with the proof")
 	assert.Equal(t, model.LostStopped, end.out.Lost.Proof.Kind)
-	require.NoError(t, (<-second).err, "the second gate runs once the wait has ended")
+	require.NoError(t, receive(t, second).err, "the second gate runs once the wait has ended")
 	assert.EqualValues(t, 2, gated.submits.Load())
 }
 
@@ -604,7 +604,7 @@ func TestLostJob_ContinueAfterTheHostCameBackReadsTheProofBeforeAnyRerun(t *test
 	hosts.prove(model.LostProof{Kind: model.LostStopped})
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "CONTINUE"))
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.ErrorContains(t, outcome.err, `GATE passed=False steps=["unknown", "unknown"] proof=stopped host=gpu-b job=job-1 report=the gate job was lost on gpu-b and the proof is stopped`)
 	assert.Equal(t, before+1, hosts.proofReads(), "the answer reads the proof once")
@@ -636,7 +636,7 @@ func TestLostJob_AProofReadThatFailsAfterAnAnswerFailsTheGate(t *testing.T) {
 	hosts.mu.Unlock()
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "CONTINUE"))
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.ErrorContains(t, outcome.err, `gate "check" lost its job: read the proof that the lost job job-1 on host gpu-b can no longer run: the job id is not a unit of this host`)
 	assert.EqualValues(t, 1, h.gate.submits.Load())

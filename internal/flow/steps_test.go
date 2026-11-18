@@ -126,7 +126,7 @@ func TestClient_StepsOfARunInItsAgentStepShowTheStepAsRunningWithItsElapsedTime(
 	}
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	view, err = client.Steps(testRun)
 	require.NoError(t, err)

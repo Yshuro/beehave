@@ -191,5 +191,5 @@ command(run = ["done"])
 	assert.Len(t, rig.h.agents.seen(), 2, "a ran once, b ran once, c never started")
 
 	require.NoError(t, next.Shutdown())
-	<-done
+	receive(t, done)
 }

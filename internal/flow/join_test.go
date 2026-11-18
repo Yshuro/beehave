@@ -126,7 +126,7 @@ func TestJoinRun_ACancelledCallerLeavesNoPollerBehind(t *testing.T) {
 	eventually(t, func() bool { return len(rowsOf(t, client, testItem)) == 1 })
 	stop()
 
-	require.ErrorIs(t, <-done, context.Canceled)
+	require.ErrorIs(t, receive(t, done), context.Canceled)
 
 	eventually(t, func() bool {
 		stacks := make([]byte, 1<<20)
@@ -192,8 +192,8 @@ func TestJoinRun_AnOpenRunIsJoinedAndNotEnqueuedAgain(t *testing.T) {
 	})
 	require.NoError(t, client.Answer(testItem, "go on"))
 
-	require.NoError(t, <-started)
-	require.NoError(t, <-joined)
+	require.NoError(t, receive(t, started))
+	require.NoError(t, receive(t, joined))
 
 	rows := rowsOf(t, client, testItem)
 	require.Len(t, rows, 1)
@@ -315,7 +315,7 @@ func TestJoinRun_ACancelledCallerStopsWaitingAndTheRunStays(t *testing.T) {
 	eventually(t, func() bool { return len(rowsOf(t, client, testItem)) == 1 })
 	stop()
 
-	require.ErrorIs(t, <-done, context.Canceled)
+	require.ErrorIs(t, receive(t, done), context.Canceled)
 	assert.Len(t, rowsOf(t, client, testItem), 1)
 }
 

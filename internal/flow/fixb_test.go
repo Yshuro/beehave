@@ -26,7 +26,7 @@ func (hangingBeats) Renewed(context.Context, string, string, string) (time.Time,
 }
 
 func (hangingBeats) Beat(ctx context.Context, _, _ string) (string, error) {
-	<-ctx.Done()
+	hang(ctx.Done())
 
 	return "", ctx.Err()
 }
@@ -254,7 +254,7 @@ func TestAnswer_RefusesARunThatAsksNoQuestion(t *testing.T) {
 	require.ErrorContains(t, err, "asks no question")
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestRun_AnEmptyLoginFailsTheAgentStepAndStartsNoAgent(t *testing.T) {
@@ -481,7 +481,7 @@ func TestTick_AClaimRenewalThatHangsEndsAtItsOwnTimeout(t *testing.T) {
 
 	release()
 
-	outcome := <-done
+	outcome := receive(t, done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	require.ErrorContains(t, outcome.err, "deadline exceeded")
 }

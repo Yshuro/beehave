@@ -137,7 +137,7 @@ func TestSpawnGather_FailRaiseCancelsTheOpenChildrenAndRaisesAfterTheStep(t *tes
 	h.commands.before = func(ctx context.Context, request CommandRequest) error {
 		switch request.Item {
 		case "22":
-			<-started
+			receive(t, started)
 
 			return errFake
 		default:
@@ -145,7 +145,7 @@ func TestSpawnGather_FailRaiseCancelsTheOpenChildrenAndRaisesAfterTheStep(t *tes
 				close(started)
 			}
 
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -291,7 +291,7 @@ func TestSpawnGather_ResumeOfAFailedParentReopensASiblingThatTheRaiseCancelled(t
 
 			return errFake
 		case request.Item == "23":
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}
@@ -634,7 +634,7 @@ func TestSpawnGather_FiveChildrenRunAtMostMaxConcurrentAtOnce(t *testing.T) {
 	assert.True(t, waitUntil(func() bool { return countEnqueued(engine, items) == 3 }), "three children wait while two run")
 
 	close(release)
-	require.NoError(t, <-done)
+	require.NoError(t, receive(t, done))
 
 	assert.Equal(t, int32(2), peak.Load(), "the items queue holds agents.max_concurrent runs at once")
 }
@@ -648,7 +648,7 @@ func TestSpawnGather_CancelOfTheParentWhileItGathersEndsTheChildren(t *testing.T
 			return nil
 		}
 
-		<-ctx.Done()
+		receive(t, ctx.Done())
 
 		return ctx.Err()
 	}

@@ -29,7 +29,7 @@ func TestScope_ANewClosedIssueWithoutAnOwnerLineRefusesTheMergeAndNamesTheIssueA
 	waitForTheOwner(t, h)
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "no"))
 
-	err := (<-done).err
+	err := receive(t, done).err
 
 	require.ErrorIs(t, err, errScopeRefused)
 	require.ErrorContains(t, err, "#13 has no owner line")
@@ -48,7 +48,7 @@ func TestScope_AnOwnerLineThatNamesTheNewIssueLetsTheMergeGo(t *testing.T) {
 	waitForTheOwner(t, h)
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "keep #13"))
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Len(t, h.merge.asked, 1)
 }
 
@@ -63,7 +63,7 @@ func TestScope_TheIssuesTheOwnerKeptGoToTheMergeAsKept(t *testing.T) {
 	waitForTheOwner(t, h)
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, "keep #13"))
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	require.Len(t, h.merge.given, 1)
 	assert.Equal(t, []int{13}, h.merge.given[0].Kept)
 }
@@ -217,7 +217,7 @@ func answerTheScopeQuestion(t *testing.T, closing [][]int, gates int, answer str
 	waitForTheOwner(t, h)
 	require.NoError(t, h.client(t, testVersion).Answer(testItem, answer))
 
-	return h, (<-done).err
+	return h, receive(t, done).err
 }
 
 func TestScope_AnAnswerThatNamesAnotherNumberThatStartsWithTheIssueRefuses(t *testing.T) {
@@ -294,7 +294,7 @@ func TestScope_ANewRunOfTheItemKeepsTheScopeOfItsFirstReview(t *testing.T) {
 	})
 	require.NoError(t, client.Answer(testItem, "no"))
 
-	err = (<-done).err
+	err = receive(t, done).err
 
 	require.ErrorIs(t, err, errScopeRefused, "the second run compares with the first review of the first run")
 	require.ErrorContains(t, err, "#13 has no owner line")
@@ -341,7 +341,7 @@ func TestScope_AnEarlierRunThatFixedNoScopeLeavesTheNewRunToReadTheForge(t *test
 	})
 	require.NoError(t, client.Answer(testItem, "keep #13"))
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Len(t, h.merge.asked, 1)
 }
 

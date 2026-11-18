@@ -49,7 +49,7 @@ func holdOnCap(t *testing.T, rig *agentRig, file string) *CapStop {
 	stop := stoppedRun(t, client, testRun)
 
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 
 	return stop
 }
@@ -79,7 +79,7 @@ func TestBudget_TheTreeCapCountsTheRoundAndEveryChild(t *testing.T) {
 	assert.Equal(t, runRunning, steps.State)
 
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 }
 
 func TestBudget_AChildInheritsTheRootCap(t *testing.T) {
@@ -102,7 +102,7 @@ func TestBudget_AChildInheritsTheRootCap(t *testing.T) {
 	assert.Nil(t, stoppedRun(t, client, testRun), "the root run is not stopped: only the step of the child is")
 
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 }
 
 // deepTree runs a tree of three item runs: item 1 is the root, item 2 its child and item 3 the grandchild. Each run records the cost of 2 dollars the way an
@@ -269,7 +269,7 @@ func capRestart(t *testing.T, set func(h *harness, limit float64), scope string,
 	assert.Len(t, rig.h.agents.seen(), 2)
 
 	require.NoError(t, first.Shutdown())
-	require.Error(t, (<-done).err, "the stopped engine ends the call and leaves the run open")
+	require.Error(t, receive(t, done).err, "the stopped engine ends the call and leaves the run open")
 
 	set(rig.h, after)
 
@@ -277,7 +277,7 @@ func capRestart(t *testing.T, set func(h *harness, limit float64), scope string,
 	handle, err := dbos.RetrieveWorkflow[ItemResult](second.ctx, testRun)
 	require.NoError(t, err, "the launch of the second engine recovers the open run")
 
-	_, err = joinRun(handle)
+	_, err = resultOfHandle(t, handle)
 
 	require.NoError(t, err)
 	assert.Len(t, rig.h.agents.seen(), 3, "a and b are not run again after the restart: c runs once")

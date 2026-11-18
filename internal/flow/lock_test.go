@@ -52,7 +52,7 @@ func TestNewEngine_AStartIsNotRefusedByACheckThatHoldsTheEngineLockUnderTheProbe
 	require.NoError(t, check.Unlock())
 	require.NoError(t, probe.Unlock())
 
-	got := <-result
+	got := receive(t, result)
 	require.NoError(t, got.err, "the start waits for probe.lock, so it never meets the lock of a check")
 	require.NoError(t, got.engine.Shutdown())
 }

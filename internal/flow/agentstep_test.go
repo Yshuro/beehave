@@ -691,7 +691,7 @@ func TestAgentStep_AReplayKeepsTheOutputFileOfAnAgentThatAlreadyRan(t *testing.T
 	}()
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.FileExists(t, outputFile(rig.h.opts.StateDir, testItem, aStep), "the replay must not remove the file")
 }
@@ -792,7 +792,7 @@ func TestAgentStep_AReplayDoesNotReadThePromptFileOrRunTheAgentAgain(t *testing.
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 	assert.Len(t, rig.h.agents.seen(), 1, "the agent ran once")

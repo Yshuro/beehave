@@ -160,7 +160,7 @@ func TestStatus_AnOpenRunNamesTheStepThatRunsNow(t *testing.T) {
 	assert.Contains(t, info.Notes(), "now agent:work#1")
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.Empty(t, onlyRun(t, client).Now, "a finished run runs no step")
 }
@@ -171,11 +171,11 @@ func waitForTheDeadline(t *testing.T, client *Client) {
 
 	read := newStatusRead(client)
 
-	pollUntil(t, "the open run to show a question and a deadline", read.last, func() (bool, error) {
+	waitOn(t, waiting[struct{}]{what: "the open run to show a question and a deadline", run: runOfClient(t, client), last: read.last, read: func() (struct{}, bool, error) {
 		infos := read.next()
 
-		return read.err == nil && len(infos) == 1 && infos[0].Question != "" && !infos[0].Deadline.IsZero(), nil
-	})
+		return struct{}{}, read.err == nil && len(infos) == 1 && infos[0].Question != "" && !infos[0].Deadline.IsZero(), nil
+	}})
 }
 
 func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *testing.T) {
@@ -203,7 +203,9 @@ func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *test
 	assert.Equal(t, info.Deadline, view.Deadline, "the run view shows the same deadline")
 
 	require.NoError(t, client.Answer(testItem, "go on"))
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent of the answered run to start", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
+		return struct{}{}, harness.agents.running() == 1, nil
+	}})
 
 	info = onlyRun(t, client)
 	assert.Equal(t, runRunning, info.State, "the run is still open")
@@ -215,7 +217,7 @@ func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *test
 	assert.True(t, view.Deadline.IsZero())
 
 	release()
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestRunInfo_WaitingIsAnOpenRunWithAQuestion(t *testing.T) {
@@ -243,7 +245,7 @@ func TestStatus_ARunThatWaitsWithNoDeadlineShowsNone(t *testing.T) {
 	assert.True(t, info.Deadline.IsZero())
 
 	require.NoError(t, client.Answer(testItem, "go on"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestStatus_ARunShowsTheLastGateResultAndTheHeadItJudged(t *testing.T) {

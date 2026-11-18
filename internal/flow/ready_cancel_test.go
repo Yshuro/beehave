@@ -55,7 +55,7 @@ func (d *drafting) SetDraft(ctx context.Context, _ string, pr int, draft bool) e
 	}
 
 	if d.hang {
-		<-ctx.Done()
+		hang(ctx.Done())
 
 		return ctx.Err()
 	}
@@ -228,7 +228,7 @@ func TestMergeStep_AStopOfTheEngineInTheWaitLeavesThePullRequestReadyAndTheResum
 	harness, engine, done := heldInTheWait(t)
 
 	require.NoError(t, engine.Shutdown())
-	<-done
+	receive(t, done)
 
 	_, drafts := harness.watch.seen()
 	require.Empty(t, drafts, "an engine stop does not draft the pull request: the resumed run continues the merge")
