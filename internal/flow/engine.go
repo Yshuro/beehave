@@ -500,7 +500,7 @@ func (e *Engine) forgetDeleted(ids []string, deleteErr error) error {
 
 // oldRuns lists the ids of the runs that finished with success more than the retention ago.
 func (e *Engine) oldRuns() ([]string, error) {
-	cutoff := time.Now().Add(-cmp.Or(e.deps.Clock.Retain, e.retention, config.DefaultRetention))
+	cutoff := e.deps.Clock.wall().Add(-cmp.Or(e.deps.Clock.Retain, e.retention, config.DefaultRetention))
 
 	rows, err := dbos.ListWorkflows(e.ctx, dbos.WithFilterStatus(dbos.WorkflowStatusSuccess), dbos.WithFilterWorkflowIDPrefix(runPrefix),
 		dbos.WithFilterName(itemName), dbos.WithFilterCompletedBefore(cutoff))
@@ -671,7 +671,7 @@ func (e *Engine) pickLogin(ctx context.Context, in ItemInput, overCap bool, take
 	return login, nil
 }
 
-// busyLogins returns the logins that have agents.per_login agent steps running or queued, counting the logins in taken. The library keeps the list: beehave counts nothing.
+// busyLogins returns the logins that have agents.per_login agent steps running or queued, counting the logins in taken. The library lists the open workflows, and beehave counts the agents of each login in that list.
 // An agent step is an open phase, which has the login as its partition key on the agents queue. A run that a spawn or the queue started holds its login from its start,
 // because its agent step is not queued yet while the run waits in a slot or does other steps. A run that `beehave run` started holds none, so the loop parent needs no login of its own.
 // The engine registers only the run and the phase, so one listing of the open workflows, filtered to those two names, reads both.
