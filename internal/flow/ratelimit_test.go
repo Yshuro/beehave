@@ -600,6 +600,73 @@ func TestRateLimit_AStoreThatRefusesTheLimitRecordFailsTheStepAndTheCostOfTheLim
 	assert.InDelta(t, 0.7, tree.Cost, 1e-9, "the cost of the limited run is recorded by the step of the failed run")
 }
 
+// liftRefusal drops the trigger of refuseOutcome, so the store writes every record again.
+func liftRefusal(t *testing.T, h *harness) {
+	t.Helper()
+
+	_, err := sqlOf(t, h).ExecContext(t.Context(), "DROP TRIGGER refuse_outcome")
+	require.NoError(t, err)
+}
+
+func TestRateLimit_AResumeAfterTheStoreRefusedTheLimitRecordRunsTheAgentAgainAndCountsTheCostOnce(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0.2), exited)
+
+	engine := h.engine(t)
+	refuseOutcome(t, sqlOf(t, h), "agent:fix#1/limit1.0")
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, refusedText)
+
+	var failure *dbos.StepInfo
+
+	for _, step := range recordsOfTestRun(t, engine) {
+		if step.StepName == "agent:fix#1/limit1.0" {
+			failure = &step
+		}
+	}
+
+	require.NotNil(t, failure, "the limit step has a record")
+	require.Error(t, failure.Error, "the record of the limit step holds a failure")
+	assert.Contains(t, failure.Error.Error(), "Step agent:fix#1/limit1.0 in workflow", "the failure is the error of the limit step")
+	assert.Contains(t, failure.Error.Error(), refusedText, "the failure is the refusal of the limit record")
+	liftRefusal(t, h)
+
+	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
+
+	require.NoError(t, err, "the resume cuts the history at the failure of the limit step, and the replay records the limit")
+	assert.Len(t, h.agents.seen(), 2, "the limited run, then the run of the resume")
+
+	tree, err := runAndBelowSpend(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.2, tree.Cost, 1e-9, "the resume records the cost of the limited run once")
+}
+
+func TestRateLimit_AResumeAfterTheStoreRefusedTheLimitRecordOfASecondRunCountsEachRunOnce(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	inTurn(h, limited(limitReset, 0.2), limited(limitReset, 0.7), exited)
+
+	engine := h.engine(t)
+	refuseOutcome(t, sqlOf(t, h), "agent:fix#1/limit1.1")
+
+	_, err := engine.Run(testItem, testProject)
+	require.ErrorContains(t, err, refusedText)
+	liftRefusal(t, h)
+
+	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
+
+	require.NoError(t, err, "the resume runs the second limited run again, and the limit is gone")
+	assert.Len(t, h.agents.seen(), 3, "two limited runs, then the run of the resume")
+
+	tree, err := runAndBelowSpend(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.9, tree.Cost, 1e-9, "each limited run counts once")
+}
+
 func TestRateLimit_TheSleepLastsUntilTheRecordedReset(t *testing.T) {
 	t.Parallel()
 
