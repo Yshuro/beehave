@@ -2,7 +2,6 @@ package ssh
 
 import (
 	"errors"
-	"fmt"
 	"strings"
 	"unicode"
 
@@ -74,7 +73,7 @@ func decodeBlock(from *model.Block) (block, error) {
 func decodeKnownHosts(from *model.Block) (string, error) {
 	value, given := from.Text(BlockKnownHosts)
 	if given && value == "" {
-		return "", fmt.Errorf("%w: %s: `host.ssh.known_hosts` must be %s or %s. A host key that changed is always refused", link.ErrConfig, from.At(), model.KnownHostsStrict, model.KnownHostsAcceptNew)
+		return "", link.Refusal(from.At(), "`host.ssh.known_hosts` must be %s or %s. A host key that changed is always refused", model.KnownHostsStrict, model.KnownHostsAcceptNew)
 	}
 
 	return value, nil
@@ -84,7 +83,7 @@ func decodeKnownHosts(from *model.Block) (string, error) {
 func decodePort(from *model.Block) (int, error) {
 	port, given := from.Whole(BlockPort)
 	if given && (port < 1 || port > maxPort) {
-		return 0, fmt.Errorf("%w: %s: `host.ssh.port` must be from 1 to %d; got %d. Fix the value", link.ErrConfig, from.At(), maxPort, port)
+		return 0, link.Refusal(from.At(), "`host.ssh.port` must be from 1 to %d; got %d. Fix the value", maxPort, port)
 	}
 
 	return port, nil
@@ -96,9 +95,9 @@ func checkPath(at, key, value string) error {
 	case value == "":
 		return nil
 	case strings.ContainsFunc(value, unicode.IsControl):
-		return fmt.Errorf("%w: %s: `host.ssh.%s` must hold no control character. Fix the value", link.ErrConfig, at, key)
+		return link.Refusal(at, "`host.ssh.%s` must hold no control character. Fix the value", key)
 	case !strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "~/"):
-		return fmt.Errorf("%w: %s: `host.ssh.%s` must be an absolute path or start with ~/; got `%s`. Fix the value", link.ErrConfig, at, key, value)
+		return link.Refusal(at, "`host.ssh.%s` must be an absolute path or start with ~/; got `%s`. Fix the value", key, value)
 	}
 
 	return nil
