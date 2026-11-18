@@ -19,6 +19,7 @@ import (
 const (
 	envMaxConcurrent       = "BEEHAVE_AGENTS_MAX_CONCURRENT"
 	envMaxReviewConcurrent = "BEEHAVE_AGENTS_MAX_REVIEW_CONCURRENT"
+	envPerLogin            = "BEEHAVE_AGENTS_PER_LOGIN"
 	envMaxTurns            = "BEEHAVE_AGENTS_MAX_TURNS"
 	envMaxBudget           = "BEEHAVE_AGENTS_MAX_BUDGET_USD"
 	envMaxRunBudget        = "BEEHAVE_AGENTS_MAX_RUN_BUDGET_USD"
@@ -184,6 +185,7 @@ func (c *Config) applyEnv(env map[string]string) error {
 	err := errors.Join(
 		overlayWhole(env, envMaxConcurrent, "for example 2.", &c.Agents.MaxConcurrent),
 		overlayWhole(env, envMaxReviewConcurrent, "for example 2.", &c.Agents.MaxReviewConcurrent),
+		overlayWhole(env, envPerLogin, "for example 2.", &c.Agents.PerLogin),
 		overlayWhole(env, envMaxTurns, "for example 40, or 0 for no cap.", &c.Agents.MaxTurns),
 		overlayWhole(env, envReviewPoll, "for example 60, or 0 for no poll.", &c.Agents.ReviewPollMinutes),
 		overlayWhole(env, envRetentionDays, "for example 30, or 0 to keep every finished run.", &c.Agents.RetentionDays),
@@ -255,9 +257,9 @@ func (c Config) perLoginProblems(runnersPath string) Problems {
 
 	switch {
 	case perLogin < 1:
-		return Problems{refuse("agents.per_login must be 1 or more. Set it in %s.", runnersPath)}
-	case perLogin > c.Agents.MaxConcurrent || perLogin > c.Agents.MaxReviewConcurrent:
-		return Problems{refuse("agents.per_login is %d: set it to agents.max_concurrent (%d) or agents.max_review_concurrent (%d), whichever is lower, or less. Set it in %s.", perLogin, c.Agents.MaxConcurrent, c.Agents.MaxReviewConcurrent, runnersPath)}
+		return Problems{refuse("agents.per_login must be 1 or more. Set it in %s or in %s.", runnersPath, envPerLogin)}
+	case min(c.Agents.MaxConcurrent, c.Agents.MaxReviewConcurrent) >= 1 && perLogin > min(c.Agents.MaxConcurrent, c.Agents.MaxReviewConcurrent):
+		return Problems{refuse("agents.per_login is %d: set it to agents.max_concurrent (%d) or agents.max_review_concurrent (%d), whichever is lower, or less. Set it in %s or in %s.", perLogin, c.Agents.MaxConcurrent, c.Agents.MaxReviewConcurrent, runnersPath, envPerLogin)}
 	}
 
 	return nil
