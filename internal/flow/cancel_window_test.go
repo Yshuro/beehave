@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -71,17 +70,12 @@ func startJobDuringCancel(t *testing.T, h *harness, parent string, cancel func()
 		canceled <- cancel()
 	}()
 
-	eventually(t, waitsForTheStoreLock(<-ids))
+	waitOn(t, condition(waitsForTheStoreLock(receive(t, ids))))
 
 	_, err = conn.ExecContext(ctx, "COMMIT")
 	require.NoError(t, err)
 
-	select {
-	case err := <-canceled:
-		require.NoError(t, err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the cancel did not end")
-	}
+	require.NoError(t, receive(t, canceled))
 
 	var status string
 
@@ -100,7 +94,7 @@ func openItemRun(t *testing.T) (*harness, *Engine, *Client, string, <-chan runOu
 	client := h.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return h.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent of the open run to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, h.agents.running() == 1, nil }})
 
 	return h, engine, client, mustNewest(t, client).Status.ID, done
 }
@@ -111,12 +105,7 @@ func endsAfterTheCancel(t *testing.T, h *harness, done <-chan runOutcome) {
 
 	h.tick(t)
 
-	select {
-	case outcome := <-done:
-		require.Error(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, done).err)
 }
 
 func TestCancel_ABuildJobThatStartsDuringTheCancelOfItsRunIsCanceledWithIt(t *testing.T) {
@@ -150,7 +139,7 @@ func TestSuperseded_ABuildJobThatStartsDuringTheCancelOfTheOldGateIsCanceledWith
 
 	old := queueHostGate(engine, testProject, testItem, "A", "box")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, waiting[struct{}]{what: "the gate of head A to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, startedCount(gated, 1)(), nil }})
 	setHead(h, "B")
 
 	gates, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterStatus(dbos.WorkflowStatusPending))

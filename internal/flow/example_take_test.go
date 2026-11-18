@@ -73,8 +73,8 @@ func answerTheGrace(t *testing.T, rig *agentRig, text string) {
 	t.Helper()
 
 	client := rig.h.client(t, testVersion)
-	waitForTheOwner(t, rig.h)
-	eventually(t, func() bool { return askedOf(t, client) != nil })
+	waitOn(t, ownerAsks(t, rig.h))
+	waitOn(t, waiting[struct{}]{what: "the question to name its people", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, askedOf(t, client) != nil, nil }})
 	require.NoError(t, client.AnswerAs(testItem, "alice", text))
 }
 
@@ -114,7 +114,7 @@ func TestExampleTake_TheReviewComesFirstThenTheNoticeThenTheTakeAfterTheGraceAns
 	rig, file := takeRig(t)
 	done := runTake(rig.h.engine(t), file)
 
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 
 	// At the grace question the review agent and the notice have run, and the take has not.
 	assert.Len(t, rig.h.agents.seen(), 1, "the review of the pull request is the only agent step")

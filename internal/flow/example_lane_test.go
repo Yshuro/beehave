@@ -88,7 +88,7 @@ func TestExampleLane_APapersLaneSettleThatChangesASourcePathFailsAndNamesIt(t *t
 	rig.setRound("fix_rounds", oneFixRound)
 	done := pipelineInBackground(rig.h.engine(t), file)
 
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "fix all"))
 	outcome := receive(t, done)
 

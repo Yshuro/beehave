@@ -543,7 +543,7 @@ func TestExample_SixCandidatesAreTheCapAndTheSixthFullReviewIsTheLast(t *testing
 	engine := rig.h.engine(t)
 	done := pipelineInBackground(engine, file)
 
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	outcome := receive(t, done)
 	require.NoError(t, outcome.err)
@@ -768,7 +768,7 @@ func TestExample_AGateThatIsVoidEveryTimeAsksTheOwnerAndRefusesAfterTheLastAnswe
 	}()
 
 	for range 3 {
-		eventually(t, func() bool { return client.Answer(testItem, "run it again") == nil })
+		waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "run it again") == nil, nil }})
 	}
 
 	outcome := receive(t, done)
@@ -793,7 +793,7 @@ func TestExample_AnAnswerToAVoidGateQuestionRunsTheGateAgainAndAPassGoesToTheRev
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "run it again") == nil })
+	waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "run it again") == nil, nil }})
 
 	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, 4, rig.h.gate.calls, "the answer, which the refusal-free question names, ran the gate again")
@@ -818,12 +818,12 @@ func TestExample_AGateWithAFailedStepAndAnUnknownStepIsRedAndStillGetsAFixRound(
 
 	// The red gate repeats until the rounds cap, and then the run waits for a person for the whole claim lease. The test ends it after
 	// the second gate, which is the claim of the test.
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the second gate call", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		rig.h.gate.mu.Lock()
 		defer rig.h.gate.mu.Unlock()
 
-		return rig.h.gate.calls > 1
-	})
+		return struct{}{}, rig.h.gate.calls > 1, nil
+	}})
 	require.NoError(t, client.Cancel(testItem))
 	rig.h.tick(t)
 

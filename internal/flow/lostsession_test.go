@@ -38,26 +38,26 @@ func TestPhase_TheSessionIdIsSavedAsAnEventWhileTheAgentRuns(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	phases, err := dbos.ListWorkflows(client.flow, dbos.WithFilterName(phaseName))
 	require.NoError(t, err)
 	require.Len(t, phases, 1)
 
 	// The saver writes on a goroutine of its own, so the event comes soon after the agent names the id.
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the session id to be saved as an event", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		session, err := dbos.GetEvent[string](client.flow, phases[0].ID, sessionEvent, 0)
 
-		return err == nil && session == "s-lost"
-	})
+		return struct{}{}, err == nil && session == "s-lost", nil
+	}})
 	assert.Equal(t, 1, harness.agents.running(), "the phase holds the session id while the agent still runs")
 
 	// The log line follows the write, so it too comes soon after the event.
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the log line of the saved session", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		log, err := os.ReadFile(filepath.Join(harness.opts.StateDir, logFileName))
 
-		return err == nil && strings.Contains(string(log), `msg="saved the session of the agent" item=`+testItem+" session=s-lost\n")
-	})
+		return struct{}{}, err == nil && strings.Contains(string(log), `msg="saved the session of the agent" item=`+testItem+" session=s-lost\n"), nil
+	}})
 
 	close(harness.agents.gate)
 	require.NoError(t, receive(t, done).err)
@@ -184,9 +184,9 @@ func loseTheRerun(t *testing.T, h *harness, session string, ran time.Duration) {
 	first := h.engine(t)
 	done := runInBackground(first, testItem)
 
-	waitForTheSleep(t, first)
+	waitOn(t, inASleep(t, first))
 	require.NoError(t, first.Shutdown())
-	<-done
+	receive(t, done)
 	require.Len(t, h.agents.seen(), 1, "the engine stopped in the wait")
 
 	h.agents.gate = make(chan struct{})
@@ -195,23 +195,23 @@ func loseTheRerun(t *testing.T, h *harness, session string, ran time.Duration) {
 	second, err := NewEngine(t.Context(), h.opts, h.deps())
 	require.NoError(t, err)
 	require.NoError(t, second.Launch())
-	eventually(t, func() bool { return h.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent of the rerun to run", run: runOfEngine(t, second), read: func() (struct{}, bool, error) { return struct{}{}, h.agents.running() == 1, nil }})
 
 	if session != "" {
-		eventually(t, func() bool {
+		waitOn(t, waiting[struct{}]{what: "the session of the rerun to be saved", run: runOfEngine(t, second), read: func() (struct{}, bool, error) {
 			phases, err := dbos.ListWorkflows(second.ctx, dbos.WithFilterName(phaseName))
 			if err != nil {
-				return false
+				return struct{}{}, false, nil
 			}
 
 			for _, phase := range phases {
 				if saved, err := dbos.GetEvent[string](second.ctx, phase.ID, sessionEvent, 0); err == nil && saved == session {
-					return true
+					return struct{}{}, true, nil
 				}
 			}
 
-			return false
-		})
+			return struct{}{}, false, nil
+		}})
 	}
 
 	// The start mark of the rerun reads the wall clock of the harness.
@@ -426,11 +426,8 @@ func TestSessionSaver_ANewIdNeverWaitsForAStoreThatBlocksAndTheNewestIdIsWritten
 		}
 	}()
 
-	select {
-	case <-named:
-	case <-time.After(5 * time.Second):
-		t.Fatal("a new session id waited for the store, so the output of the agent was not read")
-	}
+	// A new session id that waits for the store leaves the output of the agent unread, and this wait fails.
+	receive(t, named)
 
 	close(release)
 	saver.finish()

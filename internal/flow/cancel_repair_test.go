@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -202,7 +201,7 @@ func TestSuperseded_AGateOfALaterHeadCancelsTheBuildJobThatAFailedCancelOfTheOld
 	h, engine := supersedeEngine(t, gated, "A")
 	old := queueHostGate(engine, testProject, testItem, "A", "box")
 
-	eventually(t, startedCount(gated, 1))
+	waitOn(t, waiting[struct{}]{what: "the gate of head A to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, startedCount(gated, 1)(), nil }})
 
 	jobs, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(hostJobName), dbos.WithFilterStatus(dbos.WorkflowStatusPending))
 	require.NoError(t, err)
@@ -289,12 +288,7 @@ func resumeDuringACancel(t *testing.T, version string, resume func(c *Client) er
 	storeExec(t, h, allowJobCancel)
 	h.tick(t)
 
-	select {
-	case runErr := <-ended:
-		require.Error(t, runErr)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, ended))
 
 	// A second cancel holds the write of the job level while a resume runs.
 	storeExec(t, h, pause)
@@ -318,7 +312,7 @@ func resumeDuringACancel(t *testing.T, version string, resume func(c *Client) er
 	}()
 
 	// The resume waits: for probe.lock, or for the store after it read the job.
-	eventually(t, blockedIn(<-ids, "flock.(*Flock).Lock", "dbos.RewindWorkflow", "dbos.ResumeWorkflow"))
+	waitOn(t, condition(blockedIn(receive(t, ids), "flock.(*Flock).Lock", "dbos.RewindWorkflow", "dbos.ResumeWorkflow")))
 	release()
 
 	require.NoError(t, receive(t, canceled))

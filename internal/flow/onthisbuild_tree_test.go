@@ -13,8 +13,6 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-const finishLimit = 30 * time.Second
-
 // expireLease makes the lease of the claim in the store end, as it does when the engine that held it is gone.
 func expireLease(h *harness) {
 	h.beats.setRenewed(time.Now().Add(-model.ClaimLease - time.Minute))
@@ -51,12 +49,7 @@ func TestClient_ResumeOnThisBuildMovesTheWholeTreeOfAFailedRun(t *testing.T) {
 	harness.opts.Version = otherBuild
 	done := runInBackground(harness.engine(t), testItem)
 
-	select {
-	case out := <-done:
-		require.NoError(t, out.err)
-	case <-time.After(finishLimit):
-		t.Fatal("the moved run did not finish on the new build")
-	}
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestClient_ResumeOnThisBuildRefusesARunWhoseLeaseIsLive(t *testing.T) {

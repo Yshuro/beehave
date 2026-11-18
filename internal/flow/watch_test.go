@@ -115,14 +115,9 @@ func runWithin(t *testing.T, engine *Engine) (ItemResult, error) {
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	select {
-	case outcome := <-done:
-		return outcome.result, outcome.err
-	case <-time.After(eventTimeout):
-		t.Fatalf("the watch did not end within %s", eventTimeout)
-	}
+	outcome := waitOn(t, waiting[runOutcome]{what: "the watch to end", ch: done})
 
-	return ItemResult{}, nil
+	return outcome.result, outcome.err
 }
 
 func TestRun_TheSendBackReadsTheStateAgainAndDoesNotDraftAMergedPullRequest(t *testing.T) {
@@ -347,17 +342,17 @@ func TestCancel_AWatchThatSleepsEndsWithTheCancel(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { reads, _ := harness.watch.seen(); return len(reads) == 1 })
+	waitOn(t, waiting[struct{}]{what: "the watch to read the pull request once", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		reads, _ := harness.watch.seen()
+
+		return struct{}{}, len(reads) == 1, nil
+	}})
 
 	require.NoError(t, client.Cancel(testItem))
 	harness.tick(t)
 
-	select {
-	case outcome := <-done:
-		require.Error(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the cancel")
-	}
+	outcome := receive(t, done)
+	require.Error(t, outcome.err)
 }
 
 func TestRun_TheWatchStepDoesNotStartAfterARefusedReady(t *testing.T) {
