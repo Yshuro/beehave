@@ -177,7 +177,7 @@ func writeFakes(ts *testscript.TestScript, command string, fakes map[string]stri
 			ts.Fatalf("%s: %v", command, err)
 		}
 
-		if err := work.WriteFile(filepath.Join("fake", name), []byte(strings.ReplaceAll(string(text), e2eWorkMarker, ts.Getenv("WORK"))), e2eToolMode); err != nil {
+		if err := writeFake(ts, filepath.Join("fake", name), text); err != nil {
 			ts.Fatalf("%s: %v", command, err)
 		}
 	}

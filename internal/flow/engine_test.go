@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 const privateMode = os.FileMode(0o600)
@@ -53,6 +54,8 @@ func TestOptions_RefuseUnusableSettingsForTheEngineAndTheClient(t *testing.T) {
 		{"an_empty_version", func(o *Options) { o.Version = "" }, "build version is empty"},
 		{"a_relative_state_folder", func(o *Options) { o.StateDir = "state" }, "not an absolute path"},
 		{"no_agent_slot", func(o *Options) { o.MaxConcurrent = 0 }, "agents.max_concurrent is 0: set it to 1 or more"},
+		{"a_negative_per_login", func(o *Options) { o.PerLogin = -1 }, "agents.per_login is -1: set it to 1 or more"},
+		{"a_per_login_above_a_queue_cap", func(o *Options) { o.MaxConcurrent, o.MaxReviewConcurrent, o.PerLogin = 3, 1, 2 }, "agents.per_login is 2: set it to agents.max_concurrent (3) or agents.max_review_concurrent (1), whichever is lower, or less"},
 		{"a_negative_review_poll", func(o *Options) { o.ReviewPoll = -time.Minute }, "review poll interval is -1m0s: set it to 0 or more"},
 	}
 
@@ -78,7 +81,7 @@ func TestOpenStore_RefusesAFolderOthersCanUse(t *testing.T) {
 	harness := newHarness(t)
 	harness.fresh(t)
 	require.NoError(t, os.Mkdir(harness.opts.StateDir, 0o700))
-	require.NoError(t, os.Chmod(harness.opts.StateDir, 0o777)) //nolint:gosec // the test needs an open folder to prove the refusal
+	require.NoError(t, exectest.ChmodFolder(harness.opts.StateDir, 0o777)) // the test needs an open folder to prove the refusal
 
 	_, err := NewEngine(t.Context(), harness.opts, harness.deps())
 	require.Error(t, err)

@@ -99,7 +99,11 @@ func (c *clock) sleep(_ context.Context, d time.Duration) error {
 var job = jobwait.Job{ID: "7", Nonce: "n"}
 
 func engine(s jobwait.Scheduler, c *clock, bank func(context.Context) error, sl slot, stale time.Duration) *jobwait.Engine {
-	return jobwait.New(s, sl.Release, jobwait.Clock{Poll: 10 * time.Second, Now: c.read, Sleep: c.sleep}, bank, stale)
+	return limitedEngine(s, c, bank, sl, stale, jobwait.Limits{})
+}
+
+func limitedEngine(s jobwait.Scheduler, c *clock, bank func(context.Context) error, sl slot, stale time.Duration, limits jobwait.Limits) *jobwait.Engine {
+	return jobwait.New(s, sl.Release, jobwait.Clock{Poll: 10 * time.Second, Now: c.read, Sleep: c.sleep}, bank, stale, limits)
 }
 
 func noBank(context.Context) error { return nil }
@@ -300,6 +304,36 @@ func TestCancel_AJobThatIsNotFinalAfterTheLimitIsAnErrorWithTheAdvice(t *testing
 	require.ErrorContains(t, err, "stuck-advice")
 	assert.GreaterOrEqual(t, c.now.Sub(start), 5*time.Minute)
 	assert.Less(t, c.now.Sub(start), 5*time.Minute+10*time.Second)
+}
+
+func TestWait_ADroppedLinkEndsAsLostAfterTheLostAfterOfTheLimits(t *testing.T) {
+	t.Parallel()
+
+	s := &scripted{reads: []reading{{state: model.JobUnknown, err: link.ErrDropped}}}
+	c := newClock()
+	start := c.now
+
+	state, err := limitedEngine(s, c, noBank, slot{}, 0, jobwait.Limits{LostAfter: time.Minute}).Wait(t.Context(), job)
+
+	require.ErrorIs(t, err, host.ErrLost)
+	require.ErrorContains(t, err, "answered for 1m0s")
+	assert.Equal(t, model.JobLost, state)
+	assert.GreaterOrEqual(t, c.now.Sub(start), time.Minute)
+	assert.Less(t, c.now.Sub(start), 2*time.Minute)
+}
+
+func TestCancel_AJobThatIsNotFinalAfterTheStopLimitOfTheLimitsIsAnError(t *testing.T) {
+	t.Parallel()
+
+	s := &scripted{reads: []reading{{state: model.JobPending}}}
+	c := newClock()
+	start := c.now
+
+	err := limitedEngine(s, c, noBank, slot{}, 0, jobwait.Limits{StopLimit: 2 * time.Minute}).Cancel(t.Context(), job)
+
+	require.ErrorContains(t, err, "was not final 2m0s after the cancel")
+	assert.GreaterOrEqual(t, c.now.Sub(start), 2*time.Minute)
+	assert.Less(t, c.now.Sub(start), 2*time.Minute+10*time.Second)
 }
 
 func TestCancel_ReturnsTheStopError(t *testing.T) {

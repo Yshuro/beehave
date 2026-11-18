@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/config"
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 // repoWithCommit makes a git repository with one commit and returns its folder.
@@ -143,7 +144,7 @@ func TestGateSandbox_AGitThatCannotNameTheRecordOfTheWorktreeRunsNoCommand(t *te
 	calls := filepath.Join(bin, "calls")
 	// A git that logs the worktree calls, makes the worktree and then fails on every other call.
 	script := "#!/bin/sh\ncase \"$*\" in *worktree*) echo \"$@\" >> " + calls + "; exit 0;; esac\necho boom\nexit 1\n"
-	require.NoError(t, os.WriteFile(filepath.Join(bin, "git"), []byte(script), 0o700)) //nolint:gosec // a test script
+	require.NoError(t, exectest.Write(filepath.Join(bin, "git"), script))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+config.ProcessEnv()["PATH"])
 
 	dir := t.TempDir()

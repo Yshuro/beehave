@@ -22,6 +22,7 @@ import (
 
 	"github.com/tobocop2/beehave/examples/remediation/tools/check"
 	"github.com/tobocop2/beehave/examples/remediation/tools/ledger"
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/lockfile"
 )
 
@@ -148,9 +149,9 @@ func TestAdd_AFolderThatCannotBeWrittenToRefusesTheAddThatMustMakeTheFile(t *tes
 
 	// The lock file stays, so the add gets its turn; the ledger file is gone, so the add must make it.
 	require.NoError(t, os.Remove(h.file()))
-	require.NoError(t, os.Chmod(h.dir, 0o555)) //nolint:gosec // a folder needs the execute bit
+	require.NoError(t, exectest.ChmodFolder(h.dir, 0o555))
 	t.Cleanup(func() {
-		assert.NoError(t, os.Chmod(h.dir, 0o700)) //nolint:gosec // a folder needs the execute bit
+		assert.NoError(t, exectest.ChmodFolder(h.dir, 0o700))
 	})
 
 	_, err := h.ledger.Add(ledger.Request{Key: "5", Lane: "fix-2", Kind: ledger.KindFix, At: at})
@@ -284,9 +285,9 @@ func TestReads_AHotJournalInAFolderThatCannotBeWrittenIsRefusedInWords(t *testin
 
 	h := crashed(t)
 
-	require.NoError(t, os.Chmod(h.dir, 0o555)) //nolint:gosec // a folder needs the execute bit
+	require.NoError(t, exectest.ChmodFolder(h.dir, 0o555))
 	t.Cleanup(func() {
-		assert.NoError(t, os.Chmod(h.dir, 0o700)) //nolint:gosec // a folder needs the execute bit
+		assert.NoError(t, exectest.ChmodFolder(h.dir, 0o700))
 	})
 
 	_, err := h.ledger.Count("7", "")
@@ -628,9 +629,9 @@ func TestReads_AFolderThatCannotBeWrittenStillReadsItsLedger(t *testing.T) {
 	h.add("7", "fix-1", ledger.KindFix, "")
 	h.add("7", "rev-1", ledger.KindReview, "")
 
-	require.NoError(t, os.Chmod(h.dir, 0o555)) //nolint:gosec // a folder needs the execute bit
+	require.NoError(t, exectest.ChmodFolder(h.dir, 0o555))
 	t.Cleanup(func() {
-		assert.NoError(t, os.Chmod(h.dir, 0o700)) //nolint:gosec // a folder needs the execute bit
+		assert.NoError(t, exectest.ChmodFolder(h.dir, 0o700))
 	})
 
 	assert.Equal(t, 1, h.count("7", ""))

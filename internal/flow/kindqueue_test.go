@@ -67,6 +67,37 @@ func TestAgentKind_ARunOfAKindWaitsWhenTheCapOfItsQueueIsFull(t *testing.T) {
 	}
 }
 
+func TestAgentKind_PerLoginSetsHowManyRunsOfOneLoginRunAtOnceOnEachAgentQueue(t *testing.T) {
+	t.Parallel()
+
+	for _, test := range []struct{ name, flow string }{
+		{"the_agents_queue", kindFlow("implement")},
+		{"the_reviews_queue", kindFlow("review")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+
+			harness := newHarness(t)
+			harness.opts.MaxConcurrent, harness.opts.MaxReviewConcurrent, harness.opts.PerLogin = 2, 2, 2
+			harness.flowIs(t, test.flow)
+			harness.logins = fakeLogins{byItem: map[string]string{"1": "a", "2": "a"}}
+			harness.agents.gate = make(chan struct{})
+			release := sync.OnceFunc(func() { close(harness.agents.gate) })
+			t.Cleanup(release)
+
+			engine := harness.engine(t)
+			runs := []<-chan runOutcome{runInBackground(engine, "1"), runInBackground(engine, "2")}
+
+			eventually(t, func() bool { return harness.agents.running() == 2 })
+			release()
+
+			for _, run := range runs {
+				require.NoError(t, (<-run).err)
+			}
+		})
+	}
+}
+
 // An agent phase is its own workflow on the agent queue and ends with the agent, so an item that waits for the owner after its agent call holds no agent slot.
 func TestAgentQueue_AnItemThatWaitsForTheOwnerHoldsNoAgentSlot(t *testing.T) {
 	t.Parallel()

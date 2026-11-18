@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.yaml.in/yaml/v3"
+
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 // makefile returns the absolute path of the Makefile of the repository.
@@ -42,7 +44,7 @@ func TestMakefile_MutationLeavesTheWorkerCountToTheGremlinsConfig(t *testing.T) 
 
 	fake := t.TempDir()
 	args := filepath.Join(fake, "args")
-	require.NoError(t, os.WriteFile(filepath.Join(fake, "gremlins"), []byte("#!/bin/sh\necho \"$*\" > "+args+"\n"), 0o700)) //nolint:gosec // the fake must be executable
+	require.NoError(t, exectest.Write(filepath.Join(fake, "gremlins"), "#!/bin/sh\necho \"$*\" > "+args+"\n"))
 
 	command := exec.CommandContext(t.Context(), "make", "-s", "-C", filepath.Dir(makefile(t)), "mutation", "PKG=./internal/cli") //nolint:gosec // G204: the arguments are constants of this test
 	command.Env = []string{"PATH=" + fake + ":/usr/bin:/bin:/usr/sbin:/sbin"}
@@ -85,7 +87,7 @@ func TestMakefile_MutationRefusesAPackagePatternWithDots(t *testing.T) {
 
 	fake := t.TempDir()
 	ran := filepath.Join(fake, "ran")
-	require.NoError(t, os.WriteFile(filepath.Join(fake, "gremlins"), []byte("#!/bin/sh\ntouch "+ran+"\n"), 0o700)) //nolint:gosec // the fake must be executable
+	require.NoError(t, exectest.Write(filepath.Join(fake, "gremlins"), "#!/bin/sh\ntouch "+ran+"\n"))
 
 	command := exec.CommandContext(t.Context(), "make", "-s", "-C", t.TempDir(), "-f", makefile(t), "mutation", "PKG=./internal/...") //nolint:gosec // G204: the arguments are constants of this test and its temporary folders
 	// The path holds the fake gremlins first, then the system folders for sh and for the core count that the Makefile reads (sysctl is in /usr/sbin on macOS).
