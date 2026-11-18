@@ -1,6 +1,8 @@
 package flow
 
 import (
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -49,8 +51,9 @@ func TestOverload_AnOverloadThatClearsAfterOneBackoffRunsTheStepAgainOnTheSameLo
 func TestOverload_AnOverloadThatStaysPastTheCeilingFailsTheStepAndNamesTheLimit(t *testing.T) {
 	t.Parallel()
 
+	// The agent is overloaded for two runs more than the ceiling allows, then it works. A step that drops the ceiling ends with no error after those runs.
 	h := limitedHarness(t, limitReset)
-	inTurn(h, overloaded())
+	inTurn(h, append(slices.Repeat([]agent.Result{overloaded()}, overloadWaits+2), exited)...)
 
 	engine := h.engine(t)
 
@@ -60,6 +63,67 @@ func TestOverload_AnOverloadThatStaysPastTheCeilingFailsTheStepAndNamesTheLimit(
 	require.ErrorContains(t, err, "Run beehave resume "+testItem+" when the limit is gone")
 	assert.Len(t, h.agents.seen(), overloadWaits+1, "the first run and one rerun after each wait of the backoff")
 	assert.Equal(t, overloadWaits, sleepsIn(recordsOfTestRun(t, engine)), "one sleep for each wait of the backoff")
+}
+
+func TestOverload_ARestartKeepsTheCountOfTheBackoffFromTheRecords(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		// hangAt is the agent start that the first engine holds while it stops. The overloads before it are recorded.
+		hangAt int
+	}{
+		{"in_the_middle_of_the_backoff", 3},
+		{"after_the_last_wait", overloadWaits + 1},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := limitedHarness(t, limitReset)
+			h.agents.hangAt = tc.hangAt
+			inTurn(h, append(slices.Repeat([]agent.Result{overloaded()}, overloadWaits+2), exited)...)
+
+			first := h.engine(t)
+			done := runInBackground(first, testItem)
+
+			waitOn(t, waiting[struct{}]{what: "the agent start that the engine stops in", run: runOfEngine(t, first), read: func() (struct{}, bool, error) {
+				return struct{}{}, len(h.agents.seen()) == tc.hangAt && h.agents.running() == 1, nil
+			}})
+			require.NoError(t, first.Shutdown())
+			receive(t, done)
+
+			second := h.engine(t)
+			client := h.client(t, testVersion)
+
+			var steps RunSteps
+
+			waitOn(t, waiting[struct{}]{what: "the replayed run to fail at the ceiling", run: runOfEngine(t, second), read: func() (struct{}, bool, error) {
+				var err error
+
+				steps, err = client.Steps(testRun)
+
+				return struct{}{}, err == nil && steps.State == runFailed, nil
+			}})
+
+			assert.Contains(t, steps.Error, "stopped at the overload of login "+testLogin)
+			assert.Len(t, h.agents.seen(), overloadWaits+2, "the stopped start, and the replay starts each run from the first one that has no record")
+			assert.Equal(t, overloadWaits, sleepsIn(recordsOfTestRun(t, second)), "the replay adds no wait to the backoff that the records hold")
+
+			waits := map[string]string{}
+
+			for _, step := range recordsOfTestRun(t, second) {
+				if record, isText := step.Output.(string); isText && step.StepName != sleepStep {
+					waits[step.StepName] = record
+				}
+			}
+
+			for count := range overloadWaits {
+				assert.Contains(t, waits["agent:fix#1/limit1."+strconv.Itoa(count)], limitReset.Add(time.Millisecond<<count).Format(time.RFC3339Nano), "wait number %d doubles from the count in the records", count)
+			}
+		})
+	}
 }
 
 func TestOverload_TheBackoffDoublesAndAnotherLimitBetweenTwoOverloadsStartsItAgain(t *testing.T) {
