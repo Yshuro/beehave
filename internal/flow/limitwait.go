@@ -58,12 +58,33 @@ func (s *script) waitOutLimit(name string, in PhaseInput, ended PhaseOutput, try
 	return record.Passed, s.waitForReset(record.WaitUntil)
 }
 
+// dateLimit gives a limit that carries no reset time the reset time that the usage read of the pool gives for the login of the run, so the wait goes on as if the agent had given it.
+// The step records the dated limit, so a replay never reads the usage again. A read that knows no time leaves the limit undated, and the end of the phase fails it (see limitEnd).
+func (e *Engine) dateLimit(ctx context.Context, in PhaseInput, out *PhaseOutput) error {
+	if out.Outcome != agent.OutcomeLimited || out.Limit == nil || !out.Limit.ResetsAt.IsZero() {
+		return nil
+	}
+
+	reset, known, err := e.deps.Logins.Reset(ctx, in.Project, in.Login)
+	if err != nil {
+		return fmt.Errorf("read the usage of login %s for the reset of the %s: %w. Run beehave resume %s when the usage read works", in.Login, out.Limit.Name(), err, in.Item)
+	}
+
+	if known {
+		limit := *out.Limit
+		limit.ResetsAt = reset
+		out.Limit = &limit
+	}
+
+	return nil
+}
+
 // limitEnd fails the phase of a run that a provider limit stopped when no wait has an end: the limit gives no reset time, or it is the second limit
 // in a row whose reset time has passed. The failed phase is the failed step, so beehave resume reopens the phase and runs the agent again.
 func limitEnd(in PhaseInput, limit agent.Limit, now time.Time) error {
 	switch {
 	case limit.ResetsAt.IsZero():
-		return fmt.Errorf("the agent step of item %s stopped at the %s of login %s, and the agent gives no reset time. Run beehave resume %s when the limit is gone",
+		return fmt.Errorf("the agent step of item %s stopped at the %s of login %s, and neither the agent nor the usage read gives a reset time. Run beehave resume %s when the limit is gone",
 			in.Item, limit.Name(), in.Login, in.Item)
 	case in.ResetPassed && !limit.ResetsAt.After(now):
 		return fmt.Errorf("the agent step of item %s stopped at the %s of login %s twice in a row with a reset time that has passed (%s), so the reset time is wrong. "+

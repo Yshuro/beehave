@@ -21,6 +21,8 @@ import (
 // poolLogins is the real pick of the pool over the runners names: equal use everywhere, so the first runner in config order wins a tie.
 // It records the busy logins that the engine gave for each item.
 type poolLogins struct {
+	noReset
+
 	mu      sync.Mutex
 	runners []model.Runner
 	busy    map[string][]string
