@@ -385,7 +385,7 @@ If the loop used all its rounds, the `exhausted` field of its result is true. Th
 **Deadline.**
 
 - With no `timeout` argument, the wait keeps waiting until someone answers. It has no deadline. The engine renews the receive every seven days, and that renewal ends nothing.
-- The `timeout` argument sets the deadline of a wait. To bound an owner wait, set `timeout`.
+- The `timeout` argument sets the deadline of a wait. To bound the owner wait of a `wait` step, set `timeout` in that step. It does not bound the owner wait for a lost job, which `docs/design/hosts.md` describes.
 - With `timeout = "48h"`, the wait ends at the deadline. The `timed_out` field of its result is true, and the `answer` field is empty.
 - `beehave check workflow` and the run refuse a `timeout` of zero or below, because it would read as no deadline. For a wait with no deadline, leave the argument out.
 - DBOS records the deadline of the wait. A run that stops and resumes after the deadline times out at once. A run that resumes before it waits for the time left.
