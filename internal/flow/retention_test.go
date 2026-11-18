@@ -50,6 +50,20 @@ func TestLaunch_AFinishedRunStaysWhileTheRetentionOfTheOptionsIsLonger(t *testin
 	assert.Len(t, rows, 1)
 }
 
+func TestLaunch_OptionsWithNoRetentionKeepARunThatIsYoungerThanTheDefault(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	finishedRun(t, harness)
+
+	harness.opts.Retention = 0
+	launchOn(t, harness, harness.deps())
+
+	rows, err := harness.client(t, testVersion).Status()
+	require.NoError(t, err)
+	assert.Len(t, rows, 1, "a run of a few milliseconds is far younger than the default")
+}
+
 func TestLaunch_KeepRunsDeletesNothingWhateverTheAge(t *testing.T) {
 	t.Parallel()
 

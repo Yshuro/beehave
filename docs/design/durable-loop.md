@@ -94,7 +94,7 @@ Each agent step runs as a child workflow named `phase`. The phase starts the age
 
 The queue holds only phases. Phases run on the queue `agents`, or on the queue `reviews` for an agent call with `kind = "review"`.
 
-- The partition key of a phase is the login. Each partition of a queue runs one phase at a time.
+- The partition key of a phase is the login. Each partition of a queue runs at most `agents.per_login` phases at once. The default is 1.
 - Each queue has a global limit: `agents.max_concurrent` for `agents` and `agents.max_review_concurrent` for `reviews`.
 - The queues do not lend slots. The host never runs more than the sum of the two limits.
 - One login can run one review phase and one implement phase at once.

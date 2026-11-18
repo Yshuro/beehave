@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -906,6 +907,38 @@ func TestLoadFolder_AgentsRetentionDaysDefaultsToSevenKeepsForeverAtZeroAndRefus
 	require.Len(t, problems, 1)
 	require.ErrorContains(t, problems[0], "agents.retention_days must be 0 (keep for ever) or more")
 	require.ErrorContains(t, problems[0], "BEEHAVE_AGENTS_RETENTION_DAYS")
+}
+
+func TestLoadFolder_AgentsPerLoginDefaultsToOneAndRefusesAValueBelowOne(t *testing.T) {
+	t.Parallel()
+
+	cfg, problems := loadRunnersText(t, "agents()\n")
+	require.Empty(t, problems)
+	require.Equal(t, 1, cfg.Agents.PerLogin, "the default keeps the one agent per login that the engine always ran")
+
+	cfg, problems = loadRunnersText(t, "agents(per_login = 2)\n")
+	require.Empty(t, problems)
+	require.Equal(t, 2, cfg.Agents.PerLogin)
+
+	_, problems = loadRunnersText(t, "agents(max_concurrent = 4, max_review_concurrent = 2, per_login = 3)\n")
+	require.Len(t, problems, 1)
+	require.ErrorContains(t, problems[0], "agents.per_login is 3: set it to agents.max_concurrent (4) or agents.max_review_concurrent (2), whichever is lower, or less")
+
+	_, problems = loadRunnersText(t, "agents(max_concurrent = 3, max_review_concurrent = 4, per_login = 4)\n")
+	require.Len(t, problems, 1, "the cap of the agents queue is below per_login too")
+
+	for _, text := range []string{"0", "-1"} {
+		_, problems = loadRunnersText(t, "agents(per_login = "+text+")\n")
+		require.Len(t, problems, 1, text)
+		require.ErrorContains(t, problems[0], "agents.per_login must be 1 or more", text)
+	}
+}
+
+func TestDefaultRetention_IsSevenDaysAndIsTheDefaultOfRetentionDays(t *testing.T) {
+	t.Parallel()
+
+	require.Equal(t, 7*24*time.Hour, config.DefaultRetention)
+	require.Equal(t, 7, config.DefaultConfig().Agents.RetentionDays)
 }
 
 func TestLoadFolder_AgentsRetentionDaysHasAnUpperBoundThatKeepsTheDurationInRange(t *testing.T) {

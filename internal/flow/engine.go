@@ -45,7 +45,6 @@ const (
 	shutdownTimeout  = 10 * time.Second
 	partitionLimit   = 1
 	ownerWaitLimit   = 7 * 24 * time.Hour
-	retention        = 7 * 24 * time.Hour
 	beatLimit        = 30 * time.Second
 	minMaxConcurrent = 1
 )
@@ -73,7 +72,9 @@ type Options struct {
 	MaxTreeBudget float64
 	// ReviewPoll is the time between two review polls. 0 means no poll.
 	ReviewPoll time.Duration
-	// Retention is the age at which Launch deletes a finished run: agents.retention_days. 0 means the default of 7 days.
+	// PerLogin is agents.per_login, the agent steps that one login runs at once in each agent queue. 0 means config.DefaultPerLogin.
+	PerLogin int
+	// Retention is the age at which Launch deletes a finished run: agents.retention_days. 0 means config.DefaultRetention.
 	Retention time.Duration
 	// KeepRuns turns the deletion off, so every finished run stays: agents.retention_days set to 0.
 	KeepRuns bool
@@ -105,6 +106,18 @@ func (o Options) validate() error {
 		return fmt.Errorf("%w: agents.max_review_concurrent is %d: set it to 1 or more", errBadOptions, o.MaxReviewConcurrent)
 	case o.ReviewPoll < 0:
 		return fmt.Errorf("%w: the review poll interval is %s: set it to 0 or more", errBadOptions, o.ReviewPoll)
+	}
+
+	return o.validatePerLogin()
+}
+
+// validatePerLogin refuses a negative per_login, and one above the cap of an agent queue: DBOS refuses a queue whose partition limit is above its global limit.
+func (o Options) validatePerLogin() error {
+	switch {
+	case o.PerLogin < 0:
+		return fmt.Errorf("%w: agents.per_login is %d: set it to 1 or more", errBadOptions, o.PerLogin)
+	case o.PerLogin > min(o.MaxConcurrent, o.MaxReviewConcurrent):
+		return fmt.Errorf("%w: agents.per_login is %d: set it to agents.max_concurrent (%d) or agents.max_review_concurrent (%d), whichever is lower, or less", errBadOptions, o.PerLogin, o.MaxConcurrent, o.MaxReviewConcurrent)
 	}
 
 	return nil
@@ -153,6 +166,8 @@ type Engine struct {
 	deps      Deps
 	// maxConcurrent is agents.max_concurrent, the cap of the items queue. The queue builtin subtracts the open runs from it.
 	maxConcurrent int
+	// perLogin is the agent steps that one login runs at once in each agent queue: Options.PerLogin, or the default of the config.
+	perLogin int
 	// maxRunBudget is Options.MaxRunBudget.
 	maxRunBudget float64
 	// maxTreeBudget is Options.MaxTreeBudget.
@@ -269,7 +284,7 @@ func claimFolder(dir, version, mode string) (*flock.Flock, error) {
 // newEngine makes the engine value for an opened store and a held folder lock.
 func newEngine(opts Options, deps Deps, state store, held *flock.Flock, registry step.Registry) *Engine {
 	engine := &Engine{
-		registry: registry, deps: deps, maxConcurrent: opts.MaxConcurrent, maxRunBudget: opts.MaxRunBudget, maxTreeBudget: opts.MaxTreeBudget, reviewPoll: opts.ReviewPoll, retention: opts.Retention, keepRuns: opts.KeepRuns, overCap: opts.OverCap, setSchedule: (*Engine).schedulePoll, env: opts.Env, version: applicationVersion(opts.Version), dir: state.dir, log: state.log, lock: held, logger: newLogger(state.log), redact: agent.Redactor(),
+		registry: registry, deps: deps, maxConcurrent: opts.MaxConcurrent, perLogin: cmp.Or(opts.PerLogin, config.DefaultPerLogin), maxRunBudget: opts.MaxRunBudget, maxTreeBudget: opts.MaxTreeBudget, reviewPoll: opts.ReviewPoll, retention: opts.Retention, keepRuns: opts.KeepRuns, overCap: opts.OverCap, setSchedule: (*Engine).schedulePoll, env: opts.Env, version: applicationVersion(opts.Version), dir: state.dir, log: state.log, lock: held, logger: newLogger(state.log), redact: agent.Redactor(),
 		procs: &groups{path: groupsFile(opts.StateDir)}, tickEnd: make(chan struct{}), progress: &progress{out: opts.Progress},
 	}
 	engine.progress.redact = engine.redact
@@ -349,7 +364,7 @@ func describeStepList(steps string) string {
 }
 
 // register adds the workflows, the agents queue (implement steps), the reviews queue (review steps) and the items queue of spawn.
-// Each agent queue runs one agent per login, at most its own cap in all. The two caps do not lend slots to each other.
+// Each agent queue runs at most agents.per_login agents for each login, at most its own cap in all. The two caps do not lend slots to each other.
 func (e *Engine) register(opts Options) error {
 	maxConcurrent := opts.MaxConcurrent
 
@@ -365,9 +380,9 @@ func (e *Engine) register(opts Options) error {
 	)
 }
 
-// registerQueue adds an agent queue with one agent per login and at most limit in all, and keeps it in into.
+// registerQueue adds an agent queue with at most perLogin agents for each login and at most limit in all, and keeps it in into.
 func (e *Engine) registerQueue(name string, limit int, into *dbos.Queue) error {
-	options := []dbos.QueueOption{dbos.WithGlobalConcurrency(limit), dbos.WithPartitionConcurrency(partitionLimit)}
+	options := []dbos.QueueOption{dbos.WithGlobalConcurrency(limit), dbos.WithPartitionConcurrency(e.perLogin)}
 	if poll := e.deps.Clock.Poll; poll > 0 {
 		options = append(options, dbos.WithQueueBasePollingInterval(poll))
 	}
@@ -485,7 +500,7 @@ func (e *Engine) forgetDeleted(ids []string, deleteErr error) error {
 
 // oldRuns lists the ids of the runs that finished with success more than the retention ago.
 func (e *Engine) oldRuns() ([]string, error) {
-	cutoff := time.Now().Add(-cmp.Or(e.deps.Clock.Retain, e.retention, retention))
+	cutoff := time.Now().Add(-cmp.Or(e.deps.Clock.Retain, e.retention, config.DefaultRetention))
 
 	rows, err := dbos.ListWorkflows(e.ctx, dbos.WithFilterStatus(dbos.WorkflowStatusSuccess), dbos.WithFilterWorkflowIDPrefix(runPrefix),
 		dbos.WithFilterName(itemName), dbos.WithFilterCompletedBefore(cutoff))
@@ -656,7 +671,7 @@ func (e *Engine) pickLogin(ctx context.Context, in ItemInput, overCap bool, take
 	return login, nil
 }
 
-// busyLogins returns the logins that have an agent step running or queued, and the logins in taken. The library keeps the list: beehave counts nothing.
+// busyLogins returns the logins that have agents.per_login agent steps running or queued, counting the logins in taken. The library keeps the list: beehave counts nothing.
 // An agent step is an open phase, which has the login as its partition key on the agents queue. A run that a spawn or the queue started holds its login from its start,
 // because its agent step is not queued yet while the run waits in a slot or does other steps. A run that `beehave run` started holds none, so the loop parent needs no login of its own.
 // The engine registers only the run and the phase, so one listing of the open workflows, filtered to those two names, reads both.
@@ -666,12 +681,14 @@ func (e *Engine) busyLogins(taken []string) ([]string, error) {
 		return nil, fmt.Errorf("list the open workflows: %w", err)
 	}
 
-	return heldLogins(open, taken)
+	return heldLogins(open, taken, e.perLogin)
 }
 
-// heldLogins returns the logins that the open workflows in rows hold, and the logins in taken, sorted and without repeats.
-func heldLogins(rows []dbos.WorkflowStatus, taken []string) ([]string, error) {
-	busy := slices.Clone(taken)
+// heldLogins returns the logins that hold limit agents or more, sorted. The open workflows in rows and the logins in taken each hold one agent.
+// A phase is a child of its run: a run that has an open phase holds its login through the phase and counts once.
+func heldLogins(rows []dbos.WorkflowStatus, taken []string, limit int) ([]string, error) {
+	phased := runsWithAPhase(rows)
+	held := countNames(taken)
 
 	for _, row := range rows {
 		login, err := heldLogin(row)
@@ -679,14 +696,53 @@ func heldLogins(rows []dbos.WorkflowStatus, taken []string) ([]string, error) {
 			return nil, err
 		}
 
-		if login != "" {
-			busy = append(busy, login)
+		if !phased[row.ID] {
+			held[login]++
+		}
+	}
+
+	delete(held, "")
+
+	return atLeast(held, limit), nil
+}
+
+// countNames counts each name in names.
+func countNames(names []string) map[string]int {
+	counts := map[string]int{}
+
+	for _, name := range names {
+		counts[name]++
+	}
+
+	return counts
+}
+
+// runsWithAPhase returns the ids of the runs that have an open phase in rows.
+func runsWithAPhase(rows []dbos.WorkflowStatus) map[string]bool {
+	phased := map[string]bool{}
+
+	for _, row := range rows {
+		if row.Name == phaseName && row.ParentWorkflowID != "" {
+			phased[row.ParentWorkflowID] = true
+		}
+	}
+
+	return phased
+}
+
+// atLeast returns the keys of counts whose count reaches limit, sorted.
+func atLeast(counts map[string]int, limit int) []string {
+	busy := []string{}
+
+	for key, count := range counts {
+		if count >= limit {
+			busy = append(busy, key)
 		}
 	}
 
 	slices.Sort(busy)
 
-	return slices.Compact(busy), nil
+	return busy
 }
 
 // heldLogin returns the login that an open workflow holds, or "" when it holds none. A phase holds its login. A run holds it only when a spawn or the queue started it: its input has an entry.
