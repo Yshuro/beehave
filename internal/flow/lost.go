@@ -21,6 +21,8 @@ const (
 	noRecord = "the process ended with no record"
 	// callStartRef is the per-worktree ref that the render step of an agent call writes at the start commit. Git deletes it with the worktree.
 	callStartRef = "refs/worktree/beehave/call-start"
+	// continueStep ends the prompt of a resumed session of a step.
+	continueStep = "Continue the step from where you stopped. Your brief and the output file are earlier in this session."
 )
 
 // lostView is what the note of a lost step can say about the changes of the step.
@@ -77,11 +79,16 @@ func (l LostStep) note(view lostView) string {
 		ran = "ran before and was lost after " + minutes(l.Ran())
 	}
 
-	return "This step " + ran + ". " + l.changes(view) + "Read `git status` and `git diff` before you start, and keep what is right."
+	return "This step " + ran + ". " + treeNote(view, l.DiffStat)
 }
 
-// changes is the part of the note about the changes of the step. Only a folder that holds the start mark of the call gets a claim about its changes.
-func (l LostStep) changes(view lostView) string {
+// treeNote is the end of the note of a step that runs again: what the view lets the engine say about the changes of the step, and the request to read them.
+func treeNote(view lostView, stat string) string {
+	return changes(view, stat) + "Read `git status` and `git diff` before you start, and keep what is right."
+}
+
+// changes is the part of the note about the changes of the step, with stat the diff summary. Only a folder that holds the start mark of the call gets a claim about its changes.
+func changes(view lostView, stat string) string {
 	switch view {
 	case viewNoStart:
 		return "The work tree may hold its edits. The engine has no start commit of the step, so it cannot say what the step changed. "
@@ -93,11 +100,11 @@ func (l LostStep) changes(view lostView) string {
 	case viewDiff:
 	}
 
-	if l.DiffStat == "" {
+	if stat == "" {
 		return "The work tree may hold its edits. The engine found no change to tracked files since the step started. "
 	}
 
-	return "The work tree may hold its edits. The engine read this summary of the changes since the step started:\n\n```\n" + l.DiffStat + "\n```\n\n"
+	return "The work tree may hold its edits. The engine read this summary of the changes since the step started:\n\n```\n" + stat + "\n```\n\n"
 }
 
 // continued is the prompt of a resumed session of the step. The brief and the output file are in the session already.
@@ -107,8 +114,7 @@ func (l LostStep) continued() string {
 		ran = minutes(l.Ran())
 	}
 
-	return "The engine stopped while you worked on this step, after " + ran + ". Continue the step from where you stopped. " +
-		"Your brief and the output file are earlier in this session."
+	return "The engine stopped while you worked on this step, after " + ran + ". " + continueStep
 }
 
 // lostRun returns the lost run for the start that follows the loss, or nil when the lost agent named no session: the note then goes into the prompt.
