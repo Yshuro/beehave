@@ -280,8 +280,25 @@ The loop ends when the full review approves and no lane run left a violation. If
 
 | Fix round | The `fix-scoped-<n>` agent |
 |---|---|
-| 1 to 3 | Resumes the session of the `implement` agent, on `sonnet`. |
-| 4 and later | Starts a fresh agent, on `opus`. |
+| 1 to `escalate_after` | Runs on the step `fix`. It resumes the session of the `implement` agent when `fix` and `implement` use the same runner. If the runners differ, it starts a fresh agent. |
+| After `escalate_after` | Starts a fresh agent on the step `fix_late`. With no `fix_late` entry, it starts a fresh agent on `fix`. |
+
+`escalate_after` is 3 by default (`FIX_ESCALATE_AFTER`). A session belongs to one login, and a resume on another agent fails. So a fix resumes the implementer only when both steps name the same runner, or both name none and use the pool.
+
+#### The steps and the limits
+
+The library holds no model name. The argument `steps` of `review_fix` is a dict from a step name to `{"model": text, "runner": text}`. The entries `implement`, `review` and `fix` are required. `design` is required when the call has a `design_prompt`. `fix_late` is optional. A missing or blank model is a refusal that names the step. A runner that is empty or left out means the pool pick. A step with a runner never reads the pool, so the usage caps of the pool do not apply to it, for a Claude runner too.
+
+The four limits are arguments of `review_fix`. The constants of the same names in capitals are the defaults.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `design_after` | `DESIGN_AFTER`, 2 | The fixes on one mechanism before the design step. |
+| `void_reruns` | `VOID_RERUNS`, 2 | The reruns of a void gate before the loop asks the owner. |
+| `void_asks` | `VOID_ASKS`, 3 | The questions to the owner about a void gate. |
+| `escalate_after` | `FIX_ESCALATE_AFTER`, 3 | The last fix round on the step `fix`. |
+
+`examples/remediation/workflow.star` reads both from the project file. The table `STEP_DEFAULTS` of the example is the one place that names a model: plan `opus`, implement `sonnet`, review `opus`, fix `sonnet`, fix_late `opus`, design `opus`, take_review `opus`, sync_review `opus`, sync_resolve `opus`, queue_audit `sonnet` and settle `sonnet`. `vars.round.steps` overrides the model, the runner or both of any step. `vars.round.design_after`, `void_reruns`, `void_asks` and `escalate_after` set the limits, each a whole number from its least value to 100. The example refuses an unknown step, an unknown field, a model that is not non-blank text, a runner that is not text and a limit out of range, each with the path of the key. It also refuses a review on the model of the implementer when at least two models are in use. A project on one model for every step is accepted. `beehave check workflow <file> --project <name> --dry-run` shows each refusal.
 
 The status caps follow from `rounds`: the review cap is `rounds * (MAX_INNER + 1)` and the fix cap is `rounds * MAX_INNER`.
 
@@ -299,7 +316,7 @@ The result holds `head`, the commit that the last step of the loop judged. A sco
 
 A void gate has a host cause when its `host_loss` is not empty: the engine proved that the host job of the gate was lost. The gate gave no verdict about the code, and the host is not the fault of the item.
 
-- The loop reruns the gate as `candidate-gate-host-<k>`, with `k` from 1 for each call of the gate. The rerun takes no plain attempt: `VOID_RERUNS` and `VOID_ASKS` count only the voids with no host cause, and the fix round does not change.
+- The loop reruns the gate as `candidate-gate-host-<k>`, with `k` from 1 for each call of the gate. The rerun takes no plain attempt: `void_reruns` and `void_asks` count only the voids with no host cause, and the fix round does not change.
 - The loop reads `host_losses` of the gate result, the count of the engine. It keeps no count of its own.
 - `HOST_LOSS_LIMIT` is 5, one constant in `review_fix.star`. A void gate whose `host_losses` is at or above the limit is not rerun. No fix agent reads its report.
 - The result of the loop then has `host_lost = true`, with no `held` reason. The caller decides what the loss costs.
@@ -930,7 +947,7 @@ sequenceDiagram
     loop until the full review approved, at most 6 candidates for the pull request
         loop up to 3 times, until a scoped review approves
             opt findings are due
-                F->>A: run a scoped fix with the findings (resumes the implement session in fix rounds 1 to 3)
+                F->>A: run a scoped fix with the findings (resumes the implement session in fix rounds up to escalate_after, when both steps use one runner)
             end
             F->>A: run a scoped review of the diff, pinned to the head of the worktree
             A-->>F: verdict

@@ -41,8 +41,17 @@ func exampleProject() model.Project {
 		Name: testProject, Repo: "o/r", BaseBranch: "main",
 		Vars: roundVars(map[string]any{
 			"base": "integration", "owner": "owner", "owner_email": "owner@example.com", "source_checkout": "/own/checkout",
-			"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round",
+			"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round", "steps": exampleSteps(),
 		}),
+	}
+}
+
+// exampleSteps is vars.round.steps of the example rig: the steps of the review loop on the models that the model-order assertions of the tests name.
+func exampleSteps() map[string]any {
+	model := func(name string) any { return map[string]any{"model": name} }
+
+	return map[string]any{
+		"implement": model("sonnet"), "review": model("opus"), "fix": model("sonnet"), "fix_late": model("opus"), "design": model("opus"),
 	}
 }
 
@@ -330,7 +339,7 @@ func libraryLoop(head, extra string) string {
 	return "load(\"@beehave//review_fix.star\", \"review_fix\")\n" +
 		"def main(item):\n" +
 		"    impl = struct(violations = \"\", session = \"\", rewrote = False, head_sha = \"" + head + "\")\n" +
-		"    review_fix(item, impl, \"prompts/review.md\", \"prompts/fix.md\", base = \"integration\", facts = facts()" + extra + ")\n"
+		"    review_fix(item, impl, \"prompts/review.md\", \"prompts/fix.md\", base = \"integration\", facts = facts(), steps = facts().vars[\"round\"][\"steps\"]" + extra + ")\n"
 }
 
 // The fixes after candidate k are fix round k, as the fix after review k was before the scoped loop. Rounds 1 to 3 resume the implementer on sonnet;

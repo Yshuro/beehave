@@ -14,7 +14,7 @@ import (
 const candidateFlow = "load(\"@beehave//review_fix.star\", \"review_fix\")\n\n" +
 	"def main(item):\n" +
 	"    impl = agent(name = \"implement\", lane = \"fix\", prompt = \"p.md\", model = \"sonnet\")\n" +
-	"    loop = review_fix(item, impl, \"p.md\", \"p.md\", base = \"main\", rounds = 2)\n" +
+	"    loop = review_fix(item, impl, \"p.md\", \"p.md\", base = \"main\", rounds = 2, steps = " + loopSteps + ")\n" +
 	"    return {\"approved\": loop.review != None and loop.review.verdict == \"approve\"}\n"
 
 // loopEvent is one gate, before_review or agent step of a dry-run line: the kind and the label.
