@@ -141,6 +141,6 @@ func TestExample_AnApproveFromAReviewThatChangedTheFolderIsNotClean(t *testing.T
 	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus"}, rig.models(), "review 1 approved but changed the folder, so a fix ran and review 2 approved")
+	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "opus"}, rig.models(), "scoped review 1 approved but changed the folder, so a fix ran, scoped review 2 approved, and the full review approved")
 	assert.True(t, childOf(t, result).Approved)
 }

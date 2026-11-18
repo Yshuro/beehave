@@ -249,36 +249,59 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 
 ### Fix rounds
 
-The library `review_fix.star` sets the fix rounds. `examples/remediation/workflow.star` calls `review_fix` with the default of `rounds = 6`.
+The library `review_fix.star` sets the fix rounds. `examples/remediation/workflow.star` calls `review_fix` with `rounds` from the project setting `fix_rounds` (see [Fix caps across runs](#fix-caps-across-runs-earlier_calls)).
 
-#### Rounds
+#### Two levels: candidates and scoped fixes
 
-A round is one gate, one review and one fix. The loop starts with a review, so five fix rounds need six reviews: the sixth review reads the fifth fix. The loop leaves before the `fix` call of round 6, so the sixth pass never fixes.
+The loop has two levels. The outer level makes candidates, and `rounds` caps them. The inner level runs scoped fixes with no gate, up to `MAX_INNER = 3` times for each candidate.
 
-| Round | The `fix` agent |
+The inner level runs in this order:
+
+1. The agent `fix-scoped-<n>` fixes the open findings. It runs first only when findings are due: the violations of the implementer, or the findings that sent the last candidate back.
+2. The fresh agent `scoped-review-<n>` reads the head with the scope "the diff of the last fix". It writes only a verdict. When no findings were due, no fix ran: that first review of candidate 1 is `scoped-review-implement`, with the scope "the diff of the implementer".
+3. An approve with no violations ends the inner level. A `changes` gives the findings of the next scoped fix. After the third scoped review, the head is the candidate, whatever the verdict. The findings of that review go with any findings of the full checks to the next fix, and its violations keep the full review from a clean approve.
+
+Each candidate then gets the full checks once, in this order. The first entry with findings sends the candidate back to the inner level, and the entries after it do not run.
+
+1. The gate `candidate-gate` on the base. A void result reruns as `candidate-gate-void-<n>`.
+2. The checks before review `candidate-before-review`, which compare the head with `origin/<base>`.
+3. Each function in the list `checks` of the caller. The example passes its mutation run.
+4. The fresh agent `candidate-review` reads the whole pull request at the head that the gate passed (`pin` is that head).
+
+The loop ends when the full review approves and no lane run left a violation. If `rounds` candidates did not end it, the loop is exhausted.
+
+- A gate that ran and failed gives its report as the findings for the next scoped fix.
+- A gate that could not run stops the item with an error.
+- The fix prompt gets `round`, the fix round. The fixes after candidate k are round k, and the fixes inside candidate 1 are round 1.
+
+| Fix round | The `fix-scoped-<n>` agent |
 |---|---|
 | 1 to 3 | Resumes the session of the `implement` agent, on `sonnet`. |
-| 4 and 5 | Starts a fresh agent, on `opus`. |
+| 4 and later | Starts a fresh agent, on `opus`. |
 
-The loop ends when the gate passed and the review approved.
+The status caps follow from `rounds`: the review cap is `rounds * (MAX_INNER + 1)` and the fix cap is `rounds * MAX_INNER`.
 
-- A gate that ran and failed gives its report as the findings of the round.
-- A gate that could not run stops the item with an error and uses no fix round.
-- The findings of round `k` go into the prompt of the `fix` call in round `k`.
+#### The `base` and `checks` arguments
 
-The `review` call has a `pin` of `check.head`, the head that the gate passed, so the review reads only that head.
+The keyword `base` of `review_fix` is required: the base branch of the item. The gate of each candidate runs on it.
+
+The argument `checks` is a list of functions of one argument, the passed gate. Each one returns an empty text for a clean head, or the findings as text.
+
+#### The result of the loop
+
+The result holds `head`, the commit that the last step of the loop judged. A scoped review can reject or a guard can stop before the first gate. Then `gate` is `None`, and `head` is the head of the last lane run. So a caller that holds the item reports `head`, not `gate.head`.
 
 #### Review verdicts
 
 A review verdict is `approve`, `changes` or `reject`.
 
-A `reject` ends the loop at once with no fix round, whatever the gate says. The loop returns `rejected = true`, and the example holds the item with the text of the review as the reason. The review runs only after a passing gate, so a failing gate gives no review and one fix round first. With `follow_ups = "forbid"`, open findings do not turn a `reject` into `changes`.
+A `reject` from a scoped review or the full review ends the loop at once with no more fixes. The loop returns `rejected = true`, and the example holds the item with the text of the review as the reason. The full review runs only after a passing gate, so a failing gate gives no full review and one scoped fix first. With `follow_ups = "forbid"`, open findings do not turn a `reject` into `changes`.
 
 #### The `guard` argument
 
-The argument `guard` of `review_fix` is a dict of `base`, `hold` and `own`. It turns on a `preflight` call before every review, design and fix agent. The calls are named `before-review-<round>`, `before-design-<round>` and `before-fix-<round>`.
+The argument `guard` of `review_fix` is a dict of `base`, `hold` and `own`. It turns on a `preflight` call before every review, design and fix agent. The calls are named `before-scoped-review-<candidate>`, `before-fix-<candidate>`, `before-design-<candidate>` and `before-review-<candidate>`.
 
-- The call passes the head the gate ran on, which is the head of the worktree. So a loop with a pull request needs each fix pushed before the next gate.
+- The call passes the head that the next agent reads, which is the head of the worktree. So a loop with a pull request needs each fix pushed before the next review.
 - A stop is a result. The loop returns `stopped = true` and starts no more agents.
 - The run reports the step, the exit code and the reason, as the stop at the intake does.
 
@@ -286,11 +309,19 @@ The argument `guard` of `review_fix` is a dict of `base`, `hold` and `own`. It t
 
 The builtin `earlier_calls(call = "<name>")` returns `count`: the number of `agent` calls with that `name` in the other runs of the item. It is a recorded step, so a replay keeps the count of the first start.
 
-The example lowers the fix cap by the count of its `fix` calls, so the cap holds for the pull request over every run of the item.
+A candidate counts as spent when its first agent starts: its first scoped fix `fix-scoped-1`, or `scoped-review-implement` when no findings were due. Each candidate makes one of these two calls once. The library function `candidates_spent()` adds up both calls in the other runs of the item, and the example loads it. The first candidate reviews the implementer, so `fix_rounds` fix rounds need one candidate more. The example passes:
+
+```
+rounds = max(fix_rounds + 1 - candidates_spent(), 0)
+```
+
+- An earlier run that ended early leaves the candidates that it did not start. A run that spent one candidate of `fix_rounds = 2` leaves two.
+- A run that stops after the first fix of a candidate and before its scoped review still spends that candidate.
+- After the cap, a run gets no candidate. The loop starts no review and no fix lane, and the example asks the owner to rule on the open findings.
 
 #### The `review_check` argument
 
-The argument `review_check` of `review_fix` is a function of one argument. The loop calls it with each review whose verdict is not `reject`.
+The argument `review_check` of `review_fix` is a function of one argument. The loop calls it with each full review whose verdict is not `reject`. Scoped reviews write only a verdict, so the loop does not call it for them.
 
 - An empty text goes on.
 - Any other text ends the loop at once with `held` set to it and no more fix lane. The example holds the item with that text.
@@ -304,7 +335,7 @@ The design round needs the argument `design_prompt` of `review_fix`. The default
 - Without it, the review declares only the output `verdict`, and the loop is the plain loop.
 - With it, the review also writes the output `mechanism`: the file path (it may add `:function`) that its open findings are about, or an empty text. The loop keys on the part before the first colon. A review prompt that writes no `mechanism` fails when `design_prompt` is set.
 
-The loop counts the `fix` steps of each mechanism as it runs, so no second counter exists beside the round. When a mechanism had two fix steps and the review still asks for changes on it, the next step is a `design` agent step with the prompt `design_prompt`, not a fix.
+The loop counts the scoped fix steps of each mechanism as it runs, so no second counter exists beside the candidate. When a mechanism had two fix steps and a review still asks for changes on it, the next step is a `design` agent step with the prompt `design_prompt`, not a fix. Scoped reviews write the output `mechanism` too, so the count includes the fixes inside one candidate.
 
 The design step writes a `decision` (`keep`, `replace` or `delete`) and a `reason`.
 
@@ -325,12 +356,13 @@ The argument `review_outputs` of `review_fix` (default: an empty list) names mor
 
 #### Violations of the lane runs
 
-The loop also gates on the violations of the lane runs. The latest violations are `impl.violations` in round 1, and after that the violations of the `fix` call of the round before.
+The loop also gates on the violations of the lane runs. The latest violations are `impl.violations` before the first fix, and after that the violations of the last scoped fix.
 
-- The review reads them.
-- When they are not empty, the `fix` call runs, even if the review approves. It gets them ahead of the review text as findings.
-- The loop does not end while they are not empty. So a hit in any lane run forces one more fix round and one more review of it.
-- If the violations are still not empty at round 6, the loop is exhausted and the owner rules.
+- When `impl.violations` is not empty, the first scoped fix runs before any review. It gets them as findings.
+- Each review reads the latest violations.
+- When they are not empty, the next scoped fix runs, even if the review approves. It gets them ahead of the review text as findings.
+- The loop does not end while they are not empty. So a hit in any lane run forces one more scoped fix and one more review of it.
+- If the violations are still not empty after the last candidate, the loop is exhausted and the owner rules.
 
 #### The wait for the owner
 
@@ -516,7 +548,7 @@ The record also holds `diff_stat`: the output of `git diff --stat --stat-count=5
 
 When the loss record holds a session, the agents layer decides once, before the start, whether the session can resume. It cannot resume when the CLI of the runner has no resume option, or when the transcript file of the session is missing (a moved worktree, a cleaned login folder, another login). A session that can resume starts with `--resume <id>` and a short prompt: the engine stopped after N minutes, continue the step, the brief and the output file are earlier in the session. The phase output records `resumed`. The saved session wins over the `resume` keyword of the call.
 
-A session that cannot resume, and a loss before the agent named a session, start the agent again with the prompt and the note. A start that the CLI refuses at run time fails the step as any failed run does.
+A session that cannot resume, and a loss before the agent named a session, start the agent again with the prompt and the note. OpenCode never resumes a lost run: it keeps no file for one session, so the check finds none. A start that the CLI refuses at run time fails the step as any failed run does.
 
 #### The note in the prompt
 
@@ -641,7 +673,7 @@ A line of the list also shows these facts when the run has them. Each is a tab-s
 | `gate pass at <head>` or `gate fail at <head>` | The newest gate result and the head it judged. |
 | `fix U of C` and `review U of C` | The count of the agent calls of the lanes `rework` and `review` against the cap that those calls name with the keyword `rounds`. A call that names none shows the count alone. |
 
-The keyword `rounds` is a whole number of 1 or more, recorded in the phase. The review loop of the library sets it to its `rounds` for the review and to one less for the fix.
+The keyword `rounds` is a whole number of 1 or more, recorded in the phase. The review loop of the library sets it to `rounds * (MAX_INNER + 1)` for the reviews and to `rounds * MAX_INNER` for the fixes.
 
 Every value is read from the step records, the events and the options of the client. The store has no table for it. The deadline of a `wait` with a `timeout` is the output of the `DBOS.sleep` record that the receive of the wait writes before it waits. Status shows it only while the question is open.
 
@@ -870,18 +902,22 @@ sequenceDiagram
     A-->>F: plan
     F->>A: run the implement step with the plan
     A-->>F: output file
-    loop until the gate passed and the review approved, at most 6 passes
-        F->>K: run the gate on the worktree or the build host
-        K-->>F: passed, head and report
-        opt the gate passed
-            F->>A: run the review step, pinned to the head that passed
+    loop until the full review approved, at most 6 candidates for the pull request
+        loop up to 3 times, until a scoped review approves
+            opt findings are due
+                F->>A: run a scoped fix with the findings (resumes the implement session in fix rounds 1 to 3)
+            end
+            F->>A: run a scoped review of the diff, pinned to the head of the worktree
             A-->>F: verdict
         end
-        opt fix rounds 1 to 5 remain
-            F->>A: run the fix step with the findings (resumes the implement session in rounds 1 to 3)
+        F->>K: run the gate of the candidate on the base, then the checks before review and the mutation run
+        K-->>F: passed, head and report
+        opt every check passed
+            F->>A: run the full review, pinned to the head that passed
+            A-->>F: verdict
         end
     end
-    opt the loop used all of its passes
+    opt the loop used all of its candidates
         F->>O: pause with the question
         O-->>F: answer
         F->>A: run the settle step with the answer

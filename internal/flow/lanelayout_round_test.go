@@ -67,23 +67,24 @@ func TestLaneLayout_EveryReviewIsAFreshReadOnlySessionAndNoFixLaneResumesOne(t *
 		}
 	}
 
-	assert.Equal(t, 3, reviews)
+	assert.Equal(t, 4, reviews, "three scoped reviews and the full review")
 	assert.Equal(t, 2, fixes)
 }
 
-// The review loop calls the hook after each review, so a rise in a middle round ends the loop at that round.
-// A check that runs only when the loop ends misses a rise that a later fix lane hides.
-func TestLaneLayout_ARiseInAMiddleRoundHoldsTheItemBeforeTheNextFixLane(t *testing.T) {
+// The review loop calls the hook after each full review, so a rise in the full review of a middle candidate ends the loop at that candidate.
+// A check that runs only when the loop ends misses a rise that a later fix lane hides. A scoped review judges the diff of one fix and counts no regressions of the pull request.
+func TestLaneLayout_ARiseInTheFullReviewOfAMiddleCandidateHoldsTheItemBeforeTheNextFixLane(t *testing.T) {
 	t.Parallel()
 
+	// Review 1 is the scoped review of the implement and review 2 the full review of candidate 1.
 	rig, file := exampleRig(t, func(review int) string {
-		if review == 1 {
+		if review == 2 {
 			return "changes"
 		}
 
 		return "approve"
 	})
-	withCountSequence(rig, "1", "2", "0")
+	withCountSequence(rig, "1", "0", "2", "0")
 	writer := newFakeWriter()
 	rig.h.writer = writer
 

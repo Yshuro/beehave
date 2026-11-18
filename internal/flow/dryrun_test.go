@@ -52,7 +52,8 @@ func TestDryRun_ThePipelineOfTheExamplePrintsEachStepInOrderAndEndsClean(t *test
 	assert.Contains(t, text, "dry run: no agent ran")
 	assert.Positive(t, strings.Index(text, " agent:plan#1"), text)
 	assert.Less(t, strings.Index(text, " agent:plan#1"), strings.Index(text, " agent:implement#2"), text)
-	assert.Less(t, strings.Index(text, " agent:implement#2"), strings.Index(text, " agent:review#3"), text)
+	assert.Less(t, strings.Index(text, " agent:implement#2"), strings.Index(text, " agent:scoped-review-implement#3"), text)
+	assert.Less(t, strings.Index(text, " agent:scoped-review-implement#3"), strings.Index(text, " agent:candidate-review#4"), text)
 	assert.NotContains(t, text, "agent:fix")
 	assert.NotContains(t, text, "FAILED")
 }
@@ -246,7 +247,7 @@ func dryFileWithPrompt(t *testing.T, text string) string {
 func TestDryGate_EveryRunPassesWithAPassedStepUnlessTheRedGateIsChosen(t *testing.T) {
 	t.Parallel()
 
-	gate := newDryGate("h", false)
+	gate := newDryGate(t.TempDir(), "h", false)
 
 	for range 2 {
 		green, err := gate.Run(t.Context(), "p", "i", "", GateJob{})
@@ -259,7 +260,7 @@ func TestDryGate_EveryRunPassesWithAPassedStepUnlessTheRedGateIsChosen(t *testin
 func TestDryGate_WithTheRedGateTheFirstRunIsRedWithAFailedStepAndEveryLaterRunPasses(t *testing.T) {
 	t.Parallel()
 
-	gate := newDryGate("h", true)
+	gate := newDryGate(t.TempDir(), "h", true)
 
 	red, err := gate.Run(t.Context(), "p", "i", "", GateJob{})
 	require.NoError(t, err)
@@ -300,11 +301,14 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:fix-lanes-spent#1", "item_read:parent#1", "login#1",
+		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1",
 		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-1#2",
-		"agent:review#3/render", "agent:review#3/clear1", "agent:review#3/budget1.0", "phase", "DBOS.getResult", "agent:review#3/read1",
+		"preflight:before-scoped-review-1#2",
+		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "agent:scoped-review-implement#3/budget1.0", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "before_review:candidate-before-review#1",
+		"host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-1#3",
+		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "agent:candidate-review#4/budget1.0", "phase", "DBOS.getResult", "agent:candidate-review#4/read1",
 		"worktree", "release",
 	}, remediationStepNames(t))
 }
@@ -313,13 +317,18 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:fix-lanes-spent#1", "item_read:parent#1", "login#1",
+		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "agent:plan#1/budget1.0", "phase", "DBOS.getResult", "agent:plan#1/read1",
 		"agent:implement#2/render", "agent:implement#2/clear1", "agent:implement#2/budget1.0", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:check#1", "gate:check#1", "preflight:before-fix-1#2",
-		"agent:fix#3/render", "agent:fix#3/clear1", "agent:fix#3/budget1.0", "phase", "DBOS.getResult", "agent:fix#3/read1",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:check#2", "host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-2#3",
-		"agent:review#4/render", "agent:review#4/clear1", "agent:review#4/budget1.0", "phase", "DBOS.getResult", "agent:review#4/read1",
+		"preflight:before-scoped-review-1#2",
+		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "agent:scoped-review-implement#3/budget1.0", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "preflight:before-fix-2#3",
+		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "agent:fix-scoped-1#4/budget1.0", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1",
+		"preflight:before-scoped-review-2#4",
+		"agent:scoped-review-1#5/render", "agent:scoped-review-1#5/clear1", "agent:scoped-review-1#5/budget1.0", "phase", "DBOS.getResult", "agent:scoped-review-1#5/read1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:candidate-gate#2", "before_review:candidate-before-review#1",
+		"host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-2#5",
+		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "agent:candidate-review#6/budget1.0", "phase", "DBOS.getResult", "agent:candidate-review#6/read1",
 		"worktree", "release",
 	}, remediationStepNames(t, WithRedGate()))
 }
@@ -522,6 +531,33 @@ func TestDryRepo_FailsWhenTheFolderCannotBeMade(t *testing.T) {
 
 	_, err = dryRepo(canceled, t.TempDir(), t.TempDir())
 	require.Error(t, err)
+}
+
+func TestDryGate_ASubmitWithABasePointsTheRemoteBranchOfTheBaseAtTheParentOfTheHead(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	head, err := dryRepo(t.Context(), dir, t.TempDir())
+	require.NoError(t, err)
+
+	gate := newDryGate(dir, head, false)
+
+	job, err := gate.Submit(t.Context(), "p", "i", "", "integration")
+	require.NoError(t, err)
+	assert.Equal(t, "integration", job.Plan.Base)
+
+	base, err := dryGit(t.Context(), dir, []string{"rev-parse", "refs/remotes/origin/integration"})
+	require.NoError(t, err)
+	parent, err := dryGit(t.Context(), dir, []string{"rev-parse", head + "^"})
+	require.NoError(t, err)
+	assert.Equal(t, parent, base)
+
+	landing, err := newDryGate(filepath.Join(dir, "none"), head, false).Submit(t.Context(), "p", "i", "", "")
+	require.NoError(t, err, "a gate with no base touches no repository")
+	assert.Empty(t, landing.Plan.Base)
+
+	_, err = newDryGate(dir, "no-such-commit", false).Submit(t.Context(), "p", "i", "", "integration")
+	require.ErrorContains(t, err, "git exited")
 }
 
 func TestDryRun_FailsWhenTheTemporaryFolderCannotBeMade(t *testing.T) {

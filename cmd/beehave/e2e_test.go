@@ -22,6 +22,7 @@ import (
 	"github.com/tobocop2/beehave/internal/cli"
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/flow"
+	"github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/preflight"
 	"github.com/tobocop2/beehave/internal/proc"
@@ -212,17 +213,22 @@ func e2eHeadOf(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(result.Stdout), nil
 }
 
-// e2eGate passes every item.
+// e2eGate passes every item. A gate with a base, the gate of a candidate, also gives a clean check record: one new test and a clean secret scan.
 type e2eGate struct{ dir string }
 
-func (e2eGate) Submit(context.Context, string, string, string, string) (flow.GateJob, error) {
-	return flow.GateJob{}, nil
+func (e2eGate) Submit(_ context.Context, _, _, _, base string) (flow.GateJob, error) {
+	return flow.GateJob{Plan: gate.Plan{Base: base}}, nil
 }
 
-func (g e2eGate) Run(ctx context.Context, _, _, _ string, _ flow.GateJob) (flow.GateResult, error) {
+func (g e2eGate) Run(ctx context.Context, _, _, _ string, job flow.GateJob) (flow.GateResult, error) {
 	head, err := e2eHeadOf(ctx, g.dir)
+	result := flow.GateResult{Passed: true, Head: head, Tree: "tree-of-" + head}
 
-	return flow.GateResult{Passed: true, Head: head, Tree: "tree-of-" + head}, err
+	if job.Plan.Base != "" {
+		result.Checks = &flow.GateChecks{NewTests: []string{"shop TestE2E"}, New: 1, Secrets: new(int), Complete: true}
+	}
+
+	return result, err
 }
 
 func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, error) {
@@ -549,7 +555,12 @@ func e2eSetup(env *testscript.Env) error {
 		return err
 	}
 
-	for _, args := range [][]string{{"init", "-q"}, {"-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "commit", "-q", "--allow-empty", "-m", "start"}} {
+	// The remote branch of the round base points at the first commit, as in a clone, so the checks before review find a head that descends from the base.
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.name=e2e", "-c", "user.email=e2e@example.com", "commit", "-q", "--allow-empty", "-m", "start"},
+		{"update-ref", "refs/remotes/origin/integration", "HEAD"},
+	} {
 		if result := proc.NewExecRunner("git", tree).Run(context.Background(), args); result.ExitCode != 0 {
 			return fmt.Errorf("git %s: %s", args[0], result.Stderr)
 		}
