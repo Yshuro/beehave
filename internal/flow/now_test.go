@@ -74,7 +74,7 @@ func TestNow_AReplayKeepsTheFirstReading(t *testing.T) {
 		ended <- runErr
 	}()
 
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
 	steps, err := dbos.GetWorkflowSteps(first.ctx, testRun)
 	require.NoError(t, err)
@@ -86,7 +86,7 @@ func TestNow_AReplayKeepsTheFirstReading(t *testing.T) {
 	require.NoError(t, first.Shutdown())
 	require.Error(t, receive(t, ended))
 
-	time.Sleep(1100 * time.Millisecond)
+	waitOn(t, condition(func() bool { return time.Since(recorded) > time.Second }))
 
 	next := h.engine(t)
 	done := make(chan runOutcome, 1)

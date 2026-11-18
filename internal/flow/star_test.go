@@ -181,11 +181,11 @@ func interrupted(t *testing.T, h *harness, file string) {
 		ended <- runErr
 	}()
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the run to show a question", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		rows, err := client.Status()
 
-		return err == nil && len(rows) == 1 && rows[0].Question != ""
-	})
+		return struct{}{}, err == nil && len(rows) == 1 && rows[0].Question != "", nil
+	}})
 
 	stop()
 	require.NoError(t, engine.Shutdown())
@@ -240,7 +240,7 @@ func TestRunStar_AReplayIssuesTheSameStepNamesAndRunsNoRecordedStepAgain(t *test
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfEngine(t, next), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
 	outcome := receive(t, done)
 
@@ -306,8 +306,8 @@ func TestRunStar_TheStepNamesOfEveryBuiltinMatchTheGoldenListOfTheStepsVersion(t
 	client := h.client(t, testVersion)
 	done := runInBackground(engine, testItem)
 
-	waitForTheOwner(t, h)
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, ownerAsks(t, h))
+	waitOn(t, waiting[struct{}]{what: "the run to take the answer", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
 	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, "star30", stepsVersion)

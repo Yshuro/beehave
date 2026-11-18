@@ -22,7 +22,7 @@ func TestWaitOn_AMessageOnATopicTheRunNeverReceivesIsNotAPendingMessage(t *testi
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	waitForTheDeadline(t, client)
+	waitOn(t, ownerAsksWithADeadline(t, client))
 
 	run := runOfClient(t, client)
 

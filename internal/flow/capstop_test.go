@@ -242,10 +242,10 @@ func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing
 		}
 	}
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "six looks of the caps to be recorded", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		records, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
 		if err != nil {
-			return false
+			return struct{}{}, false, nil
 		}
 
 		looks = looks[:0]
@@ -256,8 +256,8 @@ func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing
 			}
 		}
 
-		return len(looks) >= 6
-	})
+		return struct{}{}, len(looks) >= 6, nil
+	}})
 
 	require.NoError(t, engine.Shutdown())
 	receive(t, done)
@@ -310,7 +310,7 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 
 	cancel := receive(t, ends)
 
-	waitForTheSleep(t, engine)
+	waitOn(t, inASleep(t, engine))
 	cancel()
 
 	words, err := handle.GetResult()

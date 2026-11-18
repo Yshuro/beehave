@@ -86,7 +86,7 @@ func TestGatherUntil_TheDefaultAndAllWaitForEveryRun(t *testing.T) {
 				done <- err
 			}()
 
-			require.True(t, waitUntil(func() bool { return itemEnded(engine, "21") && itemEnded(engine, "22") }), "the free runs end")
+			waitOn(t, condition(func() bool { return itemEnded(engine, "21") && itemEnded(engine, "22") }))
 			time.Sleep(10 * tickInterval)
 			assert.Empty(t, h.commands.ranBy(testItem), "the parent still waits for run 23")
 			close(release)
@@ -114,14 +114,14 @@ func interruptedAtTheQuestion(t *testing.T, h *harness, file string, release cha
 		ended <- runErr
 	}()
 
-	eventually(t, func() bool {
+	waitOn(t, waiting[struct{}]{what: "the parent to show its question", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		rows, statusErr := client.Status()
 
-		return statusErr == nil && slices.ContainsFunc(rows, func(r RunInfo) bool { return r.Question != "" })
-	})
+		return struct{}{}, statusErr == nil && slices.ContainsFunc(rows, func(r RunInfo) bool { return r.Question != "" }), nil
+	}})
 
 	close(release)
-	require.True(t, waitUntil(func() bool { return itemEnded(engine, "21") && itemEnded(engine, "23") }), "the held runs end after the parent asked")
+	waitOn(t, condition(func() bool { return itemEnded(engine, "21") && itemEnded(engine, "23") }))
 
 	stop()
 	require.NoError(t, engine.Shutdown())
@@ -153,7 +153,7 @@ def main(item):
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the answer to be accepted", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
 	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, []string{"after 22:ok"}, h.commands.ranBy(testItem), "the outcomes recorded before the stop come back, whatever the runs say now")

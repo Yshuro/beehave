@@ -54,7 +54,7 @@ func TestResume_TheCostSumOfAnItemSurvivesARestartSoAStepPastTheCapWaitsAgain(t 
 	seen := looks(second)
 
 	// The recovered run replays the recorded looks and reads the cap again: the sum of a and b is not reset, so c waits once more.
-	eventually(t, func() bool { return looks(second) > seen })
+	waitOn(t, waiting[struct{}]{what: "the recovered run to look at the cap again", run: runOfEngine(t, second), read: func() (struct{}, bool, error) { return struct{}{}, looks(second) > seen, nil }})
 
 	stop := stoppedRun(t, rig.h.client(t, testVersion), testRun)
 

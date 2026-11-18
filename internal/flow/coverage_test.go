@@ -318,7 +318,7 @@ func TestTick_TheRealTickerRenewsAHeldClaim(t *testing.T) {
 		close(ended)
 	}()
 
-	eventually(t, func() bool { return len(harness.beats.seen()) > 0 })
+	waitOn(t, condition(func() bool { return len(harness.beats.seen()) > 0 }))
 	close(stop)
 	receive(t, ended)
 
@@ -570,11 +570,11 @@ func TestClient_StatusReportsAQuestionThatIsNotText(t *testing.T) {
 
 	client := harness.client(t, testVersion)
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		_, err := client.Status()
 
 		return err != nil
-	})
+	}))
 
 	_, err = client.Status()
 	require.ErrorContains(t, err, "read the question of "+stuckItemID)
@@ -631,11 +631,11 @@ func TestClient_StatusReportsAnEventThatIsNotInItsShape(t *testing.T) {
 
 			client := harness.client(t, testVersion)
 
-			eventually(t, func() bool {
+			waitOn(t, condition(func() bool {
 				_, err := client.Status()
 
 				return err != nil
-			})
+			}))
 
 			_, err = client.Status()
 			require.ErrorContains(t, err, tc.want)

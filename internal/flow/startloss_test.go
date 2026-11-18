@@ -89,7 +89,7 @@ func TestRunAgent_TheAgentRunsUnderTheContextOfTheClaim(t *testing.T) {
 	engine := launchedWith(t, harness, func(*Deps) {})
 	done := runInBackground(engine, testItem)
 
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	// A claim that ends, as the end of the run ends it, ends the context of the agent and kills its group.
 	engine.holds.drop(runID(testItem, 1))
@@ -110,6 +110,6 @@ func TestLose_KillsNoAgentOfAnotherRunOfTheSameItem(t *testing.T) {
 	run.engine.beatClaims()
 
 	requireDies(t, run.agent)
-	time.Sleep(300 * time.Millisecond)
+	receive(t, run.done)
 	assert.True(t, alive(other), "the agent of another run of the item must survive the loss of this run")
 }

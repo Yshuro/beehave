@@ -12,12 +12,13 @@ import (
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
-// waitForTheQuestionOfALiveRun waits until the latest run asks a question and has not been canceled.
-func waitForTheQuestionOfALiveRun(t *testing.T, h *harness) {
+// aLiveRunAsks is the fact that the latest run asks a question and has not been canceled. It names no run: an earlier run of the item has ended or is canceled.
+func aLiveRunAsks(t *testing.T, h *harness) waiting[struct{}] {
 	t.Helper()
 
 	client := h.client(t, testVersion)
-	eventually(t, func() bool {
+
+	return condition(func() bool {
 		infos, err := client.Status()
 		if err != nil {
 			return false
@@ -38,7 +39,7 @@ func TestLaneLayout_ACancelledFirstRunStillCountsAgainstTheCapOfThePullRequest(t
 	client := rig.h.client(t, testVersion)
 
 	first := pipelineInBackground(engine, file)
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, client.Cancel(testItem))
 	rig.h.tick(t)
 	require.Error(t, receive(t, first).err)
@@ -46,7 +47,7 @@ func TestLaneLayout_ACancelledFirstRunStillCountsAgainstTheCapOfThePullRequest(t
 	fixes := countFix(rig)
 
 	second := pipelineInBackground(engine, file)
-	waitForTheQuestionOfALiveRun(t, rig.h)
+	waitOn(t, aLiveRunAsks(t, rig.h))
 	require.NoError(t, client.Answer(testItem, "park all"))
 	require.NoError(t, receive(t, second).err)
 
@@ -120,7 +121,7 @@ func TestLaneLayout_ARunThatStopsBetweenAFixAndItsScopedReviewCountsTheCandidate
 	turning.mu.Unlock()
 
 	second := pipelineInBackground(engine, file)
-	waitForTheOwnerOfASecondRun(t, rig.h)
+	waitOn(t, aSecondRunAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, receive(t, second).err)
 
@@ -146,7 +147,7 @@ func TestLaneLayout_AResumedRunKeepsTheCountOfEarlierFixLanesItStartedWith(t *te
 	client := h.client(t, testVersion)
 
 	first := runInBackground(engine, testItem)
-	waitForTheOwner(t, h)
+	waitOn(t, ownerAsks(t, h))
 
 	// Another run of the item (attempt 0, so the first run stays the latest) adds a fix lane while the first run waits.
 	file := filepath.Join(filepath.Dir(engine.dir), defaultFlowName)
@@ -155,7 +156,7 @@ func TestLaneLayout_AResumedRunKeepsTheCountOfEarlierFixLanesItStartedWith(t *te
 
 	_, err = engine.start(ItemInput{Item: testItem, Project: testProject, File: file, Files: pinned}, 0)
 	require.NoError(t, err)
-	eventually(t, func() bool { return len(h.agents.seen()) >= 2 })
+	waitOn(t, condition(func() bool { return len(h.agents.seen()) >= 2 }))
 
 	count, err := (&script{e: engine, ctx: engine.ctx, in: ItemInput{Item: testItem}}).countEarlier("fix")
 	require.NoError(t, err)
@@ -166,20 +167,21 @@ func TestLaneLayout_AResumedRunKeepsTheCountOfEarlierFixLanesItStartedWith(t *te
 	require.Error(t, receive(t, first).err)
 
 	require.NoError(t, client.Resume(testItem))
-	waitForTheQuestionOfALiveRun(t, h)
+	waitOn(t, aLiveRunAsks(t, h))
 	require.NoError(t, client.Answer(testItem, "go"))
 
-	eventually(t, func() bool {
-		return slices.ContainsFunc(h.agents.seen(), func(r AgentRequest) bool { return r.Model == "late-model" })
-	})
+	waitOn(t, waiting[struct{}]{what: "the late agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		return struct{}{}, slices.ContainsFunc(h.agents.seen(), func(r AgentRequest) bool { return r.Model == "late-model" }), nil
+	}})
 }
 
-// waitForTheOwnerOfASecondRun waits until a run of the item asks a question. The status lists the finished first run too, so it does not count the runs.
-func waitForTheOwnerOfASecondRun(t *testing.T, h *harness) {
+// aSecondRunAsks is the fact that a run of the item asks a question. The status lists the finished first run too, so it does not count the runs, and no run is named.
+func aSecondRunAsks(t *testing.T, h *harness) waiting[struct{}] {
 	t.Helper()
 
 	client := h.client(t, testVersion)
-	eventually(t, func() bool {
+
+	return condition(func() bool {
 		infos, err := client.Status()
 		if err != nil {
 			return false
@@ -205,14 +207,14 @@ func TestLaneLayout_ASecondRunOfTheItemStartsNoFixLaneAfterTheFirstRunSpentTheCa
 	engine := rig.h.engine(t)
 
 	first := pipelineInBackground(engine, file)
-	waitForTheOwner(t, rig.h)
+	waitOn(t, ownerAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, receive(t, first).err)
 	require.Equal(t, 3, countCandidates(rig), "the first run spends the cap of three candidates")
 	fixes, gates := countFix(rig), rig.h.gate.calls
 
 	second := pipelineInBackground(engine, file)
-	waitForTheOwnerOfASecondRun(t, rig.h)
+	waitOn(t, aSecondRunAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, receive(t, second).err)
 
@@ -257,7 +259,7 @@ func TestLaneLayout_ASecondRunOfTheItemGetsTheCandidatesTheFirstRunLeft(t *testi
 
 	rig.setRound("fix_rounds", json.Number("2"))
 	second := pipelineInBackground(engine, file)
-	waitForTheOwnerOfASecondRun(t, rig.h)
+	waitOn(t, aSecondRunAsks(t, rig.h))
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	require.NoError(t, receive(t, second).err)
 

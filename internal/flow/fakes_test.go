@@ -929,22 +929,6 @@ func (w waiting[T]) found(t *testing.T) (T, bool) {
 	return value, ok
 }
 
-// ticker returns the channel that wakes the wait to read the fact or the run, or nil when only the channel of the fact wakes it.
-func (w waiting[T]) ticker() (<-chan time.Time, func()) {
-	switch {
-	case w.read != nil:
-		ticker := time.NewTicker(pollEvery)
-
-		return ticker.C, ticker.Stop
-	case w.run != nil:
-		ticker := time.NewTicker(runCheckEvery)
-
-		return ticker.C, ticker.Stop
-	}
-
-	return nil, func() {}
-}
-
 // stallLook reads the run of a wait at most every runCheckEvery, and confirms a stall only when two reads in a row see it.
 type stallLook struct {
 	checked time.Time
@@ -978,8 +962,21 @@ func (s *stallLook) confirmed(run *runRef, bound time.Time) string {
 func waitOn[T any](t *testing.T, w waiting[T]) T {
 	t.Helper()
 
-	tick, stop := w.ticker()
-	defer stop()
+	// The ticker wakes the wait to read the fact or the run. Only the channel of the fact wakes a wait with neither.
+	var tick <-chan time.Time
+
+	switch {
+	case w.read != nil:
+		ticker := time.NewTicker(pollEvery)
+		defer ticker.Stop()
+
+		tick = ticker.C
+	case w.run != nil:
+		ticker := time.NewTicker(runCheckEvery)
+		defer ticker.Stop()
+
+		tick = ticker.C
+	}
 
 	bound := time.Now().Add(eventTimeout)
 	guard := time.NewTimer(eventTimeout)
@@ -1056,13 +1053,6 @@ func receive[T any](t *testing.T, ch <-chan T) T {
 	return waitOn(t, waiting[T]{what: "a value on a channel of the test", ch: ch})
 }
 
-// eventually waits until check returns true.
-func eventually(t *testing.T, check func() bool) {
-	t.Helper()
-
-	waitOn(t, waiting[struct{}]{what: "a condition of the test", read: func() (struct{}, bool, error) { return struct{}{}, check(), nil }})
-}
-
 // condition is the fact that check returns true. The test reads it with waitOn.
 func condition(check func() bool) waiting[struct{}] {
 	return waiting[struct{}]{what: "a condition of the test", read: func() (struct{}, bool, error) { return struct{}{}, check(), nil }}
@@ -1112,31 +1102,6 @@ func ownerAsks(t *testing.T, h *harness) waiting[struct{}] {
 	}}
 }
 
-// waitForTheSleep waits until the run has started a durable sleep. The sleep records its step when it starts, so a cancel sent after this lands inside the sleep and not in the step before it.
-func waitForTheSleep(t *testing.T, engine *Engine) {
-	t.Helper()
-
-	waitOn(t, waiting[struct{}]{what: "the run to start a durable sleep", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
-		steps, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
-
-		return struct{}{}, err == nil && slices.ContainsFunc(steps, func(s dbos.StepInfo) bool { return s.StepName == "DBOS.sleep" }), nil
-	}})
-}
-
-// waitForTheOwner waits until the open run shows its question. The last verdict is recorded before the run asks, so a wait on the verdict count alone can read the run in between.
-func waitForTheOwner(t *testing.T, h *harness) {
-	t.Helper()
-
-	client := h.client(t, testVersion)
-	read := newStatusRead(client)
-
-	waitOn(t, waiting[struct{}]{what: "the open run to show a question", run: runOfClient(t, client), last: read.last, read: func() (struct{}, bool, error) {
-		infos := read.next()
-
-		return struct{}{}, read.err == nil && len(infos) == 1 && infos[0].Question != "", nil
-	}})
-}
-
 // statusRead reads the status of the runs and keeps the last result and the last error, so a wait that ends at its deadline can report them.
 type statusRead struct {
 	client *Client
@@ -1160,17 +1125,6 @@ func (s *statusRead) next() []RunInfo {
 
 func (s *statusRead) last() string {
 	return fmt.Sprintf("the last status read was %+v with error %v", s.infos, s.err)
-}
-
-// pollUntil calls step every pollEvery until it reports done. A step that returns an error ends the wait at once with that error. The wait fails with what it waited for and the text of last, which says where the wait stood.
-func pollUntil(t *testing.T, what string, last func() string, step func() (done bool, failNow error)) {
-	t.Helper()
-
-	waitOn(t, waiting[struct{}]{what: what, last: last, read: func() (struct{}, bool, error) {
-		done, err := step()
-
-		return struct{}{}, done, err
-	}})
 }
 
 // runInBackground runs an item on the engine and returns the channel that gets the outcome.

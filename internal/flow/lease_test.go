@@ -67,7 +67,7 @@ func runWithAgentInFlight(t *testing.T) inFlight {
 	engine := launchedWith(t, harness, func(deps *Deps) { clk.install(&deps.Clock) })
 	done := runInBackground(engine, testItem)
 
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	return inFlight{harness: harness, engine: engine, clock: clk, done: done, agent: harness.agents.pid, finish: finish}
 }

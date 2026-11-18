@@ -24,7 +24,7 @@ func stopsTheEngine(t *testing.T, engine func() *Engine, ran *atomic.Int32) func
 
 		go func() { assert.NoError(t, running.Shutdown()) }()
 
-		<-running.ctx.Done()
+		hang(running.ctx.Done())
 
 		return errors.New("the command ended with the stop of the engine")
 	}
@@ -72,11 +72,11 @@ func TestExclusiveStop_ARunWhoseCallFailsWhileTheEngineStopsStaysOpenAndRunsTheC
 
 			var rows []dbos.WorkflowStatus
 
-			eventually(t, func() bool {
+			waitOn(t, condition(func() bool {
 				rows, err = dbos.ListWorkflows(next.ctx, dbos.WithFilterName(run.workflow), dbos.WithFilterLoadOutput(true))
 
 				return err == nil && len(rows) == 1 && rows[0].Status == dbos.WorkflowStatusSuccess
-			})
+			}))
 
 			text, isText := rows[0].Output.(string)
 			require.True(t, isText)

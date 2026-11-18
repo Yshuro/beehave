@@ -19,7 +19,10 @@ func finishedRun(t *testing.T, harness *harness) {
 	_, err = first.Run(testItem, testProject)
 	require.NoError(t, err)
 	require.NoError(t, first.Shutdown())
-	time.Sleep(10 * time.Millisecond)
+
+	ended := time.Now().UnixMilli()
+
+	waitOn(t, condition(func() bool { return time.Now().UnixMilli() > ended }))
 }
 
 func TestLaunch_TheRetentionOfTheOptionsSetsTheAgeAtWhichAFinishedRunIsDeleted(t *testing.T) {

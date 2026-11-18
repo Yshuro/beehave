@@ -44,7 +44,7 @@ func holdOnCap(t *testing.T, rig *agentRig, file string) *CapStop {
 	client := rig.h.client(t, testVersion)
 	done := runInBackground2(engine, file)
 
-	eventually(t, func() bool { return stoppedRun(t, client, testRun) != nil })
+	waitOn(t, waiting[struct{}]{what: "the run to stop on a cap", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, stoppedRun(t, client, testRun) != nil, nil }})
 
 	stop := stoppedRun(t, client, testRun)
 
@@ -66,7 +66,7 @@ func TestBudget_TheTreeCapCountsTheRoundAndEveryChild(t *testing.T) {
 	done := runInBackground2(engine, capFile(t, treeFlow))
 
 	// The parent spent 2.5, the child spent 2.5 in x: the sum is at the cap when y is about to start.
-	eventually(t, func() bool { return stoppedRun(t, client, childRun) != nil })
+	waitOn(t, waiting[struct{}]{what: "the child run to stop on a cap", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, stoppedRun(t, client, childRun) != nil, nil }})
 
 	stop := stoppedRun(t, client, childRun)
 	assert.Equal(t, scopeTree, stop.Scope)
@@ -94,7 +94,7 @@ func TestBudget_AChildInheritsTheRootCap(t *testing.T) {
 	done := runInBackground2(engine, capFile(t, treeFlow))
 
 	// The child has no cap of its own and no spend of its own at x: the sum of the root is 3, under the cap of 4, so x starts. The sum of 6 stops y.
-	eventually(t, func() bool { return stoppedRun(t, client, childRun) != nil })
+	waitOn(t, waiting[struct{}]{what: "the child run to stop on a cap", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, stoppedRun(t, client, childRun) != nil, nil }})
 
 	stop := stoppedRun(t, client, childRun)
 	assert.InDelta(t, 4.0, stop.Cap, 0, "the child uses the cap of the root")
@@ -251,7 +251,7 @@ func capRestart(t *testing.T, set func(h *harness, limit float64), scope string,
 	client := rig.h.client(t, testVersion)
 	done := runInBackground2(first, capFile(t, threeFlow))
 
-	eventually(t, func() bool { return stoppedRun(t, client, testRun) != nil })
+	waitOn(t, waiting[struct{}]{what: "the run to stop on a cap", run: runOfEngine(t, first), read: func() (struct{}, bool, error) { return struct{}{}, stoppedRun(t, client, testRun) != nil, nil }})
 
 	steps, err := client.Steps(testRun)
 	require.NoError(t, err)

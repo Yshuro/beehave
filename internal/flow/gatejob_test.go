@@ -6,7 +6,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -105,12 +104,7 @@ func TestGateJob_ACrashAfterTheSubmitAndBeforeTheWaitIsRecordedSubmitsOnceAndThe
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
 
-	select {
-	case runErr := <-ended:
-		require.Error(t, runErr)
-	case <-time.After(20 * time.Second):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, ended))
 
 	require.EqualValues(t, 1, gated.submits.Load(), "the first run submitted the host job")
 	_, err = resumeAndJoin(t, engine, client)
@@ -160,12 +154,7 @@ func TestGateJob_ARestartAfterAConfigEditFinishesTheGateWithTheListOfTheJobAndNo
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
 
-	select {
-	case runErr := <-ended:
-		require.Error(t, runErr)
-	case <-time.After(20 * time.Second):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, ended))
 
 	restarted.Store(true)
 
@@ -205,12 +194,7 @@ func TestGateJob_AResumedRunGatesOnTheHostThatItRecordedAndStartsNoHostAgain(t *
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
 
-	select {
-	case runErr := <-ended:
-		require.Error(t, runErr)
-	case <-time.After(20 * time.Second):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, ended))
 
 	_, err = resumeAndJoin(t, engine, client)
 	require.NoError(t, err)
@@ -257,12 +241,7 @@ func TestGateJob_AResumedMainUsesTheHostThatTheReplayedRecordNamesForEveryLaterS
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
 
-	select {
-	case runErr := <-ended:
-		require.Error(t, runErr)
-	case <-time.After(20 * time.Second):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, ended))
 
 	before := len(gated.gatedOn())
 

@@ -27,11 +27,11 @@ func TestRunFile_ASuccessRunOfAnotherItemThatTheLaunchResumedIsNotJoined(t *test
 
 	next := rig.h.engine(t)
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		rows, err := dbos.ListWorkflows(next.ctx, dbos.WithFilterName(itemName), dbos.WithFilterStatus(dbos.WorkflowStatusSuccess))
 
 		return err == nil && len(rows) == 1
-	})
+	}))
 
 	_, err := next.RunFile(testItem, testProject, file)
 
@@ -56,11 +56,11 @@ func TestRunFile_ARunThatTheLaunchResumedAndEndedIsNotRunAgain(t *testing.T) {
 
 	next := rig.h.engine(t)
 
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		rows, err := dbos.ListWorkflows(next.ctx, dbos.WithFilterName(itemName), dbos.WithFilterStatus(dbos.WorkflowStatusSuccess))
 
 		return err == nil && len(rows) == 1
-	})
+	}))
 
 	_, err := next.RunFile(testItem, testProject, file)
 

@@ -7,7 +7,6 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -42,21 +41,16 @@ func TestCancel_AnEngineThatRunsTheItemReleasesTheClaimOnItsNextTick(t *testing.
 	client := harness.client(t, testVersion)
 
 	done := runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	require.NoError(t, client.Cancel(testItem))
 	assert.Equal(t, 0, countOf(harness.life.seen(), "release"), "the client leaves the release to the engine that runs the item")
 
 	harness.tick(t)
 
-	select {
-	case outcome := <-done:
-		require.Error(t, outcome.err)
-	case <-time.After(eventTimeout):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, done).err)
 
-	eventually(t, func() bool { return countOf(harness.life.seen(), "release") == 1 })
+	waitOn(t, condition(func() bool { return countOf(harness.life.seen(), "release") == 1 }))
 }
 
 func TestCancel_WithNoEngineTheCancelReleasesTheClaimItself(t *testing.T) {
@@ -70,7 +64,7 @@ func TestCancel_WithNoEngineTheCancelReleasesTheClaimItself(t *testing.T) {
 	require.NoError(t, engine.Launch())
 
 	_ = runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 	shutdownOpeningGate(t, engine, harness.agents.gate)
 
 	client := harness.client(t, testVersion)
@@ -94,7 +88,7 @@ func TestShutdown_AnInterruptLeavesTheRunOpenAndTheNextRunContinuesIt(t *testing
 	require.NoError(t, engine.Launch())
 
 	_ = runInBackground(engine, testItem)
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	stop() // Ctrl-C cancels the context the command gave the engine.
 	shutdownOpeningGate(t, engine, harness.agents.gate)

@@ -221,7 +221,7 @@ func TestRun_AnOpenRunOfTheItemIsJoinedNotStartedAgain(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	first := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	second := runInBackground(engine, testItem)
 
@@ -278,8 +278,8 @@ func TestRun_OneAgentPerLoginAndAtMostMaxConcurrentInAll(t *testing.T) {
 			first, second := runInBackground(engine, "1"), runInBackground(engine, "2")
 
 			// Both items reach their first phase. The store shows whether the second phase waits in the queue or runs.
-			eventually(t, func() bool { return harness.agents.running() == test.wantTotal })
-			eventually(t, func() bool { return enqueuedPhases(t, engine) == 2-test.wantTotal })
+			waitOn(t, condition(func() bool { return harness.agents.running() == test.wantTotal }))
+			waitOn(t, condition(func() bool { return enqueuedPhases(t, engine) == 2-test.wantTotal }))
 			release()
 
 			require.NoError(t, receive(t, first).err)
@@ -299,7 +299,7 @@ func TestRun_AnOtherVersionStrandsTheOpenRunAndEveryCommandSaysSo(t *testing.T) 
 	same, other := harness.client(t, testVersion), harness.client(t, "v2")
 
 	done := runInBackground(engine, testItem)
-	waitForTheOwner(t, harness)
+	waitOn(t, ownerAsks(t, harness))
 
 	infos, err := other.Status()
 	require.NoError(t, err)
@@ -368,7 +368,7 @@ func TestEngine_TheShutdownWaitsForAStartInFlight(t *testing.T) {
 
 	// A new reader fails only while a writer waits for the lock: the shutdown has begun and waits for the start.
 	// A stopped library also ends the poll, so a shutdown that does not wait fails the check below at once.
-	eventually(t, func() bool {
+	waitOn(t, condition(func() bool {
 		if engine.ctx.Err() != nil {
 			return true
 		}
@@ -380,7 +380,7 @@ func TestEngine_TheShutdownWaitsForAStartInFlight(t *testing.T) {
 		}
 
 		return true
-	})
+	}))
 
 	whileHeld := engine.ctx.Err()
 

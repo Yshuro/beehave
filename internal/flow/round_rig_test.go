@@ -517,18 +517,14 @@ func (r *roundRig) runOn(t *testing.T, engine *Engine) (ItemResult, error) {
 
 	client := r.h.client(t, testVersion)
 	owner := &answering{}
-	deadline := time.After(eventTimeout)
 
-	for {
-		select {
-		case out := <-done:
-			return out.result, out.err
-		case <-deadline:
-			require.FailNow(t, "the round neither ended nor asked the owner")
-		case <-time.After(pollEvery):
-			r.answerOnce(t, client, owner)
-		}
-	}
+	out := waitOn(t, waiting[runOutcome]{what: "the round to end", ch: done, read: func() (runOutcome, bool, error) {
+		r.answerOnce(t, client, owner)
+
+		return runOutcome{}, false, nil
+	}})
+
+	return out.result, out.err
 }
 
 // answering is what the loop of run knows about the waits that it answered: how many, and whether the last one still shows in the status.

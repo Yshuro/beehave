@@ -5,7 +5,6 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -23,9 +22,6 @@ import (
 
 // premiseKey is the stream that the premise tests write.
 const premiseKey = "premise"
-
-// premiseWait is the longest that a premise test waits for a run before it fails instead of hanging.
-const premiseWait = 20 * time.Second
 
 // premiseContext opens a DBOS context on a fresh store of a harness, registers the workflow as an item run and launches it.
 func premiseContext[R any](t *testing.T, flow dbos.Workflow[int, R]) dbos.Context {
@@ -48,7 +44,7 @@ func premiseContext[R any](t *testing.T, flow dbos.Workflow[int, R]) dbos.Contex
 	return flowCtx
 }
 
-// resultWithin waits for the result of a run, and fails the test when the run takes longer than premiseWait.
+// resultWithin waits for the result of a run.
 func resultWithin[R any](t *testing.T, handle dbos.WorkflowHandle[R]) (R, error) {
 	t.Helper()
 
@@ -64,16 +60,9 @@ func resultWithin[R any](t *testing.T, handle dbos.WorkflowHandle[R]) (R, error)
 		done <- outcome{value, err}
 	}()
 
-	select {
-	case got := <-done:
-		return got.value, got.err
-	case <-time.After(premiseWait):
-		require.FailNow(t, "the run did not end in time")
+	got := receive(t, done)
 
-		var zero R
-
-		return zero, nil
-	}
+	return got.value, got.err
 }
 
 var errPremiseFirstRun = errors.New("the first run fails after the write")

@@ -93,6 +93,7 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 	names := []string{"racerA", "racerB"}
 	claims := sharedClaims(t, names...)
 	proceed := make(chan struct{})
+	release := sync.OnceFunc(func() { close(proceed) })
 
 	var arrived sync.WaitGroup
 
@@ -135,6 +136,8 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 		engines[i] = engineWith(t, rig, lives[i])
 	}
 
+	t.Cleanup(release) // It runs before the shutdown of the engines, so a failed wait does not leave an agent held.
+
 	for i, name := range names {
 		go func() {
 			_, err := runPipeline(engines[i], files[i])
@@ -143,16 +146,9 @@ func TestExampleClaim_TwoRunsThatStartTogetherOnOneItemGiveOneClaimAndOneStop(t 
 	}
 
 	// The winner holds its agent in flight, so the one result that arrives first is the stop of the run that lost.
-	var loser raceOutcome
+	loser := receive(t, results)
 
-	select {
-	case loser = <-results:
-	case <-time.After(raceWait):
-		close(proceed)
-		require.FailNow(t, "no run stopped: both runs hold the claim")
-	}
-
-	close(proceed)
+	release()
 
 	winner := receive(t, results)
 

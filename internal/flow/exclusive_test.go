@@ -5,7 +5,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -67,19 +66,16 @@ func TestExclusive_AMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositoryEnds
 		ended <- err
 	})
 
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
+
 	select {
 	case <-merged:
 		t.Fatal("the merge started while the gate of the same repository was running")
-	case <-time.After(2 * time.Second):
+	default:
 	}
 
 	close(gated.release)
-
-	select {
-	case <-merged:
-	case <-time.After(eventTimeout):
-		t.Fatal("the merge never started after the gate ended")
-	}
+	receive(t, merged)
 
 	group.Wait()
 	require.NoError(t, receive(t, ended))
@@ -118,11 +114,7 @@ func TestExclusive_AGateOfOneProjectDoesNotHoldTheMergeOfAnotherProject(t *testi
 		ended <- err
 	}()
 
-	select {
-	case <-merged:
-	case <-time.After(eventTimeout):
-		t.Fatal("the merge of project B waited for the gate of project A")
-	}
+	receive(t, merged)
 
 	close(gated.release)
 	require.NoError(t, receive(t, ended))
@@ -176,12 +168,7 @@ func TestExclusive_ACancelWhileTheGateRunsThenAResumeEndsTheItemWithOneMerge(t *
 	require.NoError(t, client.Cancel(testItem))
 	h.tick(t)
 
-	select {
-	case err := <-ended:
-		require.Error(t, err)
-	case <-time.After(20 * time.Second):
-		t.Fatal("the run did not end after the cancel")
-	}
+	require.Error(t, receive(t, ended))
 
 	assert.Empty(t, h.merge.asked, "no merge ran before the gate ended")
 	result, err := resumeAndJoin(t, engine, client)
@@ -221,7 +208,7 @@ func TestExclusive_ABatchMergeOfARepositoryStartsOnlyAfterTheGateOfThatRepositor
 		ended <- err
 	})
 
-	time.Sleep(2 * time.Second)
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
 	assert.Empty(t, rig.h.commands.ran(), "the gate of the batch did not start while the gate of the repository ran")
 	assert.Empty(t, rig.merger.landed(), "no member was merged while the gate of the repository ran")
 

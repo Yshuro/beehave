@@ -296,7 +296,7 @@ func TestFreeLogin_PerLoginTwoKeepsALoginFreeWhileItHoldsOneRun(t *testing.T) {
 	in := ItemInput{Item: "21", Project: testProject, File: r.file, Files: pinned, Login: "alice", Entry: "work"}
 	_, err = dbos.RunWorkflow(engine.ctx, engine.item, in, dbos.WithQueue(engine.itemQueue), dbos.WithWorkflowID(runID("21", 1)))
 	require.NoError(t, err)
-	<-started
+	receive(t, started)
 
 	busy, err := engine.busyLogins(nil)
 
@@ -330,7 +330,7 @@ func TestFreeLogin_APlainRunHoldsNoLoginBetweenPhases(t *testing.T) {
 
 	go func() { _, err := engine.RunFile(testItem, testProject, r.file); done <- err }()
 
-	require.True(t, waitUntil(func() bool { return picks.loginOf("21") != "" }), "item 21 started")
+	waitOn(t, condition(func() bool { return picks.loginOf("21") != "" }))
 	close(release)
 	require.NoError(t, receive(t, done))
 
@@ -405,7 +405,7 @@ func TestFreeLogin_ALoginThatHoldsARunStaysBusyUntilItEnds(t *testing.T) {
 
 	go func() { _, err := engine.RunFile(testItem, testProject, r.file); done <- err }()
 
-	require.True(t, waitUntil(func() bool { return picks.loginOf("23") != "" }), "the third item started after the second ended")
+	waitOn(t, condition(func() bool { return picks.loginOf("23") != "" }))
 	close(release)
 	require.NoError(t, receive(t, done))
 
@@ -434,7 +434,7 @@ func TestFreeLogin_AResumeKeepsTheRecordedLogins(t *testing.T) {
 
 	go func() { _, _ = crashed.RunFile(testItem, testProject, r.file) }() //nolint:errcheck // the crash ends the run with an error
 
-	require.True(t, waitUntil(func() bool { return len(r.agents.started()) == 2 }), "both agents run when the engine stops")
+	waitOn(t, condition(func() bool { return len(r.agents.started()) == 2 }))
 	stop()
 	require.NoError(t, crashed.Shutdown())
 

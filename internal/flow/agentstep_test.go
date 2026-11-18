@@ -202,23 +202,13 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 		held <- pipe
 	}()
 
-	var pipe *os.File
-	select {
-	case pipe = <-held:
-	case <-time.After(eventTimeout):
-		require.FailNow(t, "the read step did not start")
-	}
+	pipe := receive(t, held)
 
 	require.Equal(t, 1, phaseCount(t, crashed, dbos.WorkflowStatusSuccess), "the phase ended before the read step started")
 
 	require.NoError(t, crashed.Shutdown())
 
-	select {
-	case runErr := <-ran:
-		require.Error(t, runErr, "the stopped engine ends the run before it records the read step")
-	case <-time.After(eventTimeout):
-		require.FailNow(t, "the stopped engine did not end the run")
-	}
+	require.Error(t, receive(t, ran), "the stopped engine ends the run before it records the read step")
 
 	require.NoError(t, pipe.Close())
 	require.NoError(t, os.Remove(gate), "the replay reads HEAD with no gate")
@@ -690,7 +680,7 @@ func TestAgentStep_AReplayKeepsTheOutputFileOfAnAgentThatAlreadyRan(t *testing.T
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the open run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 	require.NoError(t, receive(t, done).err)
 
 	assert.FileExists(t, outputFile(rig.h.opts.StateDir, testItem, aStep), "the replay must not remove the file")
@@ -790,7 +780,7 @@ func TestAgentStep_AReplayDoesNotReadThePromptFileOrRunTheAgentAgain(t *testing.
 		done <- runOutcome{result: result, err: err}
 	}()
 
-	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
+	waitOn(t, waiting[struct{}]{what: "the open run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) { return struct{}{}, client.Answer(testItem, "yes") == nil, nil }})
 
 	outcome := receive(t, done)
 

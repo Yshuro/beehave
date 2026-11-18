@@ -98,7 +98,7 @@ func runTimed(t *testing.T, change func(*Deps)) timed {
 	})
 	done := runInBackground(engine, testItem)
 
-	eventually(t, func() bool { return harness.agents.running() == 1 })
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	return timed{inFlight: inFlight{harness: harness, engine: engine, clock: clk, done: done, agent: harness.agents.pid, finish: finish}, timers: timers}
 }
@@ -396,7 +396,7 @@ func TestRunAgent_NoAgentStartsAfterTheClaimIsLostWhileThePhaseWaitsToStart(t *t
 
 	close(gated.hold)
 	receive(t, gated.returned)
-	eventually(t, func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 })
+	waitOn(t, condition(func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 }))
 
 	assert.Empty(t, harness.agents.seen(), "the phase read the lost claim and started no agent")
 }
@@ -438,7 +438,7 @@ func TestRunAgent_AnOrphanPhaseOfALostRunStartsNoAgentWhenANewRunHoldsTheItem(t 
 
 	close(gated.hold)
 	receive(t, gated.returned)
-	eventually(t, func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 })
+	waitOn(t, condition(func() bool { return phaseCount(t, engine, dbos.WorkflowStatusError) == 1 }))
 
 	assert.Empty(t, harness.agents.seen(), "the claim of the new run is not the claim of the orphan")
 }
@@ -475,7 +475,9 @@ func TestRunAgent_APhaseReopenedByResumeWaitsForTheFirstTrustOfItsRunBeforeItSta
 	}()
 
 	// A worker took the reopened phase from the queue: its status is pending.
-	eventually(t, func() bool { return phaseCount(t, engine, dbos.WorkflowStatusPending) == 1 })
+	waitOn(t, waiting[struct{}]{what: "a worker to take the reopened phase", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		return struct{}{}, phaseCount(t, engine, dbos.WorkflowStatusPending) == 1, nil
+	}})
 	assert.Len(t, harness.agents.seen(), started, "the reopened phase is in a worker and starts no agent while its run has no trusted claim")
 
 	unblock()
