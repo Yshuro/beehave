@@ -20,6 +20,8 @@ cp b.go repo/b.go
 cp c.go repo/c.go
 cp gomod repo/go.mod
 script mutation-pr.sh repo/scripts/mutation-pr.sh
+script mutation-exec.sh repo/scripts/mutation-exec.sh
+chmod 755 repo/scripts/mutation-exec.sh
 exec git -C repo add a.go b.go c.go go.mod scripts
 exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
 exec git -C repo checkout -q -b docs
@@ -212,6 +214,23 @@ exec git -C nomod -c user.name=e2e -c user.email=e2e@example.com commit -q -m ca
 stdout '^mutation-pr: .*/nomod has no go\.mod, so it is not the module root$'
 ! stdout 'the fake gremlins ran'
 
+# GOFLAGS splits on spaces and has no quoting, so a module root with a space in its path cannot name the recording script.
+exec git init -q -b main 'spaced repo'
+cp a.go 'spaced repo/a.go'
+cp gomod 'spaced repo/go.mod'
+script mutation-pr.sh 'spaced repo/scripts/mutation-pr.sh'
+script mutation-exec.sh 'spaced repo/scripts/mutation-exec.sh'
+chmod 755 'spaced repo/scripts/mutation-exec.sh'
+exec git -C 'spaced repo' add a.go go.mod scripts
+exec git -C 'spaced repo' -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+exec git -C 'spaced repo' checkout -q -b cand
+cp cand.go 'spaced repo/a.go'
+exec git -C 'spaced repo' add a.go
+exec git -C 'spaced repo' -c user.name=e2e -c user.email=e2e@example.com commit -q -m cand
+! exec /bin/sh 'spaced repo/scripts/mutation-pr.sh' main
+stdout '^mutation-pr: .*/spaced repo has a space in its path, and GOFLAGS cannot name a script there$'
+! stdout 'the fake gremlins ran'
+
 -- gomod --
 module example.com/r
 
@@ -328,7 +347,8 @@ if [ "$GREMLINS_REPORT" = many ]; then
 		i=2
 		while [ "$i" -le 52 ]; do
 			[ "$i" -eq 2 ] || printf ','
-			printf '{"line":%d,"type":"ARITHMETIC_BASE","status":"LIVED"}' "$i"
+			printf '{"line":%d,"column":9,"type":"ARITHMETIC_BASE","status":"LIVED"}' "$i"
+			printf 'a.go\t%d\t9\t0\t\n' "$i" >>"$MUTATION_EXIT_LOG"
 			i=$((i + 1))
 		done
 		printf ']}]}'

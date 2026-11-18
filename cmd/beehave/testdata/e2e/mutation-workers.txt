@@ -13,6 +13,8 @@ exec git init -q -b main repo
 cp a.go repo/a.go
 cp gomod repo/go.mod
 script mutation-pr.sh repo/scripts/mutation-pr.sh
+script mutation-exec.sh repo/scripts/mutation-exec.sh
+chmod 755 repo/scripts/mutation-exec.sh
 exec git -C repo add a.go go.mod scripts
 exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
 exec git -C repo checkout -q -b change
