@@ -1,7 +1,6 @@
 package slurm
 
 import (
-	"fmt"
 	"strings"
 	"unicode"
 
@@ -38,6 +37,7 @@ func Block() config.Block {
 // block is the slurm block of the cluster, as the project file wrote it: the link to the head node. A key that the file leaves out stays empty.
 // The link reads an empty port as the default port and an empty known_hosts as strict.
 type block struct {
+	at         string // the position of the block in the project file, for a refusal
 	address    string
 	user       string
 	port       int
@@ -48,7 +48,7 @@ type block struct {
 
 // decodeBlock reads the slurm block once. A nil block gives every key empty. The link refuses an address, a user or a known_hosts value that ssh could read as an option.
 func decodeBlock(from *model.Block) (block, error) {
-	var settings block
+	settings := block{at: from.At()}
 
 	settings.address, _ = from.Text(BlockAddress)
 	settings.user, _ = from.Text(BlockUser)
@@ -72,7 +72,7 @@ func decodeBlock(from *model.Block) (block, error) {
 func decodeKnownHosts(from *model.Block) (string, error) {
 	value, given := from.Text(BlockKnownHosts)
 	if given && value == "" {
-		return "", fmt.Errorf("%w: %s: `host.slurm.known_hosts` must be %s or %s. A host key that changed is always refused", link.ErrConfig, from.At(), model.KnownHostsStrict, model.KnownHostsAcceptNew)
+		return "", link.Refusal(from.At(), "`host.slurm.known_hosts` must be %s or %s. A host key that changed is always refused", model.KnownHostsStrict, model.KnownHostsAcceptNew)
 	}
 
 	return value, nil
@@ -82,7 +82,7 @@ func decodeKnownHosts(from *model.Block) (string, error) {
 func decodePort(from *model.Block) (int, error) {
 	port, given := from.Whole(BlockPort)
 	if given && (port < 1 || port > maxPort) {
-		return 0, fmt.Errorf("%w: %s: `host.slurm.port` must be from 1 to %d; got %d. Fix the value", link.ErrConfig, from.At(), maxPort, port)
+		return 0, link.Refusal(from.At(), "`host.slurm.port` must be from 1 to %d; got %d. Fix the value", maxPort, port)
 	}
 
 	return port, nil
@@ -94,9 +94,9 @@ func checkPath(at, key, value string) error {
 	case value == "":
 		return nil
 	case strings.ContainsFunc(value, unicode.IsControl):
-		return fmt.Errorf("%w: %s: `host.slurm.%s` must hold no control character. Fix the value", link.ErrConfig, at, key)
+		return link.Refusal(at, "`host.slurm.%s` must hold no control character. Fix the value", key)
 	case !strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "~/"):
-		return fmt.Errorf("%w: %s: `host.slurm.%s` must be an absolute path or start with ~/; got `%s`. Fix the value", link.ErrConfig, at, key, value)
+		return link.Refusal(at, "`host.slurm.%s` must be an absolute path or start with ~/; got `%s`. Fix the value", key, value)
 	}
 
 	return nil

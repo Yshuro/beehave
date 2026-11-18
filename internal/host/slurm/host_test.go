@@ -143,6 +143,36 @@ func TestNewHost_ARefusedWorkRootSaysWhyAndWhatToDo(t *testing.T) {
 	assert.Contains(t, err.Error(), "login folder")
 }
 
+func TestNewHost_EveryRefusalOfTheBlockShowsItsPositionInTheProjectFile(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		entry model.BlockEntry
+		key   string
+	}{
+		"a hostile address":   {model.TextEntry(BlockAddress, "-oProxyCommand=x"), "host.slurm.address"},
+		"a hostile user":      {model.TextEntry(BlockUser, "-oProxyCommand=x"), "host.slurm.user"},
+		"a known_hosts value": {model.TextEntry(BlockKnownHosts, "no"), "`host.slurm.known_hosts`"},
+		"a work root":         {model.TextEntry(BlockWorkRoot, "/work"), "`host.slurm.work_root`"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := hostConfig()
+			cfg.Block = model.NewBlock("p.star:3:4", []model.BlockEntry{tc.entry})
+
+			_, err := NewHost(slurmtest.Target, cfg, &spy{inner: slurmtest.New(hosttest.Working).SSH()})
+
+			require.ErrorIs(t, err, link.ErrConfig)
+			assert.Contains(t, err.Error(), "invalid ssh host setting: p.star:3:4: ")
+			assert.Contains(t, err.Error(), tc.key)
+			assert.Equal(t, 1, strings.Count(err.Error(), "p.star:3:4"))
+		})
+	}
+}
+
 func TestNewHost_ALinkRefusalNamesTheSlurmKey(t *testing.T) {
 	t.Parallel()
 
