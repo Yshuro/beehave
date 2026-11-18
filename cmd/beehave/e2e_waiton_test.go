@@ -106,6 +106,19 @@ func TestWaitOn_ReturnsAFactThatTheEndOfTheRunWrote(t *testing.T) {
 	assert.Empty(t, got.texts)
 }
 
+func TestWaitOn_FailsAtOnceWhenTheEndedChannelIsClosedAndTheFactIsAbsent(t *testing.T) {
+	t.Parallel()
+
+	var got failures
+
+	ended := make(chan struct{})
+	close(ended)
+
+	waitOn(got.fail, e2eWaiting{what: "the file", ended: ended, bound: time.Minute, found: func() bool { return false }})
+
+	assert.Equal(t, []string{"the run ended and the file is not there"}, got.texts)
+}
+
 func TestWaitOn_IgnoresARunThatEndedBeforeTheWaitBegan(t *testing.T) {
 	t.Parallel()
 
@@ -176,6 +189,38 @@ func TestRecordRun_RefusesAFolderItCannotMake(t *testing.T) {
 	require.NoError(t, os.WriteFile(file, nil, e2eFileMode))
 
 	require.Error(t, recordRun(file, []string{"run"}))
+}
+
+func TestMergePR_EndsItsBarrierWithItsOwnContext(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	remote, work, dir := filepath.Join(root, "remote.git"), filepath.Join(root, "work"), filepath.Join(root, "forge")
+	require.NoError(t, os.MkdirAll(work, e2eFolderMode))
+	require.NoError(t, os.MkdirAll(dir, e2eFolderMode))
+
+	hostGit(t, root, "init", "-q", "--bare", "-b", "main", remote)
+	hostGit(t, work, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "a.txt"), []byte("a"), e2eFileMode))
+	hostGit(t, work, "add", "a.txt")
+	hostGit(t, work, "commit", "-q", "-m", "base")
+	hostGit(t, work, "push", "-q", remote, "main")
+	hostGit(t, work, "checkout", "-q", "-b", "feature")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "b.txt"), []byte("b"), e2eFileMode))
+	hostGit(t, work, "add", "b.txt")
+	hostGit(t, work, "commit", "-q", "-m", "feature")
+	hostGit(t, work, "push", "-q", remote, "feature")
+
+	// The barrier names a task that never writes its ledger line, so only the context of the merge can end the wait before the bound of 30 seconds.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "pause-after-merge"), []byte("c\n"), e2eFileMode))
+
+	ctx, cancel := context.WithTimeout(t.Context(), swarmBarrierBound/6)
+	defer cancel()
+
+	err := swarmForgeAt{remote: remote, dir: dir}.MergePR(ctx, 1, hostGit(t, work, "rev-parse", "HEAD"))
+
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	assert.FileExists(t, filepath.Join(dir, "merged-1"), "the merge is recorded before the barrier")
 }
 
 func TestPauseAfterMerge_EndsAtOnceWhenTheContextIsDone(t *testing.T) {

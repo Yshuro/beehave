@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -15,17 +16,18 @@ import (
 )
 
 // e2eWaiting is a fact that a script waits for. runs is the folder where the run and serve processes of the script record their pids.
-// bound is the guard against a real hang. state, when set, says where the run stands.
+// ended, when set, closes when the run that the wait is inside of ends. bound is the guard against a real hang. state, when set, says where the run stands.
 type e2eWaiting struct {
 	what  string
 	found func() bool
 	runs  string
+	ended <-chan struct{}
 	bound time.Duration
 	state func() string
 }
 
-// waitOn is the one wait of the e2e scripts. It returns when the fact is recorded.
-// When every run or serve process of the script is gone, and one of them began after the wait began, and the fact is still absent, it fails at once and gives the state of the run.
+// waitOn is the one wait of the e2e scripts and of the fake forge. It returns when the fact is recorded.
+// When every run or serve process of the script is gone, and one of them began after the wait began, or when ended closes, and the fact is still absent, it fails at once and gives the state of the run.
 func waitOn(fail func(format string, args ...any), w e2eWaiting) {
 	before, _ := runRecords(w.runs)
 
@@ -46,19 +48,54 @@ func waitOn(fail func(format string, args ...any), w e2eWaiting) {
 				return
 			}
 
-			fail("every run of the script ended and %s is not there%s", w.what, w.stateText())
+			fail(waitEndedText+"%s is not there%s", w.what, w.stateText())
 
 			return
 		}
 
 		select {
 		case <-ticker.C:
+		case <-w.ended:
+			if w.found() {
+				return
+			}
+
+			fail("the run ended and %s is not there%s", w.what, w.stateText())
+
+			return
 		case <-guard.C:
 			fail("waited %s for %s%s", w.bound, w.what, w.stateText())
 
 			return
 		}
 	}
+}
+
+// waitEndedText starts the failure of a wait that sees every run of the script end.
+const waitEndedText = "every run of the script ended and "
+
+// e2eEndBound is the guard of a wait that a script expects to fail. A wait that does not fail on the end of the run fails at this bound with another text.
+const e2eEndBound = 20 * time.Second
+
+// e2eRunWait runs the wait of a script command. With "!" before the command, the script expects the wait to fail on the end of the run, with the status in the text.
+func e2eRunWait(ts *testscript.TestScript, neg bool, w e2eWaiting) {
+	if !neg {
+		waitOn(ts.Fatalf, w)
+
+		return
+	}
+
+	w.bound = e2eEndBound
+
+	var text string
+
+	waitOn(func(format string, args ...any) { text = fmt.Sprintf(format, args...) }, w)
+
+	if !strings.HasPrefix(text, waitEndedText) || !strings.Contains(text, "; beehave status: ") {
+		ts.Fatalf("the wait for %s did not fail on the end of the run: %q", w.what, text)
+	}
+
+	ts.Logf("%s", text)
 }
 
 func (w e2eWaiting) stateText() string {

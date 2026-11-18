@@ -343,7 +343,7 @@ func (f swarmForgeAt) failsMerge(pr int) bool {
 // pauseAfterMerge is the barrier of a landing. If the file pause-after-merge exists in the forge folder, the first merge waits, after it is recorded,
 // until the spend ledger holds the cost of the task that the file names. The cost is the last step of a task run, so the run is over when the landing goes on,
 // and a script can end a run in the middle of a landing on every run, and not only under load.
-// The wait ends at once when the run ends and the context of the merge is done. The bound is the guard against a barrier that nothing opens: a fault of the script, and the merge fails with that text.
+// It waits for the ledger line of that task. It ends when the line is there (nil), when the context of the merge ends (the error of ctx), or at bound (errBarrierClosed).
 func (f swarmForgeAt) pauseAfterMerge(ctx context.Context, bound time.Duration) error {
 	named, err := os.ReadFile(f.path("pause-after-merge"))
 	if err != nil {
@@ -351,32 +351,25 @@ func (f swarmForgeAt) pauseAfterMerge(ctx context.Context, bound time.Duration) 
 	}
 
 	want := "\t" + strings.TrimSpace(string(named)) + "\ttask\t"
+	opened := true
 
-	ticker := time.NewTicker(swarmBarrierPoll)
-	defer ticker.Stop()
+	waitOn(func(string, ...any) { opened = false }, e2eWaiting{what: "the ledger line of the task " + strings.TrimSpace(string(named)), ended: ctx.Done(), bound: bound, found: func() bool {
+		ledger, err := os.ReadFile(filepath.Join(f.dir, "..", "home", ".swarm", "swarm-1", "ledger.tsv"))
 
-	guard := time.NewTimer(bound)
-	defer guard.Stop()
+		return err == nil && strings.Contains(string(ledger), want)
+	}})
 
-	for {
-		if ledger, err := os.ReadFile(filepath.Join(f.dir, "..", "home", ".swarm", "swarm-1", "ledger.tsv")); err == nil && strings.Contains(string(ledger), want) {
-			return nil
-		}
-
-		select {
-		case <-ticker.C:
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-guard.C:
-			return errBarrierClosed
-		}
+	switch {
+	case opened:
+		return nil
+	case ctx.Err() != nil:
+		return ctx.Err()
+	default:
+		return errBarrierClosed
 	}
 }
 
-const (
-	swarmBarrierBound = 30 * time.Second
-	swarmBarrierPoll  = 200 * time.Millisecond
-)
+const swarmBarrierBound = 30 * time.Second
 
 var errBarrierClosed = errors.New("harness fault: the landing barrier was not opened within 30 seconds")
 

@@ -594,13 +594,13 @@ func e2eSetup(env *testscript.Env) error {
 }
 
 // cmdWaitFile is "waitfile <path>": it waits until the file exists.
-func cmdWaitFile(ts *testscript.TestScript, _ bool, args []string) {
+func cmdWaitFile(ts *testscript.TestScript, neg bool, args []string) {
 	if len(args) != 1 {
 		ts.Fatalf("usage: waitfile <path>")
 	}
 
 	path := ts.MkAbs(args[0])
-	waitOn(ts.Fatalf, e2eWaitingFor(ts, path, func() bool {
+	e2eRunWait(ts, neg, e2eWaitingFor(ts, path, func() bool {
 		_, err := os.Stat(path)
 
 		return err == nil
@@ -609,12 +609,12 @@ func cmdWaitFile(ts *testscript.TestScript, _ bool, args []string) {
 
 // cmdWaitSession is "waitsession <id>": it waits until the log of the engine, flow.log in the state folder, says that the engine saved the session id.
 // The engine saves the id on a goroutine of its own after the agent names it, so a kill that only waits for the agent could come before the save.
-func cmdWaitSession(ts *testscript.TestScript, _ bool, args []string) {
+func cmdWaitSession(ts *testscript.TestScript, neg bool, args []string) {
 	if len(args) != 1 {
 		ts.Fatalf("usage: waitsession <id>")
 	}
 
-	waitOn(ts.Fatalf, e2eWaitingFor(ts, "the engine to save the session "+args[0], func() bool {
+	e2eRunWait(ts, neg, e2eWaitingFor(ts, "the engine to save the session "+args[0], func() bool {
 		text, err := os.ReadFile(filepath.Join(ts.Getenv("BEEHAVE_STATE_DIR"), "flow.log"))
 
 		return err == nil && slices.ContainsFunc(strings.Split(string(text), "\n"), func(line string) bool {
@@ -624,12 +624,12 @@ func cmdWaitSession(ts *testscript.TestScript, _ bool, args []string) {
 }
 
 // cmdWaitStatus is "waitstatus <text>": it runs beehave status until the output holds the text.
-func cmdWaitStatus(ts *testscript.TestScript, _ bool, args []string) {
+func cmdWaitStatus(ts *testscript.TestScript, neg bool, args []string) {
 	if len(args) != 1 {
 		ts.Fatalf("usage: waitstatus <text>")
 	}
 
-	waitOn(ts.Fatalf, e2eWaitingFor(ts, "beehave status to show "+args[0], func() bool {
+	e2eRunWait(ts, neg, e2eWaitingFor(ts, "beehave status to show "+args[0], func() bool {
 		out, err := e2eStatus(ts)
 
 		return err == nil && strings.Contains(out, args[0])
