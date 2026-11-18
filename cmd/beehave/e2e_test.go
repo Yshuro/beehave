@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
@@ -59,6 +58,9 @@ func e2eBeehave() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	env := config.ProcessEnv()
+
+	e2eRecordRun(os.Args[1:])
+
 	code := cli.Execute(ctx, os.Args[1:], cli.BuildInfo{Version: e2eVersion, Registry: newAdapters(nil, nil, nil).registry(), Flow: e2eFlow(env[e2eDirVariable], env["PATH"])}, env, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
@@ -591,17 +593,6 @@ func e2eSetup(env *testscript.Env) error {
 	return nil
 }
 
-// waitFor polls until done reports true. It fails the script after e2eWait.
-func waitFor(ts *testscript.TestScript, what string, done func() bool) {
-	for deadline := time.Now().Add(e2eWait); time.Now().Before(deadline); time.Sleep(e2ePoll) {
-		if done() {
-			return
-		}
-	}
-
-	ts.Fatalf("gave up waiting for %s", what)
-}
-
 // cmdWaitFile is "waitfile <path>": it waits until the file exists.
 func cmdWaitFile(ts *testscript.TestScript, _ bool, args []string) {
 	if len(args) != 1 {
@@ -609,11 +600,11 @@ func cmdWaitFile(ts *testscript.TestScript, _ bool, args []string) {
 	}
 
 	path := ts.MkAbs(args[0])
-	waitFor(ts, path, func() bool {
+	waitOn(ts.Fatalf, e2eWaitingFor(ts, path, func() bool {
 		_, err := os.Stat(path)
 
 		return err == nil
-	})
+	}))
 }
 
 // cmdWaitSession is "waitsession <id>": it waits until the log of the engine, flow.log in the state folder, says that the engine saved the session id.
@@ -623,13 +614,13 @@ func cmdWaitSession(ts *testscript.TestScript, _ bool, args []string) {
 		ts.Fatalf("usage: waitsession <id>")
 	}
 
-	waitFor(ts, "the engine to save the session "+args[0], func() bool {
+	waitOn(ts.Fatalf, e2eWaitingFor(ts, "the engine to save the session "+args[0], func() bool {
 		text, err := os.ReadFile(filepath.Join(ts.Getenv("BEEHAVE_STATE_DIR"), "flow.log"))
 
 		return err == nil && slices.ContainsFunc(strings.Split(string(text), "\n"), func(line string) bool {
 			return strings.Contains(line, `msg="saved the session of the agent"`) && strings.HasSuffix(line, " session="+args[0])
 		})
-	})
+	}))
 }
 
 // cmdWaitStatus is "waitstatus <text>": it runs beehave status until the output holds the text.
@@ -638,29 +629,11 @@ func cmdWaitStatus(ts *testscript.TestScript, _ bool, args []string) {
 		ts.Fatalf("usage: waitstatus <text>")
 	}
 
-	var binary string
+	waitOn(ts.Fatalf, e2eWaitingFor(ts, "beehave status to show "+args[0], func() bool {
+		out, err := e2eStatus(ts)
 
-	for _, folder := range filepath.SplitList(ts.Getenv("PATH")) {
-		if _, err := os.Stat(filepath.Join(folder, "beehave")); err == nil {
-			binary = filepath.Join(folder, "beehave")
-
-			break
-		}
-	}
-
-	waitFor(ts, "beehave status to show "+args[0], func() bool {
-		ctx, cancel := context.WithTimeout(context.Background(), e2eWait)
-		defer cancel()
-
-		command := exec.CommandContext(ctx, binary, "status")
-		command.Env = []string{
-			"BEEHAVE_CONFIG=" + ts.Getenv("BEEHAVE_CONFIG"), "BEEHAVE_STATE_DIR=" + ts.Getenv("BEEHAVE_STATE_DIR"), e2eDirVariable + "=" + ts.Getenv(e2eDirVariable),
-			"PATH=" + ts.Getenv("PATH"), "HOME=" + ts.Getenv("HOME"),
-		}
-		out, err := command.Output()
-
-		return err == nil && strings.Contains(string(out), args[0])
-	})
+		return err == nil && strings.Contains(out, args[0])
+	}))
 }
 
 func TestE2E_TheOneItemCopyHasOneMain(t *testing.T) {

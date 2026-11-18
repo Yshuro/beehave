@@ -61,6 +61,8 @@ func e2eSwarm() {
 
 		return newEngineOn(ctx, cfg, opts, idle, table)
 	})
+	e2eRecordRun(os.Args[1:])
+
 	code := cli.Execute(ctx, os.Args[1:], buildInfo(env, e2eVersion, factory), env, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
@@ -311,7 +313,7 @@ func (f swarmForgeAt) MergePR(ctx context.Context, pr int, sha string) error {
 		return err
 	}
 
-	return f.pauseAfterMerge()
+	return f.pauseAfterMerge(ctx, swarmBarrierBound)
 }
 
 // failsMerge is the stand-in of a landing that the forge defers. If the file fail-merge exists in the forge folder, a merge fails while a task runs,
@@ -341,8 +343,8 @@ func (f swarmForgeAt) failsMerge(pr int) bool {
 // pauseAfterMerge is the barrier of a landing. If the file pause-after-merge exists in the forge folder, the first merge waits, after it is recorded,
 // until the spend ledger holds the cost of the task that the file names. The cost is the last step of a task run, so the run is over when the landing goes on,
 // and a script can end a run in the middle of a landing on every run, and not only under load.
-// The wait has a deadline (30 seconds): a barrier that nothing opens is a fault of the script, and the merge fails with that text.
-func (f swarmForgeAt) pauseAfterMerge() error {
+// The wait ends at once when the run ends and the context of the merge is done. The bound is the guard against a barrier that nothing opens: a fault of the script, and the merge fails with that text.
+func (f swarmForgeAt) pauseAfterMerge(ctx context.Context, bound time.Duration) error {
 	named, err := os.ReadFile(f.path("pause-after-merge"))
 	if err != nil {
 		return nil //nolint:nilerr // no barrier file: the merge goes on at once
@@ -350,16 +352,31 @@ func (f swarmForgeAt) pauseAfterMerge() error {
 
 	want := "\t" + strings.TrimSpace(string(named)) + "\ttask\t"
 
-	for range 150 {
+	ticker := time.NewTicker(swarmBarrierPoll)
+	defer ticker.Stop()
+
+	guard := time.NewTimer(bound)
+	defer guard.Stop()
+
+	for {
 		if ledger, err := os.ReadFile(filepath.Join(f.dir, "..", "home", ".swarm", "swarm-1", "ledger.tsv")); err == nil && strings.Contains(string(ledger), want) {
 			return nil
 		}
 
-		time.Sleep(200 * time.Millisecond)
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-guard.C:
+			return errBarrierClosed
+		}
 	}
-
-	return errBarrierClosed
 }
+
+const (
+	swarmBarrierBound = 30 * time.Second
+	swarmBarrierPoll  = 200 * time.Millisecond
+)
 
 var errBarrierClosed = errors.New("harness fault: the landing barrier was not opened within 30 seconds")
 
