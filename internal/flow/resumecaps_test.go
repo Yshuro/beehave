@@ -76,7 +76,7 @@ func TestResume_AStepThatARaisedCapLetsRunShowsNoStopWhileItsAgentRuns(t *testin
 	// The third call is c, after the raise: its agent runs until the test reads the view.
 	rig.h.agents.result = func(AgentRequest) agent.Result {
 		if calls.Add(1) >= 3 {
-			<-release
+			hang(release)
 		}
 
 		return costing(3)
@@ -88,7 +88,7 @@ func TestResume_AStepThatARaisedCapLetsRunShowsNoStopWhileItsAgentRuns(t *testin
 	engine := rig.h.engine(t)
 	t.Cleanup(func() { close(release) })
 
-	eventually(t, func() bool { return calls.Load() == 3 })
+	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool { return calls.Load() == 3 }))
 
 	assert.Nil(t, stoppedRun(t, rig.h.client(t, testVersion), testRun), "the look of the phase that runs the agent of c passed")
 
