@@ -82,6 +82,10 @@ type PhaseInput struct {
 type PhaseOutput struct {
 	Outcome  agent.Outcome `json:"outcome"`
 	ExitCode int           `json:"exit_code"`
+	// Login is the runner that the agent ran on: the pool pick, or the runner that the call named. It is empty in a record that an older version wrote.
+	Login string `json:"login,omitempty"`
+	// Model is the model that the step set. It is left out of a recorded phase for a step that sets none.
+	Model string `json:"model,omitempty"`
 	// Kind is the kind of the lane in the ledger of the method: fix, rework, relay, review or design. It is empty in a record that an older version wrote.
 	Kind       string   `json:"kind,omitempty"`
 	Note       string   `json:"note"`
@@ -170,6 +174,7 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Result, runErr error) (PhaseOutput, error) {
 	out := phaseOutput(result)
 	out.Kind, out.Rounds = workflow.LaneKind(in.Kind, in.Lane), in.Rounds
+	out.Login, out.Model = in.Login, in.Model
 
 	if runErr != nil {
 		return out, runErr
