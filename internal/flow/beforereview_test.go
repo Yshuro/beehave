@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // reviewTree is an item folder with a base commit, an unrelated commit on another branch, and a head one commit above the base.
@@ -37,7 +39,7 @@ func reviewTreeOf(t *testing.T, file, message string) reviewTree {
 func cleanChecks() *GateChecks {
 	zero := 0
 
-	return &GateChecks{NewTests: []string{"pkg TestA"}, New: 1, Complete: true, Secrets: &zero}
+	return &GateChecks{NewTests: []string{"pkg TestA"}, New: 1, Complete: true, Secrets: &zero, Revert: model.RevertPass, RevertCases: 1}
 }
 
 // reviewHarness gates the head of the tree with the checks, and reads the item folder from the tree.
@@ -154,7 +156,7 @@ func TestBeforeReview_ASubtestCountsAsOneNewTest(t *testing.T) {
 
 	tree := reviewTreeOf(t, "src/a.go", "add a")
 	zero := 0
-	h := reviewHarness(t, tree, &GateChecks{NewTests: []string{"pkg TestA/case"}, New: 1, Complete: true, Secrets: &zero})
+	h := reviewHarness(t, tree, &GateChecks{NewTests: []string{"pkg TestA/case"}, New: 1, Complete: true, Secrets: &zero, Revert: model.RevertPass, RevertCases: 1})
 
 	_, err := walkText(t, h, bodyFlow(reviewFlow(tree.base, "")))
 

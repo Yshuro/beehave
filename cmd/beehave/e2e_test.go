@@ -213,7 +213,8 @@ func e2eHeadOf(ctx context.Context, dir string) (string, error) {
 	return strings.TrimSpace(result.Stdout), nil
 }
 
-// e2eGate passes every item. A gate with a base, the gate of a candidate, also gives a clean check record: one new test and a clean secret scan.
+// e2eGate passes every item. A gate with a base, the gate of a candidate, also gives a clean check record: one new test, a clean secret scan,
+// and a revert run in which the new test fails on the base code.
 type e2eGate struct{ dir string }
 
 func (e2eGate) Submit(_ context.Context, _, _, _, base string) (flow.GateJob, error) {
@@ -225,7 +226,7 @@ func (g e2eGate) Run(ctx context.Context, _, _, _ string, job flow.GateJob) (flo
 	result := flow.GateResult{Passed: true, Head: head, Tree: "tree-of-" + head}
 
 	if job.Plan.Base != "" {
-		result.Checks = &flow.GateChecks{NewTests: []string{"shop TestE2E"}, New: 1, Secrets: new(int), Complete: true}
+		result.Checks = &flow.GateChecks{NewTests: []string{"shop TestE2E"}, New: 1, Secrets: new(int), Complete: true, Revert: model.RevertPass, RevertCases: 1}
 	}
 
 	return result, err

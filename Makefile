@@ -23,6 +23,9 @@ GO_TEST_FLAGS := -race -gcflags='modernc.org/...=-d=checkptr=0' -count=1 -timeou
 # and the costly tests, and a new test needs no change here. Each shard writes its own coverage profile, and "coverage" merges them
 # with the profile of the other packages (CI jobs hand their profiles on as artifacts), so the gate still measures the whole package.
 # Each run writes its own test-*.log file and prints it when it ends. "test" fails if any run fails.
+# A flow package that does not build lists no test. "test" then writes the build failure to junit-flow-build.xml and still runs the other
+# packages, so a tree with test files that do not build (the revert run of the gate) gives a report of every package. The shards then find no
+# list and fail, so "test" fails as before.
 comma := ,
 space := $() $()
 FLOW_PKG := ./internal/flow
@@ -131,7 +134,7 @@ vuln:  ## Fail on a known vulnerability the code can reach
 
 test:  ## Run the Go tests with the race detector and write coverage.out, the flow profiles and the JUnit reports in reports/
 	@mkdir -p $(REPORT_DIR); rm -f $(REPORT_DIR)/junit-*.xml coverage.out coverage-flow-*.out test-*.log
-	$(if $(RUN_SHARDS),@go test $(GO_TEST_FLAGS) -list '.*' $(FLOW_PKG) | grep -E '^(Test|Example|Fuzz)' > $(FLOW_LIST); [ -s $(FLOW_LIST) ] || { echo "make test: go test listed no flow tests" >&2; exit 1; })
+	$(if $(RUN_SHARDS),@go test $(GO_TEST_FLAGS) -list '.*' $(FLOW_PKG) | grep -E '^(Test|Example|Fuzz)' > $(FLOW_LIST); [ -s $(FLOW_LIST) ] || { echo "make test: go test listed no flow tests" >&2; $(GOTESTSUM)/junit-flow-build.xml -- $(GO_TEST_FLAGS) -run '^$$' $(FLOW_PKG) > test-flow-build.log 2>&1; echo "== test-flow-build.log"; cat test-flow-build.log; })
 	@$(MAKE) --no-print-directory -k -j $(if $(RUN_OTHER),test-run-other) $(RUN_TARGETS)
 	$(if $(RUN_OTHER),go test -race -count=1 $(GO_TEST_DRIVER_PKGS))
 

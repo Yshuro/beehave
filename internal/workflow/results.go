@@ -40,6 +40,7 @@ const (
 	prOpenName       = "pr_open"
 	prStateName      = "pr_state"
 	baseField        = "base"
+	revertField      = "revert"
 	numberField      = "number"
 	statusField      = "status"
 )
@@ -75,8 +76,8 @@ func resultFields() map[string][]string {
 // gateResultFields holds the fields of the builtins that judge a head: gate and before_review.
 func gateResultFields() map[string][]string {
 	return map[string][]string{
-		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests", "host_loss", "host_losses"},
-		beforeReviewName: {"ok", "findings", "new_tests", baseField, "keywords"},
+		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests", revertField, "host_loss", "host_losses"},
+		beforeReviewName: {"ok", "findings", "new_tests", revertField, baseField, "keywords"},
 	}
 }
 

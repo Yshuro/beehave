@@ -103,7 +103,7 @@ func TestPullRequests_RefusesWhatTheRunRefuses(t *testing.T) {
 	}{
 		{"not a list", starlark.String("x"), "`prs` must be a list"},
 		{"empty", starlark.NewList(nil), "`prs` is empty"},
-		{"not a struct", starlark.NewList([]starlark.Value{starlark.MakeInt(1)}), "`prs` holds a int"},
+		{"not a struct", starlark.NewList([]starlark.Value{starlark.MakeInt(1)}), "prs[0]: the member has the type int, not struct"},
 		{"no item", starlark.NewList([]starlark.Value{pr(starlark.StringDict{"head": text("h")})}), "has no `item`"},
 		{"no head", starlark.NewList([]starlark.Value{pr(starlark.StringDict{"item": text("i")})}), "has no `head`"},
 		{"empty head", starlark.NewList([]starlark.Value{pr(starlark.StringDict{"item": text("i"), "head": text("")})}), "`head` of a member of `prs` must be text that is not empty"},

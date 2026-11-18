@@ -352,7 +352,7 @@ At the start of a run, the engine lists the other orchestrators that hold items 
 
 ### `before_review`
 
-`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `base` and `keywords`.
+`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `revert`, `base` and `keywords`.
 
 The call needs a `gate` call in the same run with `base`, at the same `head`. It reads the checks of that gate: the new tests and the secret scan. Without that gate call, the step fails with an error that says so. A gate without `base` holds no checks, so the call refuses it as a cut log.
 
@@ -361,12 +361,13 @@ A finding is a result, not an error. `ok` is true when `findings` is empty. The 
 - the log of the gate job has no end line (a cut log),
 - the head adds no new test,
 - a new test failed or was skipped on the head,
+- a new test passed or was skipped on the base code, or the revert run proves nothing (see the revert run in `gate.md`),
 - the secret scan did not exit with 0, or left no single exit code,
 - the head is not a descendant of `base`, by `git merge-base --is-ancestor`,
 - the head changed a path that `allow` does not allow (a list of globs, as `allow_paths` of `agent`),
 - a commit message between `base` and `head` has a closing keyword, unless `integration` is true.
 
-`new_tests` lists the new tests of the gate. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
+`new_tests` lists the new tests of the gate. `revert` is the verdict of the revert run of the gate, `pass` or `fail`; the result of `gate` carries the same field. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
 
 ### `queue`
 
@@ -476,6 +477,8 @@ A value of another type fails the step and names the value. An environment name 
 `batch_merge(prs, base, repo, hold, own, forbid_text, gate_run, integration, name)` lands a list of `struct(item, head, approved)` with one gate run on the union tree of the base tip and all heads. It splits the list when the gate is red. A forge with a native merge queue needs no `batch_merge`.
 
 `approved` is an optional bool of each member, and a member that leaves it out is not approved. It is the `approved` of `merge` for that member only: a pull request of an `own` identity merges only when its own member sets `approved = True`. The call has no `approved` of its own, so the approval of one member never reaches another. A value that is not a bool fails the call and names the field.
+
+`beehave check workflow` reads each `struct(...)` member of a `prs` list with the parser that the run uses, so a wrong field is a problem before the run. The error names the member and the field, for example ``prs[1]: `approved` of a member of `prs` must be a bool, not string``, and is the same text that the run gives. The check reads the first wrong field of a member. A member that is a literal but not a struct, such as `1`, a dict or a list, is refused. A list, a dict or a struct that a field or a member holds counts as that type, whatever it contains. A value that only the run knows, such as a variable or a call, is left to the run: the check skips that field or that member and still reads the other fields. A file that defines its own `struct` is not read as the builtin.
 
 It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note`, `unproven`, `host_loss` and `host_losses`.
 

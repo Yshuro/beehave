@@ -63,6 +63,8 @@ func gateChecks(checks *gate.Checks) *flow.GateChecks {
 	return &flow.GateChecks{
 		NewTests: checks.NewTests, Failed: checks.Failed, New: checks.New, FailedCount: checks.FailedCount,
 		Secrets: checks.Secrets, Complete: checks.Complete, Problem: checks.Problem,
+		Revert: checks.Revert, RevertPassed: checks.RevertPassed, RevertPassedCount: checks.RevertPassedCount, RevertCases: checks.RevertCases,
+		RevertRC: checks.RevertRC, RevertProblem: checks.RevertProblem,
 	}
 }
 

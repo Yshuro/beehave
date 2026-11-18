@@ -19,6 +19,9 @@ import (
 // tailBytes is the size of the log tail that the ssh host reads.
 const tailBytes = 16384
 
+// revertClean is the end marker of a revert run in which every new test failed on the base code.
+const revertClean = "beehave-revert-end new=2 passed=0 cases=3"
+
 // jobLog is the log of a candidate job: a head gate that printed a lot, the two step markers, the name lines and marker lines of the check, and the end marker.
 func jobLog(noise int, secretsRC string, lines ...string) string {
 	return strings.Repeat("go test output line of the head gate\n", noise) +
@@ -50,7 +53,10 @@ func findingsOfLog(t *testing.T, log string) (read int, findings []string, check
 	require.NoError(t, err)
 
 	got := gatepkg.ReadChecks(tail)
-	checks = GateChecks{NewTests: got.NewTests, Failed: got.Failed, New: got.New, FailedCount: got.FailedCount, Secrets: got.Secrets, Complete: got.Complete, Problem: got.Problem}
+	checks = GateChecks{
+		NewTests: got.NewTests, Failed: got.Failed, New: got.New, FailedCount: got.FailedCount, Secrets: got.Secrets, Complete: got.Complete, Problem: got.Problem,
+		Revert: got.Revert, RevertPassed: got.RevertPassed, RevertPassedCount: got.RevertPassedCount, RevertCases: got.RevertCases, RevertProblem: got.RevertProblem,
+	}
 
 	return len(tail), checkFindings(checks), checks
 }
@@ -58,7 +64,7 @@ func findingsOfLog(t *testing.T, log string) (read int, findings []string, check
 func TestBeforeReview_ALogOverSixteenKiBBeforeTheEndMarkerPassesWithItsNewTestNames(t *testing.T) {
 	t.Parallel()
 
-	log := jobLog(1000, "0", "beehave-new-test pkg TestA", "beehave-new-test pkg TestA/case", "beehave-new-tests-end new=2 failed=0")
+	log := jobLog(1000, "0", "beehave-new-test pkg TestA", "beehave-new-test pkg TestA/case", "beehave-new-tests-end new=2 failed=0", revertClean)
 	require.Greater(t, len(log), tailBytes, "the log is longer than the tail that the host reads")
 
 	read, findings, checks := findingsOfLog(t, log)
@@ -71,7 +77,7 @@ func TestBeforeReview_ALogOverSixteenKiBBeforeTheEndMarkerPassesWithItsNewTestNa
 func TestBeforeReview_ASkippedNewTestInTheLogGivesOneMarkerLineAndIsRefused(t *testing.T) {
 	t.Parallel()
 
-	log := jobLog(1000, "0", "beehave-new-test pkg TestA", "beehave-new-test-failed skipped pkg TestA", "beehave-new-tests-end new=1 failed=1")
+	log := jobLog(1000, "0", "beehave-new-test pkg TestA", "beehave-new-test-failed skipped pkg TestA", "beehave-new-tests-end new=1 failed=1", revertClean)
 
 	_, findings, _ := findingsOfLog(t, log)
 
@@ -93,7 +99,7 @@ func TestBeforeReview_ALogWithNoEndMarkerIsACutLogAndZeroNewTestsIsRefused(t *te
 func TestBeforeReview_ASecretScanThatFailedInTheLogIsRefusedEvenWithNewTests(t *testing.T) {
 	t.Parallel()
 
-	_, findings, _ := findingsOfLog(t, jobLog(1000, "1", "beehave-new-test pkg TestA", "beehave-new-tests-end new=1 failed=0"))
+	_, findings, _ := findingsOfLog(t, jobLog(1000, "1", "beehave-new-test pkg TestA", "beehave-new-tests-end new=1 failed=0", revertClean))
 
 	require.Len(t, findings, 1)
 	assert.Contains(t, findings[0], "secret scan of the head exited with code 1")

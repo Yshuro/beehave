@@ -468,7 +468,7 @@ func TestBatchMerge_ACallThatTheBuildOrTheArgumentsCannotServeFailsWithAFix(t *t
 		"prs not a list": {body: func(r *batchRig) string { return bad(r, `"x" + ""`) }, want: "`prs` must be a list"},
 		"member not a struct": {body: func(r *batchRig) string {
 			return bad(r, `["x"]`)
-		}, want: "`prs` holds a string"},
+		}, want: "prs[0]: the member has the type string, not struct"},
 		"member without head": {body: func(r *batchRig) string {
 			return bad(r, `[struct(item = "1")]`)
 		}, want: "has no `head`"},
