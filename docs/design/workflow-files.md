@@ -481,17 +481,26 @@ A value of another type fails the step and names the value. An environment name 
 
 `beehave check workflow` reads each `struct(...)` member of a `prs` list with the parser that the run uses, so a wrong field is a problem before the run. The error names the member and the field, for example ``prs[1]: `approved` of a member of `prs` must be a bool, not string``, and is the same text that the run gives. The check reads the first wrong field of a member. A member that is a literal but not a struct, such as `1`, a dict or a list, is refused. A list, a dict or a struct that a field or a member holds counts as that type, whatever it contains. A value that only the run knows, such as a variable or a call, is left to the run: the check skips that field or that member and still reads the other fields. A file that defines its own `struct` is not read as the builtin.
 
-It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note` and `unproven`.
+It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note`, `unproven`, `host_loss` and `host_losses`.
 
 - Each entry of `rejected` and `deferred` has `item` and `reason`. For a member that a merge guard refused, the reason is every line of that refusal, one per line. No line of it matches a pattern of `forbid_text`, with each line tested as the posting steps test it, so a step can post it with the same `forbid_text`. This holds only for patterns that do not match the words of beehave itself, such as "left out".
 - Each entry of `unproven` has `item` and `reason`. An item of `merged` that `unproven` names has not landed.
 - `findings` holds one line for each finding. `note` says why no read ran (see below).
-
+- `host_loss` lists one record for each lost gate job of the call, in the shape of the `gate` record, with `kind` `batch_gate` and the union commit in `head_or_commit`. It is an empty list when the call lost nothing.
+- `host_losses` is the count of the host losses in the item tree that the last record of the call read. It is 0 when the call lost nothing.
 - `name` is required, and each call of a run needs its own.
 - The union is gated in the worktree of the item that runs the workflow.
 - Each member merges through the same guards as `merge`, pinned to its head and to the tree of its prefix.
 - Git 2.38 or newer is the minimum on the gate host.
 - For each member, the step `batch:<name>.intent#<item>` records the pull request as OPEN before the step `batch:<name>.merge#<item>` merges it. A resume after a crash therefore counts a merge that the forge already made as done.
+
+#### A lost batch gate job
+
+The project gate of the union is two steps in its gate run: `batch_gate:job` checks out the union commit and records the tree and the host job, then `batch_gate` waits for that job. A restart during the wait waits on the recorded job and submits none. A `gate_run` program has no host job and stays one step, `batch_gate`.
+
+- When the wait ends as lost, the gate run waits for a proof as the `gate` call does, and a cancel of the run during that wait reads the proof once more. See "The wait for a proof" in [hosts.md](hosts.md). With no proof at `host.lost_job_wait`, the item run asks the owner.
+- After a proof, the item run records the loss as the step `batch:<name>.gate#<n>/host-loss`, then gates the same commit once more. The rerun records its own loss as `batch:<name>.gate#<n>@2/host-loss`. The batch counts one gate in `gates`.
+- A second proven loss in one call fails the call with "the gate gave no result". The count is over every gate of the call: the rerun of the same commit, or the gate of a part after a split. A restart keeps it, because each loss is a recorded step. The error names the host and both proofs. No member is rejected or deferred. The call returns no result, so `beehave status <run id> --json` holds the count.
 
 #### Checks after the batch lands
 

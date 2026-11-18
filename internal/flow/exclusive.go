@@ -28,6 +28,8 @@ const (
 	gateJobName = "gate:job"
 	// gateReuseName is the step that reuses an earlier pass before a gate that runs on a build host waits for the host.
 	gateReuseName = "gate:reuse"
+	// batchGateJobName is the step that checks out the union commit of a batch gate and records its tree and its host job before the gate waits.
+	batchGateJobName = "batch_gate:job"
 
 	kindGate      = "gate"
 	kindMerge     = "merge"
@@ -73,7 +75,7 @@ type ExclusiveOutput struct {
 	Key string `json:"key,omitempty"`
 	// Project is the project of a run that holds a Key; the lookup reads a pass only from a run of the same project.
 	Project string `json:"project,omitempty"`
-	// Lost is the host job of a gate whose wait ended as lost, after the wait for its proof. It is nil for every other run.
+	// Lost is the host job of a gate or a batch gate whose wait ended as lost, after the wait for its proof. It is nil for every other run.
 	Lost *LostJob `json:"lost,omitempty"`
 }
 
@@ -83,14 +85,8 @@ type ExclusiveOutput struct {
 func (e *Engine) exclusive(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, error) {
 	var out ExclusiveOutput
 
-	run := ctx
-
-	if in.Kind == kindGate {
-		var stop func()
-
-		run, stop = e.trackGate(ctx)
-		defer stop()
-	}
+	run, stop := e.trackGate(ctx, in)
+	defer stop()
 
 	return e.endCall(&out, e.exclusiveCall(run, in, &out))
 }
@@ -106,9 +102,14 @@ func (e *Engine) endCall(out *ExclusiveOutput, err error) (ExclusiveOutput, erro
 	return *out, nil
 }
 
-// trackGate lists a running gate with the runs that the tick cancels. DBOS does not interrupt a step that runs, so a gate that a newer head canceled
-// stops when the tick cancels its context. The returned function ends the gate: it cancels the context and marks the run as ended.
-func (e *Engine) trackGate(parent dbos.Context) (dbos.Context, func()) { //nolint:ireturn // the context of a run is the interface of the workflow library
+// trackGate lists a running gate or batch gate with the runs that the tick cancels. DBOS does not interrupt a step that runs, so a gate that a newer head
+// or a person canceled stops when the tick cancels its context, and a wait for the proof of a lost job reads the proof once more (lostStopped).
+// The returned function ends the gate: it cancels the context and marks the run as ended. A run of another kind is not listed.
+func (e *Engine) trackGate(parent dbos.Context, in ExclusiveInput) (dbos.Context, func()) { //nolint:ireturn // the context of a run is the interface of the workflow library
+	if in.Kind != kindGate && in.Kind != kindBatchGate {
+		return parent, func() {}
+	}
+
 	run, cancel := dbos.WithCancel(parent)
 
 	ended := make(chan struct{})
@@ -171,9 +172,7 @@ func (e *Engine) runCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutp
 			return e.deps.Merge.Merge(c, in.Project, in.Item, in.Head, in.Settings)
 		})
 	case kindBatchGate:
-		out.Batch, err = runStep(e, ctx, kindBatchGate, func(c context.Context) (batch.GateOutcome, error) {
-			return e.batchGateOutcome(c, in)
-		})
+		out.Batch, err = e.batchGateCall(ctx, in, out)
 	case kindCommand:
 		out.Command, err = runStep(e, ctx, kindCommand, func(c context.Context) (CommandOutput, error) { return e.deps.Commands.Run(c, in.Request) })
 	default:
@@ -294,14 +293,8 @@ func (in ExclusiveInput) recordedHost() (string, bool) {
 func (e *Engine) hostJob(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, error) {
 	var out ExclusiveOutput
 
-	run := ctx
-
-	if in.Kind == kindGate {
-		var stop func()
-
-		run, stop = e.trackGate(ctx)
-		defer stop()
-	}
+	run, stop := e.trackGate(ctx, in)
+	defer stop()
 
 	return e.endCall(&out, e.runCall(run, in, &out))
 }
