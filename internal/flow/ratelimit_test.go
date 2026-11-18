@@ -275,6 +275,7 @@ func TestRateLimit_AFailedUsageReadFailsTheStepAndNamesTheLogin(t *testing.T) {
 	_, err := h.engine(t).Run(testItem, testProject)
 
 	require.ErrorContains(t, err, "read the usage of login "+testLogin+" for the reset of the rate limit five_hour: "+errFake.Error())
+	require.ErrorContains(t, err, "Run beehave resume "+testItem+" when the usage read works")
 	assert.Len(t, h.agents.seen(), 1, "no rerun after a failed read")
 }
 

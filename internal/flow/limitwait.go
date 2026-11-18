@@ -67,7 +67,7 @@ func (e *Engine) dateLimit(ctx context.Context, in PhaseInput, out *PhaseOutput)
 
 	reset, known, err := e.deps.Logins.Reset(ctx, in.Project, in.Login)
 	if err != nil {
-		return fmt.Errorf("read the usage of login %s for the reset of the %s: %w", in.Login, out.Limit.Name(), err)
+		return fmt.Errorf("read the usage of login %s for the reset of the %s: %w. Run beehave resume %s when the usage read works", in.Login, out.Limit.Name(), err, in.Item)
 	}
 
 	if known {
