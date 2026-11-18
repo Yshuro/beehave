@@ -28,6 +28,10 @@ const (
 	limitRejected  = "rejected"
 	// rateLimitError is the error of an assistant line that the CLI writes when the provider refused the request at a limit.
 	rateLimitError = "rate_limit"
+	// overloadedError is the api_error of an assistant line that the CLI writes when the provider is overloaded. highLoad is the text of the line that the CLI
+	// writes for a model under high load.
+	overloadedError = "overloaded"
+	highLoad        = "is experiencing high load"
 	// creditsRequired is the errorCode of a rate_limit_info that asks for usage credits. overageWindow is the rateLimitType of the paid overage.
 	creditsRequired = "credits_required"
 	overageWindow   = "overage"
@@ -99,7 +103,16 @@ func refusedAnswer(line map[string]any) (*agent.Limit, string) {
 		return limit, reason
 	}
 
+	if overloaded(line) {
+		return &agent.Limit{Kind: agent.LimitOverload}, ""
+	}
+
 	return &agent.Limit{Kind: agent.LimitRate}, ""
+}
+
+// overloaded reports whether an assistant rate_limit line says that the provider is overloaded: its api_error is overloaded, or its text says that the model is under high load.
+func overloaded(line map[string]any) bool {
+	return line["api_error"] == overloadedError || strings.Contains(resultText(contentOf(line, assistantType)), highLoad)
 }
 
 // object returns the JSON object at a key of a JSON object, or nil when the value there is no object.
