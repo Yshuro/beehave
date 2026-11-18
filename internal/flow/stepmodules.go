@@ -37,8 +37,7 @@ const coreVersion = 3
 // that an agent call records when a provider limit stops its run. Version 3 added the start_head field to the phase input, the session and diff_stat fields
 // to the record of a lost step, and the resumed field to the phase output. Version 4 added the tree_start field to the phase input.
 // Version 5 writes the cost of a failed run to the stream of failed runs in place of its spent step.
-// Version 6 moved the look at the caps into the phase (agent/caps, the call field of the phase input, the cap_stop field of the phase output);
-// the item run records a look only for a stop.
+// Version 6 adds the agent/caps step to the phase, the call field of the phase input and the cap_stop field of the phase output.
 const agentVersion = 6
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.

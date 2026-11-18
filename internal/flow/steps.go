@@ -197,7 +197,10 @@ func withOutputs(records []dbos.StepInfo, outputs map[string]any) []dbos.StepInf
 	return records
 }
 
-// outputsOf reads the outputs of workflows by id.
+// passedLookOutput is the output that the view gives a phase that runs after its look at the caps passed: a phase output with no stop.
+const passedLookOutput = "{}"
+
+// outputsOf reads the outputs of workflows by id with outputOf.
 func (c *Client) outputsOf(ids []string) (map[string]any, error) {
 	rows, err := dbos.ListWorkflows(c.flow, dbos.WithFilterWorkflowIDs(ids...), dbos.WithFilterLoadOutput(true))
 	if err != nil {
@@ -206,10 +209,35 @@ func (c *Client) outputsOf(ids []string) (map[string]any, error) {
 
 	outputs := make(map[string]any, len(rows))
 	for _, row := range rows {
-		outputs[row.ID] = row.Output
+		if outputs[row.ID], err = c.outputOf(row); err != nil {
+			return outputs, err
+		}
 	}
 
 	return outputs, nil
+}
+
+// outputOf is the output of one workflow, or passedLookOutput for a phase that runs and whose look at the caps found no stop.
+func (c *Client) outputOf(row dbos.WorkflowStatus) (any, error) {
+	if row.Name != phaseName || row.Status != dbos.WorkflowStatusPending {
+		return row.Output, nil
+	}
+
+	steps, err := dbos.GetWorkflowSteps(c.flow, row.ID, dbos.WithStepsLoadOutput(true))
+	if err != nil {
+		return nil, fmt.Errorf("read the look at the caps of phase %s: %w", row.ID, err)
+	}
+
+	output := row.Output
+	if at := slices.IndexFunc(steps, func(step dbos.StepInfo) bool { return step.StepName == capLookStepName }); at >= 0 {
+		decodeThen(steps[at].Output, func(check capCheck) {
+			if check.Stop == nil {
+				output = passedLookOutput
+			}
+		})
+	}
+
+	return output, nil
 }
 
 // failedRunsStream is the stream of an item run that holds the cost of each agent run that failed. A rewind keeps the entries of a stream,
@@ -324,8 +352,7 @@ func callLine(group []dbos.StepInfo, name string) StepLine {
 	return line
 }
 
-// absorb adds the error and the decoded fields of one record to the line. The kind of the step picks the type that the record decodes into.
-// A child workflow that starts after a provider limit ends the wait: the phase runs the agent again.
+// absorb adds the error and the decoded fields of one record to the line; a child workflow record ends a provider limit wait.
 func (l *StepLine) absorb(record dbos.StepInfo) {
 	if record.Error != nil && l.Error == "" {
 		l.Error, l.State = record.Error.Error(), stepFailed
@@ -437,8 +464,7 @@ func decodeThen[T any](output any, use func(T)) bool {
 	return true
 }
 
-// fromPhase takes the stop at a cap and the exit code of the agent from the result of its phase, a child workflow. A phase whose look passed holds no stop.
-// The result of the child workflow of a gate has no outcome.
+// fromPhase takes the stop at a cap and the exit code of the agent from the output of a phase; a gate's child output has no outcome.
 func (l *StepLine) fromPhase(phase PhaseOutput) {
 	l.CapStop = phase.CapStop
 

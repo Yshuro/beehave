@@ -98,10 +98,7 @@ type PhaseOutput struct {
 	CapStop *CapStop `json:"cap_stop,omitempty"`
 }
 
-// phase waits for the claim of its run, looks at the caps, then runs the agent as a step, so a restart skips the work that finished.
-// A phase starts no agent unless the run that queued it holds a trusted claim now, whatever context the phase runs under:
-// the child workflow of a phase outlives the run that queued it, and a later run of the same item holds another claim.
-// A cap that stops the look ends the phase with the stop and no agent run. The stop is not a failure.
+// phase waits for a trusted claim of its run, looks at the caps, then runs the agent as a step; a cap stop ends it with the stop and no agent run.
 func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 	claim, err := e.awaitClaim(ctx, in)
 	if err != nil {

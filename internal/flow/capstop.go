@@ -60,7 +60,6 @@ func (e *Engine) lookAtCaps(ctx dbos.Context, in PhaseInput) (capCheck, error) {
 }
 
 // holdAtCap records the stop that the look of a phase returned, as look number look of the try, and sleeps before the next phase looks again.
-// The run stays open, and a restart replays the stop and the sleep. The next look reads the caps of the engine that runs it, so a raised cap plus a restart lets the step start.
 func (s *script) holdAtCap(name string, try, look int, stop *CapStop) error {
 	_, err := runStep(s.e, s.ctx, name+"/budget"+strconv.Itoa(try)+"."+strconv.Itoa(look), func(context.Context) (capCheck, error) {
 		return capCheck{Stop: stop}, nil

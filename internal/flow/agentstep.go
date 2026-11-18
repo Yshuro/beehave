@@ -464,8 +464,7 @@ func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (step
 	return s.read(name, a, ended, try)
 }
 
-// runPastLimits runs the phase of one try until a run ends that no cap and no provider limit stopped, and returns how that run ended.
-// A phase that a cap stopped is followed by the record of the stop, a wait and a new phase. look counts the stops of the try, and run the limited runs.
+// runPastLimits runs a new phase of one try after each cap stop and each provider limit, and returns the first run that neither stopped.
 func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput, error) {
 	look, run := 0, 0
 

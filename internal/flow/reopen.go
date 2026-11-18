@@ -25,9 +25,7 @@ func (c *Client) reopen(id string, opts ...dbos.RewindWorkflowOption) error {
 	return c.rewind(id, min(from, openStart(steps)), opts...)
 }
 
-// openStart returns the step that opens the open sequence, or the length of the history when there is none. The open sequence is the look at the caps
-// and the start marks after the last agent step. A run that stopped in the middle of the agent step, such as a canceled one, holds such a sequence, and
-// a loss in it leaves marks and loss records. Every rewind goes back to the step that opens it, so the whole sequence goes and a resumed phase looks at the caps again.
+// openStart returns the first look at the caps or start mark after the last agent step, or the length of the history when there is none.
 func openStart(steps []dbos.StepInfo) int {
 	return firstOpenStart(steps, len(steps))
 }
@@ -94,9 +92,7 @@ func (c *Client) failedStep(steps []dbos.StepInfo, canceled map[string]bool, opt
 	return first, nil
 }
 
-// rewindPoint returns the step that a rewind goes back to for a failed step. A failed agent step goes back to the look at the caps that opens its phase,
-// so the rewind drops the look and every mark and loss record with the step: the rerun looks at the caps first, and holds no start that has no end.
-// Any other step goes back to itself.
+// rewindPoint returns the step that a rewind goes back to: the look at the caps that opens the phase of a failed agent step, else the failed step.
 func rewindPoint(steps []dbos.StepInfo, failed dbos.StepInfo) int {
 	if failed.StepName != agentStepName {
 		return failed.StepID
