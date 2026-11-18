@@ -63,6 +63,46 @@ func TestResume_TheCostSumOfAnItemSurvivesARestartSoAStepPastTheCapWaitsAgain(t 
 	assert.Len(t, rig.h.agents.seen(), 2, "no agent started after the restart: c waits again")
 }
 
+func TestResume_AStepThatARaisedCapLetsRunShowsNoStopWhileItsAgentRuns(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.h.opts.MaxRunBudget = 5
+
+	var calls atomic.Int32
+
+	release := make(chan struct{})
+
+	// The third call is c, after the raise: its agent runs until the test reads the view.
+	rig.h.agents.result = func(AgentRequest) agent.Result {
+		if calls.Add(1) >= 3 {
+			<-release
+		}
+
+		return costing(3)
+	}
+
+	holdOnCap(t, rig, capFile(t, threeFlow))
+
+	rig.h.opts.MaxRunBudget = 100
+	engine := rig.h.engine(t)
+	t.Cleanup(func() { close(release) })
+
+	eventually(t, func() bool { return calls.Load() == 3 })
+
+	assert.Nil(t, stoppedRun(t, rig.h.client(t, testVersion), testRun), "the look of the phase that runs the agent of c passed")
+
+	records, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
+	require.NoError(t, err)
+
+	phase := records[len(records)-1].ChildWorkflowID
+	require.NotEmpty(t, phase, "the last record of the run is the phase of c")
+
+	failing := &Client{flow: &stepsOfOneFail{Context: engine.ctx, id: phase}}
+	_, err = failing.Steps(testRun)
+	require.ErrorContains(t, err, "read the look at the caps of phase "+phase)
+}
+
 func TestResume_TheRoundsOfALoopAreNotCountedAgainAfterTheResume(t *testing.T) {
 	t.Parallel()
 

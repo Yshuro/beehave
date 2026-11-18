@@ -380,9 +380,53 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 
 	_, err = engine.awaitClaim(t.Context(), PhaseInput{Run: "run-gone", Item: testItem})
 	require.ErrorContains(t, err, "read run run-gone")
+}
 
-	_, err = engine.phase(engine.ctx, PhaseInput{Item: testItem, Project: testProject, Login: testLogin})
+// stepsOfOneFail is a store whose list of the steps of one workflow fails. Each other read goes to the store.
+type stepsOfOneFail struct {
+	dbos.Context
+
+	id string
+}
+
+func (s *stepsOfOneFail) GetWorkflowSteps(_ dbos.Client, id string, opts ...dbos.GetWorkflowStepsOption) ([]dbos.StepInfo, error) {
+	if id == s.id {
+		return nil, errors.New("the store failed")
+	}
+
+	return dbos.GetWorkflowSteps(s.Context, id, opts...)
+}
+
+func TestPhase_AListOfEarlierStartsThatCannotBeReadFailsThePhaseAfterItsLookAtTheCaps(t *testing.T) {
+	t.Parallel()
+
+	const phaseID = "item-12-r1-phase"
+
+	var store dbos.Context
+
+	// No cap is set, so the look reads nothing. The list of the earlier starts of this one phase fails.
+	engine := newHarness(t).engineWith(t, func(e *Engine) {
+		store = e.ctx
+		e.ctx = &stepsOfOneFail{Context: e.ctx, id: phaseID}
+		e.holds.add(runID(testItem, 1), claimHold{renewed: time.Now()})
+	})
+
+	handle, err := dbos.RunWorkflow(engine.ctx, engine.phase, PhaseInput{Run: runID(testItem, 1), Item: testItem, Project: testProject, Login: testLogin},
+		dbos.WithWorkflowID(phaseID), dbos.WithQueue(engine.queue), dbos.WithQueuePartitionKey(testLogin))
+	require.NoError(t, err)
+
+	_, err = handle.GetResult()
 	require.ErrorContains(t, err, "read the steps of the agent step")
+
+	steps, err := dbos.GetWorkflowSteps(store, phaseID)
+	require.NoError(t, err)
+
+	names := make([]string, 0, len(steps))
+	for _, step := range steps {
+		names = append(names, step.StepName)
+	}
+
+	assert.Equal(t, []string{capLookStepName}, names, "the look ran as a step of the phase, and no start mark followed")
 }
 
 func TestMarkStarts_ReportsAStartThatIsNotInAWorkflow(t *testing.T) {

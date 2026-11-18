@@ -55,6 +55,22 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheModuleThatChan
 	assert.Equal(t, testVersion, buildVersion(row.ApplicationVersion), "a refused run stays where it was")
 }
 
+func TestClient_ResumeOnThisBuildRefusesARunRecordedUnderAgentModule5(t *testing.T) {
+	t.Parallel()
+
+	// Agent module 5 looked at the caps in the item run, before the phase. This build looks inside the phase, so the old record has another shape.
+	harness, _, other := strandedHarness(t)
+	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?",
+		versionWithModule(testVersion, moduleAgent, 5), testRun)
+	require.NoError(t, err)
+	expireLease(harness)
+
+	err = other.ResumeOnThisBuild(testItem)
+
+	require.ErrorIs(t, err, errStranded)
+	require.ErrorContains(t, err, fmt.Sprintf("agent module at version 5 and this build has version %d", agentVersion))
+}
+
 func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAGateStepWhenTheGateModuleChanged(t *testing.T) {
 	t.Parallel()
 
