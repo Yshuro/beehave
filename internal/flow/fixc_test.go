@@ -14,6 +14,8 @@ import (
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 const (
@@ -382,8 +384,8 @@ func TestMarkCancel_LeavesNoTemporaryFileAndAFolderThatCannotBeWrittenIsAnError(
 
 	folder := filepath.Join(dir, cancelsDir)
 
-	require.NoError(t, os.Chmod(folder, 0o500)) //nolint:gosec // the test makes its own folder read-only
-	t.Cleanup(func() { require.NoError(t, os.Chmod(folder, ownersMode)) })
+	require.NoError(t, exectest.ChmodFolder(folder, 0o500)) // the test makes its own folder read-only
+	t.Cleanup(func() { require.NoError(t, exectest.ChmodFolder(folder, ownersMode)) })
 
 	require.ErrorContains(t, markCancel(dir, "item-13-r1", ItemInput{}), "mark the cancel of run item-13-r1")
 }

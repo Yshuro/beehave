@@ -20,6 +20,7 @@ import (
 
 	"github.com/tobocop2/beehave/internal/cli"
 	"github.com/tobocop2/beehave/internal/config"
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/store/local"
@@ -30,7 +31,6 @@ import (
 // The agent is the fake claude program of the script, which the real agent runner starts from PATH.
 
 const (
-	e2eToolMode   = 0o700
 	e2eWorkMarker = "@WORK@"
 	e2eModeBits   = 32
 )
@@ -154,6 +154,11 @@ func openRoot(ts *testscript.TestScript, parent, folder string) *os.Root {
 	return root
 }
 
+// writeFake writes a fake program of the script into its work folder, with the work folder in place of the marker.
+func writeFake(ts *testscript.TestScript, name string, text []byte) error {
+	return exectest.Write(filepath.Join(ts.Getenv("WORK"), name), strings.ReplaceAll(string(text), e2eWorkMarker, ts.Getenv("WORK")))
+}
+
 // cmdSubst is "subst <file>...": it replaces @WORK@ in each file with the work folder of the script.
 func cmdSubst(ts *testscript.TestScript, _ bool, args []string) {
 	work := openRoot(ts, ts.Getenv("WORK"), "")
@@ -193,7 +198,7 @@ func writeTools(t *testing.T) string {
 		require.NoError(t, err)
 
 		wrapper := "#!/bin/sh\nexec " + found + " \"$@\"\n"
-		require.NoError(t, os.WriteFile(filepath.Join(tools, name), []byte(wrapper), e2eToolMode))
+		require.NoError(t, exectest.Write(filepath.Join(tools, name), wrapper))
 	}
 
 	return tools

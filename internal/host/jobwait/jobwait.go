@@ -4,11 +4,13 @@
 package jobwait
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"time"
 
+	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/host"
 	"github.com/tobocop2/beehave/internal/host/link"
 	"github.com/tobocop2/beehave/internal/model"
@@ -18,9 +20,7 @@ var errCancelStuck = errors.New("the cancel did not take")
 
 const (
 	defaultStale = 20 * time.Minute
-	lostAfter    = 5 * time.Minute // the time without an answered read before a wait ends as lost
-	stopLimit    = 5 * time.Minute // the time a job may take to end after the cancel
-	diedGrace    = time.Minute     // the time an empty record repeats before it reads as died: the accounting record can come late
+	diedGrace    = time.Minute // the time an empty record repeats before it reads as died: the accounting record can come late
 )
 
 // Job is what the job id of an adapter holds: the id that the scheduler made and the nonce that Submit made for the slot of the job.
@@ -62,16 +62,28 @@ type Engine struct {
 	clock   Clock
 	bank    func(ctx context.Context) error
 	stale   time.Duration
+	limits  Limits
+}
+
+// Limits holds the two time limits of a wait, from host.lost_after and host.stop_limit. A zero field means the default of the config.
+type Limits struct {
+	// LostAfter is the time without an answered read before a wait ends as lost.
+	LostAfter time.Duration
+	// StopLimit is the time a job may take to end after the cancel.
+	StopLimit time.Duration
 }
 
 // New returns the engine of a scheduler. bank banks the work of the host. release ends the slot of a job after the bank.
 // stale is the time a running job may keep its log still; zero means the default.
-func New(sched Scheduler, release func(ctx context.Context, job Job) error, clock Clock, bank func(ctx context.Context) error, stale time.Duration) *Engine {
+func New(sched Scheduler, release func(ctx context.Context, job Job) error, clock Clock, bank func(ctx context.Context) error, stale time.Duration, limits Limits) *Engine {
 	if stale <= 0 {
 		stale = defaultStale
 	}
 
-	return &Engine{sched: sched, release: release, clock: clock, bank: bank, stale: stale}
+	limits.LostAfter = cmp.Or(limits.LostAfter, config.DefaultLostAfter)
+	limits.StopLimit = cmp.Or(limits.StopLimit, config.DefaultStopLimit)
+
+	return &Engine{sched: sched, release: release, clock: clock, bank: bank, stale: stale, limits: limits}
 }
 
 // Wait polls the scheduler until the job has a final state. A state that beehave does not know is an error, never a guess.
@@ -95,11 +107,11 @@ func (e *Engine) Cancel(ctx context.Context, job Job) error {
 }
 
 // waitFor is Wait. A stop wait follows a cancel: it has no stale check, as the stale stop would call itself, and it ends with an error
-// when the job is not final after stopLimit on the clock of the host.
+// when the job is not final after the stop limit on the clock of the host.
 func (e *Engine) waitFor(ctx context.Context, job Job, stopping bool) (model.JobState, error) {
 	w := waiting{grew: e.clock.Now(), answered: e.clock.Now(), size: -1}
 	if stopping {
-		w.stopBy = e.clock.Now().Add(stopLimit)
+		w.stopBy = e.clock.Now().Add(e.limits.StopLimit)
 	}
 
 	for {
@@ -133,8 +145,8 @@ func (e *Engine) pollOnce(ctx context.Context, job Job, w *waiting) (ending, boo
 	state, err := e.observe(ctx, job, w)
 
 	switch {
-	case errors.Is(err, link.ErrDropped) && e.clock.Now().Sub(w.answered) >= lostAfter:
-		return ending{model.JobLost, fmt.Errorf("job %s: no read of the job answered for %s (%w): %w. %s", job, lostAfter, err, host.ErrLost, e.sched.LostAdvice(job))}, true
+	case errors.Is(err, link.ErrDropped) && e.clock.Now().Sub(w.answered) >= e.limits.LostAfter:
+		return ending{model.JobLost, fmt.Errorf("job %s: no read of the job answered for %s (%w): %w. %s", job, e.limits.LostAfter, err, host.ErrLost, e.sched.LostAdvice(job))}, true
 	case err != nil && !errors.Is(err, link.ErrDropped):
 		return ending{model.JobUnknown, err}, true
 	case err == nil && state.Terminal():
@@ -150,7 +162,7 @@ func (e *Engine) pollOnce(ctx context.Context, job Job, w *waiting) (ending, boo
 func (e *Engine) unfinished(ctx context.Context, job Job, w *waiting) (ending, bool) {
 	switch {
 	case !w.stopBy.IsZero() && !e.clock.Now().Before(w.stopBy):
-		return ending{model.JobUnknown, fmt.Errorf("%w: job %s was not final %s after the cancel. %s", errCancelStuck, job, stopLimit, e.sched.StuckAdvice(job))}, true
+		return ending{model.JobUnknown, fmt.Errorf("%w: job %s was not final %s after the cancel. %s", errCancelStuck, job, e.limits.StopLimit, e.sched.StuckAdvice(job))}, true
 	case w.stopBy.IsZero() && e.clock.Now().Sub(w.grew) >= e.stale:
 		return endOf(e.stopStale(ctx, job)), true
 	}

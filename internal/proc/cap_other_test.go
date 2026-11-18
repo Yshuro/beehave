@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/unix"
 
+	"github.com/tobocop2/beehave/internal/exectest"
 	"github.com/tobocop2/beehave/internal/proc"
 )
 
@@ -56,7 +57,7 @@ func capHelperRun(t *testing.T, argv []string, setErr, execErr error) (written s
 
 func TestExecRunner_AProgramThatCannotBeExecutedFailsTheStepWithTheCause(t *testing.T) { //nolint:paralleltest // see above
 	program := filepath.Join(t.TempDir(), "noformat")
-	require.NoError(t, os.WriteFile(program, []byte("not a program\n"), 0o700)) //nolint:gosec // the test needs an executable file
+	require.NoError(t, exectest.Write(program, "not a program\n"))
 
 	done := proc.ExecRunner{Binary: program, Timeout: 30 * time.Second, MaxNewProcesses: 1000}.Run(context.Background(), nil)
 
@@ -177,7 +178,7 @@ func TestExecRunner_ACapOnAProgramPathRelativeToDirIsApplied(t *testing.T) { //n
 
 	dir := t.TempDir()
 	marker := filepath.Join(t.TempDir(), "ran")
-	require.NoError(t, os.WriteFile(filepath.Join(dir, "probe.sh"), []byte("#!/bin/sh\ntouch "+marker+"\n"), 0o755)) //nolint:gosec // the test script must be executable
+	require.NoError(t, exectest.Write(filepath.Join(dir, "probe.sh"), "#!/bin/sh\ntouch "+marker+"\n"))
 
 	done := proc.ExecRunner{Binary: "./probe.sh", Dir: dir, Timeout: 30 * time.Second, MaxNewProcesses: 100000}.Run(context.Background(), nil)
 
