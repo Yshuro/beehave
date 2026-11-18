@@ -420,7 +420,7 @@ func (g dryGate) Run(_ context.Context, _, _, _ string, job GateJob) (GateResult
 	}
 
 	if job.Plan.Base != "" {
-		result.Checks = &GateChecks{NewTests: []string{dryNewTest}, New: 1, Secrets: new(int), Complete: true}
+		result.Checks = &GateChecks{NewTests: []string{dryNewTest}, New: 1, Secrets: new(int), Complete: true, Revert: model.RevertPass, RevertCases: 1}
 	}
 
 	return result, nil

@@ -30,7 +30,9 @@ Each file is Starlark with the step limit of the workflow files. The limits and 
 
 ### `project(...)`
 
-The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
+The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `test_paths`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
+
+`test_paths` is a list of globs for the test files, for example `["**/*_test.go", "**/testdata/**"]` or `["tests/**"]`. The revert run copies the added and changed test files of a candidate onto the base code, so a new test that needs a changed helper in a test file still builds there. A project with new tests and no `test_paths` gets a refusal from `before_review`.
 
 The project also takes the config block of the adapter that it chooses. The adapter declares the keys of its block, and the config passes the block to the adapter unread. The beads adapter declares the `beads` block with one key: `beads = beads(prefix = "proj")`. A project that chooses the beads tracker or the beads claim store must give the block. The config refuses a block of an adapter that the project does not choose, and the refusal names the adapters that the project does choose.
 

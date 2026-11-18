@@ -352,7 +352,7 @@ At the start of a run, the engine lists the other orchestrators that hold items 
 
 ### `before_review`
 
-`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `base` and `keywords`.
+`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `revert`, `base` and `keywords`.
 
 The call needs a `gate` call in the same run with `base`, at the same `head`. It reads the checks of that gate: the new tests and the secret scan. Without that gate call, the step fails with an error that says so. A gate without `base` holds no checks, so the call refuses it as a cut log.
 
@@ -361,12 +361,13 @@ A finding is a result, not an error. `ok` is true when `findings` is empty. The 
 - the log of the gate job has no end line (a cut log),
 - the head adds no new test,
 - a new test failed or was skipped on the head,
+- a new test passed or was skipped on the base code, or the revert run proves nothing (see the revert run in `gate.md`),
 - the secret scan did not exit with 0, or left no single exit code,
 - the head is not a descendant of `base`, by `git merge-base --is-ancestor`,
 - the head changed a path that `allow` does not allow (a list of globs, as `allow_paths` of `agent`),
 - a commit message between `base` and `head` has a closing keyword, unless `integration` is true.
 
-`new_tests` lists the new tests of the gate. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
+`new_tests` lists the new tests of the gate. `revert` is the verdict of the revert run of the gate, `pass` or `fail`; the result of `gate` carries the same field. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
 
 ### `queue`
 

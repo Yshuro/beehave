@@ -84,6 +84,14 @@ type GateChecks struct {
 	Secrets     *int     `json:"secrets_rc,omitempty"`
 	Complete    bool     `json:"complete"`
 	Problem     string   `json:"problem,omitempty"`
+	// Revert is the verdict of the revert run. RevertPassed names the new tests that passed or were skipped on the base code, capped, and RevertPassedCount counts them all.
+	// RevertCases is the number of test cases in the report of the run, RevertRC its exit code or nil, and RevertProblem says why the run proves nothing.
+	Revert            model.RevertVerdict `json:"revert"`
+	RevertPassed      []string            `json:"revert_passed"`
+	RevertPassedCount int                 `json:"revert_passed_count"`
+	RevertCases       int                 `json:"revert_cases"`
+	RevertRC          *int                `json:"revert_rc,omitempty"`
+	RevertProblem     string              `json:"revert_problem,omitempty"`
 }
 
 // GateStep is the result of one step of a gate. Status is "pass", "fail" or "unknown".

@@ -1,10 +1,15 @@
 package flow
 
 import (
+	"cmp"
 	"encoding/json"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/model"
 )
+
+// revertField is the result field of gate and before_review that holds the verdict of the revert run.
+const revertField = "revert"
 
 // The outputs of each builtin that records a step, one function each. The fields of a function are the fields in workflow.ResultFields,
 // and a test compares them, so the check of a workflow file and the run read the same names.
@@ -33,10 +38,11 @@ func gateOutputs(passed bool, head, tree, report string, steps []GateStep, requi
 	}
 
 	recorded.NewTests, recorded.Failed = append([]string{}, recorded.NewTests...), append([]string{}, recorded.Failed...)
+	recorded.RevertPassed, recorded.Revert = append([]string{}, recorded.RevertPassed...), cmp.Or(recorded.Revert, model.RevertFail)
 
 	return map[string]any{
 		"passed": passed, "head": head, treeName: tree, "report": report, "steps": append([]GateStep{}, steps...), "required": append([]string{}, required...),
-		"checks": recorded, "new_tests": recorded.NewTests, hostLossKey: map[string]any{}, hostLossesKey: 0,
+		"checks": recorded, "new_tests": recorded.NewTests, revertField: string(recorded.Revert), hostLossKey: map[string]any{}, hostLossesKey: 0,
 	}
 }
 
