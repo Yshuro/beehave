@@ -442,6 +442,13 @@ func TestRoundSync_AnExitTwoOfTheCheckStopsTheRoundWithTheLineOfTheTool(t *testi
 	assert.Contains(t, result.Stopped.Output, "502")
 }
 
+// itemTerminal reports whether the latest run of the item has ended, or cannot be read.
+func itemTerminal(engine *Engine, item string) bool {
+	last, found, err := latestRun(engine.ctx, item)
+
+	return err != nil || (found && last.terminal())
+}
+
 // release lets the child of the item end now, in place of its turn at a queue read: a held pass reads no queue.
 func (s *endOrder) release(item string) {
 	s.mu.Lock()
@@ -546,10 +553,15 @@ func TestRoundSync_AHeldRoundGathersItsOpenRunAndCallsNoSyncInALaterPass(t *test
 	script := &syncScript{lines: []string{"state=current", "state=refused reason=sync-refused"}}
 	script.called = func(n int) {
 		if n == 2 {
+			// A member that ends before the held pass leaves that pass no open run to gather: member 2 must wait at its turn until this release.
+			waitUntil(func() bool { return rig.kids.turns.isParked("2") || itemTerminal(rig.last, "2") })
+			assert.True(t, rig.kids.turns.isParked("2"), "member 2 waits at its turn when the held pass starts")
 			rig.kids.turns.release("2")
 		}
 	}
 	withSync(t, rig, script)
+	// The checks before review of each child compare its head with the round base. With no such ref the child fails there, before its turn, and ends on its own.
+	rig.repo.must(t, "update-ref", "refs/remotes/origin/"+syncRoundBase, rig.kids.base)
 
 	_, _, err := runSync(t, rig, false)
 	require.NoError(t, err)

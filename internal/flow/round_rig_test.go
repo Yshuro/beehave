@@ -48,10 +48,11 @@ type endOrder struct {
 	turns   map[string]*turn
 	reads   map[string]int
 	waiting map[int][]string // the members that the queue read of the turn waits for, until each has ended
+	parked  map[string]bool  // the members that wait at their turn now or waited there before
 }
 
 func newEndOrder(members []string, stalled func(item string, what string)) *endOrder {
-	s := &endOrder{stalled: stalled, turns: map[string]*turn{}, reads: map[string]int{}, waiting: map[int][]string{}}
+	s := &endOrder{stalled: stalled, turns: map[string]*turn{}, reads: map[string]int{}, waiting: map[int][]string{}, parked: map[string]bool{}}
 
 	for at, item := range members {
 		if at > 0 {
@@ -82,6 +83,7 @@ func (s *endOrder) hold(ctx context.Context, item string) {
 	s.reads[item]++
 	mine := s.turns[item]
 	holds := s.reads[item] == readsBeforeReview
+	s.parked[item] = s.parked[item] || (mine != nil && holds)
 	s.mu.Unlock()
 	if mine == nil || !holds {
 		return
@@ -93,6 +95,14 @@ func (s *endOrder) hold(ctx context.Context, item string) {
 	case <-time.After(stallLimit):
 		s.stalled(item, "its turn")
 	}
+}
+
+// isParked reports whether the member has reached its turn: it waits there, or it waited there and has gone on.
+func (s *endOrder) isParked(item string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return s.parked[item]
 }
 
 // queueRead is called at the start of each read of the queue of the round, with the number of the read. It opens the turns of that number, and then waits until the members that the turn names have ended.
