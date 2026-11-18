@@ -10,8 +10,6 @@ import (
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tobocop2/beehave/internal/agent"
 )
 
 func TestCapStop_TheStatusNoteNamesTheScopeTheCapAndTheSpend(t *testing.T) {
@@ -134,26 +132,14 @@ func TestCapStop_TheClimbEndsAtTheRunWhenNoItemRunIsAboveIt(t *testing.T) {
 	assert.Equal(t, runID("3", 1), root)
 }
 
-func TestCapStop_ARunOutsideAWorkflowCannotSumItsTree(t *testing.T) {
+func TestCapStop_ACapCheckWithNoCapReadsNoSum(t *testing.T) {
 	t.Parallel()
 
 	engine := deepTree(t, newAgentRig(t))
-	engine.maxRunBudget = 5
-	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: "1"}}
+	// Every read of the store fails at its first read, so a check that read a sum would fail.
+	failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}}
 
-	got, err := s.checkCaps("q")
-
-	require.ErrorContains(t, err, "read the id of the run of item 1")
-	assert.Nil(t, got.Stop)
-}
-
-func TestCapStop_ACapCheckWithNoCapDoesNotReadTheIDOfTheRun(t *testing.T) {
-	t.Parallel()
-
-	engine := deepTree(t, newAgentRig(t))
-	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: "1"}}
-
-	got, err := s.checkCaps("q")
+	got, err := failing.checkCaps("q", runID("1", 1))
 
 	require.NoError(t, err)
 	assert.Nil(t, got.Stop)
@@ -162,63 +148,25 @@ func TestCapStop_ACapCheckWithNoCapDoesNotReadTheIDOfTheRun(t *testing.T) {
 func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 	t.Parallel()
 
-	engine := newAgentRig(t).h.opened(t)
+	engine := deepTree(t, newAgentRig(t))
+	failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}}
 
-	// The run is a real workflow, so its own id reads fine. The reads of the engine fail at the first read of the climb.
-	sum := func(ctx dbos.Context, in ItemInput) (string, error) {
-		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}}
-		s := &script{e: failing, ctx: ctx, in: in}
+	_, err := failing.treeSpend(runID("1", 1))
 
-		_, err := s.treeSpend(runID("1", 1))
-		if err == nil {
-			return "", errors.New("the sum did not fail")
-		}
-
-		return err.Error(), nil
-	}
-
-	dbos.RegisterWorkflow(engine.ctx, sum, dbos.WithWorkflowName(itemName))
-	require.NoError(t, dbos.Launch(engine.ctx))
-
-	handle, err := dbos.RunWorkflow(engine.ctx, sum, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(runID("1", 1)))
-	require.NoError(t, err)
-
-	words, err := handle.GetResult()
-	require.NoError(t, err)
-	assert.Contains(t, words, "the store failed")
+	require.ErrorContains(t, err, "the store failed")
 }
 
 func TestCapStop_ACapCheckWhoseTreeReadFailsReturnsTheErrorAndNoStop(t *testing.T) {
 	t.Parallel()
 
-	engine := newAgentRig(t).h.opened(t)
+	engine := deepTree(t, newAgentRig(t))
+	// The tree cap is set and the first read of the climb fails.
+	failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}, maxTreeBudget: 5}
 
-	// The run is a real workflow, so its own id reads fine. The tree cap is set and the first read of the climb fails.
-	check := func(ctx dbos.Context, in ItemInput) (string, error) {
-		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}, maxTreeBudget: 5}
-		s := &script{e: failing, ctx: ctx, in: in}
+	got, err := failing.checkCaps("q", runID("1", 1))
 
-		got, err := s.checkCaps("q")
-		if err == nil {
-			return "", errors.New("the check did not fail")
-		}
-
-		if got.Stop != nil {
-			return "", errors.New("the check returned a stop with its error")
-		}
-
-		return err.Error(), nil
-	}
-
-	dbos.RegisterWorkflow(engine.ctx, check, dbos.WithWorkflowName(itemName))
-	require.NoError(t, dbos.Launch(engine.ctx))
-
-	handle, err := dbos.RunWorkflow(engine.ctx, check, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(runID("1", 1)))
-	require.NoError(t, err)
-
-	words, err := handle.GetResult()
-	require.NoError(t, err)
-	assert.Contains(t, words, "the store failed")
+	require.ErrorContains(t, err, "the store failed")
+	assert.Nil(t, got.Stop, "no stop comes with the error")
 }
 
 func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing.T) {
@@ -233,7 +181,7 @@ func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing
 
 	var looks []string
 
-	// The names that holdForCaps builds: the agent step name, "/budget", the try, a dot and the look. Try 1 is the first try of each step.
+	// The names that holdAtCap builds: the agent step name, "/budget", the try, a dot and the look. Try 1 is the first try of each step.
 	lookNames := map[string]bool{}
 
 	for _, step := range []string{"agent:a#1", "agent:b#2", "agent:c#3"} {
@@ -256,16 +204,35 @@ func TestCapStop_AStepHeldForTwoLooksRecordsEachLookUnderItsOwnNumber(t *testing
 			}
 		}
 
-		return len(looks) >= 6
+		return len(looks) >= 4
 	})
 
 	require.NoError(t, engine.Shutdown())
 	receive(t, done)
 
 	assert.Equal(t, []string{
-		"agent:a#1/budget1.0", "agent:b#2/budget1.0",
 		"agent:c#3/budget1.0", "agent:c#3/budget1.1", "agent:c#3/budget1.2", "agent:c#3/budget1.3",
-	}, looks[:6], "the held step c records looks 0, 1, 2 and 3 in order")
+	}, looks[:4], "a and b passed and record no look; the held step c records looks 0, 1, 2 and 3 in order")
+}
+
+func TestCapStop_AStoreThatRefusesTheRecordOfTheStopFailsTheStepWithNoAgentRun(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.h.opts.MaxRunBudget = 5
+	rig.reply("", costing(3))
+
+	engine := rig.h.engine(t)
+
+	// a and b spend $6, so the look of the phase of c stops it, and the store refuses the record of that stop in the item run.
+	_, err := sqlOf(t, rig.h).ExecContext(t.Context(), "CREATE TRIGGER refuse_stop BEFORE INSERT ON operation_outputs "+
+		"WHEN NEW.function_name = 'agent:c#3/budget1.0' BEGIN SELECT RAISE(ABORT, 'the store refused the record'); END")
+	require.NoError(t, err)
+
+	_, err = engine.RunFile(testItem, testProject, capFile(t, threeFlow))
+
+	require.ErrorContains(t, err, "the store refused the record")
+	assert.Len(t, rig.h.agents.seen(), 2, "c does not run past the cap")
 }
 
 func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testing.T) {
@@ -285,21 +252,14 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 
 		ends <- cancel
 
-		// The run records a cost of 6 dollars, so the run cap of 5 stops the look and the hold waits.
-		if _, err := runStep(engine, own, "agent:a#1/spent0", func(context.Context) (stepResult, error) {
-			return stepResult{Outputs: spendOutputs(agent.Spend{Cost: 6})}, nil
-		}); err != nil {
-			return "", err
-		}
-
 		s := &script{e: engine, ctx: own, in: in}
 
-		next, err := s.holdForCaps("q", 1, 0)
+		err := s.holdAtCap("q", 1, 0, &CapStop{Scope: scopeRun, Cap: 5, Spent: 6})
 		if err == nil {
 			return "", errors.New("the hold did not fail")
 		}
 
-		return strconv.Itoa(next) + ": " + err.Error(), nil
+		return err.Error(), nil
 	}
 
 	dbos.RegisterWorkflow(engine.ctx, hold, dbos.WithWorkflowName(itemName))
@@ -315,41 +275,21 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 
 	words, err := handle.GetResult()
 	require.NoError(t, err)
-	assert.Equal(t, "1: wait for a cap of item 1 to be raised: context canceled", words)
+	assert.Equal(t, "wait for a cap of item 1 to be raised: context canceled", words)
 }
 
 func TestCapStop_ACapCheckWhoseRunReadFailsReturnsTheErrorAndNoStop(t *testing.T) {
 	t.Parallel()
 
-	engine := newAgentRig(t).h.opened(t)
+	engine := deepTree(t, newAgentRig(t))
+	// The run cap is set and the read of the steps of the item run fails.
+	failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}, maxRunBudget: 5}
 
-	// The run is a real workflow, so its own id reads fine. The run cap is set and the read of its steps fails.
-	check := func(ctx dbos.Context, in ItemInput) (string, error) {
-		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}, maxRunBudget: 5}
-		s := &script{e: failing, ctx: ctx, in: in}
+	got, err := failing.checkCaps("q", runID("1", 1))
 
-		got, err := s.checkCaps("q")
-		if err == nil {
-			return "", errors.New("the check did not fail")
-		}
-
-		if got.Stop != nil {
-			return "", errors.New("the check returned a stop with its error")
-		}
-
-		return err.Error(), nil
-	}
-
-	dbos.RegisterWorkflow(engine.ctx, check, dbos.WithWorkflowName(itemName))
-	require.NoError(t, dbos.Launch(engine.ctx))
-
-	handle, err := dbos.RunWorkflow(engine.ctx, check, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(runID("1", 1)))
-	require.NoError(t, err)
-
-	words, err := handle.GetResult()
-	require.NoError(t, err)
-	assert.Contains(t, words, "read the steps of "+runID("1", 1))
-	assert.Contains(t, words, "the store failed")
+	require.ErrorContains(t, err, "read the steps of "+runID("1", 1))
+	require.ErrorContains(t, err, "the store failed")
+	assert.Nil(t, got.Stop, "no stop comes with the error")
 }
 
 func TestCapStop_AReadThatFailsReachesTheCallerWithItsWords(t *testing.T) {
