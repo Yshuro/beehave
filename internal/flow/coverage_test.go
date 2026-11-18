@@ -277,7 +277,7 @@ func TestClock_AfterStartsTheFunctionAndItsStopFunctionCancelsIt(t *testing.T) {
 	fired := make(chan struct{})
 
 	clock{}.after(time.Millisecond, func() { close(fired) })
-	<-fired
+	receive(t, fired)
 
 	stop := clock{}.after(time.Hour, func() { t.Error("a stopped timer fires") })
 	stop()
@@ -320,7 +320,7 @@ func TestTick_TheRealTickerRenewsAHeldClaim(t *testing.T) {
 
 	eventually(t, func() bool { return len(harness.beats.seen()) > 0 })
 	close(stop)
-	<-ended
+	receive(t, ended)
 
 	assert.Equal(t, testProject+"/"+testOwner+testItem, harness.beats.seen()[0])
 }

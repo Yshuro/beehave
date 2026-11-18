@@ -90,7 +90,7 @@ func TestWaitRemind_StatusShowsTheNextReminderAndMovesItWhenOneIsSent(t *testing
 	assert.WithinDuration(t, start.Add(54*time.Minute), askedNow(t, client).NextRemind, time.Second)
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestWaitRemind_ALateWakeSendsEachOwedReminderOnceInOrder(t *testing.T) {
@@ -111,7 +111,7 @@ func TestWaitRemind_ALateWakeSendsEachOwedReminderOnceInOrder(t *testing.T) {
 	assert.True(t, askedNow(t, client).NextRemind.IsZero(), "no reminder is left")
 
 	require.NoError(t, client.AnswerAs(testItem, "bo", "yes"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.Equal(t, []string{remindStepPrefix + "1", remindStepPrefix + "2"}, remindSteps(t, client))
 }
@@ -130,7 +130,7 @@ func TestWaitRemind_TheExpiryActsAfterTheOwedReminders(t *testing.T) {
 
 	clk.advance(2 * time.Hour)
 
-	require.NoError(t, (<-done).err, "the wait times out")
+	require.NoError(t, receive(t, done).err, "the wait times out")
 
 	records, err := client.records(onlyRun(t, client).ID)
 	require.NoError(t, err)

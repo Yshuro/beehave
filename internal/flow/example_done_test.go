@@ -74,7 +74,7 @@ func TestRound_ARoundKilledAfterItsSpawnAndResumedSpawnsNothingAgain(t *testing.
 	})
 	require.NoError(t, client.AnswerAs(testItem, shipOwner, "STOP"))
 
-	_, err = joinRun(handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 
 	spawns := 0

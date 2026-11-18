@@ -211,7 +211,7 @@ func TestItemWrite_AReplayWritesNothingTwiceAndKeepsTheStepNames(t *testing.T) {
 	}()
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.Len(t, w.created, 1, "the create before the wait ran once")
 	assert.Equal(t, []string{testProject + "|n-1|" + testRun + ":n1|yes"}, w.notes)

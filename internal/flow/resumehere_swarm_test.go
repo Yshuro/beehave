@@ -40,7 +40,7 @@ func TestClient_ResumeOnThisBuildFinishesARunWithSwarmChildren(t *testing.T) {
 		}
 
 		if request.Item == "22" {
-			<-started
+			receive(t, started)
 
 			return errFake
 		}
@@ -50,7 +50,7 @@ func TestClient_ResumeOnThisBuildFinishesARunWithSwarmChildren(t *testing.T) {
 				close(started)
 			}
 
-			<-ctx.Done()
+			receive(t, ctx.Done())
 
 			return ctx.Err()
 		}

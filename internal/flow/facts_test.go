@@ -51,14 +51,14 @@ func TestFacts_TheBoardOfTheProjectIsReadAsFourFieldsAndIsEmptyWhenTheProjectHas
 	}
 	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"B=%d/%s/%s/%s\" % (f.board_number, f.board_owner, f.board_started, f.board_merged))\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "B=3/acme/In Progress/Done")
 
 	none := newHarness(t)
 	none.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"B=%d/%r\" % (f.board_number, f.board_owner))\n")
 
-	outcome = <-runInBackground(none.engine(t), testItem)
+	outcome = receive(t, runInBackground(none.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "B=0/\"\"")
 }
@@ -69,7 +69,7 @@ func TestFacts_AProjectThatTheConfigDoesNotHoldHasEmptyFacts(t *testing.T) {
 	h := newHarness(t)
 	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"N=%d/%d/%r\" % (len(f.limits), len(f.people), f.base_branch))\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "N=0/0/\"\"")
 }
@@ -80,7 +80,7 @@ func TestFacts_TheRunRefusesAnArgument(t *testing.T) {
 	h := newHarness(t)
 	h.flowIs(t, "def main(item):\n    facts(\"owner\")\n")
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.ErrorContains(t, outcome.err, "facts")
 }
@@ -95,7 +95,7 @@ func TestFacts_AVarThatTheRecordCannotHoldFailsTheCall(t *testing.T) {
 		return model.Project{Name: project, Vars: map[string]any{"ratio": math.NaN()}}
 	}
 
-	outcome := <-runInBackground(h.engine(t), testItem)
+	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
 	require.Error(t, outcome.err)
 	assert.NotContains(t, outcome.err.Error(), "GOT FACTS", "the call failed before the file used the facts")
@@ -130,7 +130,7 @@ func TestFacts_AReplayKeepsTheFactsOfTheFirstRead(t *testing.T) {
 
 	stop()
 	require.NoError(t, first.Shutdown())
-	require.Error(t, <-ended)
+	require.Error(t, receive(t, ended))
 
 	h.facts = ownedBy("bob")
 	next := h.engine(t)

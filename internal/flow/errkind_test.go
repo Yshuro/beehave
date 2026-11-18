@@ -162,7 +162,7 @@ func (deadlineGate) Run(ctx context.Context, _, _, _ string, _ GateJob) (GateRes
 	limited, cancel := context.WithTimeout(ctx, time.Millisecond)
 	defer cancel()
 
-	<-limited.Done()
+	hang(limited.Done())
 
 	return GateResult{}, fmt.Errorf("the gate ran out of time: %w", limited.Err())
 }

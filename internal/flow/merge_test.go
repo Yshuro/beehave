@@ -204,7 +204,7 @@ func TestRun_ACancelDuringTheWaitForAQueuedMergeEndsTheRun(t *testing.T) {
 	engine := harness.engine(t)
 
 	_, err := engine.Run(testItem, testProject)
-	<-done
+	receive(t, done)
 
 	require.Error(t, err)
 	assert.Less(t, len(harness.merge.lasts), queuedReads)
@@ -236,7 +236,7 @@ func TestAwaitQueued_ACancelDuringTheWaitTurnsOffTheQueuedMerge(t *testing.T) {
 	engine := harness.engine(t)
 
 	_, err := engine.Run(testItem, testProject)
-	<-done
+	receive(t, done)
 
 	require.Error(t, err)
 	assert.Equal(t, []string{testItem}, harness.merge.disarms, "the queued merge is turned off once, after the cancel")

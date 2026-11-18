@@ -122,7 +122,7 @@ func TestExampleTake_TheReviewComesFirstThenTheNoticeThenTheTakeAfterTheGraceAns
 	assert.Equal(t, []string{"--apply"}, flagsOf(rig.h.commands.requests), "only the notice has run")
 
 	answerTheGrace(t, rig, "RELEASE")
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.Equal(t, []string{"--apply", "--take"}, flagsOf(rig.h.commands.requests))
 }
@@ -134,7 +134,7 @@ func TestExampleTake_KeepFromTheAuthorStopsTheTakeAndNoClaimIsTried(t *testing.T
 	done := runTake(rig.h.engine(t), file)
 
 	answerTheGrace(t, rig, "KEEP")
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	assert.Equal(t, []string{"--apply"}, flagsOf(rig.h.commands.requests), "the notice ran and the take did not")
 }
@@ -144,7 +144,7 @@ func TestExampleTake_NoAnswerInTheGraceTimeTakesTheItem(t *testing.T) {
 
 	rig, file := takeRig(t)
 
-	outcome := <-runTake(graceOverEngine(t, rig.h), file)
+	outcome := receive(t, runTake(graceOverEngine(t, rig.h), file))
 
 	require.NoError(t, outcome.err)
 	assert.Equal(t, []string{"--apply", "--take"}, flagsOf(rig.h.commands.requests), "the clock ran out with no answer, so the take ran")
@@ -162,7 +162,7 @@ func TestExampleTake_ARefusalOfTheTakeForRepliesWithNoTokenHoldsTheItem(t *testi
 		return CommandOutput{}, nil
 	}
 
-	outcome := <-runTake(graceOverEngine(t, rig.h), file)
+	outcome := receive(t, runTake(graceOverEngine(t, rig.h), file))
 
 	require.NoError(t, outcome.err)
 	require.NotNil(t, outcome.result.Stopped)
@@ -178,7 +178,7 @@ func TestExampleTake_TheIdleAndGraceHoursAreOneAndTheItemIsPassedToTheTool(t *te
 	done := runTake(rig.h.engine(t), file)
 
 	answerTheGrace(t, rig, "RELEASE")
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 
 	first := strings.Join(rig.h.commands.requests[0].Run, " ")
 	assert.Equal(t, "remedy take 7 --me owner --idle 1 --grace 1 --item "+testItem+" --apply", first)
@@ -193,7 +193,7 @@ func TestExampleTake_ARefusedNoticeEndsTheItemBeforeTheGraceQuestion(t *testing.
 		return CommandOutput{RC: 2, Stdout: "REFUSE: not stale"}, nil
 	}
 
-	outcome := <-runTake(rig.h.engine(t), file)
+	outcome := receive(t, runTake(rig.h.engine(t), file))
 
 	require.NoError(t, outcome.err)
 	require.NotNil(t, outcome.result.Stopped)

@@ -90,7 +90,7 @@ func TestGatherUntil_TheDefaultAndAllWaitForEveryRun(t *testing.T) {
 			time.Sleep(10 * tickInterval)
 			assert.Empty(t, h.commands.ranBy(testItem), "the parent still waits for run 23")
 			close(release)
-			require.NoError(t, <-done)
+			require.NoError(t, receive(t, done))
 			assert.Equal(t, []string{"after 21:ok 22:ok 23:ok"}, h.commands.ranBy(testItem))
 		})
 	}
@@ -155,7 +155,7 @@ def main(item):
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, []string{"after 22:ok"}, h.commands.ranBy(testItem), "the outcomes recorded before the stop come back, whatever the runs say now")
 }
 

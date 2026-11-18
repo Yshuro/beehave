@@ -242,7 +242,7 @@ func TestRunStar_AReplayIssuesTheSameStepNamesAndRunsNoRecordedStepAgain(t *test
 
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.NoError(t, outcome.err)
 	assert.Equal(t, []string{"before", "after yes"}, h.commands.ran(), "the command before the wait ran once")
@@ -309,7 +309,7 @@ func TestRunStar_TheStepNamesOfEveryBuiltinMatchTheGoldenListOfTheStepsVersion(t
 	waitForTheOwner(t, h)
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, "star30", stepsVersion)
 	assert.Equal(t, goldenSteps, stepNames(t, engine), "the step names changed: bump the version of the module that owns the step in moduleTable (stepmodules.go) and update the list")
 

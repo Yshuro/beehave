@@ -118,7 +118,7 @@ func TestLoginStep_ACanceledRunEndsTheWaitForAReset(t *testing.T) {
 	require.NoError(t, harness.client(t, testVersion).Cancel(testItem))
 	harness.tick(t)
 
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.Error(t, outcome.err)
 	assert.Equal(t, 1, logins.count(), "the run ends in the wait and reads no more")

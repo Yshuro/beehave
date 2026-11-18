@@ -397,7 +397,7 @@ func TestClient_PollShowsAFailedPollAsTheNewestRun(t *testing.T) {
 
 // waitingPoll runs until DBOS cancels it.
 func waitingPoll(ctx dbos.Context, _ dbos.ScheduledWorkflowInput) (PollOutput, error) {
-	<-ctx.Done()
+	hang(ctx.Done())
 
 	return PollOutput{}, ctx.Err()
 }

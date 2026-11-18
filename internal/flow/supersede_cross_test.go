@@ -44,8 +44,8 @@ func TestSuperseded_AGateOfAnotherItemOfTheProjectIsNotStopped(t *testing.T) {
 
 	close(gated.release)
 
-	require.NoError(t, (<-other).err, "a gate of another item is not a gate of the same pull request")
-	require.NoError(t, (<-current).err)
+	require.NoError(t, receive(t, other).err, "a gate of another item is not a gate of the same pull request")
+	require.NoError(t, receive(t, current).err)
 	assert.EqualValues(t, 1, gated.stopped.Load(), "only the gate of the same item stopped")
 }
 
@@ -68,8 +68,8 @@ func TestSuperseded_AGateOfAnotherProjectIsNotStopped(t *testing.T) {
 
 	close(gated.release)
 
-	require.NoError(t, (<-foreign).err, "a gate of another project is not a gate of the same pull request")
-	require.NoError(t, (<-current).err)
+	require.NoError(t, receive(t, foreign).err, "a gate of another project is not a gate of the same pull request")
+	require.NoError(t, receive(t, current).err)
 	assert.EqualValues(t, 1, gated.stopped.Load())
 }
 
@@ -98,8 +98,8 @@ func TestSuperseded_AGateThatHasNoTipIsNotStoppedByAGateThatHasOne(t *testing.T)
 	// The gate of head B waits behind the gate with no tip. Nothing may stop it.
 	close(gated.release)
 
-	require.NoError(t, (<-unread).err, "a gate with no tip judges no head, so no head supersedes it")
-	require.NoError(t, (<-current).err)
+	require.NoError(t, receive(t, unread).err, "a gate with no tip judges no head, so no head supersedes it")
+	require.NoError(t, receive(t, current).err)
 	assert.Zero(t, gated.stopped.Load())
 }
 
@@ -161,7 +161,7 @@ func TestSuperseded_AGateWhoseReadOfTheHeadIsOldNeverStopsTheGateOfTheCurrentHea
 
 	close(gated.release)
 
-	require.NoError(t, (<-last).err, "the old read of gate B did not cancel the gate of the current head")
+	require.NoError(t, receive(t, last).err, "the old read of gate B did not cancel the gate of the current head")
 }
 
 // passThenHold passes the first gate and holds every later gate until its context ends.
@@ -180,7 +180,7 @@ func (g *passThenHold) Run(ctx context.Context, _, _, _ string, _ GateJob) (Gate
 		return GateResult{Passed: true, Head: gatedHead, Steps: commandStep(true)}, nil
 	}
 
-	<-ctx.Done()
+	hang(ctx.Done())
 
 	return GateResult{}, ctx.Err()
 }
@@ -214,7 +214,7 @@ func TestSuperseded_AReplayReadsTheHeadAndCancelsTheGatesNoMore(t *testing.T) {
 	waitForTheOwner(t, h)
 	eventually(t, func() bool { return client.Answer(testItem, "yes") == nil })
 
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 	assert.Len(t, h.forge.asked, reads, "the replay reads the recorded head and asks the forge nothing more")
 
 	older, err := dbos.RetrieveWorkflow[any](engine.ctx, "older-gate")

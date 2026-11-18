@@ -231,7 +231,7 @@ func TestRun_AnOpenRunOfTheItemIsJoinedNotStartedAgain(t *testing.T) {
 
 	require.NoError(t, client.Answer(testItem, "go"))
 
-	firstOutcome, secondOutcome := <-first, <-second
+	firstOutcome, secondOutcome := receive(t, first), receive(t, second)
 	require.NoError(t, firstOutcome.err)
 	require.NoError(t, secondOutcome.err)
 	assert.Equal(t, firstOutcome.result, secondOutcome.result)
@@ -282,8 +282,8 @@ func TestRun_OneAgentPerLoginAndAtMostMaxConcurrentInAll(t *testing.T) {
 			eventually(t, func() bool { return enqueuedPhases(t, engine) == 2-test.wantTotal })
 			release()
 
-			require.NoError(t, (<-first).err)
-			require.NoError(t, (<-second).err)
+			require.NoError(t, receive(t, first).err)
+			require.NoError(t, receive(t, second).err)
 			assert.Equal(t, test.wantLogin, harness.agents.maxLogin)
 			assert.Equal(t, test.wantTotal, harness.agents.maxTotal)
 		})
@@ -315,7 +315,7 @@ func TestRun_AnOtherVersionStrandsTheOpenRunAndEveryCommandSaysSo(t *testing.T) 
 	require.ErrorContains(t, other.Answer(testItem, "go"), "Start version v1 to finish it")
 
 	require.NoError(t, same.Answer(testItem, "go"))
-	require.NoError(t, (<-done).err)
+	require.NoError(t, receive(t, done).err)
 }
 
 func TestEngine_PinsTheApplicationVersionToTheBuildVersion(t *testing.T) {
@@ -387,7 +387,7 @@ func TestEngine_TheShutdownWaitsForAStartInFlight(t *testing.T) {
 	release()
 
 	require.NoError(t, whileHeld, "the library is not stopped while a start is in flight")
-	require.NoError(t, <-down)
+	require.NoError(t, receive(t, down))
 	assert.True(t, engine.stopped)
 }
 

@@ -95,7 +95,7 @@ func TestBeat_AFailedRenewalKeepsTheRunWhileTheLeaseCanStillBeLive(t *testing.T)
 	assert.True(t, alive(run.agent))
 
 	run.finish()
-	require.NoError(t, (<-run.done).err)
+	require.NoError(t, receive(t, run.done).err)
 }
 
 func TestBeat_RenewalsThatFailUntilTheLeaseEndsCancelTheStepWithinOneTick(t *testing.T) {
@@ -114,7 +114,7 @@ func TestBeat_RenewalsThatFailUntilTheLeaseEndsCancelTheStepWithinOneTick(t *tes
 	assert.Empty(t, run.engine.holds.snapshot())
 	requireDies(t, run.agent)
 
-	outcome := <-run.done
+	outcome := receive(t, run.done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	require.ErrorContains(t, outcome.err, errFake.Error())
 	assert.Zero(t, countOf(run.harness.life.seen(), "release"), "the claim is not ours to release")
@@ -130,7 +130,7 @@ func TestBeat_ATrackerThatNamesAnotherHolderCancelsTheStepAtOnce(t *testing.T) {
 
 	requireDies(t, run.agent)
 
-	outcome := <-run.done
+	outcome := receive(t, run.done)
 	require.ErrorIs(t, outcome.err, errClaimLost)
 	require.ErrorContains(t, outcome.err, "it holds no claim row")
 }

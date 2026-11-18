@@ -63,7 +63,7 @@ func (g hostGate) Run(ctx context.Context, _, _, host string, job GateJob) (Gate
 
 	if first {
 		g.started <- struct{}{}
-		<-ctx.Done()
+		hang(ctx.Done())
 
 		return GateResult{}, ctx.Err()
 	}
@@ -99,7 +99,7 @@ func TestGateJob_ACrashAfterTheSubmitAndBeforeTheWaitIsRecordedSubmitsOnceAndThe
 		ended <- runErr
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	client := h.client(t, testVersion)
 	require.NoError(t, client.Cancel(testItem))
@@ -154,7 +154,7 @@ func TestGateJob_ARestartAfterAConfigEditFinishesTheGateWithTheListOfTheJobAndNo
 		ended <- runErr
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	client := h.client(t, testVersion)
 	require.NoError(t, client.Cancel(testItem))
@@ -199,7 +199,7 @@ func TestGateJob_AResumedRunGatesOnTheHostThatItRecordedAndStartsNoHostAgain(t *
 		ended <- runErr
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	client := h.client(t, testVersion)
 	require.NoError(t, client.Cancel(testItem))
@@ -251,7 +251,7 @@ func TestGateJob_AResumedMainUsesTheHostThatTheReplayedRecordNamesForEveryLaterS
 		ended <- runErr
 	}()
 
-	<-gated.started
+	receive(t, gated.started)
 
 	client := h.client(t, testVersion)
 	require.NoError(t, client.Cancel(testItem))

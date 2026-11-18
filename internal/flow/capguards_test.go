@@ -199,7 +199,7 @@ func TestExample_ACappedSettleStopsTheItemWithARefuse(t *testing.T) {
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
-	outcome := <-done
+	outcome := receive(t, done)
 
 	require.Error(t, outcome.err)
 	assert.Contains(t, outcome.err.Error(), "REFUSE")
