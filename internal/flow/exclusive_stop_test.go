@@ -118,6 +118,53 @@ func TestExclusiveStop_ACallThatFailsEndsAsTheStopOnlyWhenTheEngineStopped(t *te
 	}
 }
 
+func TestExclusiveStop_ABatchGateCallThatFailsEndsAsTheStopOnlyWhenTheEngineStopped(t *testing.T) {
+	t.Parallel()
+
+	// The call of a batch gate runs its recorded step outside a run, so the step fails at once and the test sets the state of the engine and nothing else.
+	in := ExclusiveInput{Kind: kindBatchGate, Project: testProject, Item: testItem, GateRun: []string{"check-all"}}
+
+	for name, run := range map[string]func(*Engine) (ExclusiveOutput, error){
+		"the exclusive run of the batch gate": func(e *Engine) (ExclusiveOutput, error) { return e.exclusive(e.ctx, in) },
+		"the host job of the batch gate":      func(e *Engine) (ExclusiveOutput, error) { return e.hostJob(e.ctx, in) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newBatchRig(t)
+			engine := rig.engine(t)
+
+			out, err := run(engine)
+
+			require.NoError(t, err, "while the engine runs, a failed batch gate call is a result of the run")
+			require.NotNil(t, out.Failure)
+
+			require.NoError(t, engine.Shutdown())
+
+			out, err = run(engine)
+
+			require.ErrorIs(t, err, context.Canceled, "once the engine stopped, the failed batch gate call is the stop")
+			assert.Nil(t, out.Failure, "the stop is no saved failure of the batch gate")
+		})
+	}
+}
+
+func TestTrackGate_OnlyAGateAndABatchGateGetAContextThatTheEndOfTheRunCancels(t *testing.T) {
+	t.Parallel()
+
+	engine := newHarness(t).opened(t)
+
+	for kind, tracked := range map[string]bool{kindGate: true, kindBatchGate: true, kindMerge: false, kindCommand: false} {
+		run, end := engine.trackGate(engine.ctx, ExclusiveInput{Kind: kind})
+
+		require.NoError(t, run.Err(), "the run of kind %s runs until its end", kind)
+
+		end()
+
+		assert.Equal(t, tracked, run.Err() != nil, "the end of a run of kind %s cancels its context only when the kind is tracked", kind)
+	}
+}
+
 func TestExclusiveStop_ACallThatSucceedsIsSavedAsASuccessAfterTheEngineStopped(t *testing.T) {
 	t.Parallel()
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"go.starlark.net/starlarkstruct"
 
 	"github.com/tobocop2/beehave/internal/batch"
+	"github.com/tobocop2/beehave/internal/host"
 	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
@@ -70,14 +72,15 @@ func (s *script) batchMerge(b *starlark.Builtin, args starlark.Tuple, kwargs []s
 		return nil, err
 	}
 
-	deps := batch.Deps{Git: git, Gate: batchGate{s: s, run: call.gateRun}, Base: &batchBase{s: s, call: call}, Steps: stepRecorder{s: s, call: call.name}, Name: call.name}
+	losses := &callLosses{}
+	deps := batch.Deps{Git: git, Gate: batchGate{s: s, run: call.gateRun, losses: losses}, Base: &batchBase{s: s, call: call}, Steps: stepRecorder{s: s, call: call.name}, Name: call.name}
 
 	done, err := batch.Run(s.ctx, deps, call.members)
 	if err != nil {
 		return nil, fmt.Errorf("batch_merge %q: %w", call.name, err)
 	}
 
-	return s.batchOutcome(call, done)
+	return s.batchOutcome(call, done, losses.records)
 }
 
 // batchRefusal asks whether the gate of the call may run on this machine. It is the first recorded step of the call: a fresh call is refused
@@ -95,7 +98,8 @@ func (s *script) batchRefusal(call batchCall) error {
 
 // batchOutcome proves the landing of the merged members, reads the issues of the landed items and builds the result. The batch has landed and
 // the merge cannot be undone, so an unproven member and a finding of the read go into the result and never fail the call.
-func (s *script) batchOutcome(call batchCall, done batch.Result) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
+// losses are the records of the lost gate jobs of the call.
+func (s *script) batchOutcome(call batchCall, done batch.Result, losses []hostLoss) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	unproven, err := s.batchProof(call, done)
 	if err != nil {
 		return nil, fmt.Errorf("batch_merge %q: %w", call.name, err)
@@ -106,7 +110,7 @@ func (s *script) batchOutcome(call batchCall, done batch.Result) (starlark.Value
 		return nil, fmt.Errorf("batch_merge %q: %w", call.name, err)
 	}
 
-	return batchResult(done, report, unproven), nil
+	return batchResult(done, report, unproven, losses)
 }
 
 // batchProof checks as one recorded step that each merged member is on the base, so a replay returns the first proof and does not read the forge again.
@@ -254,23 +258,41 @@ func members(v starlark.Value) ([]batch.Member, error) {
 // batchResult turns the result of a batch and the report of the read after it into the struct of the builtin.
 // `findings` holds one line for each problem of the issues, `note` says why no read ran, and `unproven` holds an item and a reason for each merged member
 // that is neither in the history of the base nor on the vehicle commit. An item of `merged` that is also named in `unproven` has not landed.
-func batchResult(done batch.Result, report batch.Report, unproven []batch.Outcome) starlark.Value { //nolint:ireturn // the builtin contract of starlark-go
-	merged := make([]starlark.Value, len(done.Merged))
-	for i, item := range done.Merged {
-		merged[i] = starlark.String(item)
+// `host_loss` lists the record of each lost gate job of the call, and `host_losses` is the count of the host losses of the item tree that the last record read, or 0.
+func batchResult(done batch.Result, report batch.Report, unproven []batch.Outcome, losses []hostLoss) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
+	recorded, count, err := lossFields(losses)
+	if err != nil {
+		return nil, err
 	}
 
 	return starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
-		"merged":   starlark.NewList(merged),
-		"rejected": outcomes(done.Rejected),
-		"deferred": outcomes(done.Deferred),
-		"tip":      starlark.String(done.Tip.Commit),
-		treeName:   starlark.String(done.Tip.Tree),
-		"gates":    starlark.MakeInt(done.Gates),
-		"findings": textList(report.Findings),
-		"note":     starlark.String(report.Note),
-		"unproven": outcomes(unproven),
-	})
+		"merged":      textList(done.Merged),
+		"rejected":    outcomes(done.Rejected),
+		"deferred":    outcomes(done.Deferred),
+		"tip":         starlark.String(done.Tip.Commit),
+		treeName:      starlark.String(done.Tip.Tree),
+		"gates":       starlark.MakeInt(done.Gates),
+		"findings":    textList(report.Findings),
+		"note":        starlark.String(report.Note),
+		"unproven":    outcomes(unproven),
+		hostLossKey:   recorded,
+		hostLossesKey: count,
+	}), nil
+}
+
+// lossFields is the list of the loss records of a call and the count that the last record read, or 0 when the call lost nothing.
+func lossFields(losses []hostLoss) (starlark.Value, starlark.Value, error) { //nolint:ireturn // the values are any of the Starlark types
+	records, count := make([]any, len(losses)), 0
+	for i, loss := range losses {
+		records[i], count = loss.Loss, loss.Losses
+	}
+
+	recorded, err := toStarlark(records)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the host loss records of batch_merge: %w", err)
+	}
+
+	return recorded, starlark.MakeInt(count), nil
 }
 
 // textList turns lines of text into a Starlark list of strings.
@@ -315,35 +337,158 @@ func (r stepRecorder) Step(_ context.Context, name string, run func() ([]byte, e
 }
 
 // batchGate gates a union commit: it puts the commit in the worktree of the item, then runs the project gate or the program of gate_run.
+// losses holds the proven losses of the whole call, over every gate of it.
 type batchGate struct {
-	s   *script
-	run []string
+	s      *script
+	run    []string
+	losses *callLosses
+}
+
+// callLosses holds each lost gate job of one batch_merge call that has a proof, in order, and its record for the result of batch_merge.
+// The runner gates one union at a time, and a replay calls the gates again in the same order and reads each recorded <call>/host-loss step,
+// so a restart rebuilds the same list and keeps the count of the call.
+type callLosses struct {
+	jobs    []LostJob
+	records []hostLoss
 }
 
 // Run queues the checkout and the gate on the exclusive queue, so no merge of the repository starts while the batch gate runs.
+// A gate whose job was lost and has a proof is recorded in the item run, then runs once more on the same commit, so the verdict that never came
+// is replaced and the batch counts one gate. A second proven loss in one call, on this gate or on an earlier gate of the call, is a void outcome
+// on the tree of the union: the runner ends the call with ErrGateVoid and blames no member.
 func (g batchGate) Run(ctx context.Context, in batch.GateInput) (batch.GateOutcome, error) {
-	ran, err := g.s.e.queueExclusive(ctx, ExclusiveInput{Kind: kindBatchGate, Project: g.s.in.Project, Item: g.s.in.Item, BuildHost: g.s.hostChosen, Commit: in.Commit, GateRun: g.run})
+	queued := ExclusiveInput{Kind: kindBatchGate, Project: g.s.in.Project, Item: g.s.in.Item, BuildHost: g.s.hostChosen, Commit: in.Commit, GateRun: g.run}
 
-	return ran.Batch, err
+	for run := 1; ; run++ {
+		ran, err := g.s.e.queueExclusive(ctx, queued)
+		if err != nil || ran.Lost == nil {
+			return ran.Batch, err
+		}
+
+		if err := g.loss(queued, gateRunName(in.Step, run), *ran.Lost); err != nil {
+			return batch.GateOutcome{}, err
+		}
+
+		if proven := g.losses.jobs; len(proven) == lostJobsOfACall {
+			return batch.GateOutcome{Tree: in.Tree, Void: twoLosses(proven[0], proven[1])}, nil
+		}
+	}
 }
 
-// batchGateOutcome puts the commit in the worktree of the item, then runs the project gate or the program of gate_run.
-func (e *Engine) batchGateOutcome(ctx context.Context, in ExclusiveInput) (batch.GateOutcome, error) {
-	tree, err := e.deps.Batch.Checkout(ctx, in.Project, in.Item, in.Commit)
+// lostJobsOfACall is the number of proven losses of one batch_merge call that end the call: the first loss runs its gate again, and the second ends the call.
+const lostJobsOfACall = 2
+
+// gateRunName names the records of run number n of the batch gate of the step: the step itself for the first run, and step@n for a rerun.
+func gateRunName(step string, n int) string {
+	if n == 1 {
+		return step
+	}
+
+	return step + readSeparator + strconv.Itoa(n)
+}
+
+// loss waits for the proof of a lost job of the batch gate, in the item run, records it as the step <call>/host-loss and keeps the job and the record
+// in the losses of the call.
+func (g batchGate) loss(in ExclusiveInput, call string, lost LostJob) error {
+	proven, record, err := g.s.e.provenLoss(g.s.ctx, in, call, lost)
+	if err != nil {
+		return fmt.Errorf("the batch gate lost its job: %w", err)
+	}
+
+	g.losses.jobs = append(g.losses.jobs, proven)
+	g.losses.records = append(g.losses.records, record)
+
+	return nil
+}
+
+// twoLosses is the reason of a batch_merge call whose gates lost two jobs with a proof. It names the host and the proof of each job.
+func twoLosses(first, second LostJob) string {
+	return fmt.Sprintf("the host lost two gate jobs of this batch: the gate job %s was lost on %s and the proof is %s; the gate job %s was lost on %s and the proof is %s",
+		first.Job, first.Host, first.Proof.Kind, second.Job, second.Host, second.Proof.Kind)
+}
+
+// batchStart is what the first step of the project gate of a batch records: the tree of the checked-out union commit and the host job that the gate submitted.
+// A replay reads it and checks out and submits nothing.
+type batchStart struct {
+	Tree string  `json:"tree"`
+	Job  GateJob `json:"job"`
+}
+
+// batchFinish is the record of the step that waits for the host job of a batch gate: the outcome, or the job that the wait lost.
+// A loss is a value and not an error, because a step error is replayed as text and a later step could not read it.
+type batchFinish struct {
+	Outcome batch.GateOutcome `json:"outcome"`
+	Lost    *LostJob          `json:"lost,omitempty"`
+}
+
+// batchGateCall runs the gate of a union as recorded steps. A gate_run program has no host job and is one step, batch_gate.
+// The project gate is two, as for a gate call: batch_gate:job checks out the commit and submits the host job, and batch_gate waits for that job.
+// A crash between the two leaves the job on record, so the host gets one job. A wait that ended as lost is followed by the wait for its proof (holdLost),
+// in this run, so the host slot and the exclusive slot of the project stay held while the job may still run.
+func (e *Engine) batchGateCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) (batch.GateOutcome, error) {
+	if len(in.GateRun) > 0 {
+		return runStep(e, ctx, kindBatchGate, func(c context.Context) (batch.GateOutcome, error) { return e.programBatchOutcome(c, in) })
+	}
+
+	start, err := runStep(e, ctx, batchGateJobName, func(c context.Context) (batchStart, error) { return e.startBatchGate(c, in) })
 	if err != nil {
 		return batch.GateOutcome{}, err
 	}
 
-	if len(in.GateRun) == 0 {
-		gated, err := e.deps.Gate.Run(ctx, in.Project, in.Item, in.BuildHost, GateJob{})
+	finished, err := runStep(e, ctx, kindBatchGate, func(c context.Context) (batchFinish, error) { return e.finishBatchGate(c, in, start) })
+	if err != nil || finished.Lost == nil {
+		return finished.Outcome, err
+	}
 
-		void := voidReason(gated)
-		if void != "" && gated.Tree == "" {
-			// A voided gate reads no tree. The checked-out tree is the tree of the union, so the batch reads the void and not a mismatch.
-			gated.Tree = tree
-		}
+	return e.endBatchLost(ctx, in, start, *finished.Lost, out)
+}
 
-		return batch.GateOutcome{Tree: gated.Tree, Passed: gated.Passed && everyStepIsAPass(gated.Steps), Report: gated.Report, Void: void}, err
+// endBatchLost waits for the proof that the lost job of a batch gate can no longer run, and stores the job in out. A proof gives the void outcome
+// of the gate. A wait that reaches host.lost_job_wait with no proof, or that fails, gives no outcome, as endLost does for a gate.
+func (e *Engine) endBatchLost(ctx dbos.Context, in ExclusiveInput, start batchStart, lost LostJob, out *ExclusiveOutput) (batch.GateOutcome, error) {
+	held, err := e.holdLost(ctx, in, lost)
+	out.Lost = &held
+
+	if err != nil || held.Limit {
+		return batch.GateOutcome{}, err
+	}
+
+	return lostOutcome(start.Tree, held), nil
+}
+
+// startBatchGate puts the union commit in the worktree of the item, then submits the host job of the project gate on it.
+func (e *Engine) startBatchGate(ctx context.Context, in ExclusiveInput) (batchStart, error) {
+	tree, err := e.deps.Batch.Checkout(ctx, in.Project, in.Item, in.Commit)
+	if err != nil {
+		return batchStart{}, err
+	}
+
+	job, err := e.deps.Gate.Submit(ctx, in.Project, in.Item, in.BuildHost, "")
+
+	return batchStart{Tree: tree, Job: job}, err
+}
+
+// finishBatchGate waits for the host job of the batch gate and judges it. A wait that ended as lost while the run still runs gives the lost job and no outcome.
+func (e *Engine) finishBatchGate(ctx context.Context, in ExclusiveInput, start batchStart) (batchFinish, error) {
+	gated, err := e.deps.Gate.Run(ctx, in.Project, in.Item, in.BuildHost, start.Job)
+	if errors.Is(err, host.ErrLost) && ctx.Err() == nil {
+		return batchFinish{Lost: batchLostJobOf(in, start.Job, err)}, nil
+	}
+
+	void := voidReason(gated)
+	if void != "" && gated.Tree == "" {
+		// A voided gate reads no tree. The checked-out tree is the tree of the union, so the batch reads the void and not a mismatch.
+		gated.Tree = start.Tree
+	}
+
+	return batchFinish{Outcome: batch.GateOutcome{Tree: gated.Tree, Passed: gated.Passed && everyStepIsAPass(gated.Steps), Report: gated.Report, Void: void}}, err
+}
+
+// programBatchOutcome puts the union commit in the worktree of the item, then runs the program of gate_run on it.
+func (e *Engine) programBatchOutcome(ctx context.Context, in ExclusiveInput) (batch.GateOutcome, error) {
+	tree, err := e.deps.Batch.Checkout(ctx, in.Project, in.Item, in.Commit)
+	if err != nil {
+		return batch.GateOutcome{}, err
 	}
 
 	out, err := e.deps.Commands.Run(ctx, CommandRequest{Project: in.Project, Item: in.Item, Run: in.GateRun, Gate: true})

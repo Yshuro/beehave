@@ -185,9 +185,10 @@ func (r *runner) gate(ctx context.Context, u Union) (GateOutcome, error) {
 	var out GateOutcome
 
 	in := gateInput{Tree: u.Tree, Members: u.Included}
+	name := r.stepName("gate")
 
-	err := step(ctx, r.deps.Steps, r.stepName("gate"), in, func() (GateOutcome, error) {
-		return r.deps.Gate.Run(ctx, GateInput{Commit: u.Commit, Tree: u.Tree})
+	err := step(ctx, r.deps.Steps, name, in, func() (GateOutcome, error) {
+		return r.deps.Gate.Run(ctx, GateInput{Commit: u.Commit, Tree: u.Tree, Step: name})
 	}, &out)
 	if err != nil {
 		return GateOutcome{}, err
