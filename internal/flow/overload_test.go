@@ -1,0 +1,136 @@
+package flow
+
+import (
+	"testing"
+	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/agent"
+)
+
+// overloaded is a run that the provider stopped with an overload, as the runner reports it: the outcome limited and a limit with no reset time.
+func overloaded() agent.Result {
+	return agent.Result{
+		Outcome: agent.OutcomeLimited, ExitCode: 1, Session: "sess-overloaded", Note: "the provider refused more work at its overload, and the agent gave no reset time",
+		Limit: &agent.Limit{Kind: agent.LimitOverload},
+	}
+}
+
+func TestOverload_AnOverloadThatClearsAfterOneBackoffRunsTheStepAgainOnTheSameLogin(t *testing.T) {
+	t.Parallel()
+
+	var asked []string
+
+	h := limitedHarness(t, limitReset)
+	h.logins = fakeLogins{login: testLogin, reset: limitReset.Add(24 * time.Hour), asked: &asked}
+	inTurn(h, overloaded(), exited)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.NoError(t, err)
+
+	requests := h.agents.seen()
+	require.Len(t, requests, 2, "the overloaded run, then the rerun after one backoff")
+	assert.Equal(t, requests[0].Login, requests[1].Login, "the rerun keeps the login")
+	assert.Empty(t, asked, "the usage windows of the pool say nothing about an overload")
+
+	steps := recordsOfTestRun(t, engine)
+	assert.Equal(t, 1, sleepsIn(steps), "one durable sleep, the first step of the backoff")
+
+	record := firstLimitRecord(t, steps)
+	assert.Equal(t, limitReset.Add(time.Millisecond).Format(time.RFC3339Nano), record["wait_until"], "the wait ends one first backoff step after the wall clock")
+	assert.Nil(t, record["reset_passed"], "an overload has no reset time that can pass")
+}
+
+func TestOverload_AnOverloadThatStaysPastTheCeilingFailsTheStepAndNamesTheLimit(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	inTurn(h, overloaded())
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.ErrorContains(t, err, "the agent step of item "+testItem+" stopped at the overload of login "+testLogin+", and neither the agent nor the usage read gives a reset time")
+	require.ErrorContains(t, err, "Run beehave resume "+testItem+" when the limit is gone")
+	assert.Len(t, h.agents.seen(), overloadWaits+1, "the first run and one rerun after each wait of the backoff")
+	assert.Equal(t, overloadWaits, sleepsIn(recordsOfTestRun(t, engine)), "one sleep for each wait of the backoff")
+}
+
+func TestOverload_TheBackoffDoublesAndAnotherLimitBetweenTwoOverloadsStartsItAgain(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	inTurn(h, overloaded(), overloaded(), limited(limitReset.Add(-time.Hour), 0), overloaded(), exited)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.NoError(t, err)
+	assert.Len(t, h.agents.seen(), 5)
+
+	waits := map[string]string{}
+
+	for _, step := range recordsOfTestRun(t, engine) {
+		record, isText := step.Output.(string)
+		if isText && step.StepName != sleepStep {
+			waits[step.StepName] = record
+		}
+	}
+
+	assert.Contains(t, waits["agent:fix#1/limit1.0"], limitReset.Add(time.Millisecond).Format(time.RFC3339Nano), "the first overload waits one step")
+	assert.Contains(t, waits["agent:fix#1/limit1.1"], limitReset.Add(2*time.Millisecond).Format(time.RFC3339Nano), "the second in a row waits two")
+	assert.Contains(t, waits["agent:fix#1/limit1.3"], limitReset.Add(time.Millisecond).Format(time.RFC3339Nano), "an overload after a dated limit waits one step again")
+}
+
+func TestOverload_TheStatusOfAWaitingRunShowsTheOverloadAndTheNextTry(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	h.overload = time.Hour
+	inTurn(h, overloaded(), exited)
+
+	engine := h.engine(t)
+	client := h.client(t, testVersion)
+	done := runInBackground(engine, testItem)
+
+	var steps RunSteps
+
+	waitOn(t, waiting[struct{}]{what: "the run to show the overload wait", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		var err error
+
+		steps, err = client.Steps(testRun)
+
+		return struct{}{}, err == nil && steps.LimitWait != nil, nil
+	}})
+
+	assert.Contains(t, steps.Notes(), "waits for the overload of login "+testLogin+" until "+limitReset.Add(time.Hour).Format(time.RFC3339))
+
+	require.NoError(t, engine.Shutdown())
+	receive(t, done)
+}
+
+func TestOverload_AResultThatNoWaitCuresFailsAtOnceWithNoWait(t *testing.T) {
+	t.Parallel()
+
+	denied := agent.Result{Outcome: agent.OutcomeExited, ExitCode: 1, Note: "the provider asks for usage credits, and no wait buys them: add usage credits or use another model"}
+	h := limitedHarness(t, limitReset)
+	inTurn(h, denied)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.ErrorContains(t, err, "usage credits")
+	assert.Len(t, h.agents.seen(), 1, "no rerun")
+
+	for _, step := range recordsOfTestRun(t, engine) {
+		assert.NotContains(t, step.StepName, "/limit", "no limit step, so no wait")
+	}
+}
