@@ -100,6 +100,8 @@ func withSync(t *testing.T, rig *roundRig, script *syncScript) {
 	t.Helper()
 
 	rig.setRound("base", syncRoundBase)
+	// The checks before review of each child compare its head with the round base. With no such ref the child fails there, before its turn, and ends on its own.
+	rig.repo.must(t, "update-ref", "refs/remotes/origin/"+syncRoundBase, rig.kids.base)
 
 	script.head = rig.heads["3"]
 	script.tip = rig.kids.base
@@ -560,8 +562,6 @@ func TestRoundSync_AHeldRoundGathersItsOpenRunAndCallsNoSyncInALaterPass(t *test
 		}
 	}
 	withSync(t, rig, script)
-	// The checks before review of each child compare its head with the round base. With no such ref the child fails there, before its turn, and ends on its own.
-	rig.repo.must(t, "update-ref", "refs/remotes/origin/"+syncRoundBase, rig.kids.base)
 
 	_, _, err := runSync(t, rig, false)
 	require.NoError(t, err)
