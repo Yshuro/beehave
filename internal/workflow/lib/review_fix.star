@@ -53,6 +53,10 @@ def stopped_before(item, name, head, guard):
 VOID_RERUNS = 2
 VOID_ASKS = 3
 
+# A void gate with a host cause is a lost host job that the engine proved. The loop reruns it with no cost to the item, and stops the item
+# when the engine counts HOST_LOSS_LIMIT host losses in the tree of the run. The count is the host_losses field of the gate result; the loop keeps none of its own.
+HOST_LOSS_LIMIT = 5
+
 def is_void(check):
     return not check.passed and not [s for s in check.steps if s["status"] == "fail"] and [s for s in check.steps if s["status"] == "unknown"] != []
 
@@ -60,20 +64,46 @@ def void_names(check):
     names = [s["name"] for s in check.steps if s["status"] == "unknown"]
     return ", ".join(names) if names else "unknown"
 
-def ended(head, gate = None, review = None, stopped = False, exhausted = False, rejected = False, design = None, held = ""):
-    """The result of the loop. head is the commit that the last step of the loop judged. gate is the last gate of a candidate, and it is None when the loop ended before the first one."""
-    return struct(head = head, stopped = stopped, exhausted = exhausted, rejected = rejected, design = design, held = held, gate = gate, review = review)
+def ended(loop, head, gate = None, review = None, stopped = False, exhausted = False, rejected = False, design = None, held = ""):
+    """The result of the loop. head is the commit that the last step of the loop judged. gate is the last gate of a candidate, and it is None when the loop ended before the first one.
+    host_losses is the highest count that a gate of the loop read, and host_lost is true when HOST_LOSS_LIMIT stopped the reruns."""
+    return struct(head = head, stopped = stopped, exhausted = exhausted, rejected = rejected, design = design, held = held, gate = gate, review = review, host_losses = loop.host["losses"], host_lost = loop.host["lost"])
 
 def sent_back(findings, mechanism = "", gate = None, review = None, due = True):
     """The result of a step that sends the head back to a fix: the findings and the mechanism that they are about. due is false only for a head that needs no fix."""
     return struct(end = None, due = due, findings = findings, mechanism = mechanism, gate = gate, review = review)
 
+def is_host_void(check):
+    return is_void(check) and len(check.host_loss) > 0
+
+def note_losses(loop, check):
+    """Keeps the highest host_losses that a gate of the loop read."""
+    loop.host["losses"] = max(loop.host["losses"], check.host_losses)
+
 def check_gate(loop):
-    """Runs the gate of the candidate on the base and reruns it while it is void. Returns the first result that is not void, or stops the item after the bound."""
+    """Runs the gate of the candidate on the base and reruns it while it is void. Returns the first result that is not void, or stops the item after the bound.
+    A void gate with a host cause reruns as candidate-gate-host-<k> and takes no plain attempt. The loop returns it once its host_losses reach HOST_LOSS_LIMIT.
+    The highest host_losses of every gate that ran goes to loop.host."""
     check = gate(name = "candidate-gate", base = loop.base)
-    for attempt in range(1, VOID_RERUNS + VOID_ASKS + 1):
+    note_losses(loop, check)
+    hosts = 0
+    attempt = 0
+    for _ in range(HOST_LOSS_LIMIT + VOID_RERUNS + VOID_ASKS + 1):
         if not is_void(check):
             return check
+
+        if is_host_void(check):
+            if check.host_losses >= HOST_LOSS_LIMIT:
+                return check
+
+            hosts += 1
+            check = gate(name = "candidate-gate-host-%d" % hosts, base = loop.base)
+            note_losses(loop, check)
+            continue
+
+        attempt += 1
+        if attempt > VOID_RERUNS + VOID_ASKS:
+            break
 
         if attempt > VOID_RERUNS:
             wait(
@@ -82,6 +112,7 @@ def check_gate(loop):
             )
 
         check = gate(name = "candidate-gate-void-%d" % attempt, base = loop.base)
+        note_losses(loop, check)
 
     # A gate that is still void after the reruns and the asks gave no verdict about the code. No fix agent reads its report.
     if is_void(check):
@@ -129,23 +160,23 @@ def check_review(loop, check, inner, outer):
     """Runs the full review of the candidate that passed every other check. Returns the end of the loop, or the findings for the next fix."""
     lane = inner.lane
     if stopped_before(loop.item, "before-review-%d" % outer, check.head, loop.guard) != None:
-        return struct(end = ended(check.head, stopped = True, gate = check))
+        return struct(end = ended(loop, check.head, stopped = True, gate = check))
 
     review = agent(name = "candidate-review", **review_args(loop, check.head, lane.violations, "the whole pull request", loop.review_outputs))
     capped(review, "review", loop.item)
 
     # A reject ends the loop with no fix round. The caller holds the item with the text of the review as the reason.
     if review.verdict == "reject":
-        return struct(end = ended(check.head, rejected = True, gate = check, review = review))
+        return struct(end = ended(loop, check.head, rejected = True, gate = check, review = review))
 
     # The hook sees every full review at once, so a bad round ends the loop before the next fix lane starts.
     held = loop.review_check(review) if loop.review_check != None else ""
     if held != "":
-        return struct(end = ended(check.head, held = held, gate = check, review = review))
+        return struct(end = ended(loop, check.head, held = held, gate = check, review = review))
 
     # A read-only step that changed the folder is a violation of this round, the last scoped review included: the approve of that review is not clean.
     if review.verdict == "approve" and lane.violations == "" and review.violations == "" and inner.breach == "":
-        return struct(end = ended(check.head, gate = check, review = review))
+        return struct(end = ended(loop, check.head, gate = check, review = review))
 
     return sent_back(with_violations(review.text, inner.breach, review.violations, lane.violations), mechanism_of(loop, review), check, review)
 
@@ -153,6 +184,12 @@ def check_candidate(loop, inner, outer):
     """Runs the full checks of the candidate once, in order: the gate on the base, the checks before review, each check of the caller, then the full review.
     The first entry with findings sends the candidate back, and the entries after it do not run. Findings that the last scoped review left open go with them."""
     check = check_gate(loop)
+
+    # A host report is no finding of the code: a fix agent never reads it. The item stops, and the caller decides what the loss costs.
+    if is_host_void(check):
+        loop.host["lost"] = True
+        return struct(end = ended(loop, check.head, gate = check))
+
     if not check.passed:
         return sent_back(with_violations(check.report, inner.open), gate = check)
 
@@ -174,7 +211,7 @@ def design_round(loop, pending, fixes, decided, outer, lane):
         return pending
 
     if stopped_before(loop.item, "before-design-%d" % outer, lane.head_sha, loop.guard) != None:
-        return struct(end = ended(lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
+        return struct(end = ended(loop, lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
 
     design = agent(
         name = "design",
@@ -197,7 +234,7 @@ def design_round(loop, pending, fixes, decided, outer, lane):
         fail("REFUSE: the design step wrote the decision %r. Use one of: %s. Run beehave resume %s." % (design.decision, ", ".join(DECISIONS), loop.item.id))
 
     if design.decision != "keep":
-        return struct(end = ended(lane.head_sha, gate = pending.gate, review = pending.review, design =struct(mechanism = mechanism, decision = design.decision, reason = design.reason)))
+        return struct(end = ended(loop, lane.head_sha, gate = pending.gate, review = pending.review, design =struct(mechanism = mechanism, decision = design.decision, reason = design.reason)))
 
     decided[mechanism] = True
     return sent_back("Design decision for %s: keep and patch. %s\n\n%s" % (mechanism, design.reason, pending.findings), mechanism, pending.gate, pending.review)
@@ -209,7 +246,7 @@ def scoped_fix(loop, pending, fixes, decided, outer, inner, lane):
         return pending
 
     if stopped_before(loop.item, "before-fix-%d" % outer, lane.head_sha, loop.guard) != None:
-        return struct(end = ended(lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
+        return struct(end = ended(loop, lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
 
     # The fixes after candidate k are fix round k, and the fixes inside candidate 1 are round 1. Rounds 1 to 3 resume the implementer on sonnet; later rounds start fresh on opus.
     round = max(outer - 1, 1)
@@ -246,14 +283,14 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
             lane = fixed.lane
 
         if stopped_before(loop.item, "before-scoped-review-%d" % outer, lane.head_sha, loop.guard) != None:
-            return struct(end = ended(lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
+            return struct(end = ended(loop, lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
 
         name = FIRST_REVIEW if first else "scoped-review-%d" % inner
         scope = "the diff of the implementer" if first else "the diff of the last fix"
         review = agent(name = name, **review_args(loop, lane.head_sha, lane.violations, scope, []))
         capped(review, "review", loop.item)
         if review.verdict == "reject":
-            return struct(end = ended(lane.head_sha, rejected = True, gate = pending.gate, review = review))
+            return struct(end = ended(loop, lane.head_sha, rejected = True, gate = pending.gate, review = review))
 
         if review.verdict == "approve" and lane.violations == "" and review.violations == "":
             return struct(end = None, lane = lane, open = "", breach = "")
@@ -264,7 +301,7 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     return struct(end = None, lane = lane, open = pending.findings, breach = review.violations)
 
 def review_fix(item, impl, review_prompt, fix_prompt, base, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None, checks = []):
-    """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate and review. docs/design/durable-loop.md describes the loop.
+    """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
 
     base is the base branch of the item. The gate of each candidate runs on it, and the checks before review compare the head with origin/<base>.
     rounds caps the candidates. With 0 the loop runs no agent and ends exhausted at the head of the implementer. checks lists functions of one argument, the passed gate, that run after the checks before review and before the full review.
@@ -294,6 +331,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, rounds = 6, follow_u
         facts = facts,
         review_check = review_check,
         checks = checks,
+        host = {"losses": 0, "lost": False},
         review_cap = rounds * (MAX_INNER + 1),
         fix_cap = rounds * MAX_INNER,
     )
@@ -312,4 +350,4 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, rounds = 6, follow_u
         if pending.end != None:
             return pending.end
 
-    return ended(lane.head_sha, exhausted = True, gate = pending.gate, review = pending.review)
+    return ended(loop, lane.head_sha, exhausted = True, gate = pending.gate, review = pending.review)
