@@ -572,6 +572,7 @@ func TestLostJob_EachAnswerReadsTheProofInTheNextNumberedStep(t *testing.T) {
 
 	require.NoError(t, client.Answer(testItem, "CONTINUE"))
 	eventually(t, func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.0") })
+	waitForTheLostJob(t, h, testItem)
 
 	require.NoError(t, client.Answer(testItem, "CONTINUE"))
 	eventually(t, func() bool { return slices.Contains(stepNamesOf(t, engine, testRun), "gate:check#1/lost-ask.1") })
