@@ -15,7 +15,8 @@
 # scripts/mutation-exec.sh, which records the exit code and the first failing line of the run. A lived mutant whose run
 # exited 0 is a finding. A lived mutant whose run did not exit 0, or left no record, prints "mutation-pr: run error
 # path:line TYPE: <reason>", is not counted in the end marker, and fails the run. A run that stops with no report
-# prints the recorded runs as "mutation-pr: test run of path:line exited with N: <first failing line>".
+# prints the recorded runs as "mutation-pr: test run of path:line:column exited with N: <first failing line>".
+# The records and the mutants of the report pair by file, line and column. The script needs go and gofmt on the path.
 #
 # The script changes to the module root and runs gremlins on the path ".". Gremlins matches the lines of the
 # diff to mutants by file path. The diff has paths relative to the module root. Gremlins gives mutants paths
@@ -89,6 +90,8 @@ fi
 
 command -v gremlins >/dev/null 2>&1 || { echo "mutation-pr: gremlins is not on the path"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "mutation-pr: jq is not on the path"; exit 1; }
+command -v go >/dev/null 2>&1 || { echo "mutation-pr: go is not on the path"; exit 1; }
+command -v gofmt >/dev/null 2>&1 || { echo "mutation-pr: gofmt is not on the path"; exit 1; }
 if command -v timeout >/dev/null 2>&1; then
 	limiter=timeout
 elif command -v gtimeout >/dev/null 2>&1; then
@@ -115,7 +118,10 @@ case $root in
 esac
 [ -x "$root/scripts/mutation-exec.sh" ] || { echo "mutation-pr: $root/scripts/mutation-exec.sh is not an executable file"; exit 1; }
 export MUTATION_ROOT="$root" MUTATION_EXIT_LOG="$exits"
-export GOFLAGS="${GOFLAGS:+$GOFLAGS }-count=1 -exec=$root/scripts/mutation-exec.sh"
+# "go env GOFLAGS" gives the value that go would read: the variable, or else the file that "go env -w" writes.
+# The variable replaces the file in go, so the script merges the value into the variable it sets.
+goflags=$(go env GOFLAGS) || { echo "mutation-pr: go env GOFLAGS failed"; exit 1; }
+export GOFLAGS="${goflags:+$goflags }-count=1 -exec=$root/scripts/mutation-exec.sh"
 : >"$exits"
 
 # Print each recorded test run: the evidence that a run which ended with no report still leaves.
@@ -124,7 +130,7 @@ print_exits() {
 		echo "mutation-pr: no mutant test run left an exit code record"
 		return 0
 	fi
-	head -n 200 "$exits" | awk -F '\t' '{ printf "mutation-pr: test run of %s:%s exited with %s%s\n", $1, $2, $3, ($4 == "" ? "" : ": " $4) }'
+	head -n 200 "$exits" | awk -F '\t' '{ printf "mutation-pr: test run of %s:%s:%s exited with %s%s\n", $1, $2, $3, $4, ($5 == "" ? "" : ": " $5) }'
 }
 
 # gremlins runs its own "git diff" and drops the first part of each path, which it expects to be "a/" or "b/".
@@ -257,19 +263,22 @@ fi
 #
 # Gremlins reads LIVED for exit 0, for a kill by a signal and for every exit code other than 1 and 2. A lived mutant is a
 # weak test only when its test run exited 0. The records of scripts/mutation-exec.sh hold the exit code of each run, by
-# path and line. A location with N lived mutants and Z records of exit 0 has Z weak mutants. Each other lived mutant
-# there takes one of the records that did not exit 0, in order, or has no record: its test run is an error of the run.
+# the file, the line and the column of the first byte that the mutant changes. The report of gremlins holds the column of
+# the mutated token. The two agree, except for CONDITIONALS_BOUNDARY, which adds or removes the "=" after the token, so the
+# changed byte is the next one. A lived mutant takes the records at its own place. It is weak when each of them exited 0.
+# It is an error of the run when one of them did not exit 0, or when it has none. A mutant that gremlins reports as
+# TIMED OUT keeps running after gremlins stops it, and its late record is not read for any other mutant.
 classified=$exitdir/lived.json
 jq -c --rawfile log "$exits" '
-	($log | split("\n") | map(select(. != "") | split("\t") | {at: "\(.[0]):\(.[1])", rc: (.[2] | tonumber), text: (.[3] // "")})) as $records
-	| [.files[]? | .file_name as $file | .mutations[]? | select(.status == "LIVED") | {at: "\($file):\(.line)", type}]
-	| to_entries | group_by(.value.at)
-	| map(. as $group | ($group[0].value.at) as $at
-		| ($records | map(select(.at == $at and .rc == 0)) | length) as $zero
-		| ($records | map(select(.at == $at and .rc != 0))) as $failed
-		| [range(0; $group | length)] | map(. as $i | {key: $group[$i].key} + $group[$i].value
-			+ (if $i < $zero then {weak: true} else {weak: false} + ($failed[$i - $zero] // {}) end)))
-	| add | sort_by(.key)' "$report" >"$classified" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
+	def place: "\(.file):\(.line):\(.column + (if .type == "CONDITIONALS_BOUNDARY" then 1 else 0 end))";
+	[.files[]? | .file_name as $file | .mutations[]? | {file: $file, line, column, type, status}] as $mutants
+	| ($mutants | map(select(.status == "TIMED OUT") | place)) as $timed
+	| ($log | split("\n") | map(select(. != "") | split("\t") | {place: "\(.[0]):\(.[1]):\(.[2])", rc: (.[3] | tonumber), text: (.[4] // "")})
+		| map(select(.place as $p | ($timed | any(. == $p)) | not))) as $records
+	| [$mutants[] | select(.status == "LIVED") | place as $p
+		| ($records | map(select(.place == $p))) as $own
+		| ($own | map(select(.rc != 0))) as $failed
+		| {at: "\(.file):\(.line)", type, weak: (($own | length) > 0 and ($failed | length) == 0)} + ($failed[0] // {})]' "$report" >"$classified" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
 weak=$(jq 'map(select(.weak)) | length' "$classified")
 errors=$((lived - weak))
 
