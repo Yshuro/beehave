@@ -432,6 +432,10 @@ func (dryLogins) Pick(context.Context, string, string, []string, bool) (string, 
 	return dryLogin, nil
 }
 
+func (dryLogins) Reset(context.Context, string, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 type dryLifecycle struct{}
 
 func (dryLifecycle) Claim(context.Context, string, string) (string, error) { return dryOwner, nil }

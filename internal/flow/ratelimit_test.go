@@ -172,7 +172,7 @@ func TestRateLimit_ALimitThatNoReadingDatesFailsTheStepAndNamesTheLimit(t *testi
 
 	_, err := engine.Run(testItem, testProject)
 
-	require.ErrorContains(t, err, "the agent step of item "+testItem+" stopped at the rate limit five_hour of login "+testLogin+", and the agent gives no reset time")
+	require.ErrorContains(t, err, "the agent step of item "+testItem+" stopped at the rate limit five_hour of login "+testLogin+", and neither the agent nor the usage read gives a reset time")
 	require.ErrorContains(t, err, "Run beehave resume "+testItem+" when the limit is gone")
 	assert.Len(t, h.agents.seen(), 1, "no rerun without a time to wait for")
 
@@ -181,6 +181,44 @@ func TestRateLimit_ALimitThatNoReadingDatesFailsTheStepAndNamesTheLimit(t *testi
 
 	for _, line := range steps.Steps {
 		assert.Nil(t, line.LimitWait, "the failed line of %s waits for nothing", line.Name)
+	}
+}
+
+func TestRateLimit_ALimitWithNoResetTimeWaitsForTheResetThatThePoolReads(t *testing.T) {
+	t.Parallel()
+
+	var asked []string
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	h.logins = fakeLogins{login: testLogin, reset: limitReset, asked: &asked}
+	inTurn(h, limited(time.Time{}, 0), exited)
+
+	engine := h.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.NoError(t, err)
+	assert.Len(t, h.agents.seen(), 2, "the run that the limit stopped, then the rerun after the reset")
+	assert.Equal(t, []string{testLogin}, asked, "the pool reads the usage of the login of the run once")
+
+	steps := recordsOfTestRun(t, engine)
+	assert.Equal(t, 1, sleepsIn(steps))
+
+	for _, step := range steps {
+		if step.StepName != "agent:fix#1/limit1.0" {
+			continue
+		}
+
+		text, ok := step.Output.(string)
+		require.True(t, ok, "the limit record is JSON text")
+
+		var record map[string]any
+
+		require.NoError(t, json.Unmarshal([]byte(text), &record))
+		assert.Equal(t, limitReset.Format(time.RFC3339), record["wait_until"], "the wait ends at the reset that the pool read gave")
+		limit, isObject := record["limit"].(map[string]any) // the decoded JSON object of the limit
+		require.True(t, isObject)
+		assert.Equal(t, limitReset.Format(time.RFC3339), limit["resets_at"], "the recorded limit holds the read reset time, as if the agent gave it")
 	}
 }
 
@@ -206,12 +244,62 @@ func TestRateLimit_AResumeAfterALimitWithNoResetTimeRunsTheAgentAgain(t *testing
 	engine := h.engine(t)
 
 	_, err := engine.Run(testItem, testProject)
-	require.ErrorContains(t, err, "gives no reset time")
+	require.ErrorContains(t, err, "gives a reset time")
 
 	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
 
 	require.NoError(t, err, "the resume runs the agent again, and the limit is gone")
 	assert.Len(t, h.agents.seen(), 2, "the limited run, then the run of the resume")
+}
+
+func TestRateLimit_ATimeThatThePoolReadsAndHasPassedTwiceInARowFailsTheStep(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset.Add(time.Hour))
+	h.logins = fakeLogins{login: testLogin, reset: limitReset}
+	inTurn(h, limited(time.Time{}, 0))
+
+	_, err := h.engine(t).Run(testItem, testProject)
+
+	require.ErrorContains(t, err, "stopped at the rate limit five_hour of login "+testLogin+" twice in a row with a reset time that has passed")
+	assert.Len(t, h.agents.seen(), 2, "one rerun after the first past reset, none after the second")
+}
+
+func TestRateLimit_AFailedUsageReadFailsTheStepAndNamesTheLogin(t *testing.T) {
+	t.Parallel()
+
+	h := limitedHarness(t, limitReset)
+	h.logins = fakeLogins{login: testLogin, resetErr: errFake}
+	inTurn(h, limited(time.Time{}, 0))
+
+	_, err := h.engine(t).Run(testItem, testProject)
+
+	require.ErrorContains(t, err, "read the usage of login "+testLogin+" for the reset of the rate limit five_hour: "+errFake.Error())
+	assert.Len(t, h.agents.seen(), 1, "no rerun after a failed read")
+}
+
+func TestRateLimit_TheDryRunPoolKnowsNoResetTime(t *testing.T) {
+	t.Parallel()
+
+	_, known, err := dryLogins{}.Reset(t.Context(), testProject, testLogin)
+
+	require.NoError(t, err)
+	assert.False(t, known)
+}
+
+func TestRateLimit_ALimitWithAResetTimeNeverAsksThePool(t *testing.T) {
+	t.Parallel()
+
+	var asked []string
+
+	h := limitedHarness(t, limitReset.Add(-30*time.Millisecond))
+	h.logins = fakeLogins{login: testLogin, reset: limitReset.Add(time.Hour), asked: &asked}
+	inTurn(h, limited(limitReset, 0), exited)
+
+	_, err := h.engine(t).Run(testItem, testProject)
+
+	require.NoError(t, err)
+	assert.Empty(t, asked, "the reset time of the agent stands")
 }
 
 func TestRateLimit_TwoLimitedRunsOfOneTryKeepOneRecordEachNumberedFromZero(t *testing.T) {
@@ -262,7 +350,7 @@ func TestRateLimit_TheCostOfARunThatFailedAtALimitCountsOnce(t *testing.T) {
 	engine := h.engine(t)
 
 	_, err := engine.Run(testItem, testProject)
-	require.ErrorContains(t, err, "gives no reset time")
+	require.ErrorContains(t, err, "gives a reset time")
 
 	client := h.client(t, testVersion)
 

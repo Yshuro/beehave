@@ -162,9 +162,10 @@ For try `t` and run `k` (from 0) inside the try, the call records these steps:
 | The limit has a reset time in the future | Sleeps until the reset time, then runs again. |
 | The reset time has passed | Sleeps the least wait (one minute), then runs again. |
 | The next run is limited again and its reset time has passed too | Fails. The error names the limit and the login. The reset time is wrong, and a loop on it has no end. |
-| The agent gives no reset time | Fails. The error names the limit and the login, and says to run `beehave resume <item>` when the limit is gone. |
+| The agent gives no reset time, and the usage read of the pool gives one for the login | The phase takes the read time as the reset time of the limit and records it. The step then waits as for any dated limit. A replay never reads the usage again. |
+| The agent gives no reset time, and the usage read gives none | Fails. The error names the limit and the login, and says to run `beehave resume <item>` when the limit is gone. |
 
-In the two cases that fail, the phase is the failed step, and the run records no limit step. The phase input of a rerun after a past reset holds `reset_passed`, so the phase knows that a second past reset fails. `beehave resume <item>` reopens the failed phase, as it reopens any failed agent run, and the agent runs again. The cost of the failed run counts once, in the cost record of a failed run.
+The usage read is the one that the login pick uses, over the login of the run. It dates a limit only while the login is over a usage cap of the pool. A failed read fails the phase. In the cases that fail, the phase is the failed step, and the run records no limit step. The phase input of a rerun after a past reset holds `reset_passed`, so the phase knows that a second past reset fails. `beehave resume <item>` reopens the failed phase, as it reopens any failed agent run, and the agent runs again. The cost of the failed run counts once, in the cost record of a failed run.
 
 ### The `rewrote` output
 

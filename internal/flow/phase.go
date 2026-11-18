@@ -153,6 +153,10 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 		return out, err
 	}
 
+	if err = e.dateLimit(ctx, in, &out); err != nil {
+		return out, err
+	}
+
 	// The end of the phase is judged inside the step, so a phase that did not exit with code 0, and that no cap and no provider limit with an end to its wait stopped,
 	// is a failed step that beehave resume reruns.
 	return out, phaseEnd(in, out, e.deps.Clock.wall())
