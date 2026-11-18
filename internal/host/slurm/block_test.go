@@ -57,7 +57,7 @@ func TestDecodeBlock_ReadsEveryKeyTheBlockDeclares(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, block{
-		address: "address-value", user: "user-value", port: 2222, identity: "/home/ci/identity",
+		at: "p.star:3:4", address: "address-value", user: "user-value", port: 2222, identity: "/home/ci/identity",
 		workRoot: "/home/ci/work_root", knownHosts: model.KnownHostsAcceptNew,
 	}, got)
 }
@@ -69,7 +69,7 @@ func TestDecodeBlock_ANilBlockAndAnEmptyBlockGiveEveryKeyEmpty(t *testing.T) {
 		got, err := decodeBlock(from)
 
 		require.NoError(t, err, name)
-		assert.Equal(t, block{}, got, name)
+		assert.Equal(t, block{at: from.At()}, got, name)
 	}
 }
 

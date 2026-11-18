@@ -111,3 +111,32 @@ func TestForMachine_RefusesAWordThatCouldBecomeAnOption(t *testing.T) {
 		})
 	}
 }
+
+func TestForMachine_ARefusalShowsThePositionOfTheBlockWhenTheOptionsHoldOne(t *testing.T) {
+	t.Parallel()
+
+	for name, opts := range map[string]link.Options{
+		"an address":    {Address: "-x"},
+		"a user":        {User: "a b"},
+		"a port":        {Port: 70000},
+		"a known_hosts": {KnownHosts: "no"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			opts.Block, opts.At = "ssh", "p.star:3:4"
+
+			_, err := link.ForMachine("gates", opts, proctest.Always(model.CommandResult{}))
+
+			require.ErrorIs(t, err, link.ErrConfig)
+			assert.Contains(t, err.Error(), "invalid ssh host setting: p.star:3:4: ")
+
+			opts.At = ""
+
+			_, err = link.ForMachine("gates", opts, proctest.Always(model.CommandResult{}))
+
+			require.ErrorIs(t, err, link.ErrConfig)
+			assert.NotContains(t, err.Error(), "p.star")
+		})
+	}
+}

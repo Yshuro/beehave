@@ -113,7 +113,7 @@ func (h *Host) settingsOf(opts []Option) settings {
 }
 
 func linkOptions(s block) link.Options {
-	return link.Options{Block: string(Name), Address: s.address, User: s.user, Identity: s.identity, KnownHosts: s.knownHosts, Port: s.port}
+	return link.Options{Block: string(Name), At: s.at, Address: s.address, User: s.user, Identity: s.identity, KnownHosts: s.knownHosts, Port: s.port}
 }
 
 // checkConfig reads the block of the config and returns it. It refuses a work root that systemd or the shell would change: systemd expands a percent sign in a path, and a dollar sign is no path.
@@ -128,7 +128,7 @@ func checkConfig(config model.HostConfig) (block, error) {
 	case config.MaxRun < time.Second:
 		return block{}, fmt.Errorf("%w: `host.max_run` must be at least one second", link.ErrConfig)
 	case strings.ContainsAny(values.workRoot, "%$"):
-		return block{}, fmt.Errorf("%w: `host.ssh.work_root` %q must not hold a percent or dollar sign, which systemd and the shell would expand", link.ErrConfig, values.workRoot)
+		return block{}, link.Refusal(values.at, "`host.ssh.work_root` %q must not hold a percent or dollar sign, which systemd and the shell would expand", values.workRoot)
 	}
 
 	return values, nil
