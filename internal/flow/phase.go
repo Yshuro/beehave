@@ -19,7 +19,9 @@ import (
 // Prompt is the rendered prompt, which is the whole brief. Resume is the session to continue.
 // Model, Timeout and IdleTimeout go to the agent as they are. Forbid lists the kinds of command that the step forbids.
 type PhaseInput struct {
-	Run     string `json:"run"`
+	Run string `json:"run"`
+	// Call is the name of the agent call, such as agent:fix#1. The stop at a cap and the error of a look name it.
+	Call    string `json:"call,omitempty"`
 	Item    string `json:"item"`
 	Project string `json:"project"`
 	Login   string `json:"login"`
@@ -96,17 +98,21 @@ type PhaseOutput struct {
 	Limit *agent.Limit `json:"limit,omitempty"`
 	// Resumed is true for a run that resumed the session of a lost start or of a run that a provider limit stopped. It is left out of a recorded phase for any other run.
 	Resumed bool `json:"resumed,omitempty"`
+	// CapStop is the run cap or the tree cap that stopped the look of the phase, so no agent ran. It is left out of a recorded phase for any other run.
+	CapStop *CapStop `json:"cap_stop,omitempty"`
 	// ResumeOf is the session of the lost start or the limited run that this run was given to resume, and is left out of a recorded phase for any other run.
 	ResumeOf string `json:"resume_of,omitempty"`
 }
 
-// phase waits for the claim of its run, then runs the agent as a step, so a restart skips the work that finished.
-// A phase starts no agent unless the run that queued it holds a trusted claim now, whatever context the phase runs under:
-// the child workflow of a phase outlives the run that queued it, and a later run of the same item holds another claim.
+// phase waits for a trusted claim of its run, looks at the caps, then runs the agent as a step; a cap stop ends it with the stop and no agent run.
 func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 	claim, err := e.awaitClaim(ctx, in)
 	if err != nil {
 		return PhaseOutput{}, err
+	}
+
+	if check, err := e.lookAtCaps(ctx, in); err != nil || check.Stop != nil {
+		return PhaseOutput{CapStop: check.Stop}, err
 	}
 
 	in, lost, err := e.markStarts(ctx, in)
