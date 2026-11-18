@@ -295,6 +295,21 @@ func TestCalls_AnAssistantRateLimitErrorIsALimitWithNoTime(t *testing.T) {
 	assert.Equal(t, agent.Limit{Kind: agent.LimitRate}, *seen.Limit)
 }
 
+func TestCalls_AnAssistantUsageLimitReachedLineCarriesTheResetTimeOfItsRateLimitInfo(t *testing.T) {
+	t.Parallel()
+
+	// The line is the usage_limit_reached line of the paused fixture with the pause flag off, so the CLI writes the line of a plan limit.
+	pausedLine := fixtureLines(t, "rate-limited-paused.jsonl")[1]
+	line := strings.Replace(pausedLine, `"dailyCapPaused":true`, `"dailyCapPaused":false`, 1)
+	require.NotEqual(t, pausedLine, line, "the control: the pause flag is the one thing that changes")
+
+	seen := claude.Adapter{}.Calls(line)
+
+	require.NotNil(t, seen.Limit)
+	assert.Equal(t, agent.Limit{Kind: agent.LimitRate, ResetsAt: time.Unix(1795006800, 0).UTC()}, *seen.Limit)
+	assert.Empty(t, seen.Denied)
+}
+
 func TestCalls_AnAssistantLineWithAnotherErrorOrOnARejectedLineOfAnotherTypeIsNoLimit(t *testing.T) {
 	t.Parallel()
 

@@ -83,16 +83,18 @@ func refusalOf(value any) (*agent.Limit, string) {
 
 // refusedAnswer returns the refusal of an assistant line with the error rate_limit. A pause of the organization (dailyCapPaused in the rate_limit_info of
 // the api_error_params, which the CLI writes with the api_error usage_limit_reached) and an api_error that asks for usage credits are refusals that no wait
-// cures. The pause is tested first, as the CLI does. Any other line is a rate limit with no reset time.
+// cures. The pause is tested first, as the CLI does. Any other line is a rate limit, with the reset time of that rate_limit_info when it names one.
 func refusedAnswer(line map[string]any) (*agent.Limit, string) {
+	info := object(object(line, "api_error_params"), "rate_limit_info")
+
 	switch {
-	case object(object(line, "api_error_params"), "rate_limit_info")["dailyCapPaused"] == true:
+	case info["dailyCapPaused"] == true:
 		return nil, deniedPause
 	case asksForCredits(line["api_error"]):
 		return nil, deniedCredits
 	}
 
-	return &agent.Limit{Kind: agent.LimitRate}, ""
+	return &agent.Limit{Kind: agent.LimitRate, ResetsAt: unixTime(info["resetsAt"])}, ""
 }
 
 // object returns the JSON object at a key of a JSON object, or nil when the value there is no object.
