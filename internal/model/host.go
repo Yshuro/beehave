@@ -49,8 +49,11 @@ type HostConfig struct {
 	// BankBudget is the time that the bank scan gives to each repository on the host. Zero means the default of the host package.
 	BankBudget time.Duration
 	// LostJobWait is how long the engine waits for a proof that a lost job can no longer run. It is always set by the loader, from one minute to 24 hours.
-	LostJobWait   time.Duration
-	PrivateRemote string
+	LostJobWait time.Duration
+	// LostAfter is the time without an answered read before a wait for a job ends as lost. StopLimit is the time a job may take to end after a cancel.
+	// The loader always sets both, above zero. Zero means the default of the config package.
+	LostAfter, StopLimit time.Duration
+	PrivateRemote        string
 	// Slots is the number of jobs of each slot class that the host runs at once. A class that is not a key has no slot on the host. It is nil when the block names none.
 	Slots map[string]int
 	// Block is the config block of the chosen provider, when the provider declares one and the project gave it. The provider reads its keys once, in its constructor.

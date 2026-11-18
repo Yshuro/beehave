@@ -250,6 +250,9 @@ A project selects a host with `build_host` and the `host` block.
 - `idle_minutes` is refused for `ssh` and `slurm`, because beehave does not delete a machine it does not own.
 - An unknown key or block is refused.
 - `lost_job_wait` is a duration with the default `"60m"`, from `"1m"` to `"24h"`. It is the time that the engine waits for a proof that a lost job no longer runs. It is allowed for all three providers. A value outside the range, or text that is not a duration, is refused, and the refusal names the key and the range.
+- `lost_after` is a duration above zero with the default `"5m"`. It is the time without an answered read of a job before the wait for the job ends as lost. It is not `lost_job_wait`: that key is the time the engine waits for a proof after the loss. It is allowed for all three providers.
+- `stop_limit` is a duration above zero with the default `"5m"`. It is the time that a job may take to end after a cancel. When the job is not final by then, the cancel ends with an error. It is allowed for all three providers.
+- A value of `lost_after` or `stop_limit` that is zero, negative or not a duration is refused, and the refusal names the key.
 - `slots` is an optional dict from a slot class name to a count, such as `{"mutation": 1, "bench": 2}`. See the next section.
 
 #### Slot classes
