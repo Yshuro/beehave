@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -134,7 +133,7 @@ func TestBuildInfo_TheDoctorReadsALoginThroughTheClaudeCLIOnThePathOfTheCallerEn
 	t.Parallel()
 
 	tools := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(tools, "claude"), []byte("#!/bin/sh\necho fake-claude-ran >&2\nexit 7\n"), e2eToolMode))
+	require.NoError(t, exectest.Write(filepath.Join(tools, "claude"), "#!/bin/sh\necho fake-claude-ran >&2\nexit 7\n"))
 
 	info := buildInfo(map[string]string{"PATH": tools, "HOME": t.TempDir()}, "dev", cli.Flow{})
 	reading := info.Doctor.Logins[claude.Name](t.Context(), model.Runner{Name: "a", Agent: claude.Name, ConfigDir: t.TempDir()})

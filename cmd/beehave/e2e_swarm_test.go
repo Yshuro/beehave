@@ -381,7 +381,7 @@ func cmdSwarmFakes(ts *testscript.TestScript, _ bool, args []string) {
 		ts.Fatalf("swarmfakes: %v", err)
 	}
 
-	if err := work.WriteFile("fake/claude", []byte(strings.ReplaceAll(string(text), e2eWorkMarker, ts.Getenv("WORK"))), e2eToolMode); err != nil {
+	if err := writeFake(ts, "fake/claude", text); err != nil {
 		ts.Fatalf("swarmfakes: %v", err)
 	}
 
