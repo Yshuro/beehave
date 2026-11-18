@@ -21,7 +21,7 @@ func onePull(w *world, reviews ...model.Review) {
 func poll(t *testing.T, w *world) ([]review.Row, error) {
 	t.Helper()
 
-	return review.Poll(context.Background(), w, w, me, today)
+	return review.Poll(context.Background(), w, w, me, today, lookbackDays)
 }
 
 func kindLine(t *testing.T, w *world) string {
@@ -306,14 +306,16 @@ func TestPoll_AFailedReadStopsWithAnUnreadError(t *testing.T) {
 	}
 }
 
-func TestPoll_TheSearchAsksForTheLastThreeDays(t *testing.T) {
+func TestPoll_LooksBackTheGivenNumberOfDays(t *testing.T) {
 	t.Parallel()
 
-	w := newWorld()
-	_, err := poll(t, w)
-	require.NoError(t, err)
-	assert.Equal(t, []model.SearchRequest{
-		{Kind: model.SearchIssues, Involves: me, Since: "2026-10-17", Limit: review.SearchLimit},
-		{Kind: model.SearchPulls, Involves: me, Since: "2026-10-17", Limit: review.SearchLimit},
-	}, w.asked)
+	for days, since := range map[int]string{1: "2026-10-19", 3: "2026-10-17", 7: "2026-10-13", 365: "2025-10-20"} {
+		w := newWorld()
+		_, err := review.Poll(context.Background(), w, w, me, today, days)
+		require.NoError(t, err)
+		assert.Equal(t, []model.SearchRequest{
+			{Kind: model.SearchIssues, Involves: me, Since: since, Limit: review.SearchLimit},
+			{Kind: model.SearchPulls, Involves: me, Since: since, Limit: review.SearchLimit},
+		}, w.asked, "%d days", days)
+	}
 }

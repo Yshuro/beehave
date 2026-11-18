@@ -61,6 +61,8 @@ func e2eSwarm() {
 
 		return newEngineOn(ctx, cfg, opts, idle, table)
 	})
+	e2eRecordRun(os.Args[1:])
+
 	code := cli.Execute(ctx, os.Args[1:], buildInfo(env, e2eVersion, factory), env, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
@@ -311,7 +313,7 @@ func (f swarmForgeAt) MergePR(ctx context.Context, pr int, sha string) error {
 		return err
 	}
 
-	return f.pauseAfterMerge()
+	return f.pauseAfterMerge(ctx, swarmBarrierBound)
 }
 
 // failsMerge is the stand-in of a landing that the forge defers. If the file fail-merge exists in the forge folder, a merge fails while a task runs,
@@ -341,25 +343,33 @@ func (f swarmForgeAt) failsMerge(pr int) bool {
 // pauseAfterMerge is the barrier of a landing. If the file pause-after-merge exists in the forge folder, the first merge waits, after it is recorded,
 // until the spend ledger holds the cost of the task that the file names. The cost is the last step of a task run, so the run is over when the landing goes on,
 // and a script can end a run in the middle of a landing on every run, and not only under load.
-// The wait has a deadline (30 seconds): a barrier that nothing opens is a fault of the script, and the merge fails with that text.
-func (f swarmForgeAt) pauseAfterMerge() error {
+// It waits for the ledger line of that task. It ends when the line is there (nil), when the context of the merge ends (the error of ctx), or at bound (errBarrierClosed).
+func (f swarmForgeAt) pauseAfterMerge(ctx context.Context, bound time.Duration) error {
 	named, err := os.ReadFile(f.path("pause-after-merge"))
 	if err != nil {
 		return nil //nolint:nilerr // no barrier file: the merge goes on at once
 	}
 
 	want := "\t" + strings.TrimSpace(string(named)) + "\ttask\t"
+	opened := true
 
-	for range 150 {
-		if ledger, err := os.ReadFile(filepath.Join(f.dir, "..", "home", ".swarm", "swarm-1", "ledger.tsv")); err == nil && strings.Contains(string(ledger), want) {
-			return nil
-		}
+	waitOn(func(string, ...any) { opened = false }, e2eWaiting{what: "the ledger line of the task " + strings.TrimSpace(string(named)), ended: ctx.Done(), bound: bound, found: func() bool {
+		ledger, err := os.ReadFile(filepath.Join(f.dir, "..", "home", ".swarm", "swarm-1", "ledger.tsv"))
 
-		time.Sleep(200 * time.Millisecond)
+		return err == nil && strings.Contains(string(ledger), want)
+	}})
+
+	switch {
+	case opened:
+		return nil
+	case ctx.Err() != nil:
+		return ctx.Err()
+	default:
+		return errBarrierClosed
 	}
-
-	return errBarrierClosed
 }
+
+const swarmBarrierBound = 30 * time.Second
 
 var errBarrierClosed = errors.New("harness fault: the landing barrier was not opened within 30 seconds")
 
