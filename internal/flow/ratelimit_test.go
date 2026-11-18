@@ -280,6 +280,27 @@ func TestRateLimit_TheCostOfARunThatFailedAtALimitCountsOnce(t *testing.T) {
 	assert.InDelta(t, 0.7, days[0].Spent.Cost, 1e-9, "the per-day sum")
 }
 
+func TestRateLimit_TheTreeSumCountsTheFailedAgentRunOfAChildRun(t *testing.T) {
+	t.Parallel()
+
+	// The agent step a of the root costs 0.3. The agent step x of the child run fails at a limit with no reset time after 0.7.
+	rig := newAgentRig(t)
+	inTurn(rig.h, costing(0.3), limited(time.Time{}, 0.7))
+
+	engine := rig.h.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, capFile(t, treeFlow))
+	require.NoError(t, err, "the root run ends: the gather reports the child run that failed")
+
+	child, err := runAndBelowSpend(engine.ctx, childRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 0.7, child.Cost, 1e-9, "the child run holds the cost of its failed agent run")
+
+	tree, err := runAndBelowSpend(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.InDelta(t, 1.0, tree.Cost, 1e-9, "the tree holds the root step and the failed agent run of the child run")
+}
+
 func TestRateLimit_AResumeKeepsTheCostOfTheFailedRunInEveryTotal(t *testing.T) {
 	t.Parallel()
 
@@ -311,7 +332,7 @@ func assertTotals(t *testing.T, engine *Engine, client *Client, want float64) {
 	require.Len(t, runs, 1)
 	assert.InDelta(t, want, runs[0].Spent.Cost, 1e-9, "the list of runs")
 
-	tree, err := runSpend(engine.ctx, testRun)
+	tree, err := runAndBelowSpend(engine.ctx, testRun)
 	require.NoError(t, err)
 	assert.InDelta(t, want, tree.Cost, 1e-9, "the sum that the tree cap reads")
 

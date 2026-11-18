@@ -176,7 +176,7 @@ func overCap(name string, c capLimit, spent agent.Spend) (*CapStop, error) {
 		"Raise %s (or %s) and restart beehave, or set it to 0 for no cap", name, c.subject, dollars(c.limit), c.scope, dollars(spent.Cost), c.key, c.env)}, nil
 }
 
-// treeSpend sums the recorded cost of the root run of the item tree and of every run below it. It reads the step records of each run, so a resume keeps the sum.
+// treeSpend sums the recorded cost of the root run of the item tree and of every run below it. It reads the step records and the stream of failed agent runs of each run, so a resume keeps the sum.
 func (s *script) treeSpend(id string) (agent.Spend, error) {
 	// The reads go through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
 	root, err := rootRun(s.e.ctx, id)
