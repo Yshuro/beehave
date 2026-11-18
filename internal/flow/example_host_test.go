@@ -160,7 +160,8 @@ func (f failingHosts) LostProof(context.Context, string, string, string) (model.
 func TestStopHost_ACanceledRunRecordsNoResultSoAResumeStopsTheHostAgain(t *testing.T) {
 	t.Parallel()
 
-	s := &script{e: &Engine{deps: Deps{Hosts: failingHosts{err: context.Canceled}}}}
+	// The engine runs; only the context of the step ends, as it does when beehave cancels a run.
+	s := &script{e: &Engine{ctx: newHarness(t).engine(t).ctx, deps: Deps{Hosts: failingHosts{err: context.Canceled}}}}
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
