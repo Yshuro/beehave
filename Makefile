@@ -69,6 +69,8 @@ AI_RULEZ_VERSION := v5.9.2
 GITLEAKS_VERSION := v8.30.1
 # make mutation and make mutation-pr run gremlins. scripts/mutation-pr.sh reads the JSON report of this version.
 GREMLINS_VERSION := v0.6.0
+# make setup installs this goreleaser, and the tag workflow in .github/workflows/release.yaml pins the same version.
+GORELEASER_VERSION := v2.20.2
 BIN := bin/beehave
 REMEDY := bin/remedy
 
@@ -86,6 +88,7 @@ setup:  ## Install the Go tools and generate the agent files
 	$(call GO_TOOL_AT,deadcode,golang.org/x/tools,$(word 2,$(subst @, ,$(DEADCODE_VERSION)))) || go install $(DEADCODE_VERSION)
 	$(call GO_TOOL_AT,gitleaks,github.com/zricethezav/gitleaks/v8,$(GITLEAKS_VERSION)) || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
+	goreleaser --version 2>/dev/null | grep -Eq '^GitVersion:[[:space:]]+v?$(subst .,\.,$(patsubst v%,%,$(GORELEASER_VERSION)))[[:space:]]*$$' || go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 	$(MAKE) governance-generate
 
 build:  ## Build bin/beehave and bin/remedy

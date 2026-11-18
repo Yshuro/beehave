@@ -150,5 +150,5 @@ jobs:
 
       - uses: goreleaser/goreleaser-action@v7
         with:
-          version: "~> v2"
+          version: v2.20.2
           args: release --snapshot --clean --skip=publish
