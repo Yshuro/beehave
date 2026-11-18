@@ -475,7 +475,7 @@ func TestExclusiveHost_AGateThatReusesAPassNeverWaitsForTheHost(t *testing.T) {
 
 	busy := queueHostGate(engine, "project-one", "hold", "A", "box")
 
-	waitOn(t, condition(startedCount(gated.supersedeGate, 1)))
+	waitOn(t, startsReach(t, engine, gated.supersedeGate, 1))
 
 	late := queueHostGate(engine, "project-two", "late", "A", "box")
 

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -153,19 +154,45 @@ func supersedeEngineWith(t *testing.T, gated supersedeGate, head string, wrap fu
 	return h, engine
 }
 
-func startedCount(g supersedeGate, want int32) func() bool {
-	return func() bool { return g.started.Load() == want }
+const (
+	// logLinesInDump is the number of warnings and errors of the engine log that a dump keeps.
+	logLinesInDump = 20
+	// dumpBound is the time that a dump may take. A busy store can block the reads of the dump, and the message of the failed wait must still appear.
+	dumpBound = 10 * time.Second
+)
+
+// errMoreGatesThanExpected is the failure of a wait for a count of gates when the count went past the count that the test expects.
+var errMoreGatesThanExpected = errors.New("more gates than expected")
+
+// within returns the text that build makes, or a line that says build did not finish in bound.
+func within(bound time.Duration, build func() string) string {
+	done := make(chan string, 1)
+
+	go func() { done <- build() }()
+
+	timer := time.NewTimer(bound)
+	defer timer.Stop()
+
+	select {
+	case text := <-done:
+		return text
+	case <-timer.C:
+		return fmt.Sprintf("the dump did not finish in %s\n", bound)
+	}
 }
-
-// logLinesInDump is the number of warnings and errors of the engine log that a dump keeps.
-const logLinesInDump = 20
-
-// errGateStartedTwice is the failure of a wait for the start of a gate when more gates started than the test expects.
-var errGateStartedTwice = errors.New("a gate started more than once")
 
 // gateDump is the state that a failed wait prints: the counts of the gate, each workflow of the engine with its status, queue and partition,
 // the steps recorded for each workflow, and the last warnings and errors of the engine log. It reads the store of the engine, as the engine does.
 func gateDump(engine *Engine, g supersedeGate) string {
+	return gateDumpWithin(dumpBound, engine, g)
+}
+
+// gateDumpWithin is gateDump with the time that the reads may take.
+func gateDumpWithin(bound time.Duration, engine *Engine, g supersedeGate) string {
+	return within(bound, func() string { return gateState(engine, g) })
+}
+
+func gateState(engine *Engine, g supersedeGate) string {
 	var out strings.Builder
 
 	fmt.Fprintf(&out, "gates started %d, stopped %d\n", g.started.Load(), g.stopped.Load())
@@ -206,44 +233,47 @@ func gateDump(engine *Engine, g supersedeGate) string {
 	return out.String()
 }
 
-// startsReach waits until want gates have started. A count above want fails the wait at once: a gate that starts twice is a defect, and a wait for an exact count would hang on it.
-// A wait that fails prints the dump of the engine.
-func startsReach(t *testing.T, engine *Engine, g supersedeGate, want int32) waiting[struct{}] {
-	t.Helper()
-
+// reachCount waits until count holds want, the wanted number of gates that verb names. A count above want fails the wait at once: a gate that starts or stops twice is a defect,
+// and a wait for an exact count would hang on it. The failure and the timeout of the wait carry the dump of the engine.
+func reachCount(engine *Engine, g supersedeGate, count *atomic.Int32, want int32, verb string) waiting[struct{}] {
 	return waiting[struct{}]{
-		what: fmt.Sprintf("%d gates to have started", want),
+		what: fmt.Sprintf("%d gates to have %s", want, verb),
 		read: func() (struct{}, bool, error) {
-			started := g.started.Load()
-			if started > want {
-				t.Log(gateDump(engine, g))
-
-				return struct{}{}, false, fmt.Errorf("%w: %d started, want %d", errGateStartedTwice, started, want)
+			reached := count.Load()
+			if reached > want {
+				return struct{}{}, false, fmt.Errorf("%w: %d %s, want %d\n%s", errMoreGatesThanExpected, reached, verb, want, gateDump(engine, g))
 			}
 
-			return struct{}{}, started == want, nil
+			return struct{}{}, reached == want, nil
 		},
 		last: func() string {
-			t.Log(gateDump(engine, g))
-
-			return fmt.Sprintf("%d of %d gates started", g.started.Load(), want)
+			return fmt.Sprintf("%d of %d gates %s\n%s", count.Load(), want, verb, gateDump(engine, g))
 		},
 	}
 }
 
-// stopsReach waits until the context of want gates has stopped them. A wait that fails prints the dump of the engine.
+// startsReach waits until want gates have started.
+func startsReach(t *testing.T, engine *Engine, g supersedeGate, want int32) waiting[struct{}] {
+	t.Helper()
+
+	return reachCount(engine, g, g.started, want, "started")
+}
+
+// startsOfRun is startsReach for a test that has a run under test: the wait also fails at once when the run ends or parks without the start.
+func startsOfRun(t *testing.T, engine *Engine, g supersedeGate, want int32) waiting[struct{}] {
+	t.Helper()
+
+	wait := startsReach(t, engine, g, want)
+	wait.run = runOfEngine(t, engine)
+
+	return wait
+}
+
+// stopsReach waits until the context of want gates has stopped them.
 func stopsReach(t *testing.T, engine *Engine, g supersedeGate, want int32) waiting[struct{}] {
 	t.Helper()
 
-	return waiting[struct{}]{
-		what: fmt.Sprintf("%d gates to have stopped", want),
-		read: func() (struct{}, bool, error) { return struct{}{}, g.stopped.Load() == want, nil },
-		last: func() string {
-			t.Log(gateDump(engine, g))
-
-			return fmt.Sprintf("%d of %d gates stopped", g.stopped.Load(), want)
-		},
-	}
+	return reachCount(engine, g, g.stopped, want, "stopped")
 }
 
 // waitsInTheQueue is true when the queue holds want gates that wait for the gate that runs. A gate that is not yet queued cannot be stopped by a later gate.
@@ -367,12 +397,98 @@ func TestStartsReach_AGateThatStartsTwiceFailsTheWaitAtOnce(t *testing.T) {
 	waitOn(t, startsReach(t, engine, gated, 2))
 
 	_, _, err := startsReach(t, engine, gated, 1).read()
-	require.ErrorIs(t, err, errGateStartedTwice)
-	require.EqualError(t, err, "a gate started more than once: 2 started, want 1")
+	require.ErrorIs(t, err, errMoreGatesThanExpected)
+	require.ErrorContains(t, err, "2 started, want 1")
+	assert.Contains(t, err.Error(), "gates started 2, stopped 0", "the failure carries the dump")
 
 	close(gated.release)
 	require.NoError(t, receive(t, first).err)
 	require.NoError(t, receive(t, second).err)
+}
+
+func TestStopsReach_AGateThatStopsTwiceFailsTheWaitAtOnce(t *testing.T) {
+	t.Parallel()
+
+	gated := newSupersedeGate("")
+	_, engine := supersedeEngine(t, gated, "A")
+
+	gated.stopped.Store(2)
+
+	_, _, err := stopsReach(t, engine, gated, 1).read()
+	require.ErrorIs(t, err, errMoreGatesThanExpected)
+	require.ErrorContains(t, err, "2 stopped, want 1")
+	assert.Contains(t, err.Error(), "gates started 0, stopped 2", "the failure carries the dump")
+}
+
+func TestReachCount_ATimeoutNamesTheCountAndPrintsTheDump(t *testing.T) {
+	t.Parallel()
+
+	gated := newSupersedeGate("")
+	_, engine := supersedeEngine(t, gated, "A")
+
+	ended := queueGate(engine, "A")
+
+	waitOn(t, startsReach(t, engine, gated, 1))
+
+	started := startsReach(t, engine, gated, 2).last()
+	assert.Contains(t, started, "1 of 2 gates started")
+	assert.Contains(t, started, "gates started 1, stopped 0", "the timeout carries the dump")
+	assert.Contains(t, started, "status=PENDING")
+
+	stopped := stopsReach(t, engine, gated, 1).last()
+	assert.Contains(t, stopped, "0 of 1 gates stopped")
+	assert.Contains(t, stopped, "gates started 1, stopped 0", "the timeout carries the dump")
+
+	close(gated.release)
+	require.NoError(t, receive(t, ended).err)
+}
+
+func TestGateDump_ShowsAGateThatIsQueuedAndHasNoSteps(t *testing.T) {
+	t.Parallel()
+
+	gated := newSupersedeGate("")
+	_, engine := supersedeEngine(t, gated, "A")
+
+	running := queueGate(engine, "A")
+
+	waitOn(t, startsReach(t, engine, gated, 1))
+
+	// The second gate has the same head, so it stops nothing and waits behind the first in the queue of the project.
+	waiting := queueGate(engine, "A")
+
+	waitOn(t, condition(waitsInTheQueue(engine, 1)))
+
+	dump := gateDump(engine, gated)
+	assert.Regexp(t, fmt.Sprintf(`status=ENQUEUED queue=%q partition=%q\n(?:workflow |engine log)`, exclusiveQueueName, testProject), dump, "a queued gate has a line and no step")
+
+	close(gated.release)
+	require.NoError(t, receive(t, running).err)
+	require.NoError(t, receive(t, waiting).err)
+}
+
+func TestGateDump_NamesTheTimeoutWhenTheReadsDoNotFinishInTime(t *testing.T) {
+	t.Parallel()
+
+	gated := newSupersedeGate("")
+	_, engine := supersedeEngine(t, gated, "A")
+
+	assert.Equal(t, "the dump did not finish in 1ns\n", gateDumpWithin(time.Nanosecond, engine, gated))
+	assert.Contains(t, gateDumpWithin(time.Minute, engine, gated), "gates started 0, stopped 0")
+}
+
+func TestWithin_ReturnsTheTextOfAFinishedBuildAndNamesAnUnfinishedOne(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "text", within(time.Minute, func() string { return "text" }))
+
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+
+	assert.Equal(t, "the dump did not finish in 1ms\n", within(time.Millisecond, func() string {
+		<-block
+
+		return "text"
+	}))
 }
 
 func TestSuperseded_AGateThatWaitsInTheQueueForAnOldHeadNeverStarts(t *testing.T) {
