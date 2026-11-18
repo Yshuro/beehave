@@ -22,10 +22,14 @@ const (
 	// DefaultLostJobWait is the default of host.lost_job_wait. The engine also waits this long for a project with no host block.
 	// The bounds follow it. The lower bound is one poll of the wait.
 	DefaultLostJobWait = 60 * time.Minute
-	minLostJobWait     = time.Minute
-	maxLostJobWait     = 24 * time.Hour
-	hostTableMessage   = "the `host` block %s. %s"
-	hostSpecName       = "host"
+	// DefaultLostAfter is the default of host.lost_after: the time without an answered read before a wait for a job ends as lost.
+	DefaultLostAfter = 5 * time.Minute
+	// DefaultStopLimit is the default of host.stop_limit: the time a job may take to end after the cancel.
+	DefaultStopLimit = 5 * time.Minute
+	minLostJobWait   = time.Minute
+	maxLostJobWait   = 24 * time.Hour
+	hostTableMessage = "the `host` block %s. %s"
+	hostSpecName     = "host"
 )
 
 // rawHost is a host block as written. At is the position of its call. Blocks holds the provider blocks that the call holds, by block name.
@@ -37,6 +41,8 @@ type rawHost struct {
 	MaxRun        string
 	BankBudget    string
 	LostJobWait   string
+	LostAfter     string
+	StopLimit     string
 	DiskFloorGB   int
 	DiskWaitMins  int
 	PrivateRemote string
@@ -46,7 +52,7 @@ type rawHost struct {
 
 // hostSpec is the schema of the host constructor: the keys every provider shares, and one optional argument for each provider block that the registry declares.
 func hostSpec(declared []Block) spec {
-	args := []string{"provider", "disk_floor_gb", "idle_minutes?", "stale_minutes?", "max_run?", "disk_wait_minutes?", "bank_budget?", "lost_job_wait?", "slots?", "private_remote?"}
+	args := []string{"provider", "disk_floor_gb", "idle_minutes?", "stale_minutes?", "max_run?", "disk_wait_minutes?", "bank_budget?", "lost_job_wait?", "slots?", "private_remote?", "lost_after?", "stop_limit?"}
 
 	return spec{hostSpecName, append(args, blockArgs(declared)...)}
 }
@@ -57,9 +63,9 @@ const idleUnset = -1 << 31
 // newHost returns the constructor of the host block. A key that the call leaves out keeps its default.
 func newHost(declared []Block) func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
 	return func(at syntax.Position, kwargs []starlark.Tuple) (*rawHost, error) {
-		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget, LostJobWait: defaultLostJobWaitText()}
+		raw := &rawHost{At: at, IdleMinutes: idleUnset, StaleMinutes: defaultStaleMins, MaxRun: defaultMaxRun, BankBudget: defaultBankBudget, LostJobWait: defaultLostJobWaitText(), LostAfter: minutesText(DefaultLostAfter), StopLimit: minutesText(DefaultStopLimit)}
 		held := holders(declared)
-		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.LostJobWait, &raw.Slots, &raw.PrivateRemote}
+		dests := []any{&raw.Provider, &raw.DiskFloorGB, &raw.IdleMinutes, &raw.StaleMinutes, &raw.MaxRun, &raw.DiskWaitMins, &raw.BankBudget, &raw.LostJobWait, &raw.Slots, &raw.PrivateRemote, &raw.LostAfter, &raw.StopLimit}
 
 		err := hostSpec(declared).unpack(at, kwargs, append(dests, blockDests(held)...)...)
 		raw.Blocks = heldBlocks(declared, held)
@@ -199,7 +205,22 @@ func fillDurations(raw rawHost, host *model.HostConfig) error {
 		return err
 	}
 
-	host.LostJobWait, err = lostJobWait(raw.At, raw.LostJobWait)
+	if host.LostJobWait, err = lostJobWait(raw.At, raw.LostJobWait); err != nil {
+		return err
+	}
+
+	return fillWaitLimits(raw, host)
+}
+
+// fillWaitLimits sets the two time limits of the wait for a job.
+func fillWaitLimits(raw rawHost, host *model.HostConfig) error {
+	var err error
+
+	if host.LostAfter, err = duration(raw.At, "host.lost_after", raw.LostAfter, minutesText(DefaultLostAfter)); err != nil {
+		return err
+	}
+
+	host.StopLimit, err = duration(raw.At, "host.stop_limit", raw.StopLimit, minutesText(DefaultStopLimit))
 
 	return err
 }
@@ -226,8 +247,11 @@ func lostJobWait(at syntax.Position, text string) (time.Duration, error) {
 }
 
 // defaultLostJobWaitText is DefaultLostJobWait as a project file writes it, in minutes.
-func defaultLostJobWaitText() string {
-	return strconv.Itoa(int(DefaultLostJobWait/time.Minute)) + "m"
+func defaultLostJobWaitText() string { return minutesText(DefaultLostJobWait) }
+
+// minutesText writes a whole number of minutes as a project file does.
+func minutesText(d time.Duration) string {
+	return strconv.Itoa(int(d/time.Minute)) + "m"
 }
 
 // fillCounts sets the keys of host that are whole numbers.
