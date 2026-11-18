@@ -39,6 +39,7 @@ func Block() config.Block {
 // block is the ssh block of the machine, as the project file wrote it. A key that the file leaves out stays empty.
 // The link reads an empty port as the default port and an empty known_hosts as strict.
 type block struct {
+	at         string // the position of the block in the project file, for a refusal
 	address    string
 	user       string
 	port       int
@@ -49,7 +50,7 @@ type block struct {
 
 // decodeBlock reads the ssh block once. A nil block gives every key empty. The link refuses an address, a user or a known_hosts value that ssh could read as an option.
 func decodeBlock(from *model.Block) (block, error) {
-	var settings block
+	settings := block{at: from.At()}
 
 	settings.address, _ = from.Text(BlockAddress)
 	settings.user, _ = from.Text(BlockUser)
