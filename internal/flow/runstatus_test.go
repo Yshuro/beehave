@@ -171,7 +171,7 @@ func waitForTheDeadline(t *testing.T, client *Client) {
 
 	read := newStatusRead(client)
 
-	waitOn(t, waiting[struct{}]{what: "the open run to show a question and a deadline", run: runOfClient(client), last: read.last, read: func() (struct{}, bool, error) {
+	waitOn(t, waiting[struct{}]{what: "the open run to show a question and a deadline", run: runOfClient(t, client), last: read.last, read: func() (struct{}, bool, error) {
 		infos := read.next()
 
 		return struct{}{}, read.err == nil && len(infos) == 1 && infos[0].Question != "" && !infos[0].Deadline.IsZero(), nil
@@ -203,7 +203,7 @@ func TestStatus_ARunThatWaitsWithADeadlineShowsTheQuestionAndTheDeadline(t *test
 	assert.Equal(t, info.Deadline, view.Deadline, "the run view shows the same deadline")
 
 	require.NoError(t, client.Answer(testItem, "go on"))
-	waitOn(t, waiting[struct{}]{what: "the agent of the answered run to start", run: runOfClient(client), read: func() (struct{}, bool, error) {
+	waitOn(t, waiting[struct{}]{what: "the agent of the answered run to start", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
 		return struct{}{}, harness.agents.running() == 1, nil
 	}})
 

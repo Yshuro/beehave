@@ -300,7 +300,7 @@ func TestLaneLayout_AResumeKeepsTheCapOfTheFirstStartWhenTheFixRoundsChange(t *t
 	handle := resumeRun(t, engine, rig.h.client(t, testVersion))
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
-	_, err = joinRun(t, handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 
 	rounds := map[string]bool{}

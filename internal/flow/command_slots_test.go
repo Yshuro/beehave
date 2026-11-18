@@ -345,7 +345,7 @@ func TestCommand_ACanceledSlotJobFreesItsSlotAndTheReopenWaitsOnTheQueueOfItsCla
 	assert.Equal(t, "m1", jobs.nextStart(t))
 	jobs.let("m1")
 
-	_, err = joinRun(t, handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 }
 
@@ -401,7 +401,7 @@ func TestCommand_ARestartKeepsTheLimitOfAClassForTheJobThatWasRunning(t *testing
 		handle, rerr := dbos.RetrieveWorkflow[ItemResult](second.ctx, last.Status.ID)
 		require.NoError(t, rerr)
 
-		_, rerr = joinRun(t, handle)
+		_, rerr = resultOfHandle(t, handle)
 		require.NoError(t, rerr)
 	}
 

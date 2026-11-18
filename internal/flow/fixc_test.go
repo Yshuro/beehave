@@ -78,7 +78,7 @@ func TestResume_ARunThatFailedAtTheClaimStepTakesOneClaim(t *testing.T) {
 	assert.Equal(t, 1, countOf(harness.life.seen(), "claim"), "the resume takes no claim: the claim step of the run runs again")
 	unblock()
 
-	_, err = joinRun(t, handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 
 	assert.Equal(t, 2, countOf(harness.life.seen(), "claim"), "the claim step ran once on the resume")
@@ -169,7 +169,7 @@ func TestFinish_TheTokenFileEndsWithTheRun(t *testing.T) {
 	require.FileExists(t, ownerPath(harness.opts.StateDir, testRun), "the resume saves the token")
 	unblock()
 
-	_, err = joinRun(t, handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 
 	assert.NoFileExists(t, ownerPath(harness.opts.StateDir, testRun), "the release ends the token file")

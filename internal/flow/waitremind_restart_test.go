@@ -57,7 +57,7 @@ func TestWaitRemind_ARestartNeitherRepeatsASentReminderNorLosesAnOwedOne(t *test
 
 	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
 
-	_, err = joinRun(t, handle)
+	_, err = resultOfHandle(t, handle)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{remindStepPrefix + "1", remindStepPrefix + "2"}, remindSteps(t, client))

@@ -3,6 +3,7 @@ package flow
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -40,8 +41,6 @@ const (
 	pollEvery    = 5 * time.Millisecond
 	// runCheckEvery is the interval at which a wait reads the status and the steps of the run under test.
 	runCheckEvery = 100 * time.Millisecond
-	// parkSettle is how long a run must wait in the same receive window before a wait takes it for parked.
-	parkSettle = 5 * time.Second
 	// storePoll is the interval at which the two queues of an engine and a result wait read the store. Each poll parses a statement, which
 	// costs most of the CPU of the package under the race detector, and the engines of the parallel tests all poll at once. It is the
 	// library default: a shorter interval made the package slower and did not make any test wait less than the tests need.
@@ -770,23 +769,51 @@ func (h *harness) client(t *testing.T, version string) *Client {
 
 // runRef names the run that a wait watches. A nil runRef watches no run.
 type runRef struct {
+	ctx  context.Context
 	flow dbos.Client
 	id   string
-	// window is the step of the receive window that the last check saw, and since is when the check first saw it.
-	window int
-	since  time.Time
+	// database is the file of the workflow store, which holds the messages that were sent to the run.
+	database string
 }
 
 // runOfEngine is the test run of an engine.
-func runOfEngine(engine *Engine) *runRef { return &runRef{flow: engine.ctx, id: testRun} }
+func runOfEngine(t *testing.T, engine *Engine) *runRef {
+	t.Helper()
+
+	return &runRef{ctx: t.Context(), flow: engine.ctx, id: testRun, database: filepath.Join(engine.dir, databaseFile)}
+}
 
 // runOfClient is the test run as a client reads it.
-func runOfClient(client *Client) *runRef { return &runRef{flow: client.flow, id: testRun} }
+func runOfClient(t *testing.T, client *Client) *runRef {
+	t.Helper()
+
+	return &runRef{ctx: t.Context(), flow: client.flow, id: testRun, database: filepath.Join(client.dir, databaseFile)}
+}
+
+// messagePending says whether a message that was sent to the run waits unconsumed. DBOS wakes a receive for such a message at its next one-second poll, so the receive is not parked.
+func (r *runRef) messagePending() (bool, error) {
+	db, err := sql.Open("sqlite", r.database+"?_pragma=busy_timeout(30000)")
+	if err != nil {
+		return false, err
+	}
+
+	defer db.Close()
+
+	var pending bool
+
+	err = db.QueryRowContext(r.ctx, "SELECT EXISTS (SELECT 1 FROM notifications WHERE destination_uuid = ? AND consumed = 0)", r.id).Scan(&pending)
+
+	return pending, err
+}
 
 // stalled says why the run can no longer bring the awaited fact, or returns "". The run has ended, or it parks in a receive or a sleep that wakes after the bound of the wait.
 func (r *runRef) stalled(bound time.Time) string {
 	rows, err := dbos.ListWorkflows(r.flow, dbos.WithFilterWorkflowIDs(r.id))
-	if err != nil || len(rows) != 1 {
+	if err != nil {
+		return fmt.Sprintf("the status of the run %s cannot be read: %v", r.id, err)
+	}
+
+	if len(rows) != 1 {
 		return ""
 	}
 
@@ -800,10 +827,23 @@ func (r *runRef) stalled(bound time.Time) string {
 // endedStatuses are the statuses of a run that has ended.
 var endedStatuses = []dbos.WorkflowStatusType{dbos.WorkflowStatusSuccess, dbos.WorkflowStatusError, dbos.WorkflowStatusCancelled, dbos.WorkflowStatusMaxRecoveryAttemptsExceeded}
 
-// parked says that the run waits in a receive window that ends after the bound, or returns "". A receive records its window as a DBOS.sleep step before it waits, and the step that follows is written only when the window ends.
+// parked says that the run waits in a receive window that ends after the bound, or returns "". A receive takes a step id for its DBOS.recv step and the next id for its window, a DBOS.sleep step. The window is written first and stays the last step after the message arrives. The DBOS.recv step is written when the receive ends, so the window has ended once that step is recorded. A window with an unconsumed message is about to end, so it is not a park.
 func (r *runRef) parked(bound time.Time) string {
+	pending, err := r.messagePending()
+	if err != nil {
+		return fmt.Sprintf("the messages of the run %s cannot be read: %v", r.id, err)
+	}
+
+	if pending {
+		return ""
+	}
+
 	steps, err := dbos.GetWorkflowSteps(r.flow, r.id, dbos.WithStepsLoadOutput(true))
-	if err != nil || len(steps) == 0 {
+	if err != nil {
+		return fmt.Sprintf("the steps of the run %s cannot be read: %v", r.id, err)
+	}
+
+	if len(steps) == 0 {
 		return ""
 	}
 
@@ -817,12 +857,8 @@ func (r *runRef) parked(bound time.Time) string {
 		return ""
 	}
 
-	// A message that the run has just received wakes the window within milliseconds, and the step that follows is written a little later. So the window counts as a park only after it stays the last step for parkSettle.
-	if last.StepID != r.window {
-		r.window, r.since = last.StepID, time.Now()
-	}
-
-	if time.Since(r.since) < parkSettle {
+	received := func(s dbos.StepInfo) bool { return s.StepName == "DBOS.recv" && s.StepID == last.StepID-1 }
+	if slices.ContainsFunc(steps, received) {
 		return ""
 	}
 
@@ -957,6 +993,7 @@ func waitOn[T any](t *testing.T, w waiting[T]) T {
 	}
 }
 
+// lastText is the text of last after a semicolon, or "" when the wait has no last.
 func (w waiting[T]) lastText() string {
 	if w.last == nil {
 		return ""
@@ -967,12 +1004,10 @@ func (w waiting[T]) lastText() string {
 
 // hang holds a fake that stands for a hung child until release fires. It is the hang that a test provokes, not a wait of a test, and a fake has no test to fail.
 func hang[T any](release <-chan T) {
-	select { //nolint:staticcheck // S1000: the single-case select keeps this hold out of the receive count of the waits
-	case <-release:
-	}
+	<-release
 }
 
-// resultOfHandle waits for the result of the run of handle. The result is the end of the run.
+// resultOfHandle waits for the result of the run of handle. The result is the end of the run. When the wait fails, the goroutine that reads the result ends with the shutdown of the engine in the cleanup of the test, which cancels the context of the handle.
 func resultOfHandle[R any](t *testing.T, handle dbos.WorkflowHandle[R]) (R, error) {
 	t.Helper()
 
@@ -1011,7 +1046,7 @@ func eventually(t *testing.T, check func() bool) {
 func waitForTheSleep(t *testing.T, engine *Engine) {
 	t.Helper()
 
-	waitOn(t, waiting[struct{}]{what: "the run to start a durable sleep", run: runOfEngine(engine), read: func() (struct{}, bool, error) {
+	waitOn(t, waiting[struct{}]{what: "the run to start a durable sleep", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
 		steps, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
 
 		return struct{}{}, err == nil && slices.ContainsFunc(steps, func(s dbos.StepInfo) bool { return s.StepName == "DBOS.sleep" }), nil
@@ -1025,7 +1060,7 @@ func waitForTheOwner(t *testing.T, h *harness) {
 	client := h.client(t, testVersion)
 	read := newStatusRead(client)
 
-	waitOn(t, waiting[struct{}]{what: "the open run to show a question", run: runOfClient(client), last: read.last, read: func() (struct{}, bool, error) {
+	waitOn(t, waiting[struct{}]{what: "the open run to show a question", run: runOfClient(t, client), last: read.last, read: func() (struct{}, bool, error) {
 		infos := read.next()
 
 		return struct{}{}, read.err == nil && len(infos) == 1 && infos[0].Question != "", nil

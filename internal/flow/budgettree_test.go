@@ -277,7 +277,7 @@ func capRestart(t *testing.T, set func(h *harness, limit float64), scope string,
 	handle, err := dbos.RetrieveWorkflow[ItemResult](second.ctx, testRun)
 	require.NoError(t, err, "the launch of the second engine recovers the open run")
 
-	_, err = joinRun(t, handle)
+	_, err = resultOfHandle(t, handle)
 
 	require.NoError(t, err)
 	assert.Len(t, rig.h.agents.seen(), 3, "a and b are not run again after the restart: c runs once")

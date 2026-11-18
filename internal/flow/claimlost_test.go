@@ -470,7 +470,7 @@ func TestRunAgent_APhaseReopenedByResumeWaitsForTheFirstTrustOfItsRunBeforeItSta
 	done := make(chan runOutcome, 1)
 
 	go func() {
-		result, err := joinRun(t, handle)
+		result, err := resultOfHandle(t, handle)
 		done <- runOutcome{result: result, err: err}
 	}()
 

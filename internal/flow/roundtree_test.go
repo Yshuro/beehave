@@ -73,7 +73,7 @@ func TestRoundTree_AResumedRunAsksForNoWorktreeBeforeItsSteps(t *testing.T) {
 	harness.life.failing["release"] = false
 	harness.life.mu.Unlock()
 
-	_, err = joinRun(t, resumeRunOf(t, engine, harness.client(t, testVersion), testRound))
+	_, err = resultOfHandle(t, resumeRunOf(t, engine, harness.client(t, testVersion), testRound))
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{testRound}, made.all(), "the resume replayed the recorded step and asked for the tree no more")
