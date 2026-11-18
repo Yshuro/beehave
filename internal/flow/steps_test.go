@@ -525,6 +525,20 @@ func withVerdict(outputs map[string]any, verdict string) map[string]any {
 	return outputs
 }
 
+func TestStepLines_TheCostOfAFailedRunGoesToTheLineOfItsCallOrToALineOfItsOwn(t *testing.T) {
+	t.Parallel()
+
+	lines := []StepLine{{Name: "agent:a#1", State: stepDone, Spend: agent.Spend{Cost: 0.3}}}
+	runs := []failedRun{{Call: "agent:a#1", Spend: agent.Spend{Cost: 0.7}}, {Call: "agent:b#2", Spend: agent.Spend{Cost: 0.4, Estimated: true}}}
+
+	got := withFailedRuns(lines, runs)
+
+	require.Len(t, got, 2)
+	assert.InDelta(t, 1.0, got[0].Cost, 1e-9, "the failed run of a adds to the line of a")
+	assert.Equal(t, StepLine{Name: "agent:b#2", State: stepFailed, Spend: agent.Spend{Cost: 0.4, Estimated: true}}, got[1],
+		"a call that the run has not reached again since the resume gets a line of its own")
+}
+
 func TestStepLines_AnOpenRunThatRecordedNoStepForItsWorkShowsAStepInProgress(t *testing.T) {
 	t.Parallel()
 

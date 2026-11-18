@@ -92,9 +92,18 @@ func (e *Engine) exclusive(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput
 		defer stop()
 	}
 
-	out.Failure = e.failureOf(e.exclusiveCall(run, in, &out))
+	return e.endCall(&out, e.exclusiveCall(run, in, &out))
+}
 
-	return out, nil
+// endCall ends an exclusive run or a host job: the error of its call is the Failure of the output, unless the engine stopped.
+func (e *Engine) endCall(out *ExclusiveOutput, err error) (ExclusiveOutput, error) {
+	if stop := engineStop(e.ctx, err); stop != nil {
+		return ExclusiveOutput{}, stop
+	}
+
+	out.Failure = e.failureOf(err)
+
+	return *out, nil
 }
 
 // trackGate lists a running gate with the runs that the tick cancels. DBOS does not interrupt a step that runs, so a gate that a newer head canceled
@@ -294,9 +303,7 @@ func (e *Engine) hostJob(ctx dbos.Context, in ExclusiveInput) (ExclusiveOutput, 
 		defer stop()
 	}
 
-	out.Failure = e.failureOf(e.runCall(run, in, &out))
-
-	return out, nil
+	return e.endCall(&out, e.runCall(run, in, &out))
 }
 
 // onHost runs the call of a gate as a job on the host queue, under the HostKey of the gate, and waits for it. The job is a child run of the gate,

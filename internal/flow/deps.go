@@ -139,6 +139,8 @@ type gate interface {
 // When no runner has room, the error is one with a ResetAt method, and the engine waits for that time.
 type logins interface {
 	Pick(ctx context.Context, project, item string, busy []string, overCap bool) (string, error)
+	// Reset reads the usage of one login and returns the time when it gets room again, and false when the usage read knows none.
+	Reset(ctx context.Context, project, login string) (time.Time, bool, error)
 }
 
 // resetter is the error of a pick that found no runner under the usage caps. ResetAt returns the earliest time a runner gets room,

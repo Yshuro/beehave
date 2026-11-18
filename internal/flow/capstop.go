@@ -88,27 +88,72 @@ func (e *Engine) treeCap() capLimit {
 	return capLimit{scopeTree, "the item tree", "agents.max_tree_budget_usd", "BEEHAVE_AGENTS_MAX_TREE_BUDGET_USD", e.maxTreeBudget}
 }
 
-// checkCaps reads both caps and the sums they count. A cap of 0 is not read.
+// checkCaps reads both caps and the sums they count. A cap of 0 is not read. Both sums read the records of the runs, so a resume keeps them.
 func (s *script) checkCaps(name string) (capCheck, error) {
-	if run := s.e.runCap(); run.limit > 0 {
-		if stop, err := overCap(name, run, s.spent); err != nil || stop != nil {
-			return capCheck{Stop: stop}, err
-		}
-	}
-
-	tree := s.e.treeCap()
-	if tree.limit <= 0 {
+	set := s.capsSet()
+	if len(set) == 0 {
 		return capCheck{}, nil
 	}
 
-	spent, err := s.treeSpend()
+	id, err := s.runID()
 	if err != nil {
 		return capCheck{}, err
 	}
 
-	stop, err := overCap(name, tree, spent)
+	for _, c := range set {
+		if stop, err := underCap(name, c.cap, id, c.sum); err != nil || stop != nil {
+			return capCheck{Stop: stop}, err
+		}
+	}
 
-	return capCheck{Stop: stop}, err
+	return capCheck{}, nil
+}
+
+// cappedSum is a cap with the sum it counts.
+type cappedSum struct {
+	cap capLimit
+	sum func(id string) (agent.Spend, error)
+}
+
+// capsSet lists the caps that are set, the run cap first.
+func (s *script) capsSet() []cappedSum {
+	var set []cappedSum
+
+	if run := s.e.runCap(); run.limit > 0 {
+		set = append(set, cappedSum{run, s.ownSpend})
+	}
+
+	if tree := s.e.treeCap(); tree.limit > 0 {
+		set = append(set, cappedSum{tree, s.treeSpend})
+	}
+
+	return set
+}
+
+// underCap reads the sum of a cap for the run and returns the stop of the step, or nil when the step may start.
+func underCap(name string, c capLimit, id string, sum func(id string) (agent.Spend, error)) (*CapStop, error) {
+	spent, err := sum(id)
+	if err != nil {
+		return nil, err
+	}
+
+	return overCap(name, c, spent)
+}
+
+// runID reads the id of the run of the script.
+func (s *script) runID() (string, error) {
+	id, err := dbos.GetWorkflowID(s.ctx)
+	if err != nil {
+		return "", fmt.Errorf("read the id of the run of item %s: %w", s.in.Item, err)
+	}
+
+	return id, nil
+}
+
+// ownSpend sums the recorded cost of this run, the failed runs that a resume kept included.
+func (s *script) ownSpend(id string) (agent.Spend, error) {
+	// The read goes through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
+	return runSpend(s.e.ctx, id)
 }
 
 // overCap is the stop of an agent step that may not start under a cap, or nil when it may. A sum that holds an unknown cost fails the step instead:
@@ -131,9 +176,10 @@ func overCap(name string, c capLimit, spent agent.Spend) (*CapStop, error) {
 		"Raise %s (or %s) and restart beehave, or set it to 0 for no cap", name, c.subject, dollars(c.limit), c.scope, dollars(spent.Cost), c.key, c.env)}, nil
 }
 
-// treeSpend sums the recorded cost of the root run of the item tree and of every run below it. It reads the step records of each run, so a resume keeps the sum.
-func (s *script) treeSpend() (agent.Spend, error) {
-	root, err := s.e.treeRoot(s.ctx, s.in.Item)
+// treeSpend sums the recorded cost of the root run of the item tree and of every run below it. It reads the step records and the stream of failed agent runs of each run, so a resume keeps the sum.
+func (s *script) treeSpend(id string) (agent.Spend, error) {
+	// The reads go through the context of the engine, not the one of the run: a library call on the context of a run records a step of its own.
+	root, err := rootRun(s.e.ctx, id)
 	if err != nil {
 		return agent.Spend{}, err
 	}
@@ -156,26 +202,34 @@ func (e *Engine) treeRoot(ctx dbos.Context, item string) (string, error) {
 func runAndBelowSpend(ctx dbos.Client, id string) (agent.Spend, error) {
 	var spent agent.Spend
 
-	err := walkTree(ctx, id, dbos.WithStepsLoadOutput(true), func(records []dbos.StepInfo) {
-		for _, line := range stepLines(records, "", false, time.Time{}) {
-			spent = spent.Plus(line.Spend)
-		}
+	err := walkTree(ctx, id, dbos.WithStepsLoadOutput(true), func(run string, records []dbos.StepInfo) error {
+		own, err := recordsSpend(ctx, run, records)
+		spent = spent.Plus(own)
+
+		return err
 	})
 
 	return spent, err
 }
 
-// walkTree passes the step records of a run, and then of every item run below it, to fold. It is the one walk of an item tree:
+// walkTree passes a run and its step records, and then each item run below it with its step records, to fold. It is the one walk of an item tree:
 // the sum of the tree cap and the count of the host losses both fold over it. load says whether the records hold the outputs of the steps.
-// A read that fails ends the walk with its error.
-func walkTree(ctx dbos.Client, id string, load dbos.GetWorkflowStepsOption, fold func([]dbos.StepInfo)) error {
+// A read that fails, or a fold that fails, ends the walk with its error.
+func walkTree(ctx dbos.Client, id string, load dbos.GetWorkflowStepsOption, fold func(run string, records []dbos.StepInfo) error) error {
 	records, err := dbos.GetWorkflowSteps(ctx, id, load)
 	if err != nil {
 		return fmt.Errorf("read the steps of %s: %w", id, err)
 	}
 
-	fold(records)
+	if err := fold(id, records); err != nil {
+		return err
+	}
 
+	return walkBelow(ctx, id, load, fold)
+}
+
+// walkBelow walks each item run that a run spawned, with walkTree.
+func walkBelow(ctx dbos.Client, id string, load dbos.GetWorkflowStepsOption, fold func(run string, records []dbos.StepInfo) error) error {
 	children, err := itemRuns(ctx, dbos.WithFilterParentWorkflowID(id))
 	if err != nil {
 		return err
@@ -188,6 +242,32 @@ func walkTree(ctx dbos.Client, id string, load dbos.GetWorkflowStepsOption, fold
 	}
 
 	return nil
+}
+
+// runSpend sums the cost that the step records and the failed runs of one run hold, as the view of the steps reads it.
+func runSpend(ctx dbos.Client, id string) (agent.Spend, error) {
+	records, err := dbos.GetWorkflowSteps(ctx, id, dbos.WithStepsLoadOutput(true))
+	if err != nil {
+		return agent.Spend{}, fmt.Errorf("read the steps of %s: %w", id, err)
+	}
+
+	return recordsSpend(ctx, id, records)
+}
+
+// recordsSpend sums the cost of the step records of a run and of the failed runs that the run holds.
+func recordsSpend(ctx dbos.Client, id string, records []dbos.StepInfo) (agent.Spend, error) {
+	lines, err := runLines(ctx, id, records, "", false, time.Time{})
+	if err != nil {
+		return agent.Spend{}, err
+	}
+
+	var spent agent.Spend
+
+	for _, line := range lines {
+		spent = spent.Plus(line.Spend)
+	}
+
+	return spent, nil
 }
 
 // itemRuns lists the item runs that match the filter.

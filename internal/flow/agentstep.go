@@ -17,6 +17,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"go.starlark.net/starlark"
 
 	"github.com/tobocop2/beehave/internal/agent"
@@ -474,7 +475,7 @@ func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput
 			return PhaseOutput{}, err
 		}
 
-		ended, err := s.runOnce(name, in, try)
+		ended, err := s.runOnce(name, in)
 		if err != nil || ended.Limit == nil {
 			return ended, err
 		}
@@ -485,46 +486,45 @@ func (s *script) runPastLimits(name string, in PhaseInput, try int) (PhaseOutput
 	}
 }
 
-// runOnce runs the agent once as a phase. The cost of a run that failed is recorded, so the run cap counts it.
-func (s *script) runOnce(name string, in PhaseInput, try int) (PhaseOutput, error) {
+// runOnce runs the agent once as a phase. The cost of a run that failed goes to the stream of failed runs, which a resume keeps, so every total
+// and the run cap count it after a resume too. The write and its step record are one transaction, so a replay appends nothing.
+// The error of the failed run stays the error of the step, so a failure to write the cost is not reported over it.
+func (s *script) runOnce(name string, in PhaseInput) (PhaseOutput, error) {
 	ended, err := s.e.queuePhase(s.ctx, in)
-	if err != nil {
-		s.countFailedRun(name, try, ended.Spend)
+	if err == nil || !s.running() {
+		return ended, err
+	}
+
+	if writeErr := dbos.WriteStream(s.ctx, failedRunsStream, failedRun{Call: name, Spend: ended.Spend}); writeErr != nil {
+		s.e.logger.Warn("cannot keep the cost of the failed agent run; the totals leave it out", "item", s.in.Item, "step", name, "error", writeErr)
 	}
 
 	return ended, err
 }
 
-// read reads what a finished run left, in a recorded step, and adds its cost to the sum of the run cap. The cost of a failed read stays out of the sum.
-func (s *script) read(name string, a agentArgs, ended PhaseOutput, try int) (stepResult, error) {
-	done, err := runStep(s.e, s.ctx, name+"/read"+strconv.Itoa(try), func(ctx context.Context) (stepResult, error) {
-		return readAgent(ctx, a, ended)
-	})
-	if err != nil {
-		return done, err
-	}
-
-	s.spent = s.spent.Plus(spendOf(done.Outputs))
-
-	return done, nil
+// running is false once the run is stopped. A stopped wait leaves its reading goroutine running, and it shares the step counter of the run:
+// a stopped run records no step.
+func (s *script) running() bool {
+	return s.ctx.Err() == nil
 }
 
-// countFailedRun records the cost of a run that failed and adds it to the sum of the run cap. A failed run spent money too, and the recorded step
-// gives a replay the same sum. The error of the failed run stays the error of the step, so a failure to record the cost is not reported over it.
-func (s *script) countFailedRun(name string, try int, spend agent.Spend) {
-	// A stopped wait leaves its reading goroutine running, and it shares the step counter of the run: a stopped run records no step.
-	if s.ctx.Err() != nil {
-		return
-	}
+// read reads what a finished run left, in a recorded step. The run cap counts the cost from the record.
+func (s *script) read(name string, a agentArgs, ended PhaseOutput, try int) (stepResult, error) {
+	return runStep(s.e, s.ctx, name+"/read"+strconv.Itoa(try), func(ctx context.Context) (stepResult, error) {
+		return readAgent(ctx, a, ended)
+	})
+}
 
-	done, err := runStep(s.e, s.ctx, name+"/spent"+strconv.Itoa(try), func(context.Context) (stepResult, error) {
+// countFailedRun records the cost of a run whose limit step failed, in a step of its own, so the totals count it. The error of the limit step
+// stays the error of the step, so a failure to record the cost is not reported over it. The caller records it only while the run is running.
+// Only the failure of the limit step writes this record.
+func (s *script) countFailedRun(name string, try int, spend agent.Spend) {
+	_, err := runStep(s.e, s.ctx, name+"/spent"+strconv.Itoa(try), func(context.Context) (stepResult, error) {
 		return stepResult{Outputs: spendOutputs(spend)}, nil
 	})
 	if err != nil {
-		return
+		s.e.logger.Warn("cannot record the cost of the limited agent run; the totals leave it out", "item", s.in.Item, "step", name, "error", err)
 	}
-
-	s.spent = s.spent.Plus(spendOf(done.Outputs))
 }
 
 // clearOutput removes the old output file of an agent call in a recorded step.

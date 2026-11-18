@@ -281,6 +281,18 @@ type fakeLogins struct {
 	login  string
 	byItem map[string]string
 	err    error
+	// reset is the reset time that the usage read gives for a login. The zero time is a read that has none.
+	reset    time.Time
+	resetErr error
+	asked    *[]string
+}
+
+func (l fakeLogins) Reset(_ context.Context, _, login string) (time.Time, bool, error) {
+	if l.asked != nil {
+		*l.asked = append(*l.asked, login)
+	}
+
+	return l.reset, !l.reset.IsZero(), l.resetErr
 }
 
 func (l fakeLogins) Pick(_ context.Context, _, item string, _ []string, _ bool) (string, error) {
@@ -291,6 +303,13 @@ func (l fakeLogins) Pick(_ context.Context, _, item string, _ []string, _ bool) 
 	return l.login, l.err
 }
 
+// noReset is the usage read of a fake pool that knows no reset time.
+type noReset struct{}
+
+func (noReset) Reset(context.Context, string, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
+
 // loginPick is one answer of loginSequence.
 type loginPick struct {
 	login string
@@ -299,6 +318,8 @@ type loginPick struct {
 
 // loginSequence answers each Pick from picks in order. The last answer repeats. It counts the calls.
 type loginSequence struct {
+	noReset
+
 	mu    sync.Mutex
 	calls int
 	picks []loginPick

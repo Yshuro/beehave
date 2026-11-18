@@ -138,11 +138,25 @@ func TestCapStop_ARunOutsideAWorkflowCannotSumItsTree(t *testing.T) {
 	t.Parallel()
 
 	engine := deepTree(t, newAgentRig(t))
+	engine.maxRunBudget = 5
 	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: "1"}}
 
-	_, err := s.treeSpend()
+	got, err := s.checkCaps("q")
 
 	require.ErrorContains(t, err, "read the id of the run of item 1")
+	assert.Nil(t, got.Stop)
+}
+
+func TestCapStop_ACapCheckWithNoCapDoesNotReadTheIDOfTheRun(t *testing.T) {
+	t.Parallel()
+
+	engine := deepTree(t, newAgentRig(t))
+	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: "1"}}
+
+	got, err := s.checkCaps("q")
+
+	require.NoError(t, err)
+	assert.Nil(t, got.Stop)
 }
 
 func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
@@ -155,7 +169,7 @@ func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}}
 		s := &script{e: failing, ctx: ctx, in: in}
 
-		_, err := s.treeSpend()
+		_, err := s.treeSpend(runID("1", 1))
 		if err == nil {
 			return "", errors.New("the sum did not fail")
 		}
@@ -271,7 +285,14 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 
 		ends <- cancel
 
-		s := &script{e: engine, ctx: own, in: in, spent: agent.Spend{Cost: 6}}
+		// The run records a cost of 6 dollars, so the run cap of 5 stops the look and the hold waits.
+		if _, err := runStep(engine, own, "agent:a#1/spent0", func(context.Context) (stepResult, error) {
+			return stepResult{Outputs: spendOutputs(agent.Spend{Cost: 6})}, nil
+		}); err != nil {
+			return "", err
+		}
+
+		s := &script{e: engine, ctx: own, in: in}
 
 		next, err := s.holdForCaps("q", 1, 0)
 		if err == nil {
@@ -295,6 +316,40 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 	words, err := handle.GetResult()
 	require.NoError(t, err)
 	assert.Equal(t, "1: wait for a cap of item 1 to be raised: context canceled", words)
+}
+
+func TestCapStop_ACapCheckWhoseRunReadFailsReturnsTheErrorAndNoStop(t *testing.T) {
+	t.Parallel()
+
+	engine := newAgentRig(t).h.opened(t)
+
+	// The run is a real workflow, so its own id reads fine. The run cap is set and the read of its steps fails.
+	check := func(ctx dbos.Context, in ItemInput) (string, error) {
+		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}, maxRunBudget: 5}
+		s := &script{e: failing, ctx: ctx, in: in}
+
+		got, err := s.checkCaps("q")
+		if err == nil {
+			return "", errors.New("the check did not fail")
+		}
+
+		if got.Stop != nil {
+			return "", errors.New("the check returned a stop with its error")
+		}
+
+		return err.Error(), nil
+	}
+
+	dbos.RegisterWorkflow(engine.ctx, check, dbos.WithWorkflowName(itemName))
+	require.NoError(t, dbos.Launch(engine.ctx))
+
+	handle, err := dbos.RunWorkflow(engine.ctx, check, ItemInput{Item: "1", Project: testProject}, dbos.WithWorkflowID(runID("1", 1)))
+	require.NoError(t, err)
+
+	words, err := handle.GetResult()
+	require.NoError(t, err)
+	assert.Contains(t, words, "read the steps of "+runID("1", 1))
+	assert.Contains(t, words, "the store failed")
 }
 
 func TestCapStop_AReadThatFailsReachesTheCallerWithItsWords(t *testing.T) {

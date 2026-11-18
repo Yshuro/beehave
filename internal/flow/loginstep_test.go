@@ -23,6 +23,8 @@ func (r *capRefusal) ResetAt() (time.Time, bool) { return r.reset, !r.reset.IsZe
 
 // capLogins refuses every pick that does not allow the cap to be passed, until it has refused `refusals` times. Then it picks alice.
 type capLogins struct {
+	noReset
+
 	mu       sync.Mutex
 	refusals int
 	refusal  *capRefusal
