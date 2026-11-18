@@ -138,11 +138,25 @@ func TestCapStop_ARunOutsideAWorkflowCannotSumItsTree(t *testing.T) {
 	t.Parallel()
 
 	engine := deepTree(t, newAgentRig(t))
+	engine.maxRunBudget = 5
 	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: "1"}}
 
-	_, err := s.treeSpend()
+	got, err := s.checkCaps("q")
 
 	require.ErrorContains(t, err, "read the id of the run of item 1")
+	assert.Nil(t, got.Stop)
+}
+
+func TestCapStop_ACapCheckWithNoCapDoesNotReadTheIDOfTheRun(t *testing.T) {
+	t.Parallel()
+
+	engine := deepTree(t, newAgentRig(t))
+	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: "1"}}
+
+	got, err := s.checkCaps("q")
+
+	require.NoError(t, err)
+	assert.Nil(t, got.Stop)
 }
 
 func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
@@ -155,7 +169,7 @@ func TestCapStop_ARunWhoseClimbToTheRootFailsCannotSumItsTree(t *testing.T) {
 		failing := &Engine{ctx: &failingRead{Context: engine.ctx, at: 1}}
 		s := &script{e: failing, ctx: ctx, in: in}
 
-		_, err := s.treeSpend()
+		_, err := s.treeSpend(runID("1", 1))
 		if err == nil {
 			return "", errors.New("the sum did not fail")
 		}
@@ -271,7 +285,14 @@ func TestCapStop_AWaitForACapThatEndsWithItsRunNamesTheItemAndTheCause(t *testin
 
 		ends <- cancel
 
-		s := &script{e: engine, ctx: own, in: in, spent: agent.Spend{Cost: 6}}
+		// The run records a cost of 6 dollars, so the run cap of 5 stops the look and the hold waits.
+		if _, err := runStep(engine, own, "agent:a#1/spent0", func(context.Context) (stepResult, error) {
+			return stepResult{Outputs: spendOutputs(agent.Spend{Cost: 6})}, nil
+		}); err != nil {
+			return "", err
+		}
+
+		s := &script{e: engine, ctx: own, in: in}
 
 		next, err := s.holdForCaps("q", 1, 0)
 		if err == nil {
