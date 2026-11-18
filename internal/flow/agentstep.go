@@ -515,17 +515,14 @@ func (s *script) read(name string, a agentArgs, ended PhaseOutput, try int) (ste
 	})
 }
 
-// recordedFailure is the error of a step that DBOS recorded. It has the text of its cause, so the returned error shows a failed record from a refused one.
+// recordedFailure is a step error that DBOS recorded, with the text of its cause.
 type recordedFailure struct{ cause error }
 
 func (r recordedFailure) Error() string { return r.cause.Error() }
 
 func (r recordedFailure) Unwrap() error { return r.cause }
 
-// countFailedRun records the cost of a run whose limit step failed, in a step of its own, so the totals count it. The record holds the error of
-// the limit step, so it is the recorded failure and a resume replays the limit step. The error of the limit step stays the error of the step,
-// so a failure to record the cost is not reported over it. The caller records it only while the run is running.
-// Only the failure of the limit step writes this record.
+// countFailedRun records the cost of a run whose limit step failed, with the error of the limit step as the failure of the record.
 func (s *script) countFailedRun(name string, try int, spend agent.Spend, limitErr error) {
 	_, err := runStep(s.e, s.ctx, name+"/spent"+strconv.Itoa(try), func(context.Context) (stepResult, error) {
 		return stepResult{Outputs: spendOutputs(spend)}, recordedFailure{limitErr}

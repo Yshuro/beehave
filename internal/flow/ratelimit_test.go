@@ -507,13 +507,20 @@ func TestRateLimit_AStoreThatRefusesTheLimitRecordFailsTheStepAndTheCostOfTheLim
 	assert.InDelta(t, 0.7, tree.Cost, 1e-9, "the cost of the limited run is recorded by the step of the failed run")
 }
 
-// refuseLimitRecord makes the store refuse the limit record with this name, and returns a function that lifts the refusal.
-func refuseLimitRecord(t *testing.T, h *harness, record string) func() {
+// refuseFirstLimit and refuseSecondLimit are triggers that make the store refuse the record of the first or the second limited run of the first try.
+const (
+	refuseFirstLimit = "CREATE TRIGGER refuse_limit_record BEFORE INSERT ON operation_outputs " +
+		"WHEN NEW.function_name = 'agent:fix#1/limit1.0' BEGIN SELECT RAISE(ABORT, 'the store refused the record'); END"
+	refuseSecondLimit = "CREATE TRIGGER refuse_limit_record BEFORE INSERT ON operation_outputs " +
+		"WHEN NEW.function_name = 'agent:fix#1/limit1.1' BEGIN SELECT RAISE(ABORT, 'the store refused the record'); END"
+)
+
+// refuseLimitRecord creates the trigger and returns a function that lifts the refusal.
+func refuseLimitRecord(t *testing.T, h *harness, trigger string) func() {
 	t.Helper()
 
 	db := sqlOf(t, h)
-	_, err := db.ExecContext(t.Context(), "CREATE TRIGGER refuse_limit_record BEFORE INSERT ON operation_outputs "+
-		"WHEN NEW.function_name = '"+record+"' BEGIN SELECT RAISE(ABORT, 'the store refused the record'); END")
+	_, err := db.ExecContext(t.Context(), trigger)
 	require.NoError(t, err)
 
 	return func() {
@@ -533,11 +540,24 @@ func TestRateLimit_AResumeAfterTheStoreRefusedTheLimitRecordRunsTheAgentAgainAnd
 	var logged bytes.Buffer
 
 	engine.logger = newLogger(&logged)
-	lift := refuseLimitRecord(t, h, "agent:fix#1/limit1.0")
+	lift := refuseLimitRecord(t, h, refuseFirstLimit)
 
 	_, err := engine.Run(testItem, testProject)
 	require.ErrorContains(t, err, "the store refused the record")
 	assert.NotContains(t, logged.String(), "cannot record the cost", "the cost record was written, with the error of the limit step")
+
+	var spent *dbos.StepInfo
+
+	for _, step := range recordsOfTestRun(t, engine) {
+		if step.StepName == "agent:fix#1/spent1" {
+			spent = &step
+		}
+	}
+
+	require.NotNil(t, spent, "the cost record exists")
+	require.Error(t, spent.Error, "the cost record holds a failure")
+	assert.Contains(t, spent.Error.Error(), "Step agent:fix#1/limit1.0 in workflow", "the failure is the error of the limit step")
+	assert.Contains(t, spent.Error.Error(), "the store refused the record", "the failure is the refusal of the limit record")
 	lift()
 
 	_, err = resumeAndJoin(t, engine, h.client(t, testVersion))
@@ -557,7 +577,7 @@ func TestRateLimit_AResumeAfterTheStoreRefusedTheLimitRecordOfASecondRunCountsEa
 	inTurn(h, limited(limitReset, 0.2), limited(limitReset, 0.7), exited)
 
 	engine := h.engine(t)
-	lift := refuseLimitRecord(t, h, "agent:fix#1/limit1.1")
+	lift := refuseLimitRecord(t, h, refuseSecondLimit)
 
 	_, err := engine.Run(testItem, testProject)
 	require.ErrorContains(t, err, "the store refused the record")
