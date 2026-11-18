@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"strconv"
@@ -25,37 +26,81 @@ func (w LimitWait) text() string {
 	return "waits for the " + w.Limit.Name() + " of login " + w.Login + " until " + w.WaitUntil.Format(time.RFC3339)
 }
 
+// note is the paragraph that a fresh rerun after the limit gets, with what the view lets the engine say about the changes since the step started.
+func (w LimitWait) note(view lostView, stat string) string {
+	return "This step ran before, and the " + w.Limit.Name() + " of login " + w.Login + " stopped it. " + treeNote(view, stat)
+}
+
 // limitRecord is what the limit step of an agent call records after a run that a provider limit stopped: the wait, the session and the cost of the run.
 // Passed is true when the reset time had passed when the step ran, so the wait is the least wait.
 type limitRecord struct {
 	LimitWait
 
+	// Session is the session of the step: the one that the limited run named, else the one that the limited run was given to resume.
 	Session string `json:"session,omitempty"`
+	// Note is the note of a fresh rerun after the reset.
+	Note string `json:"note,omitempty"`
 	agent.Spend
 
 	Passed bool `json:"reset_passed,omitempty"`
 }
 
-// waitOutLimit records the limit that stopped run number run of a try, with the cost of that run that the caps read, and sleeps until the limit resets.
-// It reports whether the reset time had passed, so the next run of the try fails its phase when its limit has a past reset time too.
-func (s *script) waitOutLimit(name string, in PhaseInput, ended PhaseOutput, try, run int) (bool, error) {
-	record, err := runStep(s.e, s.ctx, name+"/limit"+strconv.Itoa(try)+"."+strconv.Itoa(run), func(context.Context) (limitRecord, error) {
-		limit := *ended.Limit
+// continued is the prompt of the resumed session of the rerun. The brief and the output file are in the session already.
+func (r limitRecord) continued() string {
+	return "The " + r.Limit.Name() + " of login " + r.Login + " stopped you while you worked on this step, and it has reset. " + continueStep
+}
 
-		return limitRecord{
-			LimitWait: LimitWait{Limit: limit, Login: in.Login, WaitUntil: limit.ResetsAt}, Session: ended.Session, Spend: ended.Spend,
-			Passed: !limit.ResetsAt.After(s.e.deps.Clock.wall()),
-		}, nil
+// rerun returns the limited run for the rerun after the reset, or nil when the step has no session: the note then goes into the prompt.
+func (r limitRecord) rerun() *LostRun {
+	if r.Session == "" {
+		return nil
+	}
+
+	return &LostRun{Session: r.Session, Note: r.Note, Continue: r.continued()}
+}
+
+// afterLimit returns the input of the rerun after the limit that record holds. in is the input of the try, so the notes of two limits never stack.
+func (in PhaseInput) afterLimit(record limitRecord) PhaseInput {
+	in.ResetPassed = record.Passed
+
+	if in.Limited = record.rerun(); in.Limited == nil {
+		in.Prompt += "\n\n" + record.Note
+	}
+
+	return in
+}
+
+// waitOutLimit records the limit that stopped run number run of a try, with the cost of that run that the caps read, and sleeps until the limit resets.
+// It returns the input of the rerun, built from base, the input of the try. Its ResetPassed is true when the reset time had passed, so the rerun fails its phase when its limit has a past reset time too.
+func (s *script) waitOutLimit(name string, base, in PhaseInput, ended PhaseOutput, try, run int) (PhaseInput, error) {
+	record, err := runStep(s.e, s.ctx, name+"/limit"+strconv.Itoa(try)+"."+strconv.Itoa(run), func(ctx context.Context) (limitRecord, error) {
+		return s.limitRecordOf(ctx, in, ended), nil
 	})
 	if err != nil {
 		if s.running() {
 			s.countFailedRun(name, try, ended.Spend)
 		}
 
-		return false, err
+		return PhaseInput{}, err
 	}
 
-	return record.Passed, s.waitForReset(record.WaitUntil)
+	return base.afterLimit(record), s.waitForReset(record.WaitUntil)
+}
+
+// limitRecordOf is the record of the run that ended at a limit. Only the note uses the diff summary, so a diff that cannot be read changes the note and keeps the record.
+func (s *script) limitRecordOf(ctx context.Context, in PhaseInput, ended PhaseOutput) limitRecord {
+	limit := *ended.Limit
+	wait := LimitWait{Limit: limit, Login: in.Login, WaitUntil: limit.ResetsAt}
+
+	stat, view, unread := s.e.lostDiff(ctx, in)
+	if unread != nil {
+		s.e.logger.WarnContext(ctx, "cannot read the diff summary of the limited agent run", "item", in.Item, "error", unread)
+	}
+
+	return limitRecord{
+		LimitWait: wait, Session: cmp.Or(ended.Session, in.Limited.session()), Note: wait.note(view, stat), Spend: ended.Spend,
+		Passed: !limit.ResetsAt.After(s.e.deps.Clock.wall()),
+	}
 }
 
 // dateLimit gives a limit that carries no reset time the reset time that the usage read of the pool gives for the login of the run, so the wait goes on as if the agent had given it.
