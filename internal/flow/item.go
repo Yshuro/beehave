@@ -329,7 +329,7 @@ func (e *Engine) receiveAnswer(ctx dbos.Context, deadline time.Duration) (answer
 	}
 
 	for {
-		answer, err = dbos.Recv[string](ctx, ownerTopic, cmp.Or(e.deps.Clock.OwnerWait, ownerWaitLimit))
+		answer, err = dbos.Recv[string](ctx, ownerTopic, e.waitWindow())
 		if !errors.Is(err, context.DeadlineExceeded) {
 			return answer, false, err
 		}

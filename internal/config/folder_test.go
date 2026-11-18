@@ -1013,6 +1013,58 @@ func TestLoadFolder_TheReviewPollIntervalHasAnUpperBoundOfOneWeek(t *testing.T) 
 	require.ErrorContains(t, problems, "agents.review_poll_minutes is 307445735: set it to 10080 (one week) or less")
 }
 
+func TestAgentsConfig_ReviewLookbackDaysIsReadFromFileAndEnv(t *testing.T) {
+	t.Parallel()
+
+	cfg, problems := loadRunnersText(t, "agents()\n")
+	require.Empty(t, problems)
+	require.Equal(t, 3, cfg.Agents.ReviewLookbackDays, "the default of the config")
+	require.Equal(t, config.DefaultReviewLookbackDays, cfg.Agents.ReviewLookbackDays)
+
+	cfg, problems = loadRunnersText(t, "agents(review_lookback_days = 7, max_turns = 9)\n")
+	require.Empty(t, problems)
+	require.Equal(t, 7, cfg.Agents.ReviewLookbackDays)
+	require.Equal(t, 9, cfg.Agents.MaxTurns, "the key sets only the look-back")
+
+	cfg, problems = loadRunnersText(t, "agents(review_lookback_days = 365)\n")
+	require.Empty(t, problems)
+	require.Equal(t, 365, cfg.Agents.ReviewLookbackDays)
+
+	for _, text := range []string{"0", "-1"} {
+		_, problems = loadRunnersText(t, "agents(review_lookback_days = "+text+")\n")
+		require.Len(t, problems, 1, text)
+		require.ErrorContains(t, problems[0], "agents.review_lookback_days must be 1 or more", text)
+		require.ErrorContains(t, problems[0], "BEEHAVE_REVIEW_LOOKBACK_DAYS", text)
+	}
+
+	_, problems = loadRunnersText(t, "agents(review_lookback_days = 366)\n")
+	require.Len(t, problems, 1)
+	require.ErrorContains(t, problems[0], "agents.review_lookback_days is 366: set it to 365 (one year) or less")
+	require.ErrorContains(t, problems[0], "BEEHAVE_REVIEW_LOOKBACK_DAYS")
+
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "runners.star"), "agents(review_lookback_days = 5, max_turns = 9)\n")
+
+	cfg, problems = loadFolder(dir, map[string]string{"BEEHAVE_REVIEW_LOOKBACK_DAYS": "30"})
+	require.Empty(t, problems)
+	require.Equal(t, 30, cfg.Agents.ReviewLookbackDays, "the variable wins over the file")
+	require.Equal(t, 9, cfg.Agents.MaxTurns, "the variable sets only the look-back")
+
+	cfg, problems = loadFolder(dir, map[string]string{"BEEHAVE_REVIEW_LOOKBACK_DAYS": ""})
+	require.Empty(t, problems)
+	require.Equal(t, 5, cfg.Agents.ReviewLookbackDays, "an empty variable leaves the file value")
+
+	_, problems = loadFolder(dir, map[string]string{"BEEHAVE_REVIEW_LOOKBACK_DAYS": "some"})
+	require.Len(t, problems, 1)
+	require.ErrorContains(t, problems[0], "BEEHAVE_REVIEW_LOOKBACK_DAYS=some is not a whole number")
+
+	for value, want := range map[string]string{"0": "must be 1 or more", "366": "is 366: set it to 365 (one year) or less"} {
+		_, problems = loadFolder(dir, map[string]string{"BEEHAVE_REVIEW_LOOKBACK_DAYS": value})
+		require.Len(t, problems, 1, value)
+		require.ErrorContains(t, problems[0], want, value)
+	}
+}
+
 func TestLoadFolder_ThePerLoginVariableOverlaysTheFileAndIsValidated(t *testing.T) {
 	t.Parallel()
 

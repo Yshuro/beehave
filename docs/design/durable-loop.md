@@ -387,7 +387,8 @@ If the loop used all its rounds, the `exhausted` field of its result is true. Th
 
 **Deadline.**
 
-- With no `timeout` argument, the wait has no deadline. The receive starts again every seven days.
+- With no `timeout` argument, the wait keeps waiting until someone answers. It has no deadline. The engine renews the receive every seven days, and that renewal ends nothing.
+- The `timeout` argument sets the deadline of a wait. To bound the owner wait of a `wait` step, set `timeout` in that step. It does not bound the owner wait for a lost job, which `docs/design/hosts.md` describes.
 - With `timeout = "48h"`, the wait ends at the deadline. The `timed_out` field of its result is true, and the `answer` field is empty.
 - `beehave check workflow` and the run refuse a `timeout` of zero or below, because it would read as no deadline. For a wait with no deadline, leave the argument out.
 - DBOS records the deadline of the wait. A run that stops and resumes after the deadline times out at once. A run that resumes before it waits for the time left.
@@ -814,7 +815,7 @@ A resumed run writes these lines again for the steps it replays from the record.
 
 #### The review poll in `beehave status`
 
-When `agents.review_poll_minutes` is set, `beehave run` schedules a review poll. Each tick reads the open pull requests of every project with a forge, in read-only calls. The interval is at most 10080 minutes (one week). Under `beehave serve`, set `agents.review_poll_minutes` to 60.
+When `agents.review_poll_minutes` is set, `beehave run` schedules a review poll. Each tick reads the open pull requests of every project with a forge, in read-only calls. The interval is at most 10080 minutes (one week). The search for replies looks back `agents.review_lookback_days` days, 3 by default and 365 at most. Under `beehave serve`, set `agents.review_poll_minutes` to 60.
 
 `beehave status` lists each schedule of the store after the runs, with its last tick and whether it fires. The workflow library records the last tick, and beehave adds no record.
 

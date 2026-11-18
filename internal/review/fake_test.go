@@ -17,6 +17,8 @@ const (
 	me   = "me"
 	head = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	old  = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	lookbackDays = 3
 )
 
 var (
