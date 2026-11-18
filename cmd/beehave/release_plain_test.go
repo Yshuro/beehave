@@ -26,8 +26,8 @@ func TestReleaseDeps_TheClientKnowsAProjectWithNoRepositoryAndFindsItsFolderWith
 	require.NotNil(t, deps.Repository)
 	assert.False(t, deps.Repository("p"))
 
-	path, err := deps.Trees.Path(t.Context(), "p", "bb-1")
+	var path string
 
-	require.NoError(t, err)
+	require.NoError(t, deps.Trees.WithTree(t.Context(), "p", "bb-1", func(dir string) { path = dir }))
 	assert.Equal(t, dir, path)
 }

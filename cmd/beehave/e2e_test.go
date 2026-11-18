@@ -182,10 +182,14 @@ func (e2eFiles) Watch(context.Context, string, int) (review.Outcome, error) {
 
 func (e2eFiles) SetDraft(context.Context, string, int, bool) error { return nil }
 
-func (e2eFiles) Path(context.Context, string, string) (string, error) { return "", nil }
+func (e2eFiles) WithTree(_ context.Context, _, _ string, fn func(string)) error {
+	fn("")
+
+	return nil
+}
 
 // Ensure gives the git folder that e2eSetup makes. The gate reads the commit of that folder.
-func (f e2eFiles) Ensure(context.Context, string, string) (string, error) {
+func (f e2eFiles) Ensure(context.Context, string, string, string) (string, error) {
 	return filepath.Join(f.dir, "tree"), nil
 }
 

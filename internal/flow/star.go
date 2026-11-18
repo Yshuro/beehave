@@ -27,7 +27,8 @@ const stepsVersion = "star30"
 
 // runStar runs `main(item)` of the workflow file of the run on one thread. The files are the bytes that the run pinned.
 // Each builtin does its work in DBOS steps, so a replay of this function makes the same calls and gets the recorded results.
-func (e *Engine) runStar(ctx dbos.Context, in ItemInput, login string) (ItemResult, error) {
+// treeStart is the commit that the recorded step made the worktree of a round item at, and empty for any other item.
+func (e *Engine) runStar(ctx dbos.Context, in ItemInput, login, treeStart string) (ItemResult, error) {
 	sources, err := workflow.Open(in.File, in.Files)
 	if err != nil {
 		return ItemResult{}, err
@@ -42,7 +43,7 @@ func (e *Engine) runStar(ctx dbos.Context, in ItemInput, login string) (ItemResu
 		return ItemResult{}, fmt.Errorf("read the fields of item %s: %w", in.Item, err)
 	}
 
-	return e.playScript(&script{e: e, ctx: ctx, in: in, login: login, severity: severityOfItem(fields), counts: map[string]int{}}, sources, fields)
+	return e.playScript(&script{e: e, ctx: ctx, in: in, login: login, treeStart: treeStart, severity: severityOfItem(fields), counts: map[string]int{}}, sources, fields)
 }
 
 // playScript runs main, then the finish of the workflow file, and returns what the item came to.
@@ -145,7 +146,17 @@ func itemArg(fields map[string]string) *starlarkstruct.Struct {
 
 // hasRepository reports whether the project of the run has a git repository.
 func (s *script) hasRepository() bool {
-	return s.e.deps.Repository == nil || s.e.deps.Repository(s.in.Project)
+	return s.e.hasRepository(s.in.Project)
+}
+
+// tree returns the worktree of the item and makes it when it is missing. A round item gets it at the commit that the recorded step made it at.
+func (s *script) tree(ctx context.Context) (string, error) {
+	return s.e.deps.Trees.Ensure(ctx, s.in.Project, s.in.Item, s.treeStart)
+}
+
+// hasRepository reports whether the project has a repository. A nil Deps.Repository means every project has one.
+func (e *Engine) hasRepository(project string) bool {
+	return e.deps.Repository == nil || e.deps.Repository(project)
 }
 
 // refuseWithoutRepository refuses a call of a builtin that reads git or a forge when the project has no repository, before the call reads its arguments.

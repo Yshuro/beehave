@@ -49,7 +49,7 @@ func (s *script) beforeReview(b *starlark.Builtin, args starlark.Tuple, kwargs [
 	}
 
 	return s.durable("before_review", call.label, func(ctx context.Context, _ string) (stepResult, error) {
-		dir, err := s.e.deps.Trees.Ensure(ctx, s.in.Project, s.in.Item)
+		dir, err := s.tree(ctx)
 		if err != nil {
 			return stepResult{}, fmt.Errorf("find the folder of item %s: %w", s.in.Item, err)
 		}

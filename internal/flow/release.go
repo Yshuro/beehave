@@ -21,18 +21,23 @@ const releaseTimeout = 30 * time.Second
 // treeStepName names the workflow step that removes the worktree of an item.
 const treeStepName = "worktree"
 
+// treeMakeStepName names the workflow step that makes the worktree of a round item.
+const treeMakeStepName = "make worktree"
+
 // remoteName is the remote that holds the branch of an item.
 const remoteName = "origin"
 
-// trees finds the worktree of an item. An empty path means the item has none.
+// trees finds the worktree of an item. WithTree runs fn with the worktree while it holds the lock of the clone, so no other worktree command on the
+// clone runs meanwhile. An empty path means the item has none.
 type trees interface {
-	Path(ctx context.Context, project, item string) (string, error)
+	WithTree(ctx context.Context, project, item string, fn func(dir string)) error
 }
 
 // treeMaker finds the worktree of an item and makes it when it is missing. Ensure returns the folder, and an empty folder is not a success.
+// A round item with a start is made again at that commit; with an empty start it is made at the tip of its base.
 type treeMaker interface {
 	trees
-	Ensure(ctx context.Context, project, item string) (string, error)
+	Ensure(ctx context.Context, project, item, start string) (string, error)
 }
 
 // read is one git call that only reads, with the words that name it in a reason to keep the tree.
@@ -68,19 +73,22 @@ func (d ReleaseDeps) removeTree(ctx context.Context, project, item string) (stri
 		return "the project has no repository, so its folder holds work that no remote shows", nil
 	}
 
-	dir, err := d.Trees.Path(ctx, project, item)
-	if err != nil {
+	kept := "item has no worktree"
+
+	if err := d.Trees.WithTree(ctx, project, item, func(dir string) {
+		if dir == "" {
+			return
+		}
+
+		bounded, cancel := d.limit(ctx)
+		defer cancel()
+
+		kept = tryRemove(bounded, dir)
+	}); err != nil {
 		return "", fmt.Errorf("find the worktree of item %s: %w", item, err)
 	}
 
-	if dir == "" {
-		return "item has no worktree", nil
-	}
-
-	ctx, cancel := d.limit(ctx)
-	defer cancel()
-
-	return tryRemove(ctx, dir), nil
+	return kept, nil
 }
 
 // limit bounds one release call: the git calls of a worktree, or the call to the tracker that gives the claim back.

@@ -1070,11 +1070,37 @@ func (f *fakeWatch) seen() (reads, drafts []int) {
 
 // fakeTrees answers every lookup with dir, or fails with err. A fakeTrees with late set has no folder until Ensure makes it.
 type fakeTrees struct {
-	dir  string
-	err  error
-	late *lateFolder
+	dir string
+	err error
+	// ensureErr fails Ensure only.
+	ensureErr error
+	late      *lateFolder
 	// per, when set, gives the folder of each item and wins over dir and late.
 	per func(ctx context.Context, item string) (string, error)
+	// ensured records the item of each Ensure call when a test sets it.
+	ensured *ensureLog
+	// starts records the start of each Ensure call when a test sets it.
+	starts *ensureLog
+}
+
+// ensureLog is the items that Ensure was called for, in order.
+type ensureLog struct {
+	mu    sync.Mutex
+	items []string
+}
+
+func (l *ensureLog) add(item string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.items = append(l.items, item)
+}
+
+func (l *ensureLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.items...)
 }
 
 // lateFolder is a worktree that exists only after Ensure.
@@ -1116,7 +1142,30 @@ func (f fakeTrees) Path(ctx context.Context, _, item string) (string, error) {
 	return f.dir, f.err
 }
 
-func (f fakeTrees) Ensure(ctx context.Context, _, item string) (string, error) {
+func (f fakeTrees) WithTree(ctx context.Context, project, item string, fn func(dir string)) error {
+	dir, err := f.Path(ctx, project, item)
+	if err != nil {
+		return err
+	}
+
+	fn(dir)
+
+	return nil
+}
+
+func (f fakeTrees) Ensure(ctx context.Context, _, item, start string) (string, error) {
+	if f.ensured != nil {
+		f.ensured.add(item)
+	}
+
+	if f.starts != nil {
+		f.starts.add(start)
+	}
+
+	if f.ensureErr != nil {
+		return "", f.ensureErr
+	}
+
 	if f.per != nil {
 		return f.per(ctx, item)
 	}

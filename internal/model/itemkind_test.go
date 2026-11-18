@@ -35,3 +35,21 @@ func TestItemKind_AMalformedRoundIdIsNoItem(t *testing.T) {
 		assert.Empty(t, model.ItemKind(item), item)
 	}
 }
+
+func TestRoundBase_ReturnsTheBaseOfARoundIdAndNothingForAnyOtherItem(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct {
+		base  string
+		round bool
+	}{
+		"round/main": {"main", true}, "round/integration/s1": {"integration/s1", true},
+		"12": {"", false}, "bb-1": {"", false}, "round/": {"", false}, "round/a b": {"", false},
+	}
+	for item, want := range tests {
+		base, round := model.RoundBase(item)
+
+		assert.Equal(t, want.base, base, item)
+		assert.Equal(t, want.round, round, item)
+	}
+}
