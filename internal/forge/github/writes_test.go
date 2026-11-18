@@ -223,6 +223,21 @@ func TestAddAssignee_PostsTheLoginToTheAssigneesOfTheNumber(t *testing.T) {
 	assert.Contains(t, err.Error(), "cannot assign #4 to alice")
 }
 
+// The repeat of an assign is safe because the REST call adds a login and never replaces the assignees. GitHub says so at
+// https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue: "Users already assigned to an issue are not replaced."
+// The test pins the exact call, so a change to a call that replaces the assignees (PATCH with assignees, or a PUT) turns it red.
+func TestAddAssignee_ARepeatSendsTheSameAddOnlyCall(t *testing.T) {
+	t.Parallel()
+
+	f, run := fixed(t, "")
+
+	require.NoError(t, f.AddAssignee(context.Background(), 4, "alice"))
+	require.NoError(t, f.AddAssignee(context.Background(), 4, "alice"))
+
+	add := []string{"api", "-X", "POST", "repos/" + repo + "/issues/4/assignees", "-f", "assignees[]=alice"}
+	assert.Equal(t, [][]string{add, add}, run.Calls)
+}
+
 // authored is a forge whose pull request 4 was written by author and whose token belongs to the login me.
 func authored(t *testing.T, author string) (*github.Forge, *proctest.Scripted) {
 	t.Helper()

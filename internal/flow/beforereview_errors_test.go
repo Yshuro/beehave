@@ -6,6 +6,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 func TestBeforeReview_AFolderThatCannotBeFoundIsAnErrorNamingTheItem(t *testing.T) {
@@ -104,7 +106,7 @@ func TestBeforeReview_MoreFailedNewTestsThanTheLogNamesIsAFindingWithBothCounts(
 
 	tree := reviewTreeOf(t, "src/a.go", "add a")
 	zero := 0
-	checks := &GateChecks{NewTests: []string{"pkg TestA"}, New: 1, Failed: []string{"skipped pkg TestA"}, FailedCount: 3, Complete: true, Secrets: &zero}
+	checks := &GateChecks{NewTests: []string{"pkg TestA"}, New: 1, Failed: []string{"skipped pkg TestA"}, FailedCount: 3, Complete: true, Secrets: &zero, Revert: model.RevertPass, RevertCases: 1}
 	h := reviewHarness(t, tree, checks)
 
 	_, err := walkText(t, h, bodyFlow(reviewFlow(tree.base, "")))

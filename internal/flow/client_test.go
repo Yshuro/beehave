@@ -21,6 +21,7 @@ func TestStateOf_MapsEveryStoreStatusToARunState(t *testing.T) {
 		dbos.WorkflowStatusPending:                     runRunning,
 		dbos.WorkflowStatusEnqueued:                    runQueued,
 		dbos.WorkflowStatusDelayed:                     runQueued,
+		dbos.WorkflowStatusSuspended:                   runQueued,
 		dbos.WorkflowStatusSuccess:                     runDone,
 		dbos.WorkflowStatusError:                       runFailed,
 		dbos.WorkflowStatusMaxRecoveryAttemptsExceeded: runFailed,
@@ -30,6 +31,25 @@ func TestStateOf_MapsEveryStoreStatusToARunState(t *testing.T) {
 
 	for status, want := range tests {
 		assert.Equal(t, want, stateOf(status), status)
+	}
+}
+
+func TestRun_OnlyAnEndedRunIsTerminal(t *testing.T) {
+	t.Parallel()
+
+	tests := map[dbos.WorkflowStatusType]bool{
+		dbos.WorkflowStatusPending:                     false,
+		dbos.WorkflowStatusEnqueued:                    false,
+		dbos.WorkflowStatusDelayed:                     false,
+		dbos.WorkflowStatusSuspended:                   false,
+		dbos.WorkflowStatusSuccess:                     true,
+		dbos.WorkflowStatusError:                       true,
+		dbos.WorkflowStatusMaxRecoveryAttemptsExceeded: true,
+		dbos.WorkflowStatusCancelled:                   true,
+	}
+
+	for status, want := range tests {
+		assert.Equal(t, want, run{Status: dbos.WorkflowStatus{Status: status}}.terminal(), status)
 	}
 }
 

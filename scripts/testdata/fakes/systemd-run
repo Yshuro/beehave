@@ -1,0 +1,12 @@
+#!/bin/sh
+# Fake systemd-run: --version prints a version. Any other call runs its last argument with sh -c, in an empty environment
+# that is the environment of the user manager, as fake-unit-env builds it from the environment.d folders.
+printf 'systemd-run %s\n' "$*" >>"$FAKE_LOG"
+if [ "$1" = --version ]; then
+	echo "systemd ${FAKE_SYSTEMD:-255} (255.4-1ubuntu8)"
+	exit 0
+fi
+for last; do :; done
+unit_env=$("$(dirname "$0")/fake-unit-env")
+# shellcheck disable=SC2086 # the lines hold no space or glob in the tests
+exec env -i HOME="$HOME" FAKE_STATE="$FAKE_STATE" $unit_env sh -c "$last"

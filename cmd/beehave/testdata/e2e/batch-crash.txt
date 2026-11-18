@@ -1,6 +1,5 @@
 # The beehave process dies right after the forge merged the second of three batch members, before the engine records that merge.
 # The next beehave run finishes the same run. It merges the third member once, and it does not call the forge merge again for the first two.
-env REPO=o/r BASE=main OWNER_LOGIN=owner OWNER_EMAIL=owner@example.com
 batchsetup
 
 ! exec beehave run 7 --workflow flow/batch.star

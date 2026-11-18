@@ -81,10 +81,15 @@ env GREMLINS_REPORT=$WORK/otherpath.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: the gremlins report names files that are not under .*: internal/a\.go internal/b\.go\. Its paths do not match the diff\.$'
 ! stdout 'no candidate'
+! stdout '^mutation-pr: end '
 env GREMLINS_REPORT=$WORK/nomutant.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: the gremlins report holds no mutant$'
 ! stdout 'no candidate'
+stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'
+stdout '(?s)^mutation-pr: applied=0 .*^mutation-pr: the gremlins report holds no mutant$'
+stdout '^mutation-pr: end count=0 printed=0$'
+! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 env GREMLINS_REPORT=$WORK/notcovered.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: applied=0 killed=0 lived=0 timed_out=0$'
@@ -99,10 +104,12 @@ env GREMLINS_REPORT=$WORK/skippedchanged.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: the gremlins report does not match the diff against main: .* at a\.go:3$'
 ! stdout 'no candidate'
+! stdout '^mutation-pr: end '
 env GREMLINS_REPORT=$WORK/keptunchanged.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
 stdout '^mutation-pr: the gremlins report does not match the diff against main: .* at b\.go:3$'
 ! stdout 'no candidate'
+! stdout '^mutation-pr: end '
 
 # The changed lines are the lines that gremlins reads from its own diff, which has context lines. For each hunk,
 # gremlins starts at the first line after the leading context and counts one line for each added line.

@@ -23,6 +23,7 @@ const (
 	hostTeardownName = "host_teardown"
 	hostUpName       = "host_up"
 	reasonField      = "reason"
+	stateField       = "state"
 	waitName         = "wait"
 	mergeName        = "merge"
 	preflightName    = "preflight"
@@ -37,7 +38,9 @@ const (
 	prAssignName     = "pr_assign"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
+	prStateName      = "pr_state"
 	baseField        = "base"
+	revertField      = "revert"
 	numberField      = "number"
 	statusField      = "status"
 )
@@ -56,7 +59,7 @@ func resultFields() map[string][]string {
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
-		mergeName:        {"state", reasonField},
+		mergeName:        {stateField, reasonField},
 		preflightName:    {"ok", "stop", "code", reasonField, "foreign", "pr", "head", "author"},
 		queueName:        {"rows", "free"},
 		spawnName:        {"runs"},
@@ -73,8 +76,8 @@ func resultFields() map[string][]string {
 // gateResultFields holds the fields of the builtins that judge a head: gate and before_review.
 func gateResultFields() map[string][]string {
 	return map[string][]string{
-		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests"},
-		beforeReviewName: {"ok", "findings", "new_tests", baseField, "keywords"},
+		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests", revertField, "host_loss", "host_losses"},
+		beforeReviewName: {"ok", "findings", "new_tests", revertField, baseField, "keywords"},
 	}
 }
 
@@ -87,7 +90,7 @@ func factsResultFields() map[string][]string {
 	}}
 }
 
-// trackerResultFields holds the fields of the builtins that write the tracker or the pull request.
+// trackerResultFields holds the fields of the builtins that write the tracker or the pull request, and of pr_state, which reads the pull request.
 func trackerResultFields() map[string][]string {
 	return map[string][]string{
 		boardSyncName:   {numberField, statusField},
@@ -99,6 +102,7 @@ func trackerResultFields() map[string][]string {
 		prAssignName:    {numberField, "issues"},
 		prCommentName:   {numberField},
 		prOpenName:      {numberField, "created", "stack"},
+		prStateName:     {stateField},
 	}
 }
 

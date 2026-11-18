@@ -29,11 +29,11 @@ func TestExampleClaim_TheItemIsClaimedBeforeTheFirstAgentStepAndReleasedAfterThe
 		return inner(request)
 	}
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"claim:" + testItem}, atFirstAgent, "the claim is the only lifecycle step before the first agent starts")
-	assert.Equal(t, []string{"claim:" + testItem, "ready:" + testItem, "release:" + testItem}, rig.h.life.seen(), "the claim is first and the release is last")
+	assert.Equal(t, []string{"claim:" + testItem, "release:" + testItem}, rig.h.life.seen(), "the claim is first and the release is last, and the child marks nothing ready: the round lands")
 	assert.Equal(t, []string{testOwner + testItem}, rig.h.life.releasedBy(), "the release carries the token of the claim")
 }
 
@@ -43,7 +43,7 @@ func TestExampleClaim_AFailedClaimStartsNoAgent(t *testing.T) {
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	rig.h.life.failing["claim"] = true
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.ErrorIs(t, err, errFake)
 	assert.Empty(t, rig.h.agents.seen(), "a run that holds no claim starts no agent, so a store that cannot be read fails closed")
@@ -55,7 +55,7 @@ func TestExample_EveryAgentStepOfTheExampleThatCanEditForbidsACommitAuthor(t *te
 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
 	require.NotEmpty(t, rig.h.agents.seen())
@@ -81,7 +81,7 @@ func TestExampleClaim_TheItemIsReleasedWhenAStepOfTheExampleFails(t *testing.T) 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 	rig.h.agents.err = errFake
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Equal(t, []string{testOwner + testItem}, rig.h.life.releasedBy(), "the release runs on a failed run, with the token of the claim")

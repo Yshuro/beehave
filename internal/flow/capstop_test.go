@@ -323,14 +323,11 @@ func TestCapStop_AReadThatFailsReachesTheCallerWithItsWords(t *testing.T) {
 
 	engine := stoppedTree(t)
 
-	_, err := runSpend(engine.ctx, runID("1", 1))
+	_, err := runAndBelowSpend(engine.ctx, runID("1", 1))
 	require.ErrorContains(t, err, "read the steps of "+runID("1", 1))
 
 	_, err = itemRuns(engine.ctx, dbos.WithFilterParentWorkflowID(runID("1", 1)))
 	require.ErrorContains(t, err, "list the item runs")
-
-	_, err = runAndBelowSpend(engine.ctx, runID("1", 1))
-	require.ErrorContains(t, err, "read the steps of")
 
 	_, err = rootRun(engine.ctx, runID("3", 1))
 	require.ErrorContains(t, err, "list the item runs")

@@ -155,6 +155,8 @@ type fakeGate struct {
 	hosts []string
 	// bases are the base branches that Submit was given, in order.
 	bases []string
+	// checks is the check record that Run gives a passed result with none, or nil for no record.
+	checks *GateChecks
 }
 
 // gatedOn lists the build hosts that the calls of the gate were given, in order.
@@ -236,7 +238,9 @@ func (g *fakeGate) Run(ctx context.Context, project, item, host string, job Gate
 	if g.via != nil {
 		g.calls++
 
-		return g.via.Run(ctx, project, item, host, job)
+		result, err := g.via.Run(ctx, project, item, host, job)
+
+		return g.withChecks(result), err
 	}
 
 	index := min(g.calls, len(g.results)-1)
@@ -247,7 +251,17 @@ func (g *fakeGate) Run(ctx context.Context, project, item, host string, job Gate
 		result.Steps = commandStep(result.Passed)
 	}
 
-	return result, g.err
+	return g.withChecks(result), g.err
+}
+
+// withChecks gives a passed result with no check record the record of the gate.
+func (g *fakeGate) withChecks(result GateResult) GateResult {
+	if g.checks != nil && result.Passed && result.Checks == nil {
+		checks := *g.checks
+		result.Checks = &checks
+	}
+
+	return result
 }
 
 // commandStep is the one step that a real gate gives from the exit code of its command.
@@ -537,9 +551,13 @@ type harness struct {
 	ticks chan time.Time
 	sleep time.Duration
 	// wall replaces the wall clock of the engine when a test sets it.
-	wall    func() time.Time
+	wall func() time.Time
+	// reading replaces the reading of the clock that the now builtin and the wait for a lost job read, when a test sets it.
+	reading func() time.Time
 	capWait time.Duration
-	opts    Options
+	// lostPoll is the sleep between two looks for the proof of a lost gate job. It is a millisecond unless a test sets it.
+	lostPoll time.Duration
+	opts     Options
 }
 
 // defaultFlow is the workflow file of a harness that a test does not replace: one agent step.
@@ -603,7 +621,7 @@ func (h *harness) deps() Deps {
 	deps := Deps{
 		Agents: h.agents, Gate: h.gate, Logins: h.logins, Lifecycle: h.life, Forge: h.forge, Watch: h.watch, Trees: h.trees, Beats: h.beats, Commands: h.commands, Items: h.items, Writer: h.writer, Reader: h.reader,
 		Kept:  []error{errFake},
-		Clock: clock{Tick: h.ticks, Poll: storePoll, Watch: cmp.Or(h.sleep, time.Millisecond), Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, CapWait: cmp.Or(h.capWait, time.Millisecond)},
+		Clock: clock{Tick: h.ticks, Poll: storePoll, Watch: cmp.Or(h.sleep, time.Millisecond), Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, Reading: h.reading, CapWait: cmp.Or(h.capWait, time.Millisecond), LostPoll: cmp.Or(h.lostPoll, time.Millisecond)},
 	}
 	if h.merge != nil {
 		deps.Merge = h.merge
@@ -851,6 +869,8 @@ type fakeForge struct {
 	state review.Standing
 	err   error
 	asked []string
+	// heads is the head of the pull request of each item that has its own. An item that is not in it gets the head of state.
+	heads map[string]string
 	// rewritten makes Reviewed report a head other than the reviewed commit as a rewrite of it.
 	rewritten bool
 	// failFrom, when above zero, makes the read of that number and every later read fail with errFake.
@@ -951,7 +971,12 @@ func (f *fakeForge) Pull(_ context.Context, _, item string) (review.Standing, er
 		return review.Standing{}, errFake
 	}
 
-	return f.state, f.err
+	standing := f.state
+	if head, own := f.heads[item]; own {
+		standing.Head = head
+	}
+
+	return standing, f.err
 }
 
 // ClosingIssues answers with the next of closing and then repeats the last. A set of nil is the empty set. noPull makes it report no pull request. closingErr fails every read.
@@ -1045,9 +1070,37 @@ func (f *fakeWatch) seen() (reads, drafts []int) {
 
 // fakeTrees answers every lookup with dir, or fails with err. A fakeTrees with late set has no folder until Ensure makes it.
 type fakeTrees struct {
-	dir  string
-	err  error
-	late *lateFolder
+	dir string
+	err error
+	// ensureErr fails Ensure only.
+	ensureErr error
+	late      *lateFolder
+	// per, when set, gives the folder of each item and wins over dir and late.
+	per func(ctx context.Context, item string) (string, error)
+	// ensured records the item of each Ensure call when a test sets it.
+	ensured *ensureLog
+	// starts records the start of each Ensure call when a test sets it.
+	starts *ensureLog
+}
+
+// ensureLog is the items that Ensure was called for, in order.
+type ensureLog struct {
+	mu    sync.Mutex
+	items []string
+}
+
+func (l *ensureLog) add(item string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.items = append(l.items, item)
+}
+
+func (l *ensureLog) all() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	return append([]string(nil), l.items...)
 }
 
 // lateFolder is a worktree that exists only after Ensure.
@@ -1077,7 +1130,11 @@ func (l *lateFolder) make() string {
 	return l.dir
 }
 
-func (f fakeTrees) Path(context.Context, string, string) (string, error) {
+func (f fakeTrees) Path(ctx context.Context, _, item string) (string, error) {
+	if f.per != nil {
+		return f.per(ctx, item)
+	}
+
 	if f.late != nil {
 		return f.late.path(), f.err
 	}
@@ -1085,7 +1142,34 @@ func (f fakeTrees) Path(context.Context, string, string) (string, error) {
 	return f.dir, f.err
 }
 
-func (f fakeTrees) Ensure(context.Context, string, string) (string, error) {
+func (f fakeTrees) WithTree(ctx context.Context, project, item string, fn func(dir string)) error {
+	dir, err := f.Path(ctx, project, item)
+	if err != nil {
+		return err
+	}
+
+	fn(dir)
+
+	return nil
+}
+
+func (f fakeTrees) Ensure(ctx context.Context, _, item, start string) (string, error) {
+	if f.ensured != nil {
+		f.ensured.add(item)
+	}
+
+	if f.starts != nil {
+		f.starts.add(start)
+	}
+
+	if f.ensureErr != nil {
+		return "", f.ensureErr
+	}
+
+	if f.per != nil {
+		return f.per(ctx, item)
+	}
+
 	if f.late != nil {
 		return f.late.make(), f.err
 	}

@@ -75,7 +75,7 @@ func TestExampleLoop_AStopBeforeAnAgentOfTheReviewLoopStartsThatAgentNoMore(t *t
 		stop   preflight.Stop
 		reason string
 	}{
-		"merged while the implementer works":              {turnAt: 2, over: map[string]any{"state": "MERGED"}, models: []string{"opus", "sonnet"}, step: "preflight:before-review-1", stop: preflight.Merged, reason: "already MERGED"},
+		"merged while the implementer works":              {turnAt: 2, over: map[string]any{"state": "MERGED"}, models: []string{"opus", "sonnet"}, step: "preflight:before-scoped-review-1", stop: preflight.Merged, reason: "already MERGED"},
 		"merged while the first review runs":              {turnAt: 3, over: map[string]any{"state": "MERGED"}, models: []string{"opus", "sonnet", "opus"}, step: "preflight:before-fix-1", stop: preflight.Merged, reason: "already MERGED"},
 		"closed while the first review runs":              {turnAt: 3, over: map[string]any{"state": "CLOSED"}, models: []string{"opus", "sonnet", "opus"}, step: "preflight:before-fix-1", stop: preflight.Closed, reason: "CLOSED"},
 		"a push by the author while the review runs":      {turnAt: 3, over: map[string]any{shipHeadKey: moved}, models: []string{"opus", "sonnet", "opus"}, step: "preflight:before-fix-1", stop: preflight.HeadMoved, reason: moved},
@@ -89,7 +89,7 @@ func TestExampleLoop_AStopBeforeAnAgentOfTheReviewLoopStartsThatAgentNoMore(t *t
 
 			rig, file, _ := stopLoopRig(t, tc.turnAt, tc.over, tc.gone)
 
-			result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+			result, err := runPipeline(rig.h.engine(t), file)
 
 			require.NoError(t, err, "a stop is a result and not an error")
 			assert.Equal(t, tc.models, rig.models(), "no agent starts after the stop")
@@ -106,15 +106,16 @@ func TestReviewFix_ALoopWithNoGuardAsksTheForgeNothing(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
-	require.NoError(t, os.WriteFile(file, []byte(libraryLoop("")), 0o600))
+	require.NoError(t, os.WriteFile(file, []byte(libraryLoop(rig.head, "")), 0o600))
 
 	spy := &turningPreflight{t: t, world: &shipWorld{pull: preflightPull(t, rig.head, nil)}, head: rig.head}
 	rig.h.preflight = spy
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	loopEngine := rig.h.engine(t)
+	_, err := loopEngine.RunFile(testItem, testProject, file)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"opus"}, rig.models())
+	assert.Equal(t, []string{"opus", "opus"}, rig.models(), "the scoped review and the full review of the one candidate")
 	assert.Empty(t, spy.asked, "without the argument guard the loop runs no preflight call")
 }
 
@@ -132,11 +133,11 @@ func TestExampleLoop_EveryDispatchOfTheLoopIsCheckedAgainstTheHeadOfTheWorktree(
 	spy := &turningPreflight{t: t, world: world, head: rig.head}
 	rig.h.preflight = spy
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err)
-	assert.Equal(t, "merged", result.Merge)
-	require.Len(t, spy.asked, 4, "the intake, then the review, the fix and the second review")
+	assert.True(t, childOf(t, result).Approved)
+	require.Len(t, spy.asked, 5, "the intake, then the scoped review, the fix, the second scoped review and the full review")
 
 	for _, req := range spy.asked[1:] {
 		assert.Equal(t, rig.head, req.ExpectHead, "the head the gate ran on, read from the worktree")
@@ -150,33 +151,35 @@ func TestExampleLoop_AStopBeforeTheDesignStepStartsNoDesignAgent(t *testing.T) {
 
 	rig, file := exampleRigWithDesign(t, alwaysChanges, noFindings, sameMechanism, `{"decision":"replace","reason":"unused"}`)
 	world := &shipWorld{pull: preflightPull(t, rig.head, nil)}
-	// Calls: the intake, three reviews with two fixes between them (five calls), then the design step at call 7.
-	rig.h.preflight = &turningPreflight{t: t, world: world, head: rig.head, turnAt: 7, over: map[string]any{"state": "MERGED"}}
+	// Calls: the intake, three scoped reviews with two fixes between them (five calls), the full review of candidate 1, then the design step of candidate 2 at call 8.
+	rig.h.preflight = &turningPreflight{t: t, world: world, head: rig.head, turnAt: 8, over: map[string]any{"state": "MERGED"}}
 	rig.h.writer = newFakeWriter()
 
-	result, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	result, err := runPipeline(rig.h.engine(t), file)
 
 	require.NoError(t, err, "a stop is a result and not an error")
-	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus"}, rig.models(), "the design agent never starts")
+	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "opus"}, rig.models(), "the design agent never starts")
 	require.NotNil(t, result.Stopped)
-	assert.Equal(t, "preflight:before-design-3", result.Stopped.Step)
+	assert.Equal(t, "preflight:before-design-2", result.Stopped.Step)
 	assert.Equal(t, preflight.Merged.Code(), result.Stopped.RC)
 }
 
 func TestExampleLoop_AStopDuringTheRulingOfTheOwnerStartsNoSettleAgent(t *testing.T) {
 	t.Parallel()
 
-	// Calls: the intake, six reviews with five fixes between them (eleven calls), then the settle agent at call 13 after the ruling.
-	rig, file, _ := stopLoopRig(t, 13, map[string]any{"state": "MERGED"}, false)
+	// One fix round gives two candidates. Calls: the intake; candidate 1 with three scoped reviews, two fixes and the full review (six calls);
+	// candidate 2 with three fixes, three scoped reviews and the full review (seven calls); then the settle agent at call 15 after the ruling.
+	rig, file, _ := stopLoopRig(t, 15, map[string]any{"state": "MERGED"}, false)
+	rig.setRound("fix_rounds", oneFixRound)
 	engine := rig.h.engine(t)
-	done := runInBackground2(engine, file)
+	done := pipelineInBackground(engine, file)
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
 	outcome := <-done
 
 	require.NoError(t, outcome.err, "a stop is a result and not an error")
-	assert.Equal(t, []string{"opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "sonnet", "opus", "opus", "opus", "opus", "opus"}, rig.models(), "the settle agent never starts")
+	assert.Equal(t, append([]string{"opus", "sonnet"}, capModels(2)...), rig.models(), "the settle agent never starts")
 	require.NotNil(t, outcome.result.Stopped)
 	assert.Equal(t, "preflight:before-settle", outcome.result.Stopped.Step)
 	assert.Equal(t, preflight.Merged.Code(), outcome.result.Stopped.RC)

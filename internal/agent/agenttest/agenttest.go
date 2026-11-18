@@ -135,7 +135,8 @@ func expect(r Reporter, ok bool, format string, args ...any) {
 	}
 }
 
-// CheckProfile checks that the profile names a binary to find on PATH and the variables that point the CLI at its own login.
+// CheckProfile checks that the profile names a binary to find on PATH and the variables that point the CLI at its own login, and that it sets both bounds
+// of the supported versions or neither.
 func CheckProfile(r Reporter, adapter agent.Adapter) {
 	r.Helper()
 
@@ -144,6 +145,10 @@ func CheckProfile(r Reporter, adapter agent.Adapter) {
 	expect(r, profile.Binary != "", "the profile has no binary")
 	expect(r, !strings.ContainsRune(profile.Binary, filepath.Separator), "the binary %q is a path: the runner looks the name up on PATH", profile.Binary)
 	expect(r, len(profile.ConfigVars) > 0, "the profile has no login variable: the CLI would use the login of the caller")
+	expect(r, (profile.SupportedFrom == "") == (profile.SupportedBefore == ""),
+		"the profile sets one bound of the supported versions: set both SupportedFrom and SupportedBefore, or neither")
+	expect(r, (len(profile.VersionArgs) == 0 && profile.GuardBefore == "") || profile.SupportedFrom != "",
+		"the profile sets VersionArgs or GuardBefore but no supported versions: the runner reads the version only for a profile with a range")
 }
 
 // CheckRun starts a fake CLI named by the profile, in dir, and checks what it saw: the arguments of the profile, the prompt on stdin,
@@ -183,7 +188,9 @@ func runFake(adapter agent.Adapter, dir string, out io.Writer, change ...func(*a
 		set(&spec)
 	}
 
-	return agent.Runner{}.Run(context.Background(), spec)
+	version := func(context.Context, string, []string) (string, error) { return adapter.Profile().SupportedFrom, nil }
+
+	return agent.Runner{Version: version}.Run(context.Background(), spec)
 }
 
 // CheckNoEdits starts the fake CLI with NoEdits set, and checks that it got the arguments of the profile followed by NoEditArgs, with no EditArgs, and every

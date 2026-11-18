@@ -5,11 +5,15 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/host"
+	"github.com/tobocop2/beehave/internal/host/hosttest"
+	"github.com/tobocop2/beehave/internal/host/ssh"
+	"github.com/tobocop2/beehave/internal/host/sshtest"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -138,7 +142,7 @@ func TestHostStop_RefusesAProjectWithNoHostAndAProviderWithNoTeardown(t *testing
 
 // clusters is a hostStop whose project declares gpu and gpu-b. Every host it builds records the cluster it was built for.
 func clusters(built *[]string, h host.Host) hostStop {
-	project := model.Project{Name: "p", BuildHost: "gpu", BuildHosts: []string{"gpu", "gpu-b"}, Host: &model.HostConfig{}}
+	project := model.Project{Name: "p", BuildHost: "gpu", BuildHosts: []string{"gpu", "gpu-b"}, Host: loaderHost()}
 
 	return hostStop{programs: programs{
 		declared: func(name, cluster string) (string, error) {
@@ -223,4 +227,72 @@ func TestHostStop_StopsTheClusterThatTheRunChose(t *testing.T) {
 	require.NoError(t, clusters(&built, tearing).Teardown(t.Context(), "p", "gpu-b"))
 	assert.Equal(t, []string{"gpu-b"}, built)
 	assert.Equal(t, 1, tearing.calls)
+}
+
+// sshAt is the config of an ssh host whose work root is on the fake machine.
+func sshAt() model.HostConfig {
+	return model.HostConfig{
+		Provider: ssh.Name, MaxRun: 2 * time.Hour, StaleMinutes: 20, PrivateRemote: "private",
+		Block: model.NewBlock("test", []model.BlockEntry{
+			model.TextEntry(ssh.BlockUser, "lane"), model.TextEntry(ssh.BlockWorkRoot, sshtest.Root+"/work"), model.TextEntry(ssh.BlockKnownHosts, model.KnownHostsStrict),
+		}),
+	}
+}
+
+func TestHostStop_TheLostProofReadsTheSshHostThatTheJobRanOn(t *testing.T) {
+	t.Parallel()
+
+	first := sshtest.New(hosttest.Working)
+	machine := first
+
+	var built []string
+
+	stop := hostStop{programs: programs{hosts: func(_, cluster string) (host.Host, error) {
+		built = append(built, cluster)
+
+		return ssh.New("gates", sshAt(), machine.SSH())
+	}}}
+
+	ran, err := ssh.New("gates", sshAt(), first.SSH())
+	require.NoError(t, err)
+
+	id, err := ran.Submit(t.Context(), model.JobSpec{Name: "gate", Command: "make"})
+	require.NoError(t, err)
+
+	first.Drops = -1
+
+	proof, err := stop.LostProof(t.Context(), "p", "gpu-b", string(id))
+
+	require.NoError(t, err, "a link that is down is no proof and no error")
+	assert.Empty(t, proof.Kind)
+	assert.NotEmpty(t, proof.Note, "the note says why there is no proof")
+
+	// A new machine answers at the alias of the host. It has no state folder.
+	machine = sshtest.New(hosttest.Working)
+	machine.StrictFolders = true
+
+	proof, err = stop.LostProof(t.Context(), "p", "gpu-b", string(id))
+
+	require.NoError(t, err)
+	assert.Equal(t, model.LostStopped, proof.Kind, "the stop of a unit that the machine does not hold answers")
+	assert.True(t, machine.Files[sshtest.Root+"/work/.beehave/"], "the stop made the state folder")
+	assert.Equal(t, []string{"gpu-b", "gpu-b"}, built, "each read builds the host of the cluster that the job ran on")
+}
+
+func TestHostStop_TheLostProofOfAProjectWithNoHostIsNoProofAndAnyOtherFaultIsAnError(t *testing.T) {
+	t.Parallel()
+
+	proof, err := stopOf(nil, errNoHost).LostProof(t.Context(), "p", "", "job-1")
+	require.NoError(t, err, "a project with no host has no job that can run")
+	assert.Empty(t, proof.Kind)
+
+	broken := errors.New("host config is unreadable")
+	_, err = stopOf(nil, broken).LostProof(t.Context(), "p", "", "job-1")
+	require.ErrorIs(t, err, broken)
+
+	var built []string
+
+	_, err = clusters(&built, &fakeHost{}).LostProof(t.Context(), "p", "rogue", "job-1")
+	require.ErrorIs(t, err, model.ErrUndeclaredHost)
+	assert.Empty(t, built, "no host is built for a cluster that the project does not declare")
 }

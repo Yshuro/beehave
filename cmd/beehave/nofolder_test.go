@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ func TestPrograms_AnItemWithNoWorktreeRunsTheProgramInAnEmptyFolderThatIsRemoved
 	process, err := os.Getwd()
 	require.NoError(t, err)
 
-	runs := newPrograms(config.Config{}, treeAt(""), newAdapters(nil, nil, nil))
+	runs := newPrograms(config.Config{}, treeAt(""), cloneLock{}, newAdapters(nil, nil, nil))
 
 	got, err := runs.Run(t.Context(), flow.CommandRequest{Run: []string{"sh", "-c", "pwd -P; ls -A | wc -l; touch marker"}})
 
@@ -41,7 +42,7 @@ func TestPrograms_AnItemWithNoWorktreeRunsTheProgramInAnEmptyFolderThatIsRemoved
 func TestPrograms_AProgramThatCannotGetItsEmptyFolderIsRefused(t *testing.T) {
 	t.Setenv("TMPDIR", filepath.Join(t.TempDir(), "missing"))
 
-	runs := newPrograms(config.Config{}, treeAt(""), newAdapters(nil, nil, nil))
+	runs := newPrograms(config.Config{}, treeAt(""), cloneLock{}, newAdapters(nil, nil, nil))
 
 	_, err := runs.Run(t.Context(), flow.CommandRequest{Item: "7", Run: []string{"true"}})
 
@@ -58,4 +59,43 @@ func TestProjectGate_RefusesAnItemWithNoWorktree(t *testing.T) {
 
 	require.ErrorIs(t, err, errNoGateFolder)
 	assert.Empty(t, calls.binaries, "the gate never runs in the folder of the beehave process")
+}
+
+// goneTree is a worktree that someone removed: Path finds no folder, and Ensure makes the worktree again in dir and keeps the start it was asked for.
+type goneTree struct {
+	dir    string
+	starts *[]string
+}
+
+func (goneTree) Path(context.Context, string, string) (string, error) { return "", nil }
+
+func (t goneTree) Ensure(_ context.Context, _, _, start string) (string, error) {
+	*t.starts = append(*t.starts, start)
+
+	return t.dir, nil
+}
+
+func TestPrograms_ARequestWithATreeStartRunsInTheWorktreeMadeAgainAtThatCommitAndAnyOtherInAnEmptyFolder(t *testing.T) {
+	t.Parallel()
+
+	tree, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+
+	var starts []string
+
+	runs := newPrograms(config.Config{}, goneTree{dir: tree, starts: &starts}, cloneLock{}, newAdapters(nil, nil, nil))
+
+	// A round item of a project with no repository has no tree start, so it runs in an empty folder as any other item does.
+	for _, request := range []flow.CommandRequest{{Item: roundItem, TreeStart: "abc123"}, {Item: roundItem}, {Item: "7"}, {Item: "bb-1"}} {
+		request.Run = []string{"pwd", "-P"}
+		got, err := runs.Run(t.Context(), request)
+
+		require.NoError(t, err, request.Item)
+		assert.Equal(t, request.TreeStart != "", strings.TrimSpace(got.Stdout) == tree, "item %s with start %q ran in %s", request.Item, request.TreeStart, got.Stdout)
+	}
+
+	assert.Equal(t, []string{"abc123"}, starts, "only the request with a tree start made the worktree again, at that commit")
+
+	_, err = programs{trees: treeFails{}}.Run(t.Context(), flow.CommandRequest{Item: roundItem, TreeStart: "abc123", Run: []string{"x"}})
+	require.ErrorIs(t, err, errFake, "a worktree that cannot be made again refuses the command")
 }

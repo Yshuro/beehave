@@ -112,7 +112,7 @@ func (h *Host) Up(ctx context.Context) error {
 	args := []string{
 		"launch", "-y", "-c", h.cluster, "--down",
 		"-i", strconv.Itoa(h.config.IdleMinutes),
-		"--config", runLimitKey + strconv.FormatInt(int64(h.config.MaxRun/time.Second), 10),
+		"--config", runLimitKey + strconv.FormatInt(h.config.RunLimitSeconds(), 10),
 	}
 
 	if infra := h.infra(); infra != "" {
@@ -182,7 +182,7 @@ type slot struct{ h *Host }
 
 // Hold starts the SkyPilot job that keeps the cluster busy.
 func (s slot) Hold(ctx context.Context, job jobwait.Job) error {
-	_, err := link.Run(ctx, s.h.sky, "sky exec", []string{"exec", s.h.cluster, "-d", slotCommand(s.h.config.MaxRun, s.markerName(job))})
+	_, err := link.Run(ctx, s.h.sky, "sky exec", []string{"exec", s.h.cluster, "-d", slotCommand(s.h.config, s.markerName(job))})
 
 	return err
 }
@@ -202,6 +202,6 @@ func (s slot) markerName(job jobwait.Job) string {
 }
 
 // slotCommand is the command of the SkyPilot job that keeps the cluster busy until the marker exists.
-func slotCommand(maxRun time.Duration, marker string) string {
-	return fmt.Sprintf("cd ~ && timeout %d sh -c 'until test -e %s; do sleep 5; done'", int64(maxRun/time.Second), marker)
+func slotCommand(config model.HostConfig, marker string) string {
+	return fmt.Sprintf("cd ~ && timeout %d sh -c 'until test -e %s; do sleep 5; done'", config.RunLimitSeconds(), marker)
 }

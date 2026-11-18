@@ -50,7 +50,7 @@ func drainingSkyPilot(t *testing.T) host.Host {
 	cfg := model.HostConfig{Provider: skypilot.Name, IdleMinutes: 60, MaxRun: 2 * time.Hour}
 
 	h, err := skypilot.New(slurmtest.Target, cfg, sky, f.SSH(), func(l *link.Link, config model.HostConfig, slot skypilot.Slot) skypilot.Queue {
-		return slurm.New(l, config, slot)
+		return slurm.New(l, config, slot, slurm.WithLimit(config.MaxRun))
 	})
 	require.NoError(t, err)
 

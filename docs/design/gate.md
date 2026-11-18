@@ -58,7 +58,8 @@ A gate on a build host also runs its build job as a child run on the queue `host
 
 - The gate keeps its slot in the exclusive queue while the job waits, so a merge of the project still waits for the gate.
 - The queues cannot deadlock. A job queues nothing, so no job on the host queue waits for a slot of the exclusive queue.
-- A gate that a newer head cancels cancels its job. A cancel of the item cancels the build job too.
+- A cancel of a gate, by a newer head or with its item, cancels the build job too. DBOS cancels each level of runs before it lists the children of that level. A child start checks in its own transaction that its parent still has an owner, and the cancel clears that owner. So a job that starts during the cancel is listed and canceled, or its start is refused. Until a DBOS release has this order, `go.mod` pins a fork commit that has it. The wait of the gate never cancels the job by its id, so a stop that ends late cannot cancel a job that a resume reopened.
+- DBOS commits each level of a cancel in its own transaction. A cancel that fails after the gate level leaves the gate canceled and its job running. The gate of a later head lists a canceled old gate whose job is still queued or running, and cancels it again with its children. `beehave cancel` of the item does the same. A cancel of a canceled run lists the open runs under it first. If there are none, it says the run has nothing to cancel and exits non-zero. Otherwise it cancels them and names them on stderr.
 - The cap is 1. A cap above 1 is not built.
 
 The host of a gate is the cluster that `host_up` recorded, else the default `build_host` of the project. The engine reads it once, when the gate is queued, and keeps it in the input of the gate. So a replay uses the same host after the project file changes.
@@ -71,6 +72,8 @@ A project gate of a `gate` step is two recorded steps in the exclusive run:
 
 - `gate:job` reuses the pass of an earlier gate with the same key, or submits the host job and records its id.
 - `gate` waits for that job.
+
+When the wait of `gate` ends as `lost`, the steps `gate:lost-start` and `gate:lost-look.<k>`, with a durable sleep between two looks, wait for a proof that the job can no longer run. A proof gives a void gate with the fields `host_loss` and `host_losses`, and the item run records the loss as the step `<call>/host-loss`. See "The wait for a proof" in [hosts.md](hosts.md). When no proof comes within `host.lost_job_wait`, the item run asks the owner, and the step `<call>/lost-ask.<n>` reads the proof after each answer. See "The owner wait for a lost job" in [hosts.md](hosts.md).
 
 The workflow library cannot record from inside a step, so the id needs a step of its own. After a crash between the two steps, the replay finds the id on record and the wait reads the same job: the host gets one job. A crash inside `gate:job`, after the host accepted the job and before the step is recorded, can still submit a second job.
 
@@ -147,13 +150,14 @@ beehave reads no clock. So a file with a future timestamp, a coarse timestamp or
 
 A `gate` call with `base` submits the job of a candidate head. A `gate` call without `base` is a sync head or a landing gate: it runs the gate command only, with no secret scan and no new-tests check. A candidate gate never reuses an earlier pass, because a reused pass holds no checks.
 
-The job of a candidate runs its steps apart, each in its own subshell, and a failed step never stops a later one. Each step writes the line `beehave-gate-step <name> rc=<code>`. The step names `head-gate`, `secret-scan` and `base-suite` are reserved, and `gate_steps` refuses them. The job exits with the exit code of `head-gate`.
+The job of a candidate runs its steps apart, each in its own subshell, and a failed step never stops a later one. Each step writes the line `beehave-gate-step <name> rc=<code>`. The step names `head-gate`, `secret-scan`, `base-suite` and `revert-run` are reserved, and `gate_steps` refuses them. The job exits with the exit code of `head-gate`.
 
 | Step | What it does |
 |---|---|
 | `head-gate` | Runs the gate command and the report checks. Its exit code is the verdict of the gate. |
 | `secret-scan` | Runs `gitleaks git --log-opts=<merge base>..HEAD`, so it reads the diff of the candidate only. |
 | `base-suite` | Runs `test_command` on the merge base when the host has no cached report for that commit. |
+| `revert-run` | Runs the new tests on the base code, when the head has new tests. See "The revert run". |
 
 The merge base is the merge base of the head and `origin/<base>`. The host keeps one parsed base report for each merge base commit, in a folder outside the clone. The job writes each file under a temporary name and renames it, so no reader sees a partial file.
 
@@ -163,9 +167,18 @@ After the steps, the job compares the head report with the base report per test,
 - one line `beehave-new-test-failed <kind> <class> <name>` for each new test that failed or was skipped on the head,
 - the end line `beehave-new-tests-end new=<n> failed=<n>`.
 
-The name lines and the marker lines stop at 50 each. The end line carries the full counts.
+Each kind of line stops at 50 lines or 4096 bytes, whichever comes first. The end line carries the full counts. The host reads the last 16384 bytes of the log, so with the revert lines below, the end lines and the step lines stay in that tail whatever the length of a test name.
 
 The engine reads the log of a passing candidate job and records `checks` and `new_tests` in the result of the gate call. A log with no end line is a cut log: `checks.complete` is false. The step line of `beehave status <run id> --json` shows `new_tests`.
+
+### The revert run
+
+A new test must fail without the change. The revert run checks this on the host. It checks out the merge base in its own folder, copies onto it the test files that the head added or changed, and runs `test_command` there. The project key `test_paths` names the test files as globs (for a Go project, `["**/*_test.go", "**/testdata/**"]`). The run reads the reports of its own folder only, never the reports of the head. The job prints its lines after the new-tests lines:
+
+- one line `beehave-revert-passed <class> <name>` for each new test that passed or was skipped on the base code, at most 50 lines or 4096 bytes,
+- the end line `beehave-revert-end new=<n> passed=<n> cases=<n>`.
+
+A new test that the base report does not name failed: a package that does not build on the base gives a report with no new test name. The exit code of `revert-run` is recorded in `checks.revert_rc` and never decides a verdict. A head with no new test, or a project with no `test_command` or no `test_paths`, gets the line `beehave-revert-error <reason>` instead of a run. The engine reads the last of the end and error lines. It sets `revert` to `pass` when that line is the end line, `cases` is above 0 and `passed` is 0, and to `fail` otherwise. So an end line that a test prints in the gate output cannot pass a run that did not run. The result of `gate` and the step line show `revert`. `before_review` refuses a head with new tests whose `revert` is `fail`, and names each test that passed on the base.
 
 The secret scan needs gitleaks 8.30.1, which `make setup` and the CI `test` job install. A test with a planted key proves that the step fails. The test builds the key from parts at run time, and it fails when `CI` is set and gitleaks is missing.
 

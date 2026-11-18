@@ -31,6 +31,8 @@ type AgentRequest struct {
 	IdleTimeout time.Duration
 	Forbid      []model.FindingKind
 	Protect     []string
+	// RequireSkills lists the skills that the run must call. A CLI that reports no skill calls refuses the request before the run starts.
+	RequireSkills []string
 	// MaxBudget is the most dollars that the run may spend, passed to the budget option of the agent CLI. 0 means the step sets no cap.
 	MaxBudget float64
 	// NoEdits starts the agent so that it cannot edit files. Shell commands stay allowed.
@@ -82,6 +84,14 @@ type GateChecks struct {
 	Secrets     *int     `json:"secrets_rc,omitempty"`
 	Complete    bool     `json:"complete"`
 	Problem     string   `json:"problem,omitempty"`
+	// Revert is the verdict of the revert run. RevertPassed names the new tests that passed or were skipped on the base code, capped, and RevertPassedCount counts them all.
+	// RevertCases is the number of test cases in the report of the run, RevertRC its exit code or nil, and RevertProblem says why the run proves nothing.
+	Revert            model.RevertVerdict `json:"revert"`
+	RevertPassed      []string            `json:"revert_passed"`
+	RevertPassedCount int                 `json:"revert_passed_count"`
+	RevertCases       int                 `json:"revert_cases"`
+	RevertRC          *int                `json:"revert_rc,omitempty"`
+	RevertProblem     string              `json:"revert_problem,omitempty"`
 }
 
 // GateStep is the result of one step of a gate. Status is "pass", "fail" or "unknown".
@@ -165,7 +175,7 @@ type beats interface {
 // Poll replaces the interval at which the agents queue looks for work, at which a run looks for the result of a phase,
 // at which a phase looks again for the first trust of its run, and at which a run tries again the first renewal of a claim it did not take.
 // Release replaces the time that the git calls of one worktree release share.
-// Beat replaces the time that one claim renewal may take. OwnerWait replaces the time of one wait for the owner before the wait starts again.
+// Beat replaces the time that one claim renewal may take. Draft replaces the time that the return of a pull request to draft may take. OwnerWait replaces the time of one wait for the owner before the wait starts again.
 // Retain replaces the age at which Launch deletes a finished run. Now replaces the monotonic reading of the clock that measures the time since the last good claim renewal.
 // Wall replaces the wall reading of that clock: when it is nil, the wall reading is the one that Now returns.
 // Reading replaces the time that the now builtin returns, and the time from which a wait counts its deadline and its reminders. The lease age keeps using Wall.
@@ -175,12 +185,15 @@ type beats interface {
 // Settle replaces the time of the durable sleep between two reads of a batch member whose mergeable state is UNKNOWN.
 // Queued replaces the time of the durable sleep between two reads of a pull request whose merge the forge holds.
 // CapWait replaces the least time of the durable sleep that waits for a usage cap to reset.
+// LostPoll replaces the time of the durable sleep between two looks for the proof that a lost gate job can no longer run.
 type clock struct {
 	CapWait   time.Duration
+	LostPoll  time.Duration
 	Tick      <-chan time.Time
 	Poll      time.Duration
 	Release   time.Duration
 	Beat      time.Duration
+	Draft     time.Duration
 	OwnerWait time.Duration
 	Retain    time.Duration
 	Now       func() time.Time
@@ -269,6 +282,8 @@ type CommandRequest struct {
 	Stdin string
 	// Env is the whole environment of the program as NAME=value pairs. It is nil for a request that keeps the environment of the process.
 	Env []string
+	// TreeStart is the commit that the recorded step made the worktree of a round item at. A worktree that someone removed is made again there. It is empty for any other item.
+	TreeStart string
 }
 
 // CommandOutput is what a program printed and its exit code. A non-zero RC is data, not an error.
@@ -329,6 +344,7 @@ type Deps struct {
 	// Poll serves the scheduled review poll. A nil Poll means the build cannot read the forges: the engine sets no poll schedule.
 	Poll pollReader
 	// Hosts serves host_up and host_teardown. A nil Hosts means the build cannot start or stop a host: both calls fail.
+	// Hosts also reads the proof that a lost gate job can no longer run. With a nil Hosts no proof comes, and the wait for it ends at host.lost_job_wait.
 	Hosts hostKeeper
 	// SandboxDefault says whether a project runs the agent steps that set no sandbox in the sandbox. A nil SandboxDefault means no project does.
 	SandboxDefault func(project string) bool

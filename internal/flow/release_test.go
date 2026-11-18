@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -216,6 +217,39 @@ func TestRun_AKeptWorktreeDoesNotFailTheRunAndAFailedLookupKeepsTheClaimRelease(
 	require.ErrorIs(t, err, errFake)
 	require.ErrorContains(t, err, "worktree of item 12")
 	assert.Equal(t, []string{"claim:12", "release:12"}, failing.life.seen())
+}
+
+// lockedTrees gives one worktree, as the worktrees of the engine do under the lock of the clone. It records whether the folder of the worktree was still
+// there when WithTree gave the lock back.
+type lockedTrees struct {
+	dir     string
+	stayed  *bool
+	unlocks *int
+}
+
+func (l lockedTrees) WithTree(_ context.Context, _, _ string, fn func(dir string)) error {
+	fn(l.dir)
+
+	_, err := os.Stat(l.dir)
+	*l.stayed = err == nil
+	*l.unlocks++
+
+	return nil
+}
+
+func TestRemoveTree_RemovesTheWorktreeBeforeItGivesTheLockOfTheCloneBack(t *testing.T) {
+	t.Parallel()
+
+	r := newRepos(t)
+	stayed, unlocks := true, 0
+
+	kept, err := ReleaseDeps{Trees: lockedTrees{dir: r.tree, stayed: &stayed, unlocks: &unlocks}}.removeTree(t.Context(), testProject, testItem)
+
+	require.NoError(t, err)
+	assert.Empty(t, kept)
+	assert.Equal(t, 1, unlocks)
+	assert.False(t, stayed, "the git worktree remove ran after the release gave the lock of the clone back, so a sibling add could race it")
+	assert.NoDirExists(t, r.tree)
 }
 
 func TestRun_AnApprovedItemLosesItsPushedWorktree(t *testing.T) {

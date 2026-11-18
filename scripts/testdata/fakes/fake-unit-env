@@ -1,0 +1,42 @@
+#!/bin/sh
+# Fake user manager environment: print the NAME=value lines that a systemd user manager builds from its environment.d folders.
+# It reads ~/.config/environment.d, $HOST_SETUP_SYSROOT/etc/environment.d and $HOST_SETUP_SYSROOT/usr/lib/environment.d, in that
+# order of priority. It sorts all the *.conf files by file name, whatever the folder. A file of the home folder hides a system file
+# of the same name. A later line for a name replaces an earlier one. It removes double quotes around a value and expands $NAME and
+# ${NAME} to the value that the name had before. PATH starts as FAKE_BIN:/usr/bin:/bin.
+dirs="$HOME/.config/environment.d ${HOST_SETUP_SYSROOT:-}/etc/environment.d ${HOST_SETUP_SYSROOT:-}/usr/lib/environment.d"
+names=$(
+	for dir in $dirs; do
+		[ -d "$dir" ] && ls "$dir"
+	done | grep '\.conf$' | LC_ALL=C sort -u
+)
+state=$(printf 'PATH=%s\n' "$FAKE_BIN:/usr/bin:/bin")
+for name in $names; do
+	file=
+	for dir in $dirs; do
+		if [ -f "$dir/$name" ]; then
+			file=$dir/$name
+			break
+		fi
+	done
+	while IFS= read -r line; do
+		case $line in
+		[A-Za-z_]*=*) ;;
+		*) continue ;;
+		esac
+		var=${line%%=*}
+		value=${line#*=}
+		case $value in
+		\"*\") value=${value#\"} value=${value%\"} ;;
+		esac
+		prev=$(printf '%s\n' "$state" | sed -n "s/^$var=//p" | tail -n 1)
+		for marker in "\${$var}" "\$$var"; do
+			case $value in
+			*"$marker"*) value=${value%%"$marker"*}$prev${value#*"$marker"} ;;
+			esac
+		done
+		state="$state
+$var=$value"
+	done <"$file"
+done
+printf '%s\n' "$state" | awk -F= '{ line[$1] = $0 } END { for (name in line) print line[name] }' | LC_ALL=C sort

@@ -37,6 +37,17 @@ func ItemKind(item string) string {
 	return KindBeads
 }
 
+// RoundBase returns the base branch of a round item and true. It returns an empty string and false for any other item.
+func RoundBase(item string) (string, bool) {
+	if ItemKind(item) != KindRound {
+		return "", false
+	}
+
+	_, base, _ := strings.Cut(item, "/")
+
+	return base, true
+}
+
 func validPrefix(prefix string) bool {
 	if prefix == "" || strings.IndexFunc(prefix[:1], NotAlnum) >= 0 {
 		return false

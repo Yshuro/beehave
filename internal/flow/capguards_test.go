@@ -84,6 +84,7 @@ func guardRig(t *testing.T, guard capGuard) (*agentRig, *cappedAt, string) {
 	if child != "" {
 		text := string(mustRead(t, file))
 		require.Equal(t, 1, strings.Count(text, "def main(item):"))
+		// The copy renames main to parent and adds a main that runs the child entry, so the run starts at the agent steps of one item.
 		text = strings.Replace(text, "def main(item):", "def parent(item):", 1) + "\ndef main(item):\n    " + child + "(item)\n"
 		require.NoError(t, os.WriteFile(file, []byte(text), 0o600))
 	}
@@ -165,7 +166,7 @@ func TestExample_ACappedPlanStopsTheItemWithARefuseBeforeTheImplement(t *testing
 
 	rig, file := capRig(t, func(int) string { return "approve" }, func(r AgentRequest) bool { return r.Model == "opus" }, agent.OutcomeTurnCap)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -178,7 +179,7 @@ func TestExample_ACappedReviewStopsTheItemWithARefuseBeforeAnyFix(t *testing.T) 
 
 	rig, file := capRig(t, func(int) string { return "changes" }, nthCall(3), agent.OutcomeBudgetCap)
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	_, err := runPipeline(rig.h.engine(t), file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
@@ -189,9 +190,12 @@ func TestExample_ACappedReviewStopsTheItemWithARefuseBeforeAnyFix(t *testing.T) 
 func TestExample_ACappedSettleStopsTheItemWithARefuse(t *testing.T) {
 	t.Parallel()
 
-	rig, file := capRig(t, func(int) string { return "changes" }, nthCall(14), agent.OutcomeTurnCap)
+	// The settle is the call after the plan, the implement and every agent of the two candidates of one fix round.
+	settle := 2 + len(capModels(2)) + 1
+	rig, file := capRig(t, func(int) string { return "changes" }, nthCall(settle), agent.OutcomeTurnCap)
+	rig.setRound("fix_rounds", oneFixRound)
 	engine := rig.h.engine(t)
-	done := runInBackground2(engine, file)
+	done := pipelineInBackground(engine, file)
 
 	waitForTheOwner(t, rig.h)
 	require.NoError(t, rig.h.client(t, testVersion).Answer(testItem, "park all"))
@@ -200,16 +204,17 @@ func TestExample_ACappedSettleStopsTheItemWithARefuse(t *testing.T) {
 	require.Error(t, outcome.err)
 	assert.Contains(t, outcome.err.Error(), "REFUSE")
 	assert.Contains(t, outcome.err.Error(), "the settle step stopped at the turns cap")
-	assert.Len(t, rig.models(), 14, "the settle is the last agent")
+	assert.Len(t, rig.models(), settle, "the settle is the last agent")
 }
 
 func TestReviewFix_ACappedReviewStopsTheLoopWithARefuseThatNamesTheCap(t *testing.T) {
 	t.Parallel()
 
 	rig, file := capRig(t, func(int) string { return "changes" }, func(AgentRequest) bool { return true }, agent.OutcomeTurnCap)
-	require.NoError(t, os.WriteFile(file, []byte(libraryLoop("")), 0o600))
+	require.NoError(t, os.WriteFile(file, []byte(libraryLoop(rig.head, "")), 0o600))
 
-	_, err := rig.h.engine(t).RunFile(testItem, testProject, file)
+	loopEngine := rig.h.engine(t)
+	_, err := loopEngine.RunFile(testItem, testProject, file)
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fake mktemp: make the temporary folder of the script in TMPDIR, which is in the folder of the test.
+# The mktemp of macOS does not read TMPDIR for a call with no template.
+if [ "$*" != -d ]; then
+	echo "fake mktemp: unexpected $*" >&2
+	exit 1
+fi
+exec /usr/bin/mktemp -d "$TMPDIR/tmp.XXXXXX"

@@ -142,7 +142,7 @@ func newEngineOn(ctx context.Context, cfg config.Config, opts flow.Options, read
 func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) flow.Deps {
 	trees := newWorktrees(cfg.Projects, opts, table.forge)
 	life := newLife(cfg, table)
-	commands := newPrograms(cfg, trees, table)
+	commands := newPrograms(cfg, trees, cloneLock{repos: trees.repos}, table)
 
 	return flow.Deps{
 		Agents: newAgents(cfg, opts, trees, table), Gate: projectGate{projects: cfg.Projects, programs: commands, forge: table.forge}, Logins: picks, Lifecycle: life, Forge: life, Watch: life, Merge: life, Preflight: life, Trees: trees, Beats: life, Others: life,
@@ -221,10 +221,11 @@ func localRunner(binary, dir string, timeout time.Duration) proc.Runner { //noli
 }
 
 // newPrograms runs command steps in the worktree of the item, or on the host of the project.
-func newPrograms(cfg config.Config, trees treeFinder, table adapters) programs {
+// The sandbox of a gate holds the lock of the clone, clones, while it adds or removes the worktree of its copy.
+func newPrograms(cfg config.Config, trees programTrees, clones cloneLock, table adapters) programs {
 	return programs{
 		trees:    trees,
-		sandbox:  newGateSandbox(cfg.Projects),
+		sandbox:  newGateSandbox(cfg.Projects, clones),
 		local:    localRunner,
 		exec:     func(spec proc.ExecRunner) proc.Runner { return spec },
 		hosts:    func(project, cluster string) (host.Host, error) { return buildHostOf(cfg, table, project, cluster) },
