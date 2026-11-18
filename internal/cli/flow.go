@@ -145,9 +145,10 @@ func (f flowCommands) engineOptions(cfg config.Config, state string) flow.Option
 	return flow.Options{
 		StateDir: state, Version: f.version, MaxConcurrent: cfg.Agents.MaxConcurrent, MaxReviewConcurrent: cfg.Agents.MaxReviewConcurrent, PerLogin: cfg.Agents.PerLogin, Env: f.env,
 		MaxRunBudget: cfg.Agents.MaxRunBudgetUSD, MaxTreeBudget: cfg.Agents.MaxTreeBudgetUSD,
-		ReviewPoll: time.Duration(cfg.Agents.ReviewPollMinutes) * time.Minute,
-		Retention:  time.Duration(cfg.Agents.RetentionDays) * 24 * time.Hour,
-		KeepRuns:   cfg.Agents.RetentionDays == 0,
+		ReviewPoll:         time.Duration(cfg.Agents.ReviewPollMinutes) * time.Minute,
+		ReviewLookbackDays: cfg.Agents.ReviewLookbackDays,
+		Retention:          time.Duration(cfg.Agents.RetentionDays) * 24 * time.Hour,
+		KeepRuns:           cfg.Agents.RetentionDays == 0,
 	}
 }
 

@@ -238,7 +238,7 @@ func (r *Rounds) add(line StepLine) {
 }
 
 // sleepStep is the name of the step in which the workflow library records the deadline of a receive, as epoch milliseconds, before the receive waits.
-// A wait with no timeout receives again in windows of ownerWaitLimit, so a window of that length is no deadline.
+// A wait with no timeout receives again in windows of receiveWindow, so a window of that length is no deadline.
 const sleepStep = "DBOS.sleep"
 
 // waitDeadline reads the time that the wait of an open run ends from the record of its receive. The wait has set a question, and the receive is the last
@@ -257,7 +257,7 @@ func waitDeadline(records []dbos.StepInfo, question string) time.Time {
 	}
 
 	at := time.UnixMilli(millis)
-	if at.Sub(last.StartedAt) >= ownerWaitLimit-time.Minute {
+	if at.Sub(last.StartedAt) >= receiveWindow-time.Minute {
 		return time.Time{}
 	}
 
