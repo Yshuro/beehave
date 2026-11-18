@@ -825,6 +825,8 @@ The line shows no next due time. The library counts the first tick of a fixed de
 
 `resume` reopens the cancelled or the failed run. Then `beehave run <item>` continues it from the last finished step.
 
+When the store refuses the record of a step, the step records its failure at once, under the same name at the next step id. The resume goes back to the first failed record, so the refused step runs again and no record after it stays. `beehave status <run id>` shows such a step as failed. A canceled run records no failure, and a step whose error DBOS has already recorded, also after its retries, records nothing more. If the store refuses the failure record too, the engine logs a warning. The records that DBOS writes itself (the start of a child run, `DBOS.sleep`) are outside this rule.
+
 `beehave resume <item>` first takes a fresh claim on the item, because the release of the old run gave the old claim back.
 
 - If the claim is held, `resume` refuses and names the holder.
