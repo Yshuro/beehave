@@ -265,7 +265,7 @@ The inner level runs in this order:
 
 Each candidate then gets the full checks once, in this order. The first entry with findings sends the candidate back to the inner level, and the entries after it do not run.
 
-1. The gate `candidate-gate` on the base. A void result reruns as `candidate-gate-void-<n>`.
+1. The gate `candidate-gate` on the base. A void result reruns as `candidate-gate-void-<n>`. A void result with a host cause reruns as `candidate-gate-host-<k>`; see "The host loss limit".
 2. The checks before review `candidate-before-review`, which compare the head with `origin/<base>`.
 3. Each function in the list `checks` of the caller. The example passes its mutation run.
 4. The fresh agent `candidate-review` reads the whole pull request at the head that the gate passed (`pin` is that head).
@@ -292,6 +292,16 @@ The argument `checks` is a list of functions of one argument, the passed gate. E
 #### The result of the loop
 
 The result holds `head`, the commit that the last step of the loop judged. A scoped review can reject or a guard can stop before the first gate. Then `gate` is `None`, and `head` is the head of the last lane run. So a caller that holds the item reports `head`, not `gate.head`.
+
+#### The host loss limit
+
+A void gate has a host cause when its `host_loss` is not empty: the engine proved that the host job of the gate was lost. The gate gave no verdict about the code, and the host is not the fault of the item.
+
+- The loop reruns the gate as `candidate-gate-host-<k>`, with `k` from 1 for each call of the gate. The rerun takes no plain attempt: `VOID_RERUNS` and `VOID_ASKS` count only the voids with no host cause, and the fix round does not change.
+- The loop reads `host_losses` of the gate result, the count of the engine. It keeps no count of its own.
+- `HOST_LOSS_LIMIT` is 5, one constant in `review_fix.star`. A void gate whose `host_losses` is at or above the limit is not rerun. No fix agent reads its report.
+- The result of the loop then has `host_lost = true`, with no `held` reason. The caller decides what the loss costs.
+- The result always has `host_losses`, the highest count that any gate of the loop read. A passing rerun reads 0, so the loop keeps the maximum.
 
 #### Review verdicts
 
