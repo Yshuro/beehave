@@ -206,6 +206,17 @@ func AllowList(keyword string, v starlark.Value) (patterns, globs []string, err 
 	return patterns, globs, err
 }
 
+// PathsOutsideAllow reads the allow keyword of paths_outside. It refuses None, because a check with no scope has nothing to compare, and reads the rest as AllowList does.
+func PathsOutsideAllow(v starlark.Value) (globs []string, err error) {
+	if v == starlark.None {
+		return nil, fmt.Errorf("%s is None, which names no scope. To check no scope, leave out the call of %s", allowWord, pathsOutsideName)
+	}
+
+	_, globs, err = AllowList(allowWord, v)
+
+	return globs, err
+}
+
 // cleanGlobs drops the leading `./` of each pattern and refuses a pattern that cannot match a path of the item folder, or that does not parse.
 func cleanGlobs(keyword string, patterns []string) ([]string, error) {
 	globs := make([]string, 0, len(patterns))

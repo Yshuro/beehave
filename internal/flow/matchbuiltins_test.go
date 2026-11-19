@@ -41,6 +41,7 @@ func TestMatchBuiltins_PathsOutsideRefusesTheListsThatTheAgentScopeRefuses(t *te
 	for name, c := range map[string]struct{ line, message string }{
 		"a bad pattern":                             {`paths_outside(allow = ["["], paths = [])`, `allow has the pattern "[", which does not parse`},
 		"an empty list":                             {`paths_outside(allow = [], paths = [])`, "allow is an empty list"},
+		"no list in a variable":                     {"scope = None\npaths_outside(allow = scope, paths = [\"a\"])", "allow is None, which names no scope"},
 		"an entry that is no text":                  {`paths_outside(allow = ["a"], paths = [1])`, "paths must hold strings only"},
 		"a missing keyword":                         {`paths_outside(allow = ["a"])`, "paths_outside needs the `paths` keyword"},
 		"a bad list in a variable":                  {"bad = [\"[\"]\npaths_outside(allow = bad, paths = [])", `allow has the pattern "[", which does not parse`},

@@ -10,7 +10,7 @@ import (
 )
 
 // pathsOutside returns the paths that no glob of allow matches, sorted. It reads allow as the allow_paths of an agent call does (the doublestar dialect)
-// and refuses the same bad lists, so the library function before_review and the scope of an agent judge a path alike. It records no step: it matches text.
+// and refuses the same bad lists, and None as well, so the library function before_review and the scope of an agent judge a path alike. It records no step: it matches text.
 func pathsOutside(_ *script, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	var allow, paths starlark.Value
 
@@ -18,7 +18,7 @@ func pathsOutside(_ *script, b *starlark.Builtin, args starlark.Tuple, kwargs []
 		return nil, err
 	}
 
-	_, globs, err := workflow.AllowList("allow", allow)
+	globs, err := workflow.PathsOutsideAllow(allow)
 	if err != nil {
 		return nil, err
 	}
