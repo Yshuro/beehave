@@ -74,8 +74,8 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land4.gate5.host1.round2", applicationVersion("v1"))
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land4.gate6.host1.round2", versionWithModule("v1", moduleGate, 6))
+	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land5.gate5.host1.round2", applicationVersion("v1"))
+	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land5.gate6.host1.round2", versionWithModule("v1", moduleGate, 6))
 }
 
 func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
@@ -84,11 +84,11 @@ func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
 	assert.Contains(t, strings.Split(moduleVersions(), "."), "core6", "the facts step records ten fields: the method and board fields moved under vars at core5 and runners came at core6, so a run recorded at core5 replays no facts step")
 }
 
-func TestStepModules_TheLandModuleIsAtVersionFour(t *testing.T) {
+func TestStepModules_TheLandModuleIsAtVersionFive(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "land4", "the batch gate records its host job in batch_gate:job before it waits, "+
-		"the item run records a lost batch gate job as batch:<call>.gate#<n>/host-loss, and batch_merge returns host_loss and host_losses")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "land5", "the batch gate records its host job in batch_gate:job before it waits, "+
+		"the item run records a lost batch gate job as batch:<call>.gate#<n>/host-loss, and merge returns host_loss and host_losses")
 }
 
 func TestStepModules_TheGateModuleIsAtVersionFive(t *testing.T) {

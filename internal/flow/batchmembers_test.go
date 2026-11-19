@@ -30,11 +30,11 @@ func TestBatchMerge_TheCheckAndTheRunRefuseAMemberWithTheSameText(t *testing.T) 
 			t.Parallel()
 
 			rig := newBatchRig(t)
-			path := writeFlow(t, bodyFlow(`batch_merge(prs = `+tc.prs+`, base = "main", repo = "o/r", name = "b")`))
+			path := writeFlow(t, bodyFlow(`merge(prs = `+tc.prs+`, base = "main", repo = "o/r", name = "b")`))
 
 			found, _ := workflow.Check(path)
 			require.Len(t, found, 1)
-			assert.Contains(t, found[0].Text, "batch_merge: "+tc.want)
+			assert.Contains(t, found[0].Text, "merge: "+tc.want)
 
 			_, err := rig.engine(t).RunFile(testItem, testProject, path)
 			require.ErrorContains(t, err, tc.want)

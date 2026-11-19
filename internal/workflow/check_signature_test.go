@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -23,8 +24,8 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"agent text for the protected paths", `agent(prompt = "p", model = "m", protect_paths = "/own/checkout")`, "protect_paths must be a list, not a text."},
 		{"agent text for the edits switch", `agent(prompt = "p", model = "m", edits = "no")`, "edits must be a bool, not a text."},
 		{"agent text for a number", `agent(prompt = "p", model = "m", output_tries = "2")`, "output_tries must be an int, not a text."},
-		{"batch_merge unknown keyword", `batch_merge(prs = item.id, base = "b", repo = "r", name = "n", limit = 2)`, "batch_merge takes no argument limit"},
-		{"batch_merge missing base", `batch_merge(prs = item.id, repo = "r", name = "n")`, "batch_merge needs the `base` keyword"},
+		{"merge unknown keyword", `merge(prs = item.id, base = "b", repo = "r", name = "n", limit = 2)`, "merge takes no argument limit"},
+		{"merge missing base", `merge(prs = item.id, repo = "r", name = "n")`, "merge needs the `base` keyword"},
 		{"command unknown keyword", `command(run = ["a"], stop_on_code = [1])`, "command takes no argument stop_on_code. Use one of: run, host, stdin, env, timeout, stop_on_rc, max_new_processes, slots, name."},
 		{"command cap as text", `command(run = ["a"], max_new_processes = "5")`, "max_new_processes must be an int, not a text."},
 		{"command cap of zero", `command(run = ["a"], max_new_processes = 0)`, "command: max_new_processes must be a whole number from 1 to 100000."},
@@ -91,7 +92,7 @@ func TestCheck_AcceptsACallThatKeepsItsSignature(t *testing.T) {
 	calls := []string{
 		`agent("p", "m", label = "fix 1/3", outputs = ["verdict"], output_tries = 2, inputs = {"a": 1}, allow_paths = ["papers/**"])`,
 		`agent("p", "m", forbid_commands = ["protected-path"], protect_paths = ["/own/checkout"])`,
-		`batch_merge(item.id, "b", "r", name = "n", gate_run = ["make"])`,
+		`merge(item.id, "b", "r", name = "n", gate_run = ["make"])`,
 		`command(["a"], env = {"A": "b"}, stop_on_rc = [1], name = "n")`,
 		`command(["a"], max_new_processes = 50)`,
 		`command(["a"], max_new_processes = len(item))`,
@@ -298,4 +299,52 @@ func TestUnpack_RefusesADestinationOfAnotherTypeThanTheKindOfItsKeyword(t *testi
 	require.ErrorContains(t, agent(map[string]any{"edits": &tries}), want)
 	require.ErrorContains(t, agent(map[string]any{"prompt": &value}), want)
 	require.ErrorContains(t, agent(map[string]any{"inputs": &text}), want)
+}
+
+func TestCheck_MergeTakesTheKeywordsOfABatchAndNoKeywordOfTheOldSingleMerge(t *testing.T) {
+	t.Parallel()
+
+	for _, keyword := range []string{`head = "abc"`, `tree = "t"`, `steps = []`, `approved = True`, `children = "refuse"`, `merge = False`, `by = "owner"`} {
+		name, _, _ := strings.Cut(keyword, " ")
+
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := checkText(t, "def main(item):\n    merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", "+keyword+")\n")
+
+			require.NotEmpty(t, got)
+			assert.Contains(t, got[0], "merge takes no argument "+name+". Use one of: prs, base, repo, hold, own, forbid_text, gate_run, integration, name.")
+		})
+	}
+}
+
+func TestCheck_MergeNeedsTheNameKeywordAndAcceptsAMergeOfOnePullRequest(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    merge(prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\")\n")
+
+	require.NotEmpty(t, got)
+	assert.Contains(t, got[0], "merge needs the `name` keyword")
+
+	one := "def main(item):\n    out = merge(name = \"land\", prs = [struct(item = item.id, head = \"h\", approved = True)], base = \"main\", repo = \"o/r\")\n    print(out.merged)\n"
+	assert.Empty(t, checkText(t, one), "a merge of one pull request is a merge")
+}
+
+func TestCheck_AFileThatCallsBatchMergeIsRefusedAsAnUndefinedName(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    batch_merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\")\n")
+
+	require.NotEmpty(t, got)
+	assert.Contains(t, got[0], "batch_merge")
+	assert.Contains(t, got[0], "undefined")
+}
+
+func TestCheck_TheResultOfMergeHasNoStateField(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    out = merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\")\n    print(out.state)\n")
+
+	require.NotEmpty(t, got)
+	assert.Contains(t, got[0], "state is not a field of the result of merge")
 }

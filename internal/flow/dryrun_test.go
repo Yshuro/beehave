@@ -141,7 +141,7 @@ func TestDryRun_AStepThatTheDryRunDoesNotFakeIsNotRunAndIsNotAnError(t *testing.
 		"queue": {body: "queue(name = \"q\")", want: "not run in a dry run: read the open work of the project"},
 		"state": {body: "pr_state(pr = 41, name = \"s\")", want: "not run in a dry run: read the state of a pull request"},
 		"merge": {body: shipCall("merge = True, "), want: "not run in a dry run: merge the pull request"},
-		"batch": {body: "batch_merge(prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", name = \"b\")", want: "not run in a dry run: merge a batch of pull requests"},
+		"batch": {body: "merge(prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", name = \"b\")", want: "not run in a dry run: merge a batch of pull requests"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

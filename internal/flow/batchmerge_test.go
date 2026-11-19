@@ -54,7 +54,7 @@ func (r *batchRig) engine(t *testing.T) *Engine {
 	return engine
 }
 
-// call writes a batch_merge call over the listed items. extra holds more arguments, each followed by a comma.
+// call writes a merge call over the listed items. extra holds more arguments, each followed by a comma.
 func (r *batchRig) call(items, extra string) string {
 	var prs []string
 
@@ -62,7 +62,7 @@ func (r *batchRig) call(items, extra string) string {
 		prs = append(prs, `struct(item = "`+item+`", head = "`+r.heads[item]+`")`)
 	}
 
-	return `out = batch_merge(prs = [` + strings.Join(prs, ", ") + `], base = "main", repo = "o/r", ` + extra + `name = "b")
+	return `out = merge(prs = [` + strings.Join(prs, ", ") + `], base = "main", repo = "o/r", ` + extra + `name = "b")
 command(name = "report", run = ["report", ",".join(out.merged), ",".join([r.item + ":" + r.reason for r in out.rejected]), ",".join([d.item + ":" + d.reason for d in out.deferred])])
 `
 }
@@ -211,7 +211,7 @@ func TestBatchMerge_AMergeableStateThatStaysUnknownDefersTheMemberAfterThreeRead
 	assert.Equal(t, []string{"1", "1", "1"}, rig.merger.landed())
 }
 
-// findingsCall is a batch_merge call whose findings and note go to a command, so a test reads them.
+// findingsCall is a merge call whose findings and note go to a command, so a test reads them.
 func (r *batchRig) findingsCall(items, extra string) string {
 	return strings.Replace(r.call(items, extra), `command(name = "report"`, `command(name = "issues", run = ["issues", "|".join(out.findings), out.note])
 command(name = "report"`, 1)
@@ -243,7 +243,7 @@ func TestBatchMerge_ABatchThatLandedNothingReadsNoIssueAndSaysSo(t *testing.T) {
 	assert.Empty(t, rig.host.issueReads())
 }
 
-// unprovenCall is a batch_merge call whose unproven lines go to a command, so a test reads them.
+// unprovenCall is a merge call whose unproven lines go to a command, so a test reads them.
 func (r *batchRig) unprovenCall(items string) string {
 	return strings.Replace(r.call(items, ""), `command(name = "report"`, `command(name = "proof", run = ["proof", "|".join([u.item + ":" + u.reason for u in out.unproven])])
 command(name = "report"`, 1)
@@ -295,7 +295,7 @@ func TestBatchMerge_AProofThatErrorsEndsTheCallWithTheError(t *testing.T) {
 
 	_, err := rig.walk(t, rig.call("1", ""))
 
-	require.ErrorContains(t, err, `batch_merge "b"`)
+	require.ErrorContains(t, err, `merge "b"`)
 	require.ErrorContains(t, err, "project gone")
 }
 
@@ -307,7 +307,7 @@ func TestBatchMerge_AReadAfterTheBatchThatErrorsEndsTheCallWithTheError(t *testi
 
 	_, err := rig.walk(t, rig.call("1", ""))
 
-	require.ErrorContains(t, err, `batch_merge "b"`)
+	require.ErrorContains(t, err, `merge "b"`)
 	require.ErrorContains(t, err, "project gone")
 }
 
@@ -341,7 +341,7 @@ func TestBatchMerge_EachMemberMergesWithItsOwnApproval(t *testing.T) {
 	rig := newBatchRig(t)
 	prs := `[struct(item = "1", head = "` + rig.heads["1"] + `", approved = True), struct(item = "3", head = "` + rig.heads["3"] + `")]`
 
-	_, err := rig.walk(t, `out = batch_merge(prs = `+prs+`, base = "main", repo = "o/r", name = "b")`)
+	_, err := rig.walk(t, `out = merge(prs = `+prs+`, base = "main", repo = "o/r", name = "b")`)
 
 	require.NoError(t, err)
 	require.Equal(t, []string{"1", "3"}, rig.merger.landed())
@@ -376,7 +376,7 @@ func TestBatchMerge_AnOwnMemberWithNoApprovalIsRefusedAsOwnWork(t *testing.T) {
 	require.Len(t, rig.h.commands.ran(), 1)
 	assert.Contains(t, rig.h.commands.ran()[0], "1:", "member 1 is rejected")
 	assert.Contains(t, rig.h.commands.ran()[0], "The owner merges it in the forge")
-	assert.Contains(t, rig.h.commands.ran()[0], "the field of the member of batch_merge", "the refusal names the fix for a batch member")
+	assert.Contains(t, rig.h.commands.ran()[0], "the field of the member of merge", "the refusal names the fix for a batch member")
 	assert.Equal(t, 1, merger.askedCount(), "the merge guard saw the member once")
 	assert.Empty(t, world.writes, "a refused member has had no write on the forge")
 	assert.Equal(t, "README", rig.mainFiles(t), "nothing landed")
@@ -447,7 +447,7 @@ func TestBatchMerge_ACallThatTheBuildOrTheArgumentsCannotServeFailsWithAFix(t *t
 	t.Parallel()
 
 	bad := func(r *batchRig, prs string) string {
-		return `batch_merge(prs = ` + prs + `, base = "main", repo = "o/r", name = "b")`
+		return `merge(prs = ` + prs + `, base = "main", repo = "o/r", name = "b")`
 	}
 	member := func(r *batchRig, extra string) string {
 		return `struct(item = "1", head = "` + r.heads["1"] + `"` + extra + `)`
@@ -459,7 +459,7 @@ func TestBatchMerge_ACallThatTheBuildOrTheArgumentsCannotServeFailsWithAFix(t *t
 		want  string
 	}{
 		"no name": {body: func(r *batchRig) string {
-			return `batch_merge(prs = [` + member(r, "") + `], base = "main", repo = "o/r", name = "")`
+			return `merge(prs = [` + member(r, "") + `], base = "main", repo = "o/r", name = "")`
 		}, want: "needs a `name` that is not empty"},
 		"repeated name": {body: func(r *batchRig) string {
 			return r.call("1", "") + "\n" + r.call("3", "")
@@ -479,18 +479,18 @@ func TestBatchMerge_ACallThatTheBuildOrTheArgumentsCannotServeFailsWithAFix(t *t
 			return bad(r, `[`+member(r, `, approved = "yes"`)+`]`)
 		}, want: "`approved` of a member of `prs` must be a bool, not string"},
 		"empty base": {body: func(r *batchRig) string {
-			return `batch_merge(prs = [` + member(r, "") + `], base = "", repo = "o/r", name = "b")`
+			return `merge(prs = [` + member(r, "") + `], base = "", repo = "o/r", name = "b")`
 		}, want: "base must not be empty"},
 		"empty repo": {body: func(r *batchRig) string {
-			return `batch_merge(prs = [` + member(r, "") + `], base = "main", repo = "", name = "b")`
+			return `merge(prs = [` + member(r, "") + `], base = "main", repo = "", name = "b")`
 		}, want: "repo must not be empty"},
 		"computed empty base": {body: func(r *batchRig) string {
-			return `batch_merge(prs = [` + member(r, "") + `], base = "" + "", repo = "o/r", name = "b")`
+			return `merge(prs = [` + member(r, "") + `], base = "" + "", repo = "o/r", name = "b")`
 		}, want: "base must not be empty"},
 		"gate_run not a list": {body: func(r *batchRig) string {
 			return r.call("1", `gate_run = 3, `)
 		}, want: "gate_run"},
-		"no batch host": {body: func(r *batchRig) string { return r.call("1", "") }, build: func(_ *batchRig, d *Deps) { d.Batch = nil }, want: "cannot run batch_merge"},
+		"no batch host": {body: func(r *batchRig) string { return r.call("1", "") }, build: func(_ *batchRig, d *Deps) { d.Batch = nil }, want: "cannot run merge"},
 		"no merger":     {body: func(r *batchRig) string { return r.call("1", "") }, build: func(_ *batchRig, d *Deps) { d.Merge = nil }, want: errNoMerger.Error()},
 	}
 
@@ -520,7 +520,7 @@ func TestBatchMerge_ACallThatTheBuildOrTheArgumentsCannotServeFailsWithAFix(t *t
 func TestBatchMerge_ACallWithNoArgumentsIsRefusedWithTheMissingName(t *testing.T) {
 	t.Parallel()
 
-	_, err := newBatchRig(t).walk(t, `batch_merge(name = "b")`)
+	_, err := newBatchRig(t).walk(t, `merge(name = "b")`)
 
 	require.ErrorContains(t, err, "prs")
 }
