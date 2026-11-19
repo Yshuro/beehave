@@ -197,7 +197,7 @@ func notMerged(ctx context.Context, built forge.Forge, integration int) (batch.R
 	switch state := strings.ToUpper(strings.TrimSpace(model.Deref(view.State))); state {
 	case "MERGED":
 		return batch.Report{}, false
-	case "OPEN", "CLOSED":
+	case stateOpen, "CLOSED":
 		return batch.Report{Note: fmt.Sprintf("issue states: the integration pull request %d is %s, not MERGED, so the issues are not read yet.", integration, state)}, true
 	default:
 		return batch.Report{Findings: []string{fmt.Sprintf("the integration pull request %d has the state %q, which is not OPEN, CLOSED or MERGED", integration, state)}}, true
@@ -216,7 +216,7 @@ func (h batchHost) Intent(ctx context.Context, project, item, repo, _, tipTree s
 		return merge.Intent{}, fmt.Errorf("read the pull request of item %s: %w", item, err)
 	}
 
-	if state := strings.ToUpper(strings.TrimSpace(model.Deref(view.State))); state != "OPEN" {
+	if state := strings.ToUpper(strings.TrimSpace(model.Deref(view.State))); state != stateOpen {
 		return merge.Intent{}, fmt.Errorf("the pull request of item %s is %s, %w, so a merge cannot be tied to this run", item, state, flow.ErrMemberNotOpen)
 	}
 
@@ -236,7 +236,12 @@ func (h batchHost) Pull(ctx context.Context, project, item, repo string) (flow.P
 		return flow.PullView{}, err
 	}
 
-	view, err := built.PRView(ctx, number, "state", "isDraft", "headRefOid")
+	return readView(ctx, built, number, item)
+}
+
+// readView reads the view of an open or merged pull request, and its standing when it is open.
+func readView(ctx context.Context, built forge.Forge, number int, item string) (flow.PullView, error) {
+	view, err := built.PRView(ctx, number, "state", "isDraft", "headRefOid", "mergeable")
 	if err != nil {
 		return flow.PullView{}, err
 	}
@@ -245,7 +250,34 @@ func (h batchHost) Pull(ctx context.Context, project, item, repo string) (flow.P
 		return flow.PullView{}, fmt.Errorf("the forge gave no draft state for the pull request of item %s", item)
 	}
 
-	return flow.PullView{State: strings.ToUpper(strings.TrimSpace(model.Deref(view.State))), Draft: *view.IsDraft, Head: model.Deref(view.HeadRefOid)}, nil
+	pull := flow.PullView{State: strings.ToUpper(strings.TrimSpace(model.Deref(view.State))), Draft: *view.IsDraft, Head: model.Deref(view.HeadRefOid)}
+	if pull.State != stateOpen {
+		return pull, nil
+	}
+
+	pull.Conflicting = strings.EqualFold(model.Deref(view.Mergeable), "CONFLICTING")
+
+	return pull, readStanding(ctx, built, number, item, &pull)
+}
+
+// stateOpen is the state of a pull request that is open.
+const stateOpen = "OPEN"
+
+// readStanding fills the change requests and the unresolved threads of an open pull request. A read that fails is an error, never an empty count.
+func readStanding(ctx context.Context, built forge.Forge, number int, item string, pull *flow.PullView) error {
+	changes, err := built.OpenChangeRequests(ctx, number)
+	if err != nil {
+		return fmt.Errorf("read the change requests of the pull request of item %s: %w", item, err)
+	}
+
+	threads, err := built.UnresolvedThreads(ctx, number)
+	if err != nil {
+		return fmt.Errorf("read the review threads of the pull request of item %s: %w", item, err)
+	}
+
+	pull.ChangeRequests, pull.Threads = len(changes), len(threads)
+
+	return nil
 }
 
 // SetDraft marks the pull request of the item a draft, or ready for review when draft is false.
@@ -266,4 +298,24 @@ func closedPull(ctx context.Context, built forge.Forge, item string, missing err
 	}
 
 	return flow.PullView{State: "CLOSED"}, nil
+}
+
+// SameTree says whether two commits of the pull request of the item hold the same tree. A tree that cannot be read is an error, and a forge that does not read trees gives one.
+func (h batchHost) SameTree(ctx context.Context, project, item, repo, was, now string) (bool, error) {
+	built, _, err := h.pulls.target(ctx, project, item, repo)
+	if err != nil {
+		return false, err
+	}
+
+	before, err := built.CommitTree(ctx, was)
+	if err != nil {
+		return false, fmt.Errorf("read the tree of commit %s: %w", was, err)
+	}
+
+	after, err := built.CommitTree(ctx, now)
+	if err != nil {
+		return false, fmt.Errorf("read the tree of commit %s: %w", now, err)
+	}
+
+	return before != "" && before == after, nil
 }

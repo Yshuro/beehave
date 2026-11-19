@@ -427,14 +427,17 @@ It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`,
 
 #### `hand_off`
 
-`hand_off = True` hands the landing to the owner. The call lands nothing, runs no gate and takes no `hold`, `own`, `forbid_text`, `gate_run` or `integration`: a call with one of them fails and names it.
+`hand_off = True` hands the landing to the owner. The call lands nothing, runs no gate and takes no `hold`, `own`, `forbid_text`, `gate_run` or `integration`: a call with one of them fails and names it. `beehave check workflow` refuses the same call when `hand_off` is the literal `True`.
 
 - For each member, the step `batch:<name>.ready#<item>` reads the pull request. A draft at the head of the member is marked ready. A resume replays the step and marks nothing ready again.
+- The call does not mark a draft ready while a review asks for changes, the pull request conflicts with its base branch, or a review thread is unresolved. The member goes into `rejected` with the reasons, and the draft stays a draft. A read of the reviews or the threads that fails fails the call.
 - If a member waits, the run shows the merge state `owner_merge` and runs the `notify` command of the project once for the whole call. See `notify` in [configuration.md](configuration.md).
 - Then the step `batch:<name>.watch#<item>@<round>` reads each member that still waits, and a durable sleep of one hour separates two rounds. A restart resumes the watch.
 - A MERGED pull request goes into `merged`. A pull request that is not open goes into `rejected` with its reason, and nothing is drafted.
-- If the head of an open pull request is not the head of the member, the call marks it a draft again, unless it is a draft already. It goes into `rejected` with a reason that names the new head, and into `moved` as `struct(item, head)` with that head. The workflow can review the new head and call `merge` again.
-- The call returns when no member waits. A cancel of the run does not draft a pull request.
+- If the head of an open pull request is not the head of the member, the call marks it a draft again, unless it is a draft already. It goes into `rejected` with a reason that names the new head, and into `moved` as `struct(item, head)` with that head. The workflow can review the new head and call `merge` again. A head that is another commit with the same tree is a rewrite and not a move.
+- If a review asks for changes, or the pull request conflicts with its base branch, the call marks a ready pull request a draft again, at the first read or later. It goes into `rejected` with the reasons. An unresolved thread does not draft a ready pull request.
+- The call returns when no member waits.
+- A call that ends by a cancel of the run, or by an error, marks each member that has not ended a draft again, when it is open and ready for review. A resume of a canceled run goes on with the watch and does not mark the pull request ready again. If the draft call fails, the owner gets a notice that tells them to convert the pull request by hand. A stop of the engine does not draft a pull request, because the run resumes.
 
 #### A lost batch gate job
 

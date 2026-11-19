@@ -52,6 +52,13 @@ type hostForge struct {
 	// drafted records each SetDraft call as the number and the flag. setDraftErr is the error of that call.
 	drafted     *[]string
 	setDraftErr error
+	// mergeable is the mergeable field of the view. changes and threads are the counts of change requests and unresolved threads, and changesErr and threadsErr fail those reads.
+	mergeable              string
+	changes, threads       int
+	changesErr, threadsErr error
+	// trees is the tree of each commit, and treeErr is the error of every tree read.
+	trees   map[string]string
+	treeErr error
 }
 
 func (f hostForge) SetDraft(_ context.Context, number int, draft bool) error {
@@ -85,6 +92,10 @@ func (f hostForge) PRView(_ context.Context, number int, _ ...string) (model.Pul
 
 	head, base := f.viewHead, "main"
 	view := model.PullRequest{Number: number, HeadRefOid: &head, BaseRefName: &base, IsDraft: f.draft}
+
+	if f.mergeable != "" {
+		view.Mergeable = &f.mergeable
+	}
 
 	if f.state != "" { // a state that the forge did not send is nil, not an empty text
 		view.State = &f.state
@@ -396,3 +407,121 @@ func TestBatchHost_SetDraftMarksThePullRequestOfTheItem(t *testing.T) {
 
 	require.ErrorIs(t, hostOver("", hostForge{}, nil).SetDraft(t.Context(), "p", "item", "o/r", true), forge.ErrNoPull)
 }
+
+// OpenChangeRequests gives f.changes change requests, or the error of the read.
+func (f hostForge) OpenChangeRequests(context.Context, int) ([]model.ChangeRequest, error) {
+	return make([]model.ChangeRequest, f.changes), f.changesErr
+}
+
+// UnresolvedThreads gives f.threads threads, or the error of the read.
+func (f hostForge) UnresolvedThreads(context.Context, int) ([]model.ReviewThread, error) {
+	return make([]model.ReviewThread, f.threads), f.threadsErr
+}
+
+// CommitTree gives the tree of a commit from f.trees, or the error of the read.
+func (f hostForge) CommitTree(_ context.Context, commit string) (string, error) {
+	return f.trees[commit], f.treeErr
+}
+
+func TestBatchHost_PullReadsTheConflictTheChangeRequestsAndTheThreadsOfAnOpenPullRequest(t *testing.T) {
+	t.Parallel()
+
+	draft := false
+	f := hostForge{state: "OPEN", draft: &draft, viewHead: gated, mergeable: "CONFLICTING", changes: 2, threads: 3, listed: []model.PullRequest{{Number: 9}}}
+
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r")
+
+	require.NoError(t, err)
+	assert.Equal(t, flow.PullView{State: "OPEN", Head: gated, Conflicting: true, ChangeRequests: 2, Threads: 3}, got)
+}
+
+func TestBatchHost_PullReadsNoStandingOfAMergedPullRequest(t *testing.T) {
+	t.Parallel()
+
+	draft := false
+	f := hostForge{state: "MERGED", draft: &draft, viewHead: gated, changesErr: errFake, threadsErr: errFake, listed: []model.PullRequest{{Number: 9}}}
+
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r")
+
+	require.NoError(t, err, "a merged pull request needs no read of its reviews")
+	assert.Equal(t, flow.PullView{State: "MERGED", Head: gated}, got)
+}
+
+func TestBatchHost_PullFailsWhenTheChangeRequestsOrTheThreadsCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	draft := false
+	listed := []model.PullRequest{{Number: 9}}
+
+	_, err := hostOver("", hostForge{state: "OPEN", draft: &draft, changesErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r")
+	require.ErrorContains(t, err, "read the change requests of the pull request of item item")
+	require.ErrorIs(t, err, errFake)
+
+	_, err = hostOver("", hostForge{state: "OPEN", draft: &draft, threadsErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r")
+	require.ErrorContains(t, err, "read the review threads of the pull request of item item")
+	require.ErrorIs(t, err, errFake)
+}
+
+func TestBatchHost_SameTreeSaysWhetherTwoCommitsHoldTheSameTree(t *testing.T) {
+	t.Parallel()
+
+	f := hostForge{listed: []model.PullRequest{{Number: 9}}, trees: map[string]string{"a": "t1", "b": "t1", "c": "t2", "e": ""}}
+
+	same, err := hostOver("", f, nil).SameTree(t.Context(), "p", "item", "o/r", "a", "b")
+	require.NoError(t, err)
+	assert.True(t, same)
+
+	same, err = hostOver("", f, nil).SameTree(t.Context(), "p", "item", "o/r", "a", "c")
+	require.NoError(t, err)
+	assert.False(t, same)
+
+	same, err = hostOver("", f, nil).SameTree(t.Context(), "p", "item", "o/r", "e", "e")
+	require.NoError(t, err)
+	assert.False(t, same, "a tree that the forge did not give is no proof of a rewrite")
+}
+
+func TestBatchHost_SameTreeFailsForAReadThatFailsAndForAPullRequestThatTheItemLacks(t *testing.T) {
+	t.Parallel()
+
+	f := hostForge{listed: []model.PullRequest{{Number: 9}}, treeErr: errFake}
+
+	_, err := hostOver("", f, nil).SameTree(t.Context(), "p", "item", "o/r", "a", "b")
+	require.ErrorContains(t, err, "read the tree of commit a")
+	require.ErrorIs(t, err, errFake)
+
+	_, err = hostOver("", hostForge{}, nil).SameTree(t.Context(), "p", "item", "o/r", "a", "b")
+	require.ErrorIs(t, err, forge.ErrNoPull)
+}
+
+func TestBatchHost_SameTreeFailsWhenOnlyTheSecondTreeCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	f := hostForge{listed: []model.PullRequest{{Number: 9}}, trees: map[string]string{"a": "t1"}}
+	failing := &secondTreeFails{hostForge: f, fail: "b"}
+
+	host := hostOver("", f, nil)
+	host.pulls.forge = func(model.Project) (forge.Forge, error) { return failing, nil }
+
+	_, err := host.SameTree(t.Context(), "p", "item", "o/r", "a", "b")
+
+	require.ErrorContains(t, err, "read the tree of commit b")
+	require.ErrorIs(t, err, errFake)
+}
+
+// secondTreeFails is a forge whose tree read fails for one commit.
+type secondTreeFails struct {
+	hostForge
+
+	fail string
+}
+
+func (f *secondTreeFails) CommitTree(ctx context.Context, commit string) (string, error) {
+	if commit == f.fail {
+		return "", errFake
+	}
+
+	return f.hostForge.CommitTree(ctx, commit)
+}
+
+// TreeBlobs is the other half of the tree reads of a forge. A tree comparison reads no files, so it gives none.
+func (f hostForge) TreeBlobs(context.Context, string) (map[string]string, error) { return nil, nil } //nolint:nilnil // a fake that serves no file

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -21,6 +23,9 @@ type handForge struct {
 	drafts   []string
 	pullErr  error
 	draftErr map[bool]error
+	// same holds the heads that have the tree of the pinned head. treeErr is the error of the tree read.
+	same    map[string]bool
+	treeErr error
 	// onRead, when set, runs at each read with the number of the read of that item, counted from 1.
 	onRead func(item string, read int)
 }
@@ -318,7 +323,143 @@ func TestHandOff_ACancelAfterTheReadyMarkStopsTheCallAndAResumeGoesOn(t *testing
 	assert.Equal(t, []string{"1:false"}, rig.host.pr.marked())
 }
 
-func TestHandOff_ACancelWhileTheWatchSleepsEndsTheCall(t *testing.T) {
+// SameTree answers from the table of the pull request fake: the head named in same holds the tree of the pinned head.
+func (h *repoHost) SameTree(_ context.Context, _, _, _, _, now string) (bool, error) {
+	return h.pr.same[now], h.pr.treeErr
+}
+
+// standing makes a view of an item with the facts that hold a pull request back.
+func (r *handRig) standing(item string, draft bool, set func(*PullView)) PullView {
+	v := r.view(item, "OPEN", draft)
+	set(&v)
+
+	return v
+}
+
+func TestHandOff_AStandingReasonHoldsTheReadyMarkAndTheCallNamesIt(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		set    func(*PullView)
+		reason string
+	}{
+		"a change request": {func(v *PullView) { v.ChangeRequests = 1 }, "a review asks for changes"},
+		"a conflict":       {func(v *PullView) { v.Conflicting = true }, "it conflicts with its base branch"},
+		"a thread":         {func(v *PullView) { v.Threads = 2 }, "2 review threads are unresolved"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newHandRig(t)
+			rig.script("1", rig.standing("1", true, tc.set))
+
+			_, err := rig.walk(t, rig.body("1", ""))
+
+			require.NoError(t, err)
+			assert.Empty(t, rig.host.pr.marked(), "a draft with a reason to wait is not marked ready")
+			assert.Empty(t, notifyRequests(rig.h), "no member waits, so no owner is told")
+			assert.Equal(t, []string{"report   1:not marked ready: " + tc.reason + " 0"}, filterReport(rig.h.commands.ran()))
+		})
+	}
+}
+
+func TestHandOff_AReadyPullRequestWithAChangeRequestOrAConflictGoesBackToDraftAtOnce(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.script("1", rig.standing("1", false, func(v *PullView) { v.ChangeRequests = 1; v.Conflicting = true }))
+
+	_, err := rig.walk(t, rig.body("1", ""))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1:true"}, rig.host.pr.marked())
+	assert.Equal(t, []string{"report   1:drafted again: a review asks for changes, it conflicts with its base branch 0"}, filterReport(rig.h.commands.ran()))
+}
+
+func TestHandOff_AChangeRequestOrAConflictDuringTheWatchPutsThePullRequestBackToDraft(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		set    func(*PullView)
+		reason string
+	}{
+		"a change request": {func(v *PullView) { v.ChangeRequests = 1 }, "a review asks for changes"},
+		"a conflict":       {func(v *PullView) { v.Conflicting = true }, "it conflicts with its base branch"},
+	}
+
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newHandRig(t)
+			rig.script("1", rig.view("1", "OPEN", true), rig.view("1", "OPEN", false), rig.standing("1", false, tc.set))
+
+			_, err := rig.walk(t, rig.body("1", ""))
+
+			require.NoError(t, err)
+			assert.Equal(t, []string{"1:false", "1:true"}, rig.host.pr.marked(), "marked ready, then back to draft")
+			assert.Equal(t, []string{"report   1:drafted again: " + tc.reason + " 0"}, filterReport(rig.h.commands.ran()))
+		})
+	}
+}
+
+func TestHandOff_AnUnresolvedThreadDuringTheWatchLeavesThePullRequestReady(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.script("1", rig.view("1", "OPEN", true), rig.standing("1", false, func(v *PullView) { v.Threads = 3 }), rig.view("1", "MERGED", false))
+
+	_, err := rig.walk(t, rig.body("1", ""))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1:false"}, rig.host.pr.marked(), "a thread of a ready pull request does not draft it")
+	assert.Equal(t, []string{"report 1   0"}, filterReport(rig.h.commands.ran()))
+}
+
+func TestHandOff_AHeadRewrittenWithTheSameTreeIsNotAMove(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.host.pr.same = map[string]bool{"rewrite1": true}
+	rig.script("1", rig.view("1", "OPEN", true, "rewrite1"), rig.view("1", "OPEN", false, "rewrite1"), rig.view("1", "MERGED", false, "rewrite1"))
+
+	_, err := rig.walk(t, rig.body("1", ""))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1:false"}, rig.host.pr.marked(), "the rewrite is marked ready and never drafted")
+	assert.Equal(t, []string{"report 1   0"}, filterReport(rig.h.commands.ran()))
+}
+
+func TestHandOff_AHeadWithAnotherTreeIsAMoveEvenWhenOtherHeadsHoldTheSameTree(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.host.pr.same = map[string]bool{"rewrite1": true}
+	rig.script("1", rig.view("1", "OPEN", false, "other1"))
+
+	_, err := rig.walk(t, rig.body("1", ""))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1:true"}, rig.host.pr.marked())
+	assert.Contains(t, filterReport(rig.h.commands.ran())[0], "1@other1")
+}
+
+func TestHandOff_ATreeThatCannotBeReadEndsTheCallAndNamesTheItem(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.host.pr.treeErr = errors.New("no tree")
+	rig.script("1", rig.view("1", "OPEN", true, "rewrite1"))
+
+	_, err := rig.walk(t, rig.body("1", ""))
+
+	require.ErrorContains(t, err, "compare the tree of the head of item 1: no tree")
+	assert.Empty(t, rig.host.pr.marked())
+}
+
+func TestHandOff_ACancelDuringTheWatchPutsTheReadyPullRequestBackToDraft(t *testing.T) {
 	t.Parallel()
 
 	rig := newHandRig(t)
@@ -338,5 +479,94 @@ func TestHandOff_ACancelWhileTheWatchSleepsEndsTheCall(t *testing.T) {
 	rig.h.tick(t)
 
 	require.Error(t, receive(t, ended))
-	assert.Equal(t, []string{"1:false"}, rig.host.pr.marked(), "a cancel does not draft the pull request")
+	assert.Equal(t, []string{"1:false", "1:true"}, rig.host.pr.marked(), "a ready pull request that nobody watches goes back to draft")
+}
+
+func TestHandOff_ACancelThatCannotDraftTheReadyPullRequestTellsTheOwnerToConvertByHand(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.h.sleep = time.Hour
+	rig.script("1", rig.view("1", "OPEN", true), rig.view("1", "OPEN", false))
+	rig.host.pr.draftErr[true] = errors.New("no permission")
+	engine := rig.engine(t)
+	file := writeFlow(t, bodyFlow(rig.body("1", "")))
+	ended := make(chan error, 1)
+
+	go func() {
+		_, err := engine.RunFile(testItem, testProject, file)
+		ended <- err
+	}()
+
+	waitOn(t, inASleep(t, engine))
+	require.NoError(t, rig.h.client(t, testVersion).Cancel(testItem))
+	rig.h.tick(t)
+
+	require.Error(t, receive(t, ended))
+
+	notices := notifyRequests(rig.h)
+	require.Len(t, notices, 2, "the notice of the wait and the notice of the draft that failed")
+	assert.Contains(t, notices[1].Run[len(notices[1].Run)-1], "cannot make the pull request of item 1 a draft again. If it is open and ready for review, convert it to a draft by hand: no permission")
+}
+
+func TestHandOff_AWatchSleepsForTheTimeOfTheClockBetweenTwoReads(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.h.sleep = 3 * time.Hour
+	rig.script("1", rig.view("1", "OPEN", true), rig.view("1", "OPEN", false))
+	engine := rig.engine(t)
+	file := writeFlow(t, bodyFlow(rig.body("1", "")))
+
+	go func() { _, _ = engine.RunFile(testItem, testProject, file) }() //nolint:errcheck // the test cancels the run below
+
+	waitOn(t, inASleep(t, engine))
+
+	steps, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
+	require.NoError(t, err)
+
+	i := slices.IndexFunc(steps, func(s dbos.StepInfo) bool { return s.StepName == "DBOS.sleep" })
+	require.GreaterOrEqual(t, i, 0)
+	assert.InDelta(t, (3 * time.Hour).Seconds(), steps[i].CompletedAt.Sub(steps[i].StartedAt).Seconds(), 30, "the recorded wake time is the time of the clock after the start of the sleep")
+
+	require.NoError(t, rig.h.client(t, testVersion).Cancel(testItem))
+	rig.h.tick(t)
+}
+
+func TestHandOff_APullRequestThatSomeoneDraftedDuringTheWatchStaysInTheWatch(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.script("1", rig.view("1", "OPEN", true), rig.view("1", "OPEN", false), rig.standing("1", true, func(v *PullView) { v.ChangeRequests = 1 }), rig.view("1", "MERGED", false))
+
+	_, err := rig.walk(t, rig.body("1", ""))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1:false"}, rig.host.pr.marked(), "a draft in the watch is left as it is, and nothing marks it ready again")
+	assert.Equal(t, []string{"report 1   0"}, filterReport(rig.h.commands.ran()))
+}
+
+func TestHandOff_ACancelDraftsOnlyTheMembersThatHaveNotEnded(t *testing.T) {
+	t.Parallel()
+
+	rig := newHandRig(t)
+	rig.h.sleep = time.Hour
+	rig.script("1", rig.view("1", "OPEN", true), rig.view("1", "MERGED", false))
+	rig.script("2", rig.view("2", "OPEN", true), rig.view("2", "OPEN", false))
+	rig.script("3", rig.standing("3", true, func(v *PullView) { v.Conflicting = true }))
+	engine := rig.engine(t)
+	file := writeFlow(t, bodyFlow(rig.body("1 2 3", "")))
+	ended := make(chan error, 1)
+
+	go func() {
+		_, err := engine.RunFile(testItem, testProject, file)
+		ended <- err
+	}()
+
+	waitOn(t, inASleep(t, engine))
+	require.NoError(t, rig.h.client(t, testVersion).Cancel(testItem))
+	rig.h.tick(t)
+
+	require.Error(t, receive(t, ended))
+	assert.Equal(t, []string{"1:false", "2:false", "2:true"}, rig.host.pr.marked(), "the merged member needs no draft call and the other one gets it")
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -21,11 +22,37 @@ const watchEvery = time.Hour
 // mergeOwner is the value of the merge event while a hand-off waits for the owner to merge.
 const mergeOwner = "owner_merge"
 
+// draftTimeout bounds the reads and the draft calls that put pull requests back to draft after a cancel. They run on a context that the cancel does not reach.
+const draftTimeout = 30 * time.Second
+
 // PullView is the state of a pull request that a hand-off reads. State is OPEN, CLOSED or MERGED, and Head is the commit at its tip.
+// Conflicting is true when it conflicts with its base branch. ChangeRequests counts the reviews that ask for changes and still stand, and Threads counts the review threads that are unresolved.
 type PullView struct {
-	State string
-	Draft bool
-	Head  string
+	State          string
+	Draft          bool
+	Head           string
+	Conflicting    bool
+	ChangeRequests int
+	Threads        int
+}
+
+// reasons lists what holds a pull request back from the owner: a change request and a conflict always, an unresolved thread only when threads is true.
+func (v PullView) reasons(threads bool) []string {
+	var found []string
+
+	if v.ChangeRequests > 0 {
+		found = append(found, "a review asks for changes")
+	}
+
+	if v.Conflicting {
+		found = append(found, "it conflicts with its base branch")
+	}
+
+	if threads && v.Threads > 0 {
+		found = append(found, fmt.Sprintf("%d review threads are unresolved", v.Threads))
+	}
+
+	return found
 }
 
 // handState says how one read of a member of a hand-off ended. Only handWaiting keeps the member in the watch.
@@ -36,6 +63,7 @@ const (
 	handMerged  handState = "merged"
 	handClosed  handState = "closed"
 	handMoved   handState = "moved"
+	handHeld    handState = "held"
 )
 
 // handRead is the record of one read of a member. Head is the head that a handMoved read found, and Reason says why a member left the watch without a merge.
@@ -52,25 +80,72 @@ type handResult struct {
 	moved    []batch.Member
 }
 
-// handOff marks each member ready, tells the owner once, and reads the members until each one is merged, closed or drafted again because its head moved.
-// A member that is not ready and open at its head never gets the ready mark. The wait between two reads is a durable sleep, so a restart resumes the watch.
+// handOff marks each member ready, tells the owner once, and reads the members until each one is merged, closed or drafted again.
+// A member is drafted again when its head moves, or when a change request or a conflict stands. A member that is not ready and open at its head never gets the ready mark,
+// and neither does a member with a change request, a conflict or an unresolved thread. The wait between two reads is a durable sleep, so a restart resumes the watch.
+// A call that ends for good, by a cancel or by an error, puts each member that is still ready back to draft: nothing watches it any more.
 func (s *script) handOff(call batchCall) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	var out handResult
 
-	pending, err := s.handLook(call, call.members, 0, &out)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(pending) > 0 {
-		s.handAsk()
-
-		err = s.handWatch(call, pending, &out)
+	err := s.handRun(call, &out)
+	if err != nil && endsTheMerge(s.ctx) {
+		err = errors.Join(err, s.handUnwatch(call, out))
 	}
 
 	value, resultErr := handResultValue(out)
 
 	return value, errors.Join(err, resultErr, show(s.ctx, s.in.Item, mergeKey, "", "that the wait for the owner is over"))
+}
+
+// handRun is the round of the ready mark, the notice to the owner and the watch.
+func (s *script) handRun(call batchCall, out *handResult) error {
+	pending, err := s.handLook(call, call.members, 0, out)
+	if err != nil || len(pending) == 0 {
+		return err
+	}
+
+	s.handAsk()
+
+	return s.handWatch(call, pending, out)
+}
+
+// handUnwatch puts each member that has not ended back to draft, on a context that the cancel does not reach and within a limit of its own.
+// It reads the pull request first, so a merged or closed one, and a draft, get no call. A read or a draft call that fails tells the owner to convert the pull request by hand.
+func (s *script) handUnwatch(call batchCall, out handResult) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.ctx), draftTimeout)
+	defer cancel()
+
+	var failed []error
+
+	for _, m := range out.open(call.members) {
+		failed = append(failed, s.e.draftOpen(ctx, s.in.Project, call.settings.Repo, m.Item))
+	}
+
+	err := errors.Join(failed...)
+	if err != nil {
+		// A cancel ends the call with the error of the cancel, so the owner reads this one in the notice.
+		s.e.tell(ctx, s.in.Project, s.in.Item, err.Error())
+	}
+
+	return err
+}
+
+// draftOpen puts the pull request of an item back to draft when it is open and ready for review.
+func (e *Engine) draftOpen(ctx context.Context, project, repo, item string) error {
+	view, err := e.deps.Batch.Pull(ctx, project, item, repo)
+	if err != nil {
+		return fmt.Errorf("cannot read the pull request of item %s to make it a draft again. If it is open and ready for review, convert it to a draft by hand: %w", item, err)
+	}
+
+	if view.State != "OPEN" || view.Draft {
+		return nil
+	}
+
+	if err := e.deps.Batch.SetDraft(ctx, project, item, repo, true); err != nil {
+		return fmt.Errorf("cannot make the pull request of item %s a draft again. If it is open and ready for review, convert it to a draft by hand: %w", item, err)
+	}
+
+	return nil
 }
 
 // handWatch reads the members that wait, round by round, until none waits. A durable sleep separates two rounds.
@@ -124,12 +199,19 @@ func handStepName(call, item string, round int) string {
 	return fmt.Sprintf("batch:%s.watch#%s@%d", call, item, round)
 }
 
+// open lists the members that have not ended: they are in no list of the result.
+func (r *handResult) open(members []batch.Member) []batch.Member {
+	return slices.DeleteFunc(slices.Clone(members), func(m batch.Member) bool {
+		return slices.Contains(r.merged, m.Item) || slices.ContainsFunc(r.rejected, func(o batch.Outcome) bool { return o.Item == m.Item })
+	})
+}
+
 // add keeps the end of a member in the result. It reports whether the member still waits.
 func (r *handResult) add(m batch.Member, read handRead) bool {
 	switch read.State {
 	case handMerged:
 		r.merged = append(r.merged, m.Item)
-	case handClosed:
+	case handClosed, handHeld:
 		r.rejected = append(r.rejected, batch.Outcome{Item: m.Item, Reason: read.Reason})
 	case handMoved:
 		r.rejected = append(r.rejected, batch.Outcome{Item: m.Item, Reason: read.Reason})
@@ -141,21 +223,69 @@ func (r *handResult) add(m batch.Member, read handRead) bool {
 }
 
 // handRead reads the pull request of a member once. A merged pull request ends the member. A pull request that is not open ends it with a reason.
-// A head that is not the head of the member puts the pull request back to draft. With ready set, a draft at the head of the member is marked ready.
+// A head that is not the head of the member, and has another tree, puts the pull request back to draft. A head with the same tree is a rewrite and no move.
+// With ready set, a draft at the head of the member is marked ready, unless a change request, a conflict or an unresolved thread holds it back.
 func (e *Engine) handRead(ctx context.Context, project, repo string, m batch.Member, ready bool) (handRead, error) {
 	view, err := e.deps.Batch.Pull(ctx, project, m.Item, repo)
 	if err != nil {
 		return handRead{}, fmt.Errorf("read the pull request of item %s: %w", m.Item, err)
 	}
 
-	switch {
-	case view.State == "MERGED":
-		return handRead{State: handMerged}, nil
-	case view.State != "OPEN":
-		return handRead{State: handClosed, Reason: "the pull request is " + strings.ToLower(view.State)}, nil
-	case view.Head != m.Head:
+	if ended, over := handEnded(view); over {
+		return ended, nil
+	}
+
+	atHead, err := e.atHead(ctx, project, repo, m, view)
+	if err != nil {
+		return handRead{}, err
+	}
+
+	if !atHead {
 		return e.handMoved(ctx, project, repo, m, view)
-	case ready && view.Draft:
+	}
+
+	return e.handStanding(ctx, project, repo, m, view, ready)
+}
+
+// handEnded reads a pull request that is merged, or not open, as the end of the member. over is false for an open one.
+func handEnded(view PullView) (read handRead, over bool) {
+	switch view.State {
+	case "MERGED":
+		return handRead{State: handMerged}, true
+	case "OPEN":
+		return handRead{}, false
+	}
+
+	return handRead{State: handClosed, Reason: "the pull request is " + strings.ToLower(view.State)}, true
+}
+
+// atHead says whether the pull request is at the head of the member. A head that holds the tree of that head is a rewrite of it, and counts as the same.
+func (e *Engine) atHead(ctx context.Context, project, repo string, m batch.Member, view PullView) (bool, error) {
+	if view.Head == m.Head {
+		return true, nil
+	}
+
+	same, err := e.deps.Batch.SameTree(ctx, project, m.Item, repo, m.Head, view.Head)
+	if err != nil {
+		return false, fmt.Errorf("compare the tree of the head of item %s: %w", m.Item, err)
+	}
+
+	return same, nil
+}
+
+// handStanding acts on a pull request at the head of the member. A draft in a round after the first stays as it is. A draft that is about to be marked ready, and a ready pull request,
+// are held back by a change request or a conflict: the draft stays a draft and the ready one goes back to draft. An unresolved thread holds back the ready mark only.
+func (e *Engine) handStanding(ctx context.Context, project, repo string, m batch.Member, view PullView, ready bool) (handRead, error) {
+	marking := ready && view.Draft
+	if view.Draft && !marking {
+		return handRead{State: handWaiting}, nil
+	}
+
+	if reasons := strings.Join(view.reasons(marking), ", "); reasons != "" {
+		return e.handHold(ctx, project, repo, m, view, reasons)
+	}
+
+	if marking {
 		if err := e.deps.Batch.SetDraft(ctx, project, m.Item, repo, false); err != nil {
 			return handRead{}, fmt.Errorf("mark the pull request of item %s ready: %w", m.Item, err)
 		}
@@ -164,15 +294,34 @@ func (e *Engine) handRead(ctx context.Context, project, repo string, m batch.Mem
 	return handRead{State: handWaiting}, nil
 }
 
+// handHold ends the member because of a reason to wait. A draft that was about to be marked ready stays a draft. A ready pull request goes back to draft.
+func (e *Engine) handHold(ctx context.Context, project, repo string, m batch.Member, view PullView, reasons string) (handRead, error) {
+	if view.Draft {
+		return handRead{State: handHeld, Reason: "not marked ready: " + reasons}, nil
+	}
+
+	why := fmt.Sprintf("the pull request of item %s has a reason to wait: %s", m.Item, reasons)
+
+	return e.draftAgain(ctx, project, repo, m, view, why, handRead{State: handHeld, Reason: "drafted again: " + reasons})
+}
+
 // handMoved puts a pull request whose head moved back to draft, unless it is a draft already, and returns the new head.
 func (e *Engine) handMoved(ctx context.Context, project, repo string, m batch.Member, view PullView) (handRead, error) {
+	why := fmt.Sprintf("the head of item %s moved to %s", m.Item, view.Head)
+	read := handRead{State: handMoved, Head: view.Head, Reason: fmt.Sprintf("the head moved to %s after the head %s was marked ready", view.Head, m.Head)}
+
+	return e.draftAgain(ctx, project, repo, m, view, why, read)
+}
+
+// draftAgain puts a pull request back to draft, unless it is a draft already, and returns read. A draft call that fails tells the owner to convert it by hand.
+func (e *Engine) draftAgain(ctx context.Context, project, repo string, m batch.Member, view PullView, why string, read handRead) (handRead, error) {
 	if !view.Draft {
 		if err := e.deps.Batch.SetDraft(ctx, project, m.Item, repo, true); err != nil {
-			return handRead{}, fmt.Errorf("the head of item %s moved to %s. Cannot make its pull request a draft again. If it is open and ready for review, convert it to a draft by hand: %w", m.Item, view.Head, err)
+			return handRead{}, fmt.Errorf("%s. Cannot make its pull request a draft again. If it is open and ready for review, convert it to a draft by hand: %w", why, err)
 		}
 	}
 
-	return handRead{State: handMoved, Head: view.Head, Reason: fmt.Sprintf("the head moved to %s after the head %s was marked ready", view.Head, m.Head)}, nil
+	return read, nil
 }
 
 // handResultValue builds the result of a hand-off: the fields of the result of a landing, with no landing in them.
