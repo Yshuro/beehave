@@ -12,6 +12,7 @@ func TestCheck_ABuiltinThatTheAPIRemovedIsRefusedAsAnUndefinedNameAndNamed(t *te
 
 	tests := map[string]string{
 		"item_assign": `item_assign(id = "1", assignee = "alice")`,
+		"pr_assign":   `pr_assign(assignee = "alice", linked = True)`,
 	}
 
 	for removed, call := range tests {

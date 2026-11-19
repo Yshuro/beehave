@@ -48,7 +48,4 @@ type forge interface {
 	// A project with no forge, and a forge that cannot write a board, are errors. Both calls refuse a card with no pull request or issue behind it.
 	PlaceCard(ctx context.Context, project, item string, req CardRequest) (number int, err error)
 	ReadCard(ctx context.Context, project, item string, req CardRequest) (status string, err error)
-	// Assign assigns the pull request of the item to a login and returns its number. With linked it also assigns each issue that the pull request closes and returns their numbers.
-	// The same call again changes nothing. An item with no pull request is an error. So is a project with no forge.
-	Assign(ctx context.Context, project, item, assignee string, linked bool) (number int, issues []int, err error)
 }

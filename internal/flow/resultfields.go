@@ -90,15 +90,6 @@ func boardOutputs(number int, status string) map[string]any {
 	return map[string]any{numberField: number, statusKeyword: status}
 }
 
-// prOutputs are the fields of pr_assign: the number of the pull request, and the issues that the call assigned besides it. issues is an empty list, never null.
-func prOutputs(number int, issues []int) map[string]any {
-	if issues == nil {
-		issues = []int{}
-	}
-
-	return map[string]any{numberField: number, "issues": issues}
-}
-
 // agentOutputs are the fields that every agent call returns. The outputs that the call declares come in addition.
 // stop is "turns" or "budget" when a cap ended the run, and empty otherwise.
 // cost_usd is the total cost in dollars that the agent CLI reported for the run, or 0 when it reported none.

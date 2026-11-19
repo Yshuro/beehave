@@ -39,7 +39,6 @@ func TestPRWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(
 
 	const (
 		comment = testProject + "|" + testItem + "|" + testRun + ":take|taken"
-		assign  = testProject + "|" + testItem + "|alice|true"
 		open    = testProject + "|" + testItem + "|Fix|text|5|main|"
 		card    = testProject + "|" + testItem + "|3||5|Done"
 	)
@@ -50,7 +49,6 @@ func TestPRWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(
 		want         string
 	}{
 		"pr_comment": {`pr_comment(text = "taken", key = "take", name = "c")`, "comment", func(f *fakeForge) []string { return f.notes }, comment},
-		"pr_assign":  {`pr_assign(assignee = "alice", linked = True, name = "c")`, "assign", func(f *fakeForge) []string { return f.assigned }, assign},
 		"pr_open":    {`pr_open(title = "Fix", body = "text", issue = 5, base = "main", name = "c")`, "open", func(f *fakeForge) []string { return f.opened }, open},
 		"board_sync": {`board_sync(board = 3, status = "Done", issue = 5, name = "c")`, "card", func(f *fakeForge) []string { return f.placed }, card},
 	}
@@ -69,24 +67,6 @@ func TestPRWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(
 			assert.Equal(t, []string{tt.want, tt.want}, tt.logged(f), "the rerun reached the forge with the key and the arguments of the first call")
 		})
 	}
-}
-
-func TestPRWrite_AssignAssignsThePullRequestAndOnlyWithLinkedItsIssues(t *testing.T) {
-	t.Parallel()
-
-	h, f := prHarness(t)
-
-	_, err := walkBody(t, h, `own = pr_assign(assignee = "alice", name = "own")
-both = pr_assign(assignee = "alice", linked = True, name = "both")
-command(run = [str(own.number), str(len(own.issues)), str(len(both.issues))])
-`)
-	require.NoError(t, err)
-
-	assert.Equal(t, []string{
-		testProject + "|" + testItem + "|alice|false",
-		testProject + "|" + testItem + "|alice|true",
-	}, f.assigned)
-	assert.Equal(t, []string{"7 0 2"}, h.commands.ran())
 }
 
 func TestPRWrite_ItemCreateTakesAnAssigneeAndTheDefaultIsNone(t *testing.T) {
@@ -133,10 +113,8 @@ func TestPRWrite_ArefusedArgumentWritesNothing(t *testing.T) {
 	t.Parallel()
 
 	for name, call := range map[string]string{
-		"comment without a text":     `pr_comment(text = "", key = "k")`,
-		"comment without a key":      `pr_comment(text = "x", key = "")`,
-		"assign without an assignee": `pr_assign(assignee = "")`,
-		"linked that is not a bool":  `pr_assign(assignee = "a", linked = "yes")`,
+		"comment without a text": `pr_comment(text = "", key = "k")`,
+		"comment without a key":  `pr_comment(text = "x", key = "")`,
 	} {
 		h, f := prHarness(t)
 		w := newFakeWriter()
@@ -146,7 +124,6 @@ func TestPRWrite_ArefusedArgumentWritesNothing(t *testing.T) {
 		require.Error(t, err, name)
 		assert.Contains(t, err.Error(), "workflow.star:", name)
 		assert.Empty(t, f.notes, name)
-		assert.Empty(t, f.assigned, name)
 		assert.Empty(t, w.assignees, name)
 	}
 }
@@ -158,22 +135,19 @@ func TestPRWrite_AValueThatOnlyTheRunKnowsIsRefusedWhenItIsEmptyOrNotText(t *tes
 		"comment with an empty text": `pr_comment(text = empty, key = "k")`,
 		"comment with an empty key":  `pr_comment(text = "x", key = empty)`,
 		"comment with a number":      `pr_comment(text = number, key = "k")`,
-		"assign with an empty login": `pr_assign(assignee = empty)`,
-		"assign with a number":       `pr_assign(assignee = number)`,
 	} {
 		h, f := prHarness(t)
 
 		_, err := walkBody(t, h, "empty = \"\"\nnumber = 1\n"+call+"\n")
 		require.Error(t, err, name)
 		assert.Empty(t, f.notes, name)
-		assert.Empty(t, f.assigned, name)
 	}
 }
 
 func TestPRWrite_AForgeErrorFailsTheCall(t *testing.T) {
 	t.Parallel()
 
-	for _, call := range []string{`pr_comment(text = "x", key = "k")`, `pr_assign(assignee = "a")`} {
+	for _, call := range []string{`pr_comment(text = "x", key = "k")`, `pr_open(title = "t", base = "b")`} {
 		h, f := prHarness(t)
 		f.writeErr = errors.New("the forge refused")
 
@@ -185,14 +159,14 @@ func TestPRWrite_AForgeErrorFailsTheCall(t *testing.T) {
 func TestPRWrite_AProjectWithNoRepositoryRefusesThePullRequestBuiltins(t *testing.T) {
 	t.Parallel()
 
-	for _, call := range []string{`pr_comment(text = "x", key = "k")`, `pr_assign(assignee = "a")`} {
+	for _, call := range []string{`pr_comment(text = "x", key = "k")`, `pr_open(title = "t", base = "b")`} {
 		h, f := prHarness(t)
 		h.repository = func(string) bool { return false }
 
 		_, err := walkBody(t, h, call+"\n")
 		require.ErrorContains(t, err, "needs a repository", call)
 		assert.Empty(t, f.notes)
-		assert.Empty(t, f.assigned)
+		assert.Empty(t, f.opened)
 	}
 }
 

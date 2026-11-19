@@ -168,10 +168,6 @@ func (e2eFiles) ReadCard(context.Context, string, string, flow.CardRequest) (str
 	return "", nil
 }
 
-func (e2eFiles) Assign(context.Context, string, string, string, bool) (int, []int, error) {
-	return 0, nil, nil
-}
-
 func (f e2eFiles) Release(_ context.Context, _, item, _ string) error {
 	return f.event("release", item)
 }

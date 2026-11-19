@@ -1175,11 +1175,10 @@ type fakeForge struct {
 	closingOK    int
 	noPullAfter  int
 	noPull       bool // reports no pull request after the first noPullAfter reads
-	// notes holds each Comment call as project|item|key|text. assigned holds each Assign call as project|item|assignee|linked. writeErr fails both.
-	notes    []string
-	assigned []string
-	opened   []string // each Open call as project|item|title|body|issue|base|parent
-	placed   []string // each PlaceCard call as project|item|board|owner|issue|status
+	// notes holds each Comment call as project|item|key|text. writeErr fails it.
+	notes  []string
+	opened []string // each Open call as project|item|title|body|issue|base|parent
+	placed []string // each PlaceCard call as project|item|board|owner|issue|status
 	// cardStatus is the status that the board holds for the card. dropCards makes PlaceCard lose its write. readErr fails ReadCard.
 	cardStatus string
 	dropCards  bool
@@ -1236,20 +1235,6 @@ func (f *fakeForge) ReadCard(_ context.Context, _, _ string, _ CardRequest) (str
 	f.cardReads++
 
 	return f.cardStatus, f.readErr
-}
-
-// Assign records the call. A linked call answers with two issues.
-func (f *fakeForge) Assign(_ context.Context, project, item, assignee string, linked bool) (int, []int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.assigned = append(f.assigned, project+"|"+item+"|"+assignee+"|"+strconv.FormatBool(linked))
-
-	if linked {
-		return f.state.Number, []int{11, 12}, f.writeErr
-	}
-
-	return f.state.Number, nil, f.writeErr
 }
 
 func (f *fakeForge) Pull(_ context.Context, _, item string) (review.Standing, error) {

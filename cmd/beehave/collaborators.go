@@ -930,43 +930,6 @@ func (p pulls) Comment(ctx context.Context, project, item, key, text string) (in
 	return number, forge.PostOnce(ctx, built, number, key, text)
 }
 
-// Assign assigns the pull request of the item to a login. With linked it then assigns each issue that merging the pull request closes, as the forge lists them.
-// An assignee that the forge already holds changes nothing, so a repeated call is safe. A project with no forge and an item with no pull request are errors.
-func (p pulls) Assign(ctx context.Context, project, item, assignee string, linked bool) (int, []int, error) {
-	built, number, err := p.find(ctx, project, item)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	if err := built.AddAssignee(ctx, number, assignee); err != nil {
-		return number, nil, err
-	}
-
-	if !linked {
-		return number, nil, nil
-	}
-
-	issues, err := assignClosing(ctx, built, number, assignee)
-
-	return number, issues, err
-}
-
-// assignClosing assigns each issue that merging the pull request closes, and returns their numbers.
-func assignClosing(ctx context.Context, built forge.Forge, number int, assignee string) ([]int, error) {
-	refs, err := built.ClosingRefs(ctx, number)
-	if err != nil {
-		return nil, fmt.Errorf("read the issues that pull request %d closes: %w", number, err)
-	}
-
-	for _, issue := range refs.Issues {
-		if err := built.AddAssignee(ctx, issue, assignee); err != nil {
-			return nil, err
-		}
-	}
-
-	return refs.Issues, nil
-}
-
 // Merge merges the pull request of the item at head, through the guards of the merge package and the settings of the merge step.
 // The runners of the config count as own identities, next to the logins and addresses of the step. A pattern that is not RE2 is an error.
 func (p pulls) Merge(ctx context.Context, project, item, head string, settings flow.MergeSettings) (merge.Result, error) {

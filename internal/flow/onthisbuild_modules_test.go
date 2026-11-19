@@ -336,17 +336,31 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheSingleMergeAnd
 	}
 }
 
-func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAnItemAssignStepAndNamesTheTrackerModule(t *testing.T) {
+func TestClient_ResumeOnThisBuildRefusesARunThatRecordedARetiredAssignStepAndNamesItsModule(t *testing.T) {
 	t.Parallel()
 
-	// Tracker module 1 recorded item_assign, which this build retired.
-	harness, other := olderRoundRun(t, testItem, moduleTracker, 1)
-	recordSteps(t, harness, testItem, "item_assign:a#1")
+	// Tracker module 1 recorded item_assign and forge module 2 recorded pr_assign. This build retired both.
+	tests := map[string]struct {
+		module, step string
+		version      int
+	}{
+		"item_assign": {moduleTracker, "item_assign:a#1", 1},
+		"pr_assign":   {moduleForge, "pr_assign:a#1", 2},
+	}
 
-	err := other.ResumeOnThisBuild(testItem)
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	require.ErrorIs(t, err, errStranded)
-	require.ErrorContains(t, err, `the step "item_assign:a#1", and an older build recorded it for the tracker module, and this build does not record it`)
+			harness, other := olderRoundRun(t, testItem, test.module, test.version)
+			recordSteps(t, harness, testItem, test.step)
+
+			err := other.ResumeOnThisBuild(testItem)
+
+			require.ErrorIs(t, err, errStranded)
+			require.ErrorContains(t, err, fmt.Sprintf("the step %q, and an older build recorded it for the %s module, and this build does not record it", test.step, test.module))
+		})
+	}
 }
 
 func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfNoModuleAndNamesTheStep(t *testing.T) {

@@ -154,13 +154,6 @@ func (f *crashForge) Open(ctx context.Context, project, item string, req OpenReq
 	return opened, err
 }
 
-func (f *crashForge) Assign(ctx context.Context, project, item, assignee string, linked bool) (int, []int, error) {
-	number, issues, err := f.forge.Assign(ctx, project, item, assignee, linked)
-	f.stop("assign")
-
-	return number, issues, err
-}
-
 func (f *crashForge) PlaceCard(ctx context.Context, project, item string, req CardRequest) (int, error) {
 	number, err := f.forge.PlaceCard(ctx, project, item, req)
 	f.stop("card")

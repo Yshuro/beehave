@@ -146,28 +146,3 @@ func (r OpenRequest) check() error {
 
 	return errors.Join(workflow.NotEmpty("title", r.Title), workflow.NotEmpty(baseKeyword, r.Base))
 }
-
-// prAssign assigns the pull request of the item to a login. With linked = True it also assigns each issue that merging the pull request closes.
-// The forge keeps one entry for a login, so the same call twice changes nothing.
-func (s *script) prAssign(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
-	var (
-		assignee, label string
-		linked          bool
-	)
-
-	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{
-		assigneeKeyword: &assignee, "linked": &linked, nameKeyword: &label,
-	}); err != nil {
-		return nil, err
-	}
-
-	if err := workflow.NotEmpty(assigneeKeyword, assignee); err != nil {
-		return nil, err
-	}
-
-	return s.durable("pr_assign", label, func(ctx context.Context, _ string) (stepResult, error) {
-		number, issues, err := s.e.deps.Forge.Assign(ctx, s.in.Project, s.in.Item, assignee, linked)
-
-		return stepResult{Outputs: prOutputs(number, issues)}, err
-	})
-}

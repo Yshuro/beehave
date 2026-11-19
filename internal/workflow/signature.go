@@ -408,7 +408,6 @@ func itemSignatures() map[string][]Param {
 		},
 		itemStatusName: {filled("id"), {Name: statusField, Kind: KindText, Required: true, Values: StatusValues()}, label},
 		boardSyncName:  {req("board", KindInt), filled(statusField), opt("owner", KindText), opt("issue", KindInt), label},
-		prAssignName:   {filled("assignee"), opt("linked", KindBool), label},
 		prCommentName:  {filled("text"), filled("key"), forbidText(), opt("integration", KindBool), label},
 		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), opt("integration", KindBool), label},
 		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), one("foreign", ForeignModes()), label},

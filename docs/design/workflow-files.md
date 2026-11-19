@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -54,7 +54,6 @@ Four cases are not safe today, and a later change fixes each of them.
 | `item_comment` | Safe. | GitHub and beads read the comments first and find the key. The `local` tracker inserts the comment under its key and ignores a second insert of that key. |
 | `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
 | `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
-| `pr_assign` | Safe. | The call is a POST that adds a login, and GitHub says: "Users already assigned to an issue are not replaced." ([Assignees](https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue)). A test pins the exact call of two runs, so a change to a call that replaces the assignees turns it red. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
 | `board_sync` | Safe. | The call adds the card by its address, and GitHub says: "If you try to add an item that already exists, the existing item ID is returned instead." ([Using the API to manage Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)). The step from `gh project item-add` to that mutation rests on the same page, which does not name the command. The edit then sets the Status field to the same option. This half rests on the call that sets the same value, and no GitHub page states that a repeat is a no-op. A test pins the exact calls of two runs. No test uses a real board. |
 | `merge`: each member | Safe. | The step `batch:<name>.intent#<item>` is recorded before the merge of the member. The forge shows the pull request as merged at the gated head, so the step counts it as done. |
@@ -188,18 +187,11 @@ A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `h
 
 ### Pull request builtins
 
-`pr_comment` and `pr_assign` refuse a project with no repository, and fail for an item with no pull request. In a dry run they act on the dry-run pull request and write nothing.
+`pr_comment` and `pr_open` refuse a project with no repository. `pr_comment` fails for an item with no pull request. In a dry run they act on the dry-run pull request and write nothing.
 
 #### `pr_comment`
 
 `pr_comment(text, key, forbid_text, integration)` adds a comment to the pull request of the item and returns `number`. The forge reads the comments first, and posts only when none holds the line `beehave-key: <run id>:<key>`. A replay after a crash therefore posts once.
-
-#### `pr_assign`
-
-`pr_assign(assignee, linked)` assigns the pull request of the item and returns `number` and `issues`.
-
-- When `linked` is true, it also assigns each issue that merging the pull request closes, and `issues` lists them.
-- The forge keeps one entry for a login, so the same call twice changes nothing.
 
 #### `pr_open`
 

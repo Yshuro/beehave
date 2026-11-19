@@ -467,11 +467,6 @@ func (dryForge) ReadCard(_ context.Context, _, _ string, req CardRequest) (strin
 	return req.Status, nil
 }
 
-// Assign shows the dry-run pull request as assigned, with no linked issue.
-func (dryForge) Assign(context.Context, string, string, string, bool) (int, []int, error) {
-	return dryPull, nil, nil
-}
-
 type dryTrees struct{ dir string }
 
 func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {

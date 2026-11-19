@@ -33,7 +33,6 @@ const (
 	itemReadName     = "item_read"
 	itemStatusName   = "item_status"
 	boardSyncName    = "board_sync"
-	prAssignName     = "pr_assign"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
 	prStateName      = "pr_state"
@@ -89,7 +88,6 @@ func trackerResultFields() map[string][]string {
 		itemCreateName:  {"id", "created"},
 		itemReadName:    {"found", "id", "fields", "comments", "parent"},
 		itemStatusName:  {"id", statusField},
-		prAssignName:    {numberField, "issues"},
 		prCommentName:   {numberField},
 		prOpenName:      {numberField, "created", "stack"},
 		prStateName:     {stateField},
