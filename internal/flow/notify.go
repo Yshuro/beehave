@@ -21,11 +21,7 @@ const (
 // A notify that fails, cannot start or hangs is logged and never fails the wait. The step error is a cancel or a refused record, and the receive that follows reports it.
 func (e *Engine) announce(ctx dbos.Context, project, item, question string) {
 	_, _ = runStep(e, ctx, notifyStep, func(c context.Context) (struct{}, error) { //nolint:errcheck // the receive of the wait reports a cancel or a refused record
-		if e.deps.Facts == nil {
-			return struct{}{}, nil
-		}
-
-		notify := e.deps.Facts(project).Notify
+		notify := e.facts(project).Notify
 		if len(notify) == 0 {
 			return struct{}{}, nil
 		}

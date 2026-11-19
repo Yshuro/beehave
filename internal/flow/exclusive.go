@@ -262,8 +262,8 @@ func (e *Engine) gateHost(in ExclusiveInput) string {
 		return ""
 	}
 
-	if host == "" && e.deps.Facts != nil {
-		host = e.deps.Facts(in.Project).BuildHost
+	if host == "" {
+		host = e.facts(in.Project).BuildHost
 	}
 
 	if host == config.LocalHost {

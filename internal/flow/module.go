@@ -124,13 +124,9 @@ func scripted(call scriptCall) func(step.Call, *starlark.Builtin, starlark.Tuple
 	}
 }
 
-// Project is the project of the run as the config holds it. A nil Facts means that every project has no facts.
+// Project is the project of the run as the config holds it.
 func (s *script) Project() model.Project {
-	if s.e.deps.Facts == nil {
-		return model.Project{}
-	}
-
-	return s.e.deps.Facts(s.in.Project)
+	return s.e.facts(s.in.Project)
 }
 
 // Item is the id of the item of the run.

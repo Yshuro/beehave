@@ -12,11 +12,7 @@ import (
 // requiredSteps are the names of the steps that the gate list of the project gives now. A project with a gate string has no list, and a gate records none.
 // The gate calls it and records the names in the required field of its result.
 func (e *Engine) requiredSteps(project string) []string {
-	if e.deps.Facts == nil {
-		return nil
-	}
-
-	facts := e.deps.Facts(project)
+	facts := e.facts(project)
 	if len(facts.GateSteps) == 0 {
 		return nil
 	}
