@@ -30,9 +30,9 @@ func TestDepsOn_TheSentinelsOfTheHostEntriesReachTheEngineAsKeptErrors(t *testin
 func TestFactsOf_TheFactsOfTheProjectInTheConfigReachTheEngineAndAnUnknownProjectHasNone(t *testing.T) {
 	t.Parallel()
 
-	facts := factsOf(map[string]config.Project{"p": {Project: model.Project{Name: "p", Limits: []string{"never run rm on a glob"}}}})
+	facts := factsOf(map[string]config.Project{"p": {Project: model.Project{Name: "p", Vars: map[string]any{"limits": []any{"never run rm on a glob"}}}}})
 
-	require.Equal(t, []string{"never run rm on a glob"}, facts("p").Limits)
+	require.Equal(t, []any{"never run rm on a glob"}, facts("p").Vars["limits"])
 	require.Equal(t, model.Project{}, facts("other"))
 }
 

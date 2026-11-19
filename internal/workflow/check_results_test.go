@@ -111,7 +111,6 @@ func TestCheck_ANameThatTheCheckCannotKnowIsLeftToTheRun(t *testing.T) {
 		"env is text":           "def main(item):\n    x = env(\"HOME\")\n    command([x.haed])\n",
 		"from a function":       "def make():\n    return command([\"a\"])\n\ndef main(item):\n    x = make()\n    command([x.haed])\n",
 		"a method result":       "def main(item):\n    x = \"a\".upper()\n    command([x.haed])\n",
-		"a call result":         "def main(item):\n    command([command([\"a\"]).haed])\n",
 		"tuple target":          "def main(item):\n    x, y = command([\"a\"]), 1\n    command([x.haed])\n",
 		"shadowed builtin":      "def command(a):\n    return struct(haed = 1)\n\ndef main(item):\n    x = command([\"a\"])\n    gate(run = [x.haed])\n",
 		"local shadow":          "def main(item):\n    gate = lambda run: struct(haed = 1)\n    x = gate(run = [\"a\"])\n    command([x.haed])\n",
@@ -149,10 +148,42 @@ func TestCheck_ATopLevelStatementThatIsNotAFunctionIsSkipped(t *testing.T) {
 func TestCheck_AFieldThatFactsDoesNotReturnIsRefused(t *testing.T) {
 	t.Parallel()
 
-	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.limits[0], f.limit])\n")
+	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.vars[\"limits\"][0], f.limit])\n")
 
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0], "limit is not a field of the result of facts")
+}
+
+func TestCheck_AMethodSettingIsNoFieldOfFactsAndTheVarsHoldIt(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.traps[0], f.board_number, f.vars[\"traps\"][0]])\n")
+
+	require.Len(t, got, 2)
+	assert.Contains(t, got[0], "traps is not a field of the result of facts")
+	assert.Contains(t, got[1], "board_number is not a field of the result of facts")
+}
+
+func TestCheck_AFieldOfTheCallOfABuiltinIsRefusedWithoutAName(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    command([facts().traps, facts().repo])\n")
+
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "traps is not a field of the result of facts")
+}
+
+func TestCheck_AFieldOfACallThatIsNotTheBuiltinIsLeftToTheRun(t *testing.T) {
+	t.Parallel()
+
+	for name, text := range map[string]string{
+		"a function of the file":  "def facts():\n    return struct(a = 1)\n\ndef main(item):\n    command([facts().traps])\n",
+		"a name of the function":  "def main(item):\n    facts = lambda: struct(a = 1)\n    command([facts().traps])\n",
+		"a call of a function":    "def main(item):\n    command([len(\"a\").traps])\n",
+		"a call of an expression": "def main(item):\n    command([(facts)().traps])\n",
+	} {
+		assert.Empty(t, checkText(t, text), name)
+	}
 }
 
 func TestResults_ListsTheBuiltinsWithFixedFields(t *testing.T) {

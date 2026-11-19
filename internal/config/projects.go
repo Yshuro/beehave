@@ -46,7 +46,6 @@ type rawProject struct {
 	// Notify is the program and its arguments that the engine runs when a wait for the owner opens.
 	Notify      command
 	PinFile     text
-	Changelog   text
 	Visibility  text
 	Sandbox     text
 	SandboxRead paths
@@ -57,13 +56,8 @@ type rawProject struct {
 
 	SandboxEnforcer text
 
-	People                                                                      table
-	Epics                                                                       table
-	GateFiles, Conventions, BriefRules, StackedRules, Limits, Traps, TokenRules paths
-
 	// Vars are the free settings of the workflow. The engine reads no key and no value.
-	Vars  vars
-	Board *rawBoard
+	Vars vars
 
 	Schedules schedules
 }
@@ -89,7 +83,7 @@ func loadProject(path string, registry Adapters) (Project, error) {
 
 // projectSpec is the schema of the project call. The arguments after the fixed ones are the adapter blocks that the registry declares, each optional and named as its block.
 func projectSpec(declared []Block) spec {
-	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "test_paths?", "notify?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "vars?", "board?", "schedules?"}
+	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "test_paths?", "notify?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "vars?", "schedules?"}
 
 	for _, block := range declared {
 		args = append(args, block.Name+"?")
@@ -99,7 +93,7 @@ func projectSpec(declared []Block) spec {
 }
 
 func projectSpecs(declared, hostDeclared []Block) []spec {
-	specs := []spec{projectSpec(declared), hostSpec(hostDeclared), boardSpec(), scheduleSpec()}
+	specs := []spec{projectSpec(declared), hostSpec(hostDeclared), scheduleSpec()}
 
 	for _, block := range append(slices.Clone(declared), hostDeclared...) {
 		specs = append(specs, block.spec())
@@ -134,7 +128,6 @@ func evalProject(path string, registry Adapters) (*rawProject, error) {
 func nestedBuiltins(file *loader, declared, hostDeclared []Block) []*starlark.Builtin {
 	builtins := []*starlark.Builtin{
 		blocks(file, hostSpec(hostDeclared), true, newHost(hostDeclared)),
-		blocks(file, boardSpec(), true, newBoard),
 		blocks(file, scheduleSpec(), false, newSchedule),
 	}
 
@@ -151,14 +144,18 @@ func nestedBuiltins(file *loader, declared, hostDeclared []Block) []*starlark.Bu
 func newProject(at syntax.Position, kwargs []starlark.Tuple, declared []Block) (*rawProject, error) {
 	raw := &rawProject{At: at, Tracker: defaultTracker, Claims: defaultClaims, BuildHost: hostNames{LocalHost}}
 
-	host, board, held := nested[rawHost]{want: hostSpecName}, nested[rawBoard]{want: boardSpec().name}, holders(declared)
+	if err := refuseMovedKeys(at, kwargs); err != nil {
+		return raw, err
+	}
+
+	host, held := nested[rawHost]{want: hostSpecName}, holders(declared)
 	dests := []any{
 		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.TestCommand, &raw.TestPaths, &raw.Notify, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer,
-		&raw.People, &raw.Epics, &raw.GateFiles, &raw.Conventions, &raw.BriefRules, &raw.StackedRules, &raw.Limits, &raw.Traps, &raw.TokenRules, &raw.Changelog, &raw.Vars, &board, &raw.Schedules,
+		&raw.Vars, &raw.Schedules,
 	}
 
 	err := projectSpec(declared).unpack(at, kwargs, append(dests, blockDests(held)...)...)
-	raw.Host, raw.Board = host.block, board.block
+	raw.Host = host.block
 	raw.Blocks = heldBlocks(declared, held)
 
 	return raw, err

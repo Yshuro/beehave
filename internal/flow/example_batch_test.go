@@ -187,7 +187,7 @@ func TestExampleBatch_AnItemWithNoChangelogEntryIsHeldWhenTheProjectDeclaresOneA
 	t.Parallel()
 
 	rig := newRoundRig(t, "1 3")
-	rig.project.Changelog = "CHANGELOG.md"
+	rig.project.Vars["changelog"] = "CHANGELOG.md"
 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
@@ -222,7 +222,7 @@ func TestExampleBatch_TheChangelogChecksOfTwoItemsRecordTheirOwnSteps(t *testing
 	t.Parallel()
 
 	rig := newRoundRig(t, "1 3")
-	rig.project.Changelog = "CHANGELOG.md"
+	rig.project.Vars["changelog"] = "CHANGELOG.md"
 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
@@ -247,7 +247,7 @@ func TestExampleBatch_AnItemWhoseHeadCannotBeFetchedIsHeldWithTheReasonAndTheOth
 	t.Parallel()
 
 	rig := newRoundRig(t, "1 3")
-	rig.project.Changelog = "CHANGELOG.md"
+	rig.project.Vars["changelog"] = "CHANGELOG.md"
 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
@@ -279,7 +279,7 @@ func TestExampleBatch_AnItemWhoseChangedPathsCannotBeReadIsHeldWithTheReasonAndT
 	t.Parallel()
 
 	rig := newRoundRig(t, "1 3")
-	rig.project.Changelog = "CHANGELOG.md"
+	rig.project.Vars["changelog"] = "CHANGELOG.md"
 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {

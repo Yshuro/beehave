@@ -83,11 +83,7 @@ func gateResultFields() map[string][]string {
 
 // factsResultFields holds the fields of the struct that facts returns.
 func factsResultFields() map[string][]string {
-	return map[string][]string{factsName: {
-		"repo", "source", "forge", "tracker", "base_branch", "gate", "gate_steps", "build_host", "people", "epics", "gate_files", "conventions",
-		"brief_rules", "stacked_rules", "limits", "traps", "token_rules", "changelog", "vars",
-		"board_number", "board_owner", "board_started", "board_merged",
-	}}
+	return map[string][]string{factsName: {"repo", "source", "forge", "tracker", "base_branch", "gate", "gate_steps", "build_host", "vars"}}
 }
 
 // trackerResultFields holds the fields of the builtins that write the tracker or the pull request, and of pr_state, which reads the pull request.
@@ -131,6 +127,8 @@ type bound struct {
 	count map[string]int
 	calls map[string]*syntax.CallExpr
 	item  string
+	// shadowed are the names that the file binds at the top level.
+	shadowed []string
 }
 
 // itemFunctions lists the functions of the workflow file that the run calls with an item: main, finish and each literal entry of a spawn call.
@@ -196,7 +194,7 @@ func callee(call *syntax.CallExpr) string {
 
 // holds finds the builtin call that each name of the function holds. A builtin whose name the function or the file binds is not the builtin.
 func holds(def *syntax.DefStmt, shadowed []string) bound {
-	held := bound{count: map[string]int{}, calls: map[string]*syntax.CallExpr{}}
+	held := bound{count: map[string]int{}, calls: map[string]*syntax.CallExpr{}, shadowed: shadowed}
 
 	for _, param := range def.Params {
 		held.names(param)
@@ -272,8 +270,14 @@ func (h bound) assigned(s *syntax.AssignStmt) {
 	}
 }
 
-// field reports `name.field` when name holds the result of a builtin and the result has no such field.
+// field reports `name.field` when name holds the result of a builtin and the result has no such field. It reports `builtin(...).field` the same way.
 func (g *graph) field(dot *syntax.DotExpr, held bound) {
+	if call, direct := dot.X.(*syntax.CallExpr); direct {
+		g.directField(dot, call, held)
+
+		return
+	}
+
 	id, ok := dot.X.(*syntax.Ident)
 	if !ok {
 		return
@@ -286,6 +290,14 @@ func (g *graph) field(dot *syntax.DotExpr, held bound) {
 	}
 
 	if call, found := held.calls[id.Name]; found {
+		g.resultField(dot, call)
+	}
+}
+
+// directField reports `builtin(...).field` when the call names a builtin that the function and the file do not bind.
+func (g *graph) directField(dot *syntax.DotExpr, call *syntax.CallExpr, held bound) {
+	name := callee(call)
+	if _, builtin := resultFields()[name]; builtin && held.count[name] == 0 && !slices.Contains(held.shadowed, name) {
 		g.resultField(dot, call)
 	}
 }

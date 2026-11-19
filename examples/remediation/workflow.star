@@ -263,7 +263,7 @@ def _round_selector(block, got):
 def settings(project):
     """Returns the settings of the round as a dict, with the default of each key that the project vars leave out.
     The engine reads no setting. This function is the one check of them: it refuses project vars with no `round`, a missing key, a key of the wrong type, a value out of range and a key that is no setting,
-    each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
+    and it refuses a method setting of the vars (the lists, the dicts, the changelog and the board) of the wrong type or form, each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
     if "round" not in project.vars:
         fail("REFUSE: the project vars hold no round. Add the settings of the round to the project file: vars = {\"round\": {\"base\": \"integration/r2\", \"owner\": \"your-login\", \"lane_cap\": 4, \"fix_rounds\": 5, \"label\": \"beehave-round\"}}.")
 
@@ -296,8 +296,83 @@ def settings(project):
     _round_lists(got)
     _round_lane(got)
     _round_selector(block, got)
+    _method_vars(project.vars)
 
     return got
+
+# The method settings of the project vars that the example and its prompts read. Each key is optional. The lists hold text, the dicts map text to text.
+METHOD_LISTS = ["gate_files", "conventions", "brief_rules", "stacked_rules", "limits", "traps", "token_rules"]
+METHOD_DICTS = ["people", "epics"]
+BOARD_KEYS = ["number", "started", "merged", "owner"]
+
+def _vars_refuse(key, why):
+    fail("REFUSE: vars.%s %s" % (key, why))
+
+def _is_text(value):
+    return type(value) == "string" and value.strip() != ""
+
+def _method_vars(vars):
+    """Refuses a method setting of the project vars that has the wrong type or a blank entry, before any step runs. The engine keeps vars a free map, so this function is the one check of these keys.
+    The keys are the lists and dicts of facts, the changelog path and the board. A key that the project leaves out passes. Each refusal names the key and the fix."""
+    for key in METHOD_LISTS:
+        if key in vars:
+            _method_list(key, vars[key])
+
+    for key in METHOD_DICTS:
+        if key in vars:
+            _method_dict(key, vars[key])
+
+    if "changelog" in vars:
+        _method_changelog(vars["changelog"])
+
+    if "board" in vars:
+        _method_board(vars["board"])
+
+def _method_list(key, value):
+    if type(value) != "list":
+        _vars_refuse(key, "is %r, of type %s. Write a list of text, for example [\"a fact\"]." % (value, type(value)))
+
+    for entry in value:
+        if not _is_text(entry):
+            _vars_refuse(key, "lists %r. Write each fact as text that is not blank, or remove the item." % (entry,))
+
+def _method_dict(key, value):
+    if type(value) != "dict":
+        _vars_refuse(key, "is %r, of type %s. Write a dict of text to text, for example {\"name\": \"value\"}." % (value, type(value)))
+
+    for name, entry in value.items():
+        if not _is_text(name) or not _is_text(entry):
+            _vars_refuse(key, "holds a blank or non-text name or value (%r: %r). Write both as text or remove the entry." % (name, entry))
+
+def _method_changelog(value):
+    # The check compares the path with the lines that git prints, so only the exact form of such a line matches.
+    if not _is_text(value):
+        _vars_refuse("changelog", "is %r. Write the path of the changelog, a relative path to a file of the repository, or leave the key out." % (value,))
+
+    if value.startswith("/") or value.startswith("./") or value.endswith("/") or ".." in value.split("/"):
+        _vars_refuse("changelog", "is %r. The changelog is a file of the repository, and the check compares it with the paths that git prints. Use a relative path to a file, with no `..`, no leading `/` or `./` and no trailing `/`." % (value,))
+
+def _method_board(value):
+    if type(value) != "dict":
+        _vars_refuse("board", "is %r, of type %s. Write a dict, for example {\"number\": 3, \"started\": \"In Progress\", \"merged\": \"Done\"}; \"owner\" is optional." % (value, type(value)))
+
+    for key in value:
+        if key not in BOARD_KEYS:
+            _vars_refuse("board." + key, "is not a board setting. The settings are: %s." % ", ".join(BOARD_KEYS))
+
+    for key in ["number", "started", "merged"]:
+        if key not in value:
+            _vars_refuse("board", "has no %s. Write vars = {\"board\": {\"number\": 3, \"started\": \"In Progress\", \"merged\": \"Done\"}}; \"owner\" is optional." % key)
+
+    if type(value["number"]) != "int" or value["number"] <= 0:
+        _vars_refuse("board.number", "is %r. Write the number of the GitHub Project, a whole number above 0." % (value["number"],))
+
+    for key in ["started", "merged"]:
+        if not _is_text(value[key]):
+            _vars_refuse("board." + key, "is %r. Write the name of the column, text that is not blank." % (value[key],))
+
+    if "owner" in value and type(value["owner"]) != "string":
+        _vars_refuse("board.owner", "is %r. Write the login of the owner of the project as text, or leave the key out." % (value["owner"],))
 
 def regressions(value):
     """Returns the regression count that the output `regressions` of a report holds, or None when the count is unknown.
@@ -467,7 +542,7 @@ def land(approved, project, round_settings, n):
             continue
 
         # A project that declares a changelog lands no item without an entry, as the merge of one item does.
-        missing = changelog_missing(project.changelog, base, head, id, fetch = True)
+        missing = changelog_missing(project.vars.get("changelog", ""), base, head, id, fetch = True)
         if missing != "":
             stopped.append(struct(item = id, reason = missing))
             continue
@@ -891,16 +966,17 @@ def finish(item):
         print("the build host stays up: " + stop.reason)
 
 def _move_card(project, stage, issue = 0):
-    """Moves the card to the column that the board block of the project names for `stage` ("started" or "merged"), and reads it back.
-    `issue` names the issue card of a landed item, and 0 means the pull request of the item of the run. A project with no board makes no call."""
-    if project.board_number == 0:
+    """Moves the card to the column that `vars.board` of the project names for `stage` ("started" or "merged"), and reads it back.
+    `issue` names the issue card of a landed item, and 0 means the pull request of the item of the run. A project with no `vars.board` makes no call."""
+    board = project.vars.get("board")
+    if board == None:
         return
 
     board_sync(
         name = "board-" + stage + ("-" + str(issue) if issue != 0 else ""),
-        board = project.board_number,
-        owner = project.board_owner,
-        status = project.board_started if stage == "started" else project.board_merged,
+        board = board["number"],
+        owner = board.get("owner", ""),
+        status = board[stage],
         issue = issue,
     )
 
@@ -912,7 +988,7 @@ def item_value(item, head, approved, reason, host_losses):
 def pipeline(item):
     """The child entry: the pipeline of one item. The round starts one child for each item with spawn(entry = "pipeline"). It calls no host builtin.
     It returns item_value to the round, which lands the approved heads in one batch. The child never merges."""
-    # The facts of the project file (people, rules, limits, traps and the vars that hold the round settings). The step records them, so a resume keeps the facts the run started with.
+    # The facts of the project file (the plumbing fields and the vars that hold the people, rules, limits, traps and the round settings). The step records them, so a resume keeps the facts the run started with.
     # Each agent of the example gets them as the input `facts`; no agent reads a path for them.
     project = facts()
     round_settings = settings(project)
@@ -984,7 +1060,7 @@ def pipeline(item):
         forbid_text = ATTRIBUTION,
     )
 
-    # The board is a project choice: the `board` block of the project file. With none, the facts hold board_number 0 and the run makes no board call.
+    # The board is a project choice: the key `board` of the project vars. With none, the run makes no board call.
     # With one, the card of the item moves to the started column now and to the merged column after the merge, and each call reads the card back.
     _move_card(project, "started")
 
@@ -1072,7 +1148,7 @@ def pipeline(item):
 
     # The child never merges. It returns the head that the gate ran on and the verdict of the review, and the round lands every approved head of a pass in one batch (land).
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.
-    missing = changelog_missing(project.changelog, base, loop.gate.head, item.id)
+    missing = changelog_missing(project.vars.get("changelog", ""), base, loop.gate.head, item.id)
     if missing != "":
         fail(missing)
 
