@@ -1,11 +1,15 @@
 package flow
 
 import (
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/agent"
 )
 
 func statusRows(ids ...string) []dbos.WorkflowStatus {
@@ -22,6 +26,7 @@ const lanesFlow = "def main(item):\n" +
 	"    agent(model = \"m\", prompt = \"prompts/a.md\", name = \"look\", kind = \"review\")\n" +
 	"    agent(model = \"m\", prompt = \"prompts/a.md\", name = \"again\", lane = \"rework\")\n" +
 	"    agent(model = \"m\", prompt = \"prompts/a.md\", name = \"plan\", lane = \"design\")\n" +
+	"    agent(model = \"m\", prompt = \"prompts/a.md\", name = \"hand\", lane = \"relay\")\n" +
 	"    command(run = [\"lint\"], name = \"c\")\n"
 
 func TestClient_LanesOfAnItemNameTheKindOfEachLaneInTheLedgerOfTheMethod(t *testing.T) {
@@ -43,7 +48,60 @@ func TestClient_LanesOfAnItemNameTheKindOfEachLaneInTheLedgerOfTheMethod(t *test
 		got = append(got, [2]string{lane.Run, lane.Kind})
 	}
 
-	assert.Equal(t, [][2]string{{testRun, "fix"}, {testRun, "review"}, {testRun, "rework"}, {testRun, "design"}}, got, "the command is not a lane")
+	assert.Equal(t, [][2]string{{testRun, "fix"}, {testRun, "review"}, {testRun, "rework"}, {testRun, "design"}, {testRun, "relay"}}, got, "the command is not a lane")
+}
+
+func TestClient_LanesShowAFailedLaneWithItsKindItsLoginAndItsModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range loginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			rig.reply("", agent.Result{Outcome: agent.OutcomeExited, ExitCode: 3, Note: "bad exit"})
+
+			_, err := rig.run(t, fmt.Sprintf(loginFlow, tc.keywords+` kind = "review",`), "x\n")
+			require.Error(t, err)
+
+			lanes, err := rig.h.client(t, testVersion).Lanes(testItem)
+			require.NoError(t, err)
+			require.Len(t, lanes.Lanes, 1)
+
+			assert.Equal(t, stepFailed, lanes.Lanes[0].State)
+			assert.Equal(t, []string{"review", tc.login, tc.model}, []string{lanes.Lanes[0].Kind, lanes.Lanes[0].Login, lanes.Lanes[0].Model})
+		})
+	}
+}
+
+func TestClient_LanesShowARunningLaneWithItsKindItsLoginAndItsModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range loginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			rig.h.agents.gate = make(chan struct{})
+			release := sync.OnceFunc(func() { close(rig.h.agents.gate) })
+			t.Cleanup(release)
+			rig.reply(`{"verdict":"approve"}`, exited)
+
+			engine := rig.h.engine(t)
+			done := runInBackground2(engine, flowFile(t, fmt.Sprintf(loginFlow, tc.keywords+` kind = "review",`), "Write to {{ .output_file }}\n"))
+			waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, rig.h.agents.running() == 1, nil }})
+
+			lanes, err := rig.h.client(t, testVersion).Lanes(testItem)
+			require.NoError(t, err)
+			require.Len(t, lanes.Lanes, 1)
+
+			assert.Equal(t, stepRunning, lanes.Lanes[0].State)
+			assert.Equal(t, []string{"review", tc.login, tc.model}, []string{lanes.Lanes[0].Kind, lanes.Lanes[0].Login, lanes.Lanes[0].Model})
+
+			release()
+			require.NoError(t, receive(t, done).err)
+		})
+	}
 }
 
 func TestClient_LanesOfAnItemWithNoRunIsRefused(t *testing.T) {

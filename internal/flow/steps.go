@@ -390,11 +390,13 @@ func (l *StepLine) decode(record dbos.StepInfo) bool {
 	return true
 }
 
-// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a stop at a cap, the cost record of a run whose limit step failed
+// decodeAgentSub takes the fields of a sub-step of an agent call: the render before the run, the read of a finished run, a stop at a cap, the cost record of a run whose limit step failed
 // (and of a failed run that agent module 3 or an earlier one recorded),
 // or the limit record of a run that a provider limit stopped. Any other sub-step decodes nothing.
 func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {
+	case strings.HasPrefix(sub, "render"):
+		return decodeThen(output, l.fromRender)
 	case strings.HasPrefix(sub, "read"):
 		// The cost comes through the reader of the run cap, so a cost that cannot be read marks the line, and the sum of a tree, unknown.
 		l.Spend = l.Plus(recordedSpend(output))
@@ -474,9 +476,20 @@ func (l *StepLine) fromPhase(phase PhaseOutput) {
 
 	if phase.Outcome != "" {
 		l.ExitCode = &phase.ExitCode
-		l.Kind, l.Rounds = phase.Kind, phase.Rounds
-		l.Login, l.Model = phase.Login, phase.Model
+		l.Rounds = phase.Rounds
 	}
+}
+
+// renderFields are the lane kind, the login and the model that the render step of an agent call records.
+type renderFields struct {
+	Kind  string `json:"kind"`
+	Login string `json:"login"`
+	Model string `json:"model"`
+}
+
+// fromRender takes the lane kind, the login and the model of an agent call from its render step, which runs before the agent starts.
+func (l *StepLine) fromRender(read recorded[renderFields]) {
+	l.Kind, l.Login, l.Model = read.Outputs.Kind, read.Outputs.Login, read.Outputs.Model
 }
 
 // fromAgentRead takes the head, the cap that stopped the agent and the verdict from the read of its outputs.

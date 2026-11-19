@@ -27,8 +27,6 @@ type PhaseInput struct {
 	Login   string `json:"login"`
 	// Kind is the agent kind of the step: review or implement. It is empty, and so left out of a recorded phase, for the kind implement.
 	Kind string `json:"kind,omitempty"`
-	// Lane is the lane argument of the step: fix, rework, relay or design. It is empty, and so left out of a recorded phase, for a call that sets none.
-	Lane string `json:"lane,omitempty"`
 	// Severity is the severity of the item, which sets the place of the phase in its queue. It is left out for an item with none.
 	Severity string `json:"severity,omitempty"`
 
@@ -80,20 +78,14 @@ type PhaseInput struct {
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
 // The phase is a recorded step, so a replay reads Violations from the record and scans no transcript again.
 type PhaseOutput struct {
-	Outcome  agent.Outcome `json:"outcome"`
-	ExitCode int           `json:"exit_code"`
-	// Login is the runner that the agent ran on: the pool pick, or the runner that the call named. It is empty in a record that an older version wrote.
-	Login string `json:"login,omitempty"`
-	// Model is the model that the step set. It is left out of a recorded phase for a step that sets none.
-	Model string `json:"model,omitempty"`
-	// Kind is the kind of the lane in the ledger of the method: fix, rework, relay, review or design. It is empty in a record that an older version wrote.
-	Kind       string   `json:"kind,omitempty"`
-	Note       string   `json:"note"`
-	Session    string   `json:"session,omitempty"`
-	Transcript string   `json:"transcript,omitempty"`
-	Text       string   `json:"text,omitempty"`
-	Skills     []string `json:"skills,omitempty"`
-	Violations []string `json:"violations,omitempty"`
+	Outcome    agent.Outcome `json:"outcome"`
+	ExitCode   int           `json:"exit_code"`
+	Note       string        `json:"note"`
+	Session    string        `json:"session,omitempty"`
+	Transcript string        `json:"transcript,omitempty"`
+	Text       string        `json:"text,omitempty"`
+	Skills     []string      `json:"skills,omitempty"`
+	Violations []string      `json:"violations,omitempty"`
 	// Spend is the cost of the run: the dollars that the agent CLI reported, or an estimate that beehave made from the tokens, or the mark that the cost is unknown.
 	agent.Spend
 	// Rounds is the loop cap that the step named. The status view shows the rounds used against it.
@@ -173,8 +165,7 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 // and that no cap and no provider limit with an end to its wait stopped, is a failed step that beehave resume reruns.
 func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Result, runErr error) (PhaseOutput, error) {
 	out := phaseOutput(result)
-	out.Kind, out.Rounds = workflow.LaneKind(in.Kind, in.Lane), in.Rounds
-	out.Login, out.Model = in.Login, in.Model
+	out.Rounds = in.Rounds
 
 	if runErr != nil {
 		return out, runErr

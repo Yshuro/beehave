@@ -255,13 +255,13 @@ func (s *script) ready(a *agentArgs, label string) (name, login, prompt string, 
 		return "", "", "", err
 	}
 
-	prompt, err = s.promptOf(a, name)
+	prompt, err = s.promptOf(a, name, login)
 
 	return name, login, prompt, err
 }
 
-// promptOf finds the folder and the output file of the call, then renders the prompt in a step and returns it.
-func (s *script) promptOf(a *agentArgs, name string) (string, error) {
+// promptOf finds the folder and the output file of the call, then renders the prompt in a step and returns it. login is the runner that the call runs on.
+func (s *script) promptOf(a *agentArgs, name, login string) (string, error) {
 	if err := s.prepare(a, name); err != nil {
 		return "", err
 	}
@@ -271,7 +271,7 @@ func (s *script) promptOf(a *agentArgs, name string) (string, error) {
 	}
 
 	// The sandbox is recorded with the prompt, in the same step, so a replay reads the sandbox of the first run and never the current default of the project.
-	rendered, err := runStep(s.e, s.ctx, name+"/render", s.renderStep(*a))
+	rendered, err := runStep(s.e, s.ctx, name+"/render", s.renderStep(*a, login))
 	if err != nil {
 		return "", err
 	}
@@ -294,8 +294,8 @@ func (a *agentArgs) recall(outputs map[string]any) (err error) {
 	return err
 }
 
-// renderStep returns the step that renders the prompt of an agent call, records the sandbox of the call and marks its start commit.
-func (s *script) renderStep(a agentArgs) func(context.Context) (stepResult, error) {
+// renderStep returns the step that renders the prompt of an agent call, records the sandbox, the lane kind, the login and the model of the call and marks its start commit.
+func (s *script) renderStep(a agentArgs, login string) func(context.Context) (stepResult, error) {
 	return func(ctx context.Context) (stepResult, error) {
 		prompt, err := s.render(ctx, a)
 		if err != nil {
@@ -307,7 +307,11 @@ func (s *script) renderStep(a agentArgs) func(context.Context) (stepResult, erro
 			return stepResult{Note: prompt}, err
 		}
 
-		outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head}
+		outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head, recordedLogin: login, recordedKind: workflow.LaneKind(a.kind, a.lane)}
+		if a.model != "" {
+			outputs[recordedModel] = a.model
+		}
+
 		maps.Copy(outputs, recordSandbox(a.sandbox.effective(s.sandboxDefault())))
 
 		return stepResult{Note: prompt, Outputs: outputs}, nil
@@ -357,7 +361,7 @@ func (a agentArgs) refusePlain(project string) error {
 // phase makes the input of the phase that runs the agent. treeStart is the commit of the worktree of a round item that the run made.
 func (a agentArgs) phase(in ItemInput, login, prompt, treeStart string) PhaseInput {
 	return PhaseInput{
-		Item: in.Item, Project: in.Project, Login: login, Kind: a.kind, Lane: a.lane, Prompt: prompt,
+		Item: in.Item, Project: in.Project, Login: login, Kind: a.kind, Prompt: prompt,
 		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, RequireSkills: a.requireSkills, MaxBudget: a.maxBudget,
 		Rounds: a.rounds, NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart,
 	}

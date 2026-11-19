@@ -94,15 +94,22 @@ func (r *agentRig) reply(body string, result agent.Result) {
 	}
 }
 
-// run writes the flow and the prompt file beside it and walks the flow.
-func (r *agentRig) run(t *testing.T, flow, prompt string) (ItemResult, error) {
+// flowFile writes the flow and the prompt file beside it and returns the path of the flow.
+func flowFile(t *testing.T, flow, prompt string) string {
 	t.Helper()
 
 	file := writeFlow(t, flow)
 	require.NoError(t, os.MkdirAll(filepath.Join(filepath.Dir(file), "prompts"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(file), "prompts", "a.md"), []byte(prompt), 0o600))
 
-	result, err := r.h.engine(t).RunFile(testItem, testProject, file)
+	return file
+}
+
+// run writes the flow and the prompt file beside it and walks the flow.
+func (r *agentRig) run(t *testing.T, flow, prompt string) (ItemResult, error) {
+	t.Helper()
+
+	result, err := r.h.engine(t).RunFile(testItem, testProject, flowFile(t, flow, prompt))
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
