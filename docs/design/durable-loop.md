@@ -873,6 +873,8 @@ The shutdown of the engine and the start of a run do not overlap. The shutdown w
 
 `beehave run <item>` starts a new run only after a finished or a cancelled run. If the last run failed, `beehave run` refuses, names the step that failed, and tells the owner to run `beehave resume <item>`.
 
+A resume replays the recorded steps of the run. If the run failed in the workflow file on a recorded result, for example a missing skill call, the run fails again at the same point. To start a failed item again from the first step, run `beehave resume <item>`, then `beehave cancel <item>`, then `beehave run <item>`. `beehave cancel` refuses a failed run, so the resume comes first.
+
 ### One engine for each state folder
 
 #### The engine lock

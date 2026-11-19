@@ -14,7 +14,7 @@ stderr 'did not call the skill'
 grep -count=1 '^implement ' calls.log
 
 ! exec beehave cancel 7
-stderr 'cancel'
+stderr 'item-7-r1 is failed and has nothing to cancel$'
 rm no-skill
 exec beehave resume 7
 exec beehave cancel 7
