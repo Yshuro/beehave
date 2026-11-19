@@ -289,20 +289,16 @@ func signatures() map[string][]Param {
 func agentParams() []Param {
 	return []Param{
 		req("prompt", KindText), req("model", KindText), opt("runner", KindText), ruled("inputs", KindDict, inputsRule), words("outputs"),
-		opt("pin", KindText), opt("resume", KindText), words("require_skills"),
+		opt("pin", KindText), opt("resume", KindText),
 		{Name: "forbid_commands", Kind: KindList, Each: ForbidKinds()},
 		ruled("allow_paths", KindList, allowRule), words("protect_paths"), ruled("output_tries", KindInt, triesRule),
-		opt("edits", KindBool), one("follow_ups", FollowUpModes()), one("kind", AgentKinds()), one("lane", Lanes()), ruled("timeout", KindText, durationRule("timeout")),
+		opt("edits", KindBool), opt(LabelKeyword, KindText), ruled("timeout", KindText, durationRule("timeout")),
 		ruled("idle_timeout", KindText, durationRule("idle_timeout")), ruled(budgetKeyword, KindAny, budgetRule(budgetKeyword)), opt(sandboxKeyword, KindAny), opt(nameKeyword, KindText),
-		ruled(RoundsKeyword, KindAny, roundsRule),
 	}
 }
 
-func roundsRule(v starlark.Value) error {
-	_, err := Rounds(v)
-
-	return err
-}
+// LabelKeyword is the keyword of the agent builtin that names the call in the ledger and the status line. It is free text and never picks behavior.
+const LabelKeyword = "label"
 
 // writeParams holds the keywords of the write builtin: the keywords of command that make sense for a program on this machine, and its read-back and undo.
 func writeParams() []Param {

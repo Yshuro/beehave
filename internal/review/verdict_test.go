@@ -9,33 +9,6 @@ import (
 	"github.com/tobocop2/beehave/internal/review"
 )
 
-func TestNeedsCommit_NoFollowUpsTurnsAnyOpenFindingIntoACommit(t *testing.T) {
-	t.Parallel()
-
-	for _, class := range []review.Class{review.Deferred, review.PreExisting, review.Minor} {
-		open := []review.Finding{{Class: class, Text: "later"}}
-
-		assert.True(t, review.NeedsCommit(open, review.Policy{NoFollowUps: true}), class)
-		assert.False(t, review.NeedsCommit(open, review.Policy{}), class)
-	}
-}
-
-func TestNeedsCommit_ABlockingFindingNeedsACommitUnderEveryPolicy(t *testing.T) {
-	t.Parallel()
-
-	open := []review.Finding{{Class: review.Blocking, Text: "wrong"}}
-
-	assert.True(t, review.NeedsCommit(open, review.Policy{}))
-	assert.True(t, review.NeedsCommit(open, review.Policy{NoFollowUps: true}))
-}
-
-func TestNeedsCommit_NoFindingNeedsNoCommitUnderEveryPolicy(t *testing.T) {
-	t.Parallel()
-
-	assert.False(t, review.NeedsCommit(nil, review.Policy{NoFollowUps: true}))
-	assert.False(t, review.NeedsCommit(nil, review.Policy{}))
-}
-
 func TestStanding_ReasonsFailClosedWhenTheReviewedCommitIsEmpty(t *testing.T) {
 	t.Parallel()
 

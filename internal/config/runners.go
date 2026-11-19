@@ -28,7 +28,7 @@ type Pool struct {
 type agents struct {
 	// MaxConcurrent is the global limit on agent processes. A laptop wants 2, a build host more.
 	MaxConcurrent int
-	// MaxReviewConcurrent is the limit on agent processes of the steps of the kind review. It is separate from MaxConcurrent: the two queues do not lend slots.
+	// MaxReviewConcurrent is the limit on agent processes of the steps with edits = False. It is separate from MaxConcurrent: the two queues do not lend slots.
 	MaxReviewConcurrent int
 	// PerLogin is the most agent steps that one login runs at once, in each of the two agent queues. The default is 1.
 	PerLogin int

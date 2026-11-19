@@ -85,7 +85,7 @@ func TestPhaseInput_AStoredStepWithoutTheEditsKeyKeepsEditsAndANoEditsStepStaysW
 	require.NoError(t, json.Unmarshal([]byte(`{"run":"r1","item":"i1"}`), &old))
 	assert.False(t, old.NoEdits, "a step recorded before the key existed keeps the edit mode")
 
-	raw, err := json.Marshal(PhaseInput{Run: "r1", Kind: "review", NoEdits: true})
+	raw, err := json.Marshal(PhaseInput{Run: "r1", NoEdits: true})
 	require.NoError(t, err)
 
 	var replayed PhaseInput

@@ -109,10 +109,12 @@ func prOutputs(number int, issues []int) map[string]any {
 // cost_estimated is true when cost_usd is an estimate that beehave made from the tokens of the run, and false when the agent CLI reported the cost.
 // cost_unknown is true when the run used tokens of a model that has no price, so cost_usd holds no dollars for it.
 // rewrote is true when the commit the run started on is not in the history of the commit it ended on.
-func agentOutputs(text, session, transcript, head, violations, stop string, spend agent.Spend, rewrote bool) map[string]any {
+// skills lists the skills that the agent called, in the order of the calls. It is an empty list, never null, for a run that called none.
+func agentOutputs(text, session, transcript, head, violations, stop string, spend agent.Spend, rewrote bool, skills []string) map[string]any {
 	out := spendOutputs(spend)
 	out[textKeyword], out["session"], out["transcript"], out["head_sha"], out["violations"], out["stop"] = text, session, transcript, head, violations, stop
 	out["rewrote"] = rewrote
+	out["skills"] = append([]string{}, skills...)
 
 	return out
 }

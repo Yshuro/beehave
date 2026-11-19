@@ -53,23 +53,13 @@ The `gate` step runs the gate of the project and reports `passed`, `head`, `tree
 - `tree` is the tree id of `head`, read from the worktree before the gate runs.
 - A gate that runs a program records an empty `tree`. A resumed host job also records an empty `tree`, unless the resumed head equals the current head.
 
-#### The `follow_ups` keyword of `agent`
+#### The `follow_ups` argument of the review loop
 
-An `agent` call takes `follow_ups = "allow"` (the default), `"forbid"` or `"audit"`.
+The `agent` step has no follow-ups setting. The review loop of the library (`review_fix`) takes `follow_ups = "allow"` (the default) or `"forbid"`.
 
-With `"forbid"` or `"audit"`, the call must list `verdict` in `outputs`. The agent writes a `findings` list of `{"class", "text"}` objects in the output file. The classes are `blocking`, `deferred`, `pre-existing` and `minor`.
+With `"forbid"`, the loop adds the output `open` to each review call. The agent writes `open` as a text with one line for each open finding, and an empty text for none. A review with a non-empty `open` and a verdict that is not `reject` gets the verdict `changes` in the loop. With `"allow"`, the verdict of the agent stands.
 
-| Value | Effect on the output `verdict` |
-|---|---|
-| `"allow"` | None. |
-| `"forbid"` | Any open finding sets `changes`. With no open finding, the agent verdict stands. |
-| `"audit"` | For work that has merged: any open finding sets `findings`, and no open finding sets `clean`, whatever the agent wrote. |
-
-The review loop of the library takes a `follow_ups` argument and passes it to its review call. The remediation example sets it to `"forbid"`.
-
-`beehave check workflow` refuses these, and shows the position:
-
-- A literal value that is not listed.
+A workflow that calls `agent` itself reads the output `open` in the same way. The remediation example sets `"forbid"`.
 - A literal `"forbid"` or `"audit"` whose literal `outputs` lack `verdict`.
 
 The check sees only calls named `agent`. A call through an alias or a wrapper is checked when the run starts it.
@@ -92,7 +82,7 @@ Each agent step runs as a child workflow named `phase`. The phase starts the age
 
 #### The queues
 
-The queue holds only phases. Phases run on the queue `agents`, or on the queue `reviews` for an agent call with `kind = "review"`.
+The queue holds only phases. Phases run on the queue `agents`, or on the queue `reviews` for an agent call with `edits = False`.
 
 - The partition key of a phase is the login. Each partition of a queue runs at most `agents.per_login` phases at once. The default is 1.
 - Each queue has a global limit: `agents.max_concurrent` for `agents` and `agents.max_review_concurrent` for `reviews`.
@@ -694,7 +684,7 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core4.agent8.tracker1.forge2.land4.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core6.agent9.tracker1.forge2.land4.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
 | The run is a run of a round item, and the version of the round module differs from the version in this build. The version of the round module covers the step that makes the worktree at the start of every round item, so every round run uses the module, even a run that an older build recorded with no such step. | Names the step that makes the worktree, and says to finish the run on the build that started it or to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 
@@ -711,9 +701,7 @@ A line of the list also shows these facts when the run has them. Each is a tab-s
 | `waits for the <kind> limit <window> of login <login> until <time>` | A provider limit holds an agent step of the open run. The step runs again after that time. |
 | `now <step>` | The step that an open run is in. A run that asks a question shows the question in place of the step and, when the `wait` has a `timeout`, `answer by <time>`. |
 | `gate pass at <head>` or `gate fail at <head>` | The newest gate result and the head it judged. |
-| `fix U of C` and `review U of C` | The count of the agent calls of the lanes `rework` and `review` against the cap that those calls name with the keyword `rounds`. A call that names none shows the count alone. |
-
-The keyword `rounds` is a whole number of 1 or more, recorded in the phase. The review loop of the library sets it to `rounds * (MAX_INNER + 1)` for the reviews and to `rounds * MAX_INNER` for the fixes.
+| The latest label, such as `review 3/24` | The `label` of the latest agent call that has one. The review loop of the library labels its reviews with the count against `rounds * (MAX_INNER + 1)` and its fixes with the count against `rounds * MAX_INNER`. |
 
 Every value is read from the step records, the events and the options of the client. The store has no table for it. The deadline of a `wait` with a `timeout` is the output of the `DBOS.sleep` record that the receive of the wait writes before it waits. Status shows it only while the question is open.
 
@@ -725,8 +713,8 @@ Every value is read from the step records, the events and the options of the cli
 - `now`
 - `deadline`
 - `gate` (`passed`, `head`)
-- `fix_rounds` and `review_rounds` (`used`, `cap`)
-- `cost_usd` and `rounds` on each agent step
+- `label`: the latest label of the run
+- `cost_usd` on each agent step
 - `host_losses`, the number of `<call>/host-loss` steps in the item runs of the tree of the run, from its root. Only the view of one run reads the tree for it, and it is left out at 0. See "The host loss fields" in [workflow-files.md](workflow-files.md).
 
 #### The rest of a run line
@@ -752,7 +740,7 @@ The fields of a run are `id`, `state`, `version`, `stranded`, `older_steps`, `it
 
 The time left drops the part of a unit that is not complete: 59m59s shows `59m left`.
 
-The fields `stranded`, `older_steps`, `spent`, `cap_usd`, `fix_rounds` and `review_rounds` are always present, so a script tells false or zero from absent. A field that is absent has its own meaning, and the array leaves it out:
+The fields `stranded`, `older_steps`, `spent` and `cap_usd` are always present, so a script tells false or zero from absent. A field that is absent has its own meaning, and the array leaves it out:
 
 - A text field with no text.
 - `asked` for a wait that names no one.
@@ -790,7 +778,7 @@ A line shows the step name, the start time, the duration and the outcome: done, 
 The line then shows the fields that decide the flow, when the step has them:
 
 - `exit_code`
-- `kind`: the kind of the lane of an agent step (`fix`, `rework`, `relay`, `review` or `design`)
+- `label`: the free label of an agent step
 - `login`: the runner that an agent step runs on. It is the runner that the call names with `runner`, or the login that the pool picked when the call names none. The line shows it while the step runs and after the step fails.
 - `model`: the model that an agent step sets. The line shows it while the step runs and after the step fails. A step that sets no model shows none.
 - `stop`
@@ -806,7 +794,7 @@ A failed step shows its error. The last line is `run`: the state of the run (run
 - A step that runs shows as running with its elapsed time.
 - A command records its row when it ends. While a command runs, the last line is `step in progress`, with the time since the last row.
 
-`--json` prints one object for scripts. Its fields are `run`, `state`, `error` (left out when empty) and `steps`. Each step has `name`, `state`, `duration_seconds` and, when it has them, `started`, `ended`, `error`, `exit_code`, `kind`, `login`, `model`, `stop`, `verdict`, `head`, `passed` and `gate` (a list of `name` and `status`).
+`--json` prints one object for scripts. Its fields are `run`, `state`, `error` (left out when empty) and `steps`. Each step has `name`, `state`, `duration_seconds` and, when it has them, `started`, `ended`, `error`, `exit_code`, `label`, `login`, `model`, `stop`, `verdict`, `head`, `passed` and `gate` (a list of `name` and `status`).
 
 #### `beehave status --item <item>`: the lanes of one item
 
@@ -814,12 +802,12 @@ A failed step shows its error. The last line is `run`: the state of the run (run
 
 `--json` prints `item` and `lanes`, where each lane has `run` and the fields of a step. The view reads the run view of each run and keeps no table of its own.
 
-The kind of a lane is the `lane` argument of the `agent` call (`fix`, `rework`, `relay`, `review` or `design`).
+The label of a lane is the `label` argument of the `agent` call. A label is free text. It shows in the status and never changes what the step does.
 
-- A call with `kind = "review"` is a `review` lane.
-- A call with no `lane` is a `fix` lane.
-- The review loop of the library sets `review` for its review, `rework` for each fix after a review and `design` for its design step.
-- A record that an older version wrote has no kind.
+- A call with no `label` has an empty label.
+- The review loop of the library labels its calls with the round, for example `review 3/24` and `fix 2/18`, and `design` for its design step.
+- The run status shows the latest label.
+- A record that an older version wrote has no label.
 
 #### Progress lines of `beehave run`
 
@@ -884,6 +872,8 @@ The shutdown of the engine and the start of a run do not overlap. The shutdown w
 #### When `beehave run` starts a new run
 
 `beehave run <item>` starts a new run only after a finished or a cancelled run. If the last run failed, `beehave run` refuses, names the step that failed, and tells the owner to run `beehave resume <item>`.
+
+A resume replays the recorded steps of the run. If the run failed in the workflow file on a recorded result, for example a missing skill call, the run fails again at the same point. To start a failed item again from the first step, run `beehave resume <item>`, then `beehave cancel <item>`, then `beehave run <item>`. `beehave cancel` refuses a failed run, so the resume comes first.
 
 ### One engine for each state folder
 

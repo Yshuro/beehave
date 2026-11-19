@@ -186,7 +186,6 @@ func finishTakesNoItem(parsed *syntax.File) bool {
 
 // inspect checks the calls of a parsed file, and keeps the names that the workflow file binds.
 func (g *graph) inspect(name string, parsed *syntax.File) {
-	g.arguments(parsed)
 	g.repositoryCalls, g.gateCalls = append(g.repositoryCalls, repositoryCalls(g.display(name), parsed)...), append(g.gateCalls, gateCalls(g.display(name), parsed)...)
 	found, dynamic := programs(parsed)
 	g.programs = append(g.programs, found...)

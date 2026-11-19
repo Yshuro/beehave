@@ -466,7 +466,7 @@ func TestDryRun_TheTemplateDirOfTheEnvironmentCopiesNothingIntoTheDryRepository(
 func TestDryDeps_NowIsTheFixedClockOfADryRun(t *testing.T) {
 	t.Parallel()
 
-	deps := dryDeps("/t", "h", "12", nil, dryChoice{})
+	deps := dryDeps("/t", "h", "12", dryChoice{})
 
 	assert.Equal(t, dryNow(), deps.Clock.reading())
 	assert.Equal(t, "2030-01-02T03:04:05Z", dryNow().Format(time.RFC3339))
@@ -488,7 +488,7 @@ func TestDryRun_NowPrintsTheSameTextInTwoRuns(t *testing.T) {
 func TestDryDeps_EveryCollaboratorIsADryOne(t *testing.T) {
 	t.Parallel()
 
-	deps := dryDeps("/t", "h", "12", nil, dryChoice{})
+	deps := dryDeps("/t", "h", "12", dryChoice{})
 
 	for name, held := range map[string]any{
 		"Agents": deps.Agents, "Gate": deps.Gate, "Logins": deps.Logins, "Lifecycle": deps.Lifecycle, "Forge": deps.Forge, "Watch": deps.Watch,
@@ -586,12 +586,12 @@ func TestDryAgents_WriteTheDeclaredOutputsOfTheRequestWhateverThePromptSays(t *t
 	dir := t.TempDir()
 	file := filepath.Join(dir, "outputs", "out.json")
 
-	_, err := dryAgents{}.Run(t.Context(), AgentRequest{Prompt: "Judge the change.", OutputFile: file, Outputs: []string{"verdict", "summary"}})
+	_, err := dryAgents{}.Run(t.Context(), AgentRequest{Prompt: "Judge the change.", OutputFile: file, Outputs: []string{"verdict", "summary", "open"}})
 	require.NoError(t, err)
 
 	raw, err := os.ReadFile(file) //nolint:gosec // the test names its own output file
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"verdict":"approve","summary":"0","findings":[]}`, string(raw))
+	assert.JSONEq(t, `{"verdict":"approve","summary":"0","open":""}`, string(raw), "a review approves with no open finding, and any other output is 0")
 }
 
 func TestDryAgents_WriteNoFileForACallWithNoDeclaredOutputs(t *testing.T) {

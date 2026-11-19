@@ -41,13 +41,13 @@ func resultShape(t *testing.T) []string {
 // (stepmodules.go) and update the shape. A later change re-keys these goldens for each module; until then the key stays star30.
 var goldenShapes = map[string][]string{
 	"star30": {
-		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,stop,text,transcript,violations",
+		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,skills,stop,text,transcript,violations",
 		"batch_merge: deferred,findings,gates,host_loss,host_losses,merged,note,rejected,tip,tree,unproven",
 		"before_review: base,findings,keywords,new_tests,ok,revert",
 		"board_sync: number,status",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
-		"facts: base_branch,build_host,forge,gate,gate_steps,repo,source,tracker,vars",
+		"facts: base_branch,build_host,forge,gate,gate_steps,repo,runners,source,tracker,vars",
 		"gate: checks,head,host_loss,host_losses,new_tests,passed,report,required,revert,steps,tree",
 		"gather: results",
 		"host_teardown: down,reason",

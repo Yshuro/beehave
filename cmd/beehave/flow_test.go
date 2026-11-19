@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/agent/claude"
+	"github.com/tobocop2/beehave/internal/agent/opencode"
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/host/ssh"
@@ -30,10 +32,24 @@ func TestDepsOn_TheSentinelsOfTheHostEntriesReachTheEngineAsKeptErrors(t *testin
 func TestFactsOf_TheFactsOfTheProjectInTheConfigReachTheEngineAndAnUnknownProjectHasNone(t *testing.T) {
 	t.Parallel()
 
-	facts := factsOf(map[string]config.Project{"p": {Project: model.Project{Name: "p", Vars: map[string]any{"limits": []any{"never run rm on a glob"}}}}})
+	cfg := config.Config{Projects: map[string]config.Project{"p": {Project: model.Project{Name: "p", Vars: map[string]any{"limits": []any{"never run rm on a glob"}}}}}}
+	facts := factsOf(cfg, newAdapters(nil, nil, nil))
 
 	require.Equal(t, []any{"never run rm on a glob"}, facts("p").Vars["limits"])
 	require.Equal(t, model.Project{}, facts("other"))
+}
+
+func TestDepsOn_TheEngineGetsWhetherEachRunnerOfTheConfigReportsSkillCalls(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.Config{
+		Runners:  []model.Runner{{Name: "a", Agent: claude.Name}, {Name: "o", Agent: opencode.Name}, {Name: "x", Agent: "no-such-agent"}},
+		Projects: map[string]config.Project{"p": {Project: model.Project{Name: "p"}}},
+	}
+
+	deps := depsOn(cfg, flow.Options{StateDir: t.TempDir()}, logins{}, newAdapters(nil, nil, nil))
+
+	require.Equal(t, map[string]bool{"a": true, "o": false}, deps.Facts("p").RunnerSkills, "the Claude runner reports skill calls, the OpenCode runner does not, and a runner with no adapter is left out")
 }
 
 func TestFlowFactory_ARunForAnUnknownProjectEndsWithAnErrorAndNoPanic(t *testing.T) {

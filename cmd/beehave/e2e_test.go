@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -28,7 +30,6 @@ import (
 	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/sandbox/landlock"
-	"github.com/tobocop2/beehave/internal/workflow/workflowtest"
 )
 
 // These tests run the beehave commands as separate processes, as testscript does for any command line tool.
@@ -90,7 +91,7 @@ func e2eFlow(dir, path string) cli.Flow {
 			files := e2eFiles{dir: dir}
 
 			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
-				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg.Projects),
+				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg, newAdapters(nil, nil, nil)),
 				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
 			}, dir, cfg))
 			if err != nil {
@@ -390,7 +391,7 @@ if [ -e hang ] && [ "$step" = "$(cat hang)" ] && [ ! -e started ]; then
 fi
 if [ "$step" = review ]; then
   n=$(grep -c '^review ' calls.log)
-  printf '{"verdict":"%s","mechanism":"","regressions":"0","findings":[]}\n' "$(sed -n "${n}p" verdicts)" > "$(field write)"
+  printf '{"verdict":"%s","mechanism":"","regressions":"0","open":"","findings":[]}\n' "$(sed -n "${n}p" verdicts)" > "$(field write)"
 fi
 if [ "$step" = plan ]; then
   printf '{"regressions":"0"}\n' > "$(field write)"
@@ -400,7 +401,10 @@ if [ "$step" = settle ]; then
 fi
 # The tool calls arrive as assistant lines of the stream, as with the real claude.
 # The fake claude calls the skill that the example requires, so the session reports it.
-echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"%SKILL%"}}]}}'
+# When the file no-skill exists, the fake reports no skill call, as a CLI that does not report them.
+if [ ! -e no-skill ]; then
+  echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"%SKILL%"}}]}}'
+fi
 # The implementer stages everything, the command that the example forbids.
 if [ "$step" = implement ]; then
   if [ -e edit-file ]; then write_call toolu_edit edited.txt; fi
@@ -481,31 +485,17 @@ func oneItemCopy(example string) (string, error) {
 	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
 }
 
-// exampleSkill returns the one skill that an agent of examples/remediation/workflow.star requires.
-func exampleSkill() (string, error) {
-	text, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	if err != nil {
-		return "", err
+// exampleSkillCheck matches the check of the example that the implement step called a skill: "name" not in implement.skills.
+var exampleSkillCheck = regexp.MustCompile(`"([^"]+)" not in implement\.skills`)
+
+// exampleSkill is the skill that the implement step of the example text must call. The example is the one place that names it.
+func exampleSkill(example string) (string, error) {
+	match := exampleSkillCheck.FindStringSubmatch(example)
+	if match == nil {
+		return "", errors.New("the example holds no check of the skills of the implement step")
 	}
 
-	calls, err := workflowtest.Calls("workflow.star", text)
-	if err != nil {
-		return "", err
-	}
-
-	var skills []string
-
-	for _, call := range calls {
-		if call.Builtin == "agent" {
-			skills = append(skills, workflowtest.Literals(call.Args["require_skills"])...)
-		}
-	}
-
-	if len(skills) != 1 {
-		return "", fmt.Errorf("the example requires %d skills, want 1", len(skills))
-	}
-
-	return skills[0], nil
+	return match[1], nil
 }
 
 // e2eFile is a file of the work folder of a script; a program is a file that the script starts.
@@ -541,7 +531,13 @@ func writeE2EFile(path string, file e2eFile) error {
 // e2eSetup writes the config folder and the fake claude into the work folder of a script.
 func e2eSetup(env *testscript.Env) error {
 	work := env.WorkDir
-	skill, err := exampleSkill()
+
+	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	if err != nil {
+		return err
+	}
+
+	skill, err := exampleSkill(string(example))
 	if err != nil {
 		return err
 	}
@@ -554,11 +550,6 @@ func e2eSetup(env *testscript.Env) error {
 		"bin/claude":                {fake, true},
 		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), false},
 		"config/projects/shop.star": {e2eProject, false},
-	}
-
-	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	if err != nil {
-		return err
 	}
 
 	copied, err := oneItemCopy(string(example))

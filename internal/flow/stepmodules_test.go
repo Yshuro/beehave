@@ -74,14 +74,14 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core5.agent8.tracker1.forge2.land4.gate5.host1.round2", applicationVersion("v1"))
-	assert.Equal(t, "v1+core5.agent8.tracker1.forge2.land4.gate6.host1.round2", versionWithModule("v1", moduleGate, 6))
+	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land4.gate5.host1.round2", applicationVersion("v1"))
+	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land4.gate6.host1.round2", versionWithModule("v1", moduleGate, 6))
 }
 
-func TestStepModules_TheCoreModuleIsAtVersionFive(t *testing.T) {
+func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "core5", "the facts step records nine fields: the method and board fields moved under vars, so a run recorded at core4 replays no facts step")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "core6", "the facts step records ten fields: the method and board fields moved under vars at core5 and runners came at core6, so a run recorded at core5 replays no facts step")
 }
 
 func TestStepModules_TheLandModuleIsAtVersionFour(t *testing.T) {

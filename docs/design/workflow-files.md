@@ -111,6 +111,7 @@ The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `before_rev
 | --- | --- |
 | `repo`, `source`, `forge`, `tracker`, `base_branch`, `gate`, `gate_steps`, `build_host` | The project value of that name. |
 | `vars` | Dict. The `vars` of the project file, as written, and frozen. Every setting of a workflow is a key of it. |
+| `runners` | Dict. One entry for each runner of the config, by its name, with the field `reports_skills`: true when the agent CLI of the runner reports skill calls, false for OpenCode. The project file does not set it. A workflow reads it to refuse a step before any agent starts, for example a step that needs a skill. |
 
 - A fact that the project file leaves out is empty text, an empty list or an empty dict, never a missing field. A key that `vars` leaves out is missing: read it with `facts().vars.get("key", default)`.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.
@@ -690,6 +691,9 @@ No undo runs:
 - An `agent` call must name a `model`. A call without it fails at its line.
 - `resume` of an `agent` call is the session of an earlier agent, such as `impl.session`.
 - The call takes a `pin`, a commit id such as `check.head`, and starts only when the head of the worktree equals it.
+- The call takes one free `label`, a text that shows in `beehave status`. A label never changes what the step does. `edits = False` makes the step read-only and puts it on the review queue.
+- The call takes no `kind`, `lane`, `rounds`, `follow_ups` or `require_skills`. `beehave check workflow` refuses each one by name, for example "agent takes no argument kind".
+- The result of the call has the field `skills`: the list of the skills that the agent called, in the order of the calls. A workflow that needs a skill tests it, for example `"lint-pass" not in implement.skills`, and stops the item itself.
 
 ### `beehave check workflow`
 
@@ -784,7 +788,7 @@ The steps:
 2. One `research` agent for each sub-question writes `notes/<n>.md` in the work folder. Every line of a notes file is a claim, except a blank line and a heading. Each claim ends with one or more `[source: <URL>]` tags.
 3. The `command` step `check` runs `tools/check.sh`.
 4. A `summary` agent writes a short summary of the notes.
-5. A fresh `review` agent, with `follow_ups = "forbid"` and `output_tries = 2`, tries to refute the notes, and checks that the summary states only what the notes state.
+5. A fresh `review` agent, with the outputs `verdict` and `open` and `output_tries = 2`, tries to refute the notes, and checks that the summary states only what the notes state. Any text in `open` keeps the loop going.
 6. The `report` step runs `tools/report.sh`.
 
 `tools/check.sh` exit codes:

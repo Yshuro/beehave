@@ -92,13 +92,13 @@ func atoiOr(text string) int {
 	return n
 }
 
-// lanesOf keeps the lines of the views that are lanes: the agent steps, which have a kind.
+// lanesOf keeps the lines of the views that are lanes: the agent steps.
 func lanesOf(item string, views []RunSteps) ItemLanes {
 	out := ItemLanes{Item: item, Lanes: []LaneLine{}}
 
 	for _, view := range views {
 		for _, step := range view.Steps {
-			if step.Kind != "" {
+			if builtinOf(step.Name) == builtinAgent {
 				out.Lanes = append(out.Lanes, LaneLine{Run: view.Run, StepLine: step})
 			}
 		}

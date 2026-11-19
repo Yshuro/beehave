@@ -34,7 +34,7 @@ func printSteps(stdout io.Writer, client Steering, id string, asJSON bool) error
 }
 
 // printLanes writes the lanes of one item across its runs: one line each by default, or one JSON object.
-// A line is the run id, then the line of the step, so the kind of the lane and the fields that decide the flow read as in the view of one run.
+// A line is the run id, then the line of the step, so the label of the lane and the fields that decide the flow read as in the view of one run.
 func printLanes(stdout io.Writer, client Steering, item string, asJSON bool) error {
 	view, err := client.Lanes(item)
 	if err != nil {
@@ -93,7 +93,7 @@ func stepFields(step flow.StepLine) []string {
 		fields = append(fields, "exit_code="+strconv.Itoa(*step.ExitCode))
 	}
 
-	fields = appendText(fields, "kind", step.Kind)
+	fields = appendText(fields, "label", step.Label)
 	fields = appendText(fields, "login", step.Login)
 	fields = appendText(fields, "model", step.Model)
 	fields = appendText(fields, "stop", step.Stop)

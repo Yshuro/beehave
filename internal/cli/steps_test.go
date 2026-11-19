@@ -72,21 +72,21 @@ func TestStatus_AnAgentLineOfARunNamesItsKindAsTheLaneLedger(t *testing.T) {
 	rig := newRig(t)
 	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
-		{Name: "agent:work#1", State: "done", Started: start, Ended: start, Kind: "rework", ExitCode: intPtr(0)},
-		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Kind: "review", ExitCode: intPtr(0)},
+		{Name: "agent:work#1", State: "done", Started: start, Ended: start, Label: "fix 2/6", ExitCode: intPtr(0)},
+		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Label: "review 2/6", ExitCode: intPtr(0)},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
 
 	require.Equal(t, 0, code, stderr)
-	assert.Equal(t, "agent:work#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 kind=rework\n"+
-		"agent:look#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 kind=review\n"+
+	assert.Equal(t, "agent:work#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 label=fix 2/6\n"+
+		"agent:look#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 label=review 2/6\n"+
 		"run\tdone\n", stdout)
 
 	code, stdout, stderr = rig.execute(t.Context(), "status", "item-14-r1", "--json")
 
 	require.Equal(t, 0, code, stderr)
-	assert.Contains(t, stdout, `"kind":"review"`)
+	assert.Contains(t, stdout, `"label":"review 2/6"`)
 }
 
 func TestStatus_AnAgentLineShowsItsLoginAndItsModelInTextAndJSON(t *testing.T) {
@@ -95,14 +95,14 @@ func TestStatus_AnAgentLineShowsItsLoginAndItsModelInTextAndJSON(t *testing.T) {
 	rig := newRig(t)
 	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
-		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Kind: "review", Login: "oc", Model: "m-seen", ExitCode: intPtr(0)},
+		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Label: "review", Login: "oc", Model: "m-seen", ExitCode: intPtr(0)},
 		{Name: "agent:work#1", State: "done", Started: start, Ended: start, Login: "pool-1", ExitCode: intPtr(0)},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
 
 	require.Equal(t, 0, code, stderr)
-	assert.Equal(t, "agent:look#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 kind=review login=oc model=m-seen\n"+
+	assert.Equal(t, "agent:look#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 label=review login=oc model=m-seen\n"+
 		"agent:work#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 login=pool-1\n"+
 		"run\tdone\n", stdout)
 
@@ -119,15 +119,15 @@ func TestStatus_AnItemListsItsLanesAcrossItsRunsOneLineEach(t *testing.T) {
 	rig := newRig(t)
 	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	rig.steering.lanes = flow.ItemLanes{Item: "14", Lanes: []flow.LaneLine{
-		{Run: "item-14-r1", StepLine: flow.StepLine{Name: "agent:work#1", State: "done", Started: start, Kind: "fix", ExitCode: intPtr(0)}},
-		{Run: "item-14-r2", StepLine: flow.StepLine{Name: "agent:work#1", State: "done", Started: start, Kind: "rework", ExitCode: intPtr(0)}},
+		{Run: "item-14-r1", StepLine: flow.StepLine{Name: "agent:work#1", State: "done", Started: start, Label: "fix 1/5", ExitCode: intPtr(0)}},
+		{Run: "item-14-r2", StepLine: flow.StepLine{Name: "agent:work#1", State: "done", Started: start, Label: "fix 2/5", ExitCode: intPtr(0)}},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "--item", "14")
 
 	require.Equal(t, 0, code, stderr)
-	assert.Equal(t, "item-14-r1\tagent:work#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 kind=fix\n"+
-		"item-14-r2\tagent:work#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 kind=rework\n", stdout)
+	assert.Equal(t, "item-14-r1\tagent:work#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 label=fix 1/5\n"+
+		"item-14-r2\tagent:work#1\t2026-10-31T09:00:00Z\t0s\tdone\texit_code=0 label=fix 2/5\n", stdout)
 	assert.Equal(t, []string{"lanes 14"}, rig.steering.calls)
 
 	code, stdout, stderr = rig.execute(t.Context(), "status", "--item", "14", "--json")
@@ -135,7 +135,7 @@ func TestStatus_AnItemListsItsLanesAcrossItsRunsOneLineEach(t *testing.T) {
 	require.Equal(t, 0, code, stderr)
 	assert.Contains(t, stdout, `"item":"14"`)
 	assert.Contains(t, stdout, `"run":"item-14-r2"`)
-	assert.Contains(t, stdout, `"kind":"rework"`)
+	assert.Contains(t, stdout, `"label":"fix 2/5"`)
 }
 
 func TestStatus_AnItemAndARunIdTogetherAreRefused(t *testing.T) {

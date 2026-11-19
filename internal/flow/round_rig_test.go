@@ -432,7 +432,7 @@ func newRoundRigOf(t *testing.T, items string) *roundRig {
 	rig.h.forge.heads = rig.heads
 
 	agents := &agentRig{h: rig.h}
-	agents.answerLikeTheExample(exampleSkill(t, folder), func(int) string { return "approve" }, func(int) string { return "[]" }, func(int) string { return "" }, "", designReviewLimit)
+	agents.answerLikeTheExample(exampleSkill(t), func(int) string { return "approve" }, func(int) string { return "[]" }, func(int) string { return "" }, "", designReviewLimit)
 	rig.h.agents.result = kids.afterReview(rig.h.agents.result)
 
 	// A round over items selects them by the item list, so the queue rows need no label. A round over no item keeps the label of the example rig and reads an empty queue.

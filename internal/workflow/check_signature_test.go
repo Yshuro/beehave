@@ -18,7 +18,6 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"now with an argument", `now(zone = "utc")`, "now takes no argument, and the call gives zone."},
 		{"agent missing prompt", `agent(model = "m")`, "agent needs the `prompt` keyword"},
 		{"agent missing model", `agent(prompt = "p")`, "agent needs the `model` keyword"},
-		{"agent bad follow_ups", `agent(prompt = "p", model = "m", follow_ups = "maybe")`, `follow_ups is "maybe". Use one of: allow, forbid, audit.`},
 		{"agent text for a list", `agent(prompt = "p", model = "m", outputs = "verdict")`, "outputs must be a list, not a text."},
 		{"agent text for the allowed paths", `agent(prompt = "p", model = "m", allow_paths = "papers/**")`, "allow_paths must be a list, not a text."},
 		{"agent text for the protected paths", `agent(prompt = "p", model = "m", protect_paths = "/own/checkout")`, "protect_paths must be a list, not a text."},
@@ -47,6 +46,7 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"gather bad until", `gather([], until = "first")`, `until is "first". Use one of: all, any.`},
 		{"gather number for until", `gather([], until = 1)`, "until is 1. Use one of: all, any."},
 		{"gather number for fail", `gather([], fail = 3)`, "fail is 3. Use one of: return, raise."},
+		{"gather negative number for fail", `gather([], fail = -3)`, "fail is -3. Use one of: return, raise."},
 		{"gather list for fail", `gather([], fail = ["raise"])`, "fail is list. Use one of: return, raise."},
 		{"item_comment unknown keyword", `item_comment("1", "t", "k", body = "b")`, "item_comment takes no argument body"},
 		{"item_comment missing key", `item_comment("1", "t")`, "item_comment needs the `key` keyword"},
@@ -89,7 +89,7 @@ func TestCheck_AcceptsACallThatKeepsItsSignature(t *testing.T) {
 	t.Parallel()
 
 	calls := []string{
-		`agent("p", "m", follow_ups = "forbid", outputs = ["verdict"], output_tries = 2, inputs = {"a": 1}, allow_paths = ["papers/**"])`,
+		`agent("p", "m", label = "fix 1/3", outputs = ["verdict"], output_tries = 2, inputs = {"a": 1}, allow_paths = ["papers/**"])`,
 		`agent("p", "m", forbid_commands = ["protected-path"], protect_paths = ["/own/checkout"])`,
 		`batch_merge(item.id, "b", "r", name = "n", gate_run = ["make"])`,
 		`command(["a"], env = {"A": "b"}, stop_on_rc = [1], name = "n")`,
@@ -276,11 +276,11 @@ func TestUnpack_RefusesADestinationOfAnotherTypeThanTheKindOfItsKeyword(t *testi
 
 	agent := func(overrides map[string]any) error {
 		into := map[string]any{}
-		for _, name := range []string{"prompt", "model", "runner", "pin", "resume", "follow_ups", "kind", "lane", "timeout", "idle_timeout", "name"} {
+		for _, name := range []string{"prompt", "model", "runner", "pin", "resume", "label", "timeout", "idle_timeout", "name"} {
 			into[name] = &text
 		}
 
-		for _, name := range []string{"inputs", "outputs", "require_skills", "forbid_commands", "allow_paths", "protect_paths", "max_budget_usd", "sandbox", "rounds"} {
+		for _, name := range []string{"inputs", "outputs", "forbid_commands", "allow_paths", "protect_paths", "max_budget_usd", "sandbox"} {
 			into[name] = &value
 		}
 

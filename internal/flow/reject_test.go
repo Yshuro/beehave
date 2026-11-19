@@ -11,18 +11,6 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-func TestAgentStep_ForbiddenFollowUpsKeepARejectWhateverTheFindings(t *testing.T) {
-	t.Parallel()
-
-	rig := newAgentRig(t)
-	rig.reply(`{"verdict":"reject","findings":[{"class":"blocking","text":"the design is wrong"}]}`, exited)
-
-	_, err := rig.run(t, followUpFlow(`follow_ups = "forbid", `), "Write to {{ .output_file }}\n")
-
-	require.NoError(t, err)
-	assert.Equal(t, []string{"show reject"}, rig.h.commands.ran())
-}
-
 func TestExample_TheReviewIsReadOnlyAndTheFixIsNot(t *testing.T) {
 	t.Parallel()
 

@@ -450,7 +450,7 @@ func rejectReviewOf(t *testing.T, rig *roundRig, item string) {
 		result := inner(request)
 
 		if request.Item == item && strings.Contains(request.Prompt, reviewMarker) {
-			if err := os.WriteFile(promptOutput(request.Prompt), []byte(`{"verdict":"reject","mechanism":"","regressions":"0","findings":[]}`), 0o600); err != nil {
+			if err := os.WriteFile(promptOutput(request.Prompt), []byte(`{"verdict":"reject","mechanism":"","regressions":"0","open":"","findings":[]}`), 0o600); err != nil {
 				t.Errorf("write the reject verdict of item %s: %v", item, err)
 			}
 		}

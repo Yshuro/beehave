@@ -602,7 +602,7 @@ const (
 var errDaysBelowOne = errors.New("--" + daysFlag + " takes a number of days of 1 or more")
 
 const statusHelp = "List the runs, the questions that wait for you and the runs another version must finish. Each line starts with the run id.\n\n" +
-	"A line also shows the item and the project of the run, the cost so far against the run cap, the step that runs now, the last gate result with its head, and the fix and review rounds used against their caps. " +
+	"A line also shows the item and the project of the run, the cost so far against the run cap, the step that runs now, the last gate result with its head, and the label of the latest agent step that has one. " +
 	"A run that waits shows its question, the people it asks, how many of the quorum answered and who, the choices, the next reminder, and the deadline with the time left. " +
 	"A run that stopped or was sent back shows the fields of its result.\n\n" +
 	"After the runs, the list shows each schedule with its last tick and whether an engine fires it (it shows no next due time), then the newest review poll and why the poll is not scheduled.\n\n" +
@@ -615,8 +615,8 @@ const statusHelp = "List the runs, the questions that wait for you and the runs 
 	"The JSON list has the same figures in days, one object for each day.\n\n" +
 	"Give a run id to list the steps of that run, one line each: the step name, the start time, the duration, the outcome and the fields that decide the flow. " +
 	"A step that runs now shows as running with its elapsed time. Add --" + jsonFlag + " for one JSON object that a script reads.\n\n" +
-	"Give --" + itemFlag + " to list the lanes of one item across all its runs, one line each: the run id, the step name, the kind of the lane " +
-	"(fix, rework, relay, review or design), the outcome and the fields that decide the flow."
+	"Give --" + itemFlag + " to list the lanes of one item across all its runs, one line each: the run id, the step name, the label of the lane, " +
+	"the outcome and the fields that decide the flow."
 
 // errItemAndRun is returned when status gets both a run id and --item: the two views answer different questions.
 var errItemAndRun = errors.New("give a run id or --" + itemFlag + ", not both")
