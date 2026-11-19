@@ -37,10 +37,12 @@ import (
 const (
 	e2eVersion     = "e2e"
 	e2eDirVariable = "E2E_DIR"
-	e2eWait        = 120 * time.Second
-	e2ePoll        = 100 * time.Millisecond
-	e2eFileMode    = 0o600
-	e2eFolderMode  = 0o700
+	// e2eBuildVariable names the version of the build that beehave reports, so a script can run one state folder under two builds.
+	e2eBuildVariable = "E2E_BUILD"
+	e2eWait          = 120 * time.Second
+	e2ePoll          = 100 * time.Millisecond
+	e2eFileMode      = 0o600
+	e2eFolderMode    = 0o700
 )
 
 func TestMain(m *testing.M) {
@@ -61,7 +63,12 @@ func e2eBeehave() {
 
 	e2eRecordRun(os.Args[1:])
 
-	code := cli.Execute(ctx, os.Args[1:], cli.BuildInfo{Version: e2eVersion, Registry: newAdapters(nil, nil, nil).registry(), Flow: e2eFlow(env[e2eDirVariable], env["PATH"])}, env, os.Stdout, os.Stderr)
+	version := e2eVersion
+	if other := env[e2eBuildVariable]; other != "" {
+		version = other
+	}
+
+	code := cli.Execute(ctx, os.Args[1:], cli.BuildInfo{Version: version, Registry: newAdapters(nil, nil, nil).registry(), Flow: e2eFlow(env[e2eDirVariable], env["PATH"])}, env, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }
