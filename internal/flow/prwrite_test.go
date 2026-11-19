@@ -40,7 +40,6 @@ func TestPRWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(
 	const (
 		comment = testProject + "|" + testItem + "|" + testRun + ":take|taken"
 		open    = testProject + "|" + testItem + "|Fix|text|5|main|"
-		card    = testProject + "|" + testItem + "|3||5|Done"
 	)
 
 	tests := map[string]struct {
@@ -50,7 +49,6 @@ func TestPRWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(
 	}{
 		"pr_comment": {`pr_comment(text = "taken", key = "take", name = "c")`, "comment", func(f *fakeForge) []string { return f.notes }, comment},
 		"pr_open":    {`pr_open(title = "Fix", body = "text", issue = 5, base = "main", name = "c")`, "open", func(f *fakeForge) []string { return f.opened }, open},
-		"board_sync": {`board_sync(board = 3, status = "Done", issue = 5, name = "c")`, "card", func(f *fakeForge) []string { return f.placed }, card},
 	}
 
 	for name, tt := range tests {
@@ -58,7 +56,6 @@ func TestPRWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKey(
 			t.Parallel()
 
 			h, f := prHarness(t)
-			f.cardStatus = "Done"
 			deps := h.deps()
 			deps.Forge = &crashForge{forge: f, crash: newCrash(t, h), on: tt.method}
 

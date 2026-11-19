@@ -254,7 +254,7 @@ const goldenFlow = `def main(item):
     env("HOME")
     now()
     facts()
-    board_sync(name = "b", board = 3, owner = "acme", status = "Done", issue = 5)
+    pr_comment(name = "b", text = "t", key = "k")
     command(name = "c", run = ["c"])
     gate(name = "g")
     agent(name = "a", prompt = "prompts/work.md", model = "m")
@@ -265,7 +265,7 @@ const goldenFlow = `def main(item):
 // A change to this list is a change to the sequence of a builtin: bump the version of the module that owns it in moduleTable (stepmodules.go) in the same commit.
 // A later change re-keys this list for each module.
 var goldenSteps = []string{
-	"env:HOME#1", "now#1", "facts#1", "board_sync:b#1", "command:c#1", "scope:g#1", "gate:g#1",
+	"env:HOME#1", "now#1", "facts#1", "pr_comment:b#1", "command:c#1", "scope:g#1", "gate:g#1",
 	"login#1", "agent:a#1/render", "agent:a#1/clear1", "agent:a#1/read1",
 	"wait:w#1",
 }

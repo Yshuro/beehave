@@ -154,13 +154,6 @@ func (f *crashForge) Open(ctx context.Context, project, item string, req OpenReq
 	return opened, err
 }
 
-func (f *crashForge) PlaceCard(ctx context.Context, project, item string, req CardRequest) (int, error) {
-	number, err := f.forge.PlaceCard(ctx, project, item, req)
-	f.stop("card")
-
-	return number, err
-}
-
 func (f *crashForge) stop(method string) {
 	if method == f.on {
 		f.crash.after()

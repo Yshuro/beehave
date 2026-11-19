@@ -50,7 +50,7 @@ type ReadyReads interface {
 	ReadyMarks(ctx context.Context, pr int) ([]string, error)
 }
 
-// Boarder is the optional side of a forge that keeps project boards. A forge that lacks it cannot be used by board_sync.
+// Boarder is the optional side of a forge that keeps project boards. A forge that lacks it cannot be used by the board command of the remediation example.
 // PlaceCard puts the card on the board and sets its Status column. The same call again changes nothing, and a column that the board lacks is refused before any write.
 // CardStatus reads the Status column of the card from the board. It is an error when the card is not on the board.
 type Boarder interface {

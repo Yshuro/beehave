@@ -160,14 +160,6 @@ func (e2eFiles) Open(context.Context, string, string, flow.OpenRequest) (flow.Op
 	return flow.OpenResult{}, nil
 }
 
-func (e2eFiles) PlaceCard(context.Context, string, string, flow.CardRequest) (int, error) {
-	return 0, nil
-}
-
-func (e2eFiles) ReadCard(context.Context, string, string, flow.CardRequest) (string, error) {
-	return "", nil
-}
-
 func (f e2eFiles) Release(_ context.Context, _, item, _ string) error {
 	return f.event("release", item)
 }

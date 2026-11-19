@@ -65,7 +65,8 @@ const landVersion = 6
 const trackerVersion = 2
 
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step. Version 3 retires the kind pr_assign, which version 2 recorded.
-const forgeVersion = 3
+// Version 4 retires the kind board_sync, which version 3 recorded.
+const forgeVersion = 4
 
 // gateVersion is the version of the gate module. Version 3 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>
 // with a wait field), and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
@@ -105,7 +106,7 @@ func moduleTable() []stepModule {
 		},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: trackerVersion, kinds: []string{"item_comment", "item_create", "item_read", "item_status"}, retired: []string{"item_assign"}},
-		{name: moduleForge, version: forgeVersion, kinds: []string{"board_sync", "pr_comment", "pr_open", prStateKind}, retired: []string{"pr_assign"}},
+		{name: moduleForge, version: forgeVersion, kinds: []string{"pr_comment", "pr_open", prStateKind}, retired: []string{"board_sync", "pr_assign"}},
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}, retired: []string{"merge"}},
 		{name: moduleGate, version: gateVersion, kinds: []string{kindGate}, retired: []string{"before_review"}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},

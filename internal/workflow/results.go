@@ -32,7 +32,6 @@ const (
 	itemCreateName   = "item_create"
 	itemReadName     = "item_read"
 	itemStatusName   = "item_status"
-	boardSyncName    = "board_sync"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
 	prStateName      = "pr_state"
@@ -83,7 +82,6 @@ func factsResultFields() map[string][]string {
 // trackerResultFields holds the fields of the builtins that write the tracker or the pull request, and of pr_state, which reads the pull request.
 func trackerResultFields() map[string][]string {
 	return map[string][]string{
-		boardSyncName:   {numberField, statusField},
 		itemCommentName: {"id"},
 		itemCreateName:  {"id", "created"},
 		itemReadName:    {"found", "id", "fields", "comments", "parent"},

@@ -91,6 +91,12 @@ func ledgerCommands() []command {
 			run:     recountCommand,
 		},
 		{
+			name:    "board",
+			usage:   boardSyntax,
+			summary: "put the pull request or issue on a GitHub Project board, set its status column, and refuse when the read-back shows another column",
+			run:     boardCommand,
+		},
+		{
 			name:    "scope",
 			usage:   scopeSyntax,
 			summary: "refuse a pull request that closes an issue it did not close at its first review, unless the ledger holds an owner-add row for it",

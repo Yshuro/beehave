@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -43,7 +43,7 @@ DBOS records a step only when the step ends. If the engine stops after the effec
 
 1. Check first. The step reads the state and sends no second write.
 2. A cited rule. The call is documented to treat a repeat as no change, and a test pins the exact call.
-3. The same value. A repeat sets the value that is set already, and no page states that this is a no-op. The edit half of `board_sync` and the status and comment writes of the `local` tracker use this basis.
+3. The same value. A repeat sets the value that is set already, and no page states that this is a no-op. The status and comment writes of the `local` tracker use this basis.
 4. The library. DBOS replays the step and not beehave: `spawn` and `wait`.
 
 Four cases are not safe today, and a later change fixes each of them.
@@ -55,7 +55,6 @@ Four cases are not safe today, and a later change fixes each of them.
 | `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
 | `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
-| `board_sync` | Safe. | The call adds the card by its address, and GitHub says: "If you try to add an item that already exists, the existing item ID is returned instead." ([Using the API to manage Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)). The step from `gh project item-add` to that mutation rests on the same page, which does not name the command. The edit then sets the Status field to the same option. This half rests on the call that sets the same value, and no GitHub page states that a repeat is a no-op. A test pins the exact calls of two runs. No test uses a real board. |
 | `merge`: each member | Safe. | The step `batch:<name>.intent#<item>` is recorded before the merge of the member. The forge shows the pull request as merged at the gated head, so the step counts it as done. |
 | `spawn` | Safe. It rests on the library. | The child run has a fixed workflow id, and DBOS returns the recorded child for it. A test stops the parent while it waits in `gather`, after `spawn` returned, and shows one child run with the same id after the resume. No test reaches the window inside the start call, between the child row and the record of it in the parent. |
 | `wait` | Safe. It rests on the library, and no test in this table stops a wait. | The deadline is the output of a recorded DBOS sleep, and the answer is a durable receive. A resume waits for the same answer. |

@@ -74,8 +74,8 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core6.agent10.tracker2.forge3.land6.gate6.host1.round2", applicationVersion("v1"))
-	assert.Equal(t, "v1+core6.agent10.tracker2.forge3.land6.gate7.host1.round2", versionWithModule("v1", moduleGate, 7))
+	assert.Equal(t, "v1+core6.agent10.tracker2.forge4.land6.gate6.host1.round2", applicationVersion("v1"))
+	assert.Equal(t, "v1+core6.agent10.tracker2.forge4.land6.gate7.host1.round2", versionWithModule("v1", moduleGate, 7))
 }
 
 func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
@@ -206,6 +206,7 @@ func TestUnreplayableStep_IsTheFirstStepThatThisBuildDoesNotRecordWithTheModuleO
 		"the builtin before_review":  {[]string{"before_review:b#1"}, "before_review:b#1", moduleGate},
 		"the builtin item_assign":    {[]string{"item_assign:a#1"}, "item_assign:a#1", moduleTracker},
 		"the builtin pr_assign":      {[]string{"pr_assign:a#1"}, "pr_assign:a#1", moduleForge},
+		"the builtin board_sync":     {[]string{"board_sync:a#1"}, "board_sync:a#1", moduleForge},
 		"the owner merge wait":       {[]string{"DBOS.sleep", "watch"}, "watch", moduleCore},
 	}
 

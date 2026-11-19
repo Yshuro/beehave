@@ -586,7 +586,7 @@ def land(approved, project, round_settings, n):
     # Each merged item moves its card to the merged column, as the pipeline of one item does. The item ids of a project with a board are issue numbers.
     heads = {entry.item: entry.head for entry in approved}
     for landed in out.merged:
-        _move_card(project, "merged", int(landed))
+        _move_card(project, "merged", issue = int(landed))
         record_merge(landed, heads[landed], base)
 
     # The read of the issues after the batch. A note means the read did not run, which is not a pass: the round prints it in the run record, because the round has no item issue for a comment.
@@ -976,19 +976,21 @@ def finish(item):
     if not stop.down:
         print("the build host stays up: " + stop.reason)
 
-def _move_card(project, stage, issue = 0):
+def _move_card(project, stage, pr = 0, issue = 0):
     """Moves the card to the column that `vars.board` of the project names for `stage` ("started" or "merged"), and reads it back.
-    `issue` names the issue card of a landed item, and 0 means the pull request of the item of the run. A project with no `vars.board` makes no call."""
+    `issue` names the issue card of a landed item, and `pr` the pull request of the item of the run. A project with no `vars.board` makes no call.
+    The `remedy board` command puts the card on the board, sets the column and reads the card back. Exit code 2 (a refusal, or a read-back that shows another column) stops the run."""
     board = project.vars.get("board")
     if board == None:
         return
 
-    board_sync(
+    card = ["--issue", str(issue)] if issue != 0 else ["--pr", str(pr)]
+    owner = ["--owner", board["owner"]] if board.get("owner", "") != "" else []
+
+    command(
         name = "board-" + stage + ("-" + str(issue) if issue != 0 else ""),
-        board = board["number"],
-        owner = board.get("owner", ""),
-        status = board[stage],
-        issue = issue,
+        run = ["remedy", "board", "--board", str(board["number"]), "--status", board[stage]] + owner + card,
+        stop_on_rc = [2],
     )
 
 def item_value(item, head, approved, reason, host_losses):
@@ -1067,7 +1069,7 @@ def pipeline(item):
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
     # when the item has a parent, links it into the native stack of the pull request of that item. The call owns only the closing line of the body:
     # `Closes #N` when the base is the default branch and `Addresses #N` on any other. An item id that is not an issue number gets no line, and a body that exists is kept.
-    pr_open(
+    draft = pr_open(
         name = "draft",
         title = item.title,
         base = base,
@@ -1078,7 +1080,7 @@ def pipeline(item):
 
     # The board is a project choice: the key `board` of the project vars. With none, the run makes no board call.
     # With one, the card of the item moves to the started column now and to the merged column after the merge, and each call reads the card back.
-    _move_card(project, "started")
+    _move_card(project, "started", pr = draft.number)
 
     # Five fix rounds need six candidates: the sixth checks the fifth fix. A candidate gets the gate on the base, the checks before review, the mutation run and a full review once.
     # Between candidates, scoped fixes and scoped reviews run with no gate. Each reviewer starts fresh and judges the commit it is pinned to.

@@ -16,15 +16,6 @@ type OpenRequest struct {
 	Parent string
 }
 
-// CardRequest is what the board_sync step asks of the forge. Board is the number of the GitHub Project and Owner is its owner (empty for the owner of the repository).
-// Issue is the issue to put on the board, or 0 for the pull request of the item. Status is the name of the column.
-type CardRequest struct {
-	Board  int
-	Owner  string
-	Issue  int
-	Status string
-}
-
 // OpenResult is the pull request that Open found or made. Stack is the id of its native stack, or empty when it is in none.
 type OpenResult struct {
 	Number  int
@@ -43,9 +34,4 @@ type forge interface {
 	// Open finds the open pull request on the branch of the item, or opens a draft one, and makes its body and stack right. The same call again opens no second pull request.
 	// A project with no forge, and a forge that cannot open pull requests, are errors.
 	Open(ctx context.Context, project, item string, req OpenRequest) (OpenResult, error)
-	// PlaceCard puts the card of the pull request of the item (or of the issue in req) on the board and sets its status column, and returns the number of the pull request or issue.
-	// The same call again changes nothing. ReadCard reads the status column of the same card from the board, empty when the card has none.
-	// A project with no forge, and a forge that cannot write a board, are errors. Both calls refuse a card with no pull request or issue behind it.
-	PlaceCard(ctx context.Context, project, item string, req CardRequest) (number int, err error)
-	ReadCard(ctx context.Context, project, item string, req CardRequest) (status string, err error)
 }

@@ -457,16 +457,6 @@ func (dryForge) Open(context.Context, string, string, OpenRequest) (OpenResult, 
 	return OpenResult{Number: dryPull}, nil
 }
 
-// PlaceCard shows the dry-run pull request as placed and writes no board.
-func (dryForge) PlaceCard(context.Context, string, string, CardRequest) (int, error) {
-	return dryPull, nil
-}
-
-// ReadCard shows the card on the column that the call asked for, because a dry run writes no board to read back.
-func (dryForge) ReadCard(_ context.Context, _, _ string, req CardRequest) (string, error) {
-	return req.Status, nil
-}
-
 type dryTrees struct{ dir string }
 
 func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {
