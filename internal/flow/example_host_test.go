@@ -52,6 +52,7 @@ type fakeHosts struct {
 	unbanked bool
 	private  string
 	asked    []string
+	clusters []string // the host that each teardown named
 	ups      []string
 	live     bool // the host was up before the run, so Up starts nothing
 }
@@ -65,9 +66,10 @@ func (f *fakeHosts) Up(_ context.Context, project, _ string) (bool, string, erro
 	return !f.live, "", nil
 }
 
-func (f *fakeHosts) Teardown(ctx context.Context, project, _ string) error {
+func (f *fakeHosts) Teardown(ctx context.Context, project, cluster string) error {
 	f.mu.Lock()
 	f.asked = append(f.asked, project)
+	f.clusters = append(f.clusters, cluster)
 	f.mu.Unlock()
 
 	find := scriptRunner(func([]string) model.CommandResult {

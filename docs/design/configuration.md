@@ -88,7 +88,9 @@ The engine has no round settings. The remediation example keeps its own under th
 | `owner` | Required. The login of the owner. |
 | `lane_cap`, `fix_rounds` | Required. A whole number of 1 or more. |
 | `label`, `items` | Required: set exactly one. `label` is the tracker label that marks the items of the round. `items` is a list of item ids. The example refuses neither, both, a blank label and an id that is not an item. |
-| `next_base`, `owner_email`, `source_checkout`, `acceptance`, `base_result` | Optional text. Empty when left out. |
+| `next_base`, `owner_email`, `source_checkout`, `base_result` | Optional text. Empty when left out. |
+| `acceptance` | Optional text. The path of a script. After each batch that lands an item, the round runs `sh <acceptance>` on the build host with a limit of 30 minutes. A script that fails stops the round. Empty means none. |
+| `union_gate` | Optional list of words. The program that gates the union of a batch, in place of the gate of the project. Empty means the gate of the project. |
 | `integration_pr` | Optional. A whole number of 0 or more. 0 means the round finds the pull request. |
 | `wait_hours` | Optional. A whole number of 1 or more. The default is 24. |
 | `merge` | Optional bool. The default is false. |
