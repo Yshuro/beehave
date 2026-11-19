@@ -94,6 +94,7 @@ The engine has no round settings. The remediation example keeps its own under th
 | `integration_pr` | Optional. A whole number of 0 or more. 0 means the round finds the pull request. |
 | `wait_hours` | Optional. A whole number of 1 or more. The default is 24. |
 | `merge` | Optional bool. The default is false. |
+| `hand_off` | Optional bool. The default is false. Set it when the owner merges the approved pull requests: the round calls `merge` with `hand_off`, which marks them ready and waits for the owner, and lands none itself. An item whose pull request is closed, or whose head moves, holds with the reason. It takes effect only when `merge` is true. |
 | `base_reds`, `allow_paths` | Optional lists. The globs of `allow_paths` follow [the setting `allow_paths`](agent-runs.md#the-setting-allow_paths) of an `agent` step, which lists the patterns that it refuses. |
 | `base_reds_file` | Optional. The default is `base-reds.md`. |
 | `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |

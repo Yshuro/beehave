@@ -98,6 +98,7 @@ ROUND_KEYS = {
     "source_checkout": ("string", "the checkout of the owner"),
     "integration_pr": ("int", "the number of the integration pull request, or 0 to let the round find it"),
     "merge": ("bool", "true to land approved items, false to land none"),
+    "hand_off": ("bool", "true when the owner merges the approved pull requests: the round marks them ready and waits, and lands none itself"),
     "acceptance": ("string", "the acceptance script, or an empty text for none"),
     "union_gate": ("list", "the command that gates the union of a batch, a list of words, or an empty list for the gate of the project"),
     "base_result": ("string", "the file of the base result, or an empty text for none"),
@@ -123,6 +124,7 @@ ROUND_DEFAULTS = {
     "source_checkout": "",
     "integration_pr": 0,
     "merge": False,
+    "hand_off": False,
     "acceptance": "",
     "union_gate": [],
     "base_result": "",
@@ -573,19 +575,24 @@ def land(approved, project, round_settings, n):
     if len(prs) == 0:
         return 0
 
-    out = merge(
-        name = "round-land-%d" % n,
-        prs = prs,
-        base = base,
-        repo = project.repo,
-        hold = "hold",
-        own = {"logins": [round_settings["owner"]], "emails": [round_settings["owner_email"]]},
-        gate_run = round_settings["union_gate"],
-        forbid_text = ATTRIBUTION + id_patterns([pr.item for pr in prs]),
-        integration = round_settings["integration_pr"],
-    )
+    if round_settings["hand_off"]:
+        # The owner merges: the call marks each pull request ready at its reviewed head, tells the owner, and waits until each one is merged, closed or a draft again.
+        out = merge(name = "round-land-%d" % n, prs = prs, base = base, repo = project.repo, hand_off = True)
+    else:
+        out = merge(
+            name = "round-land-%d" % n,
+            prs = prs,
+            base = base,
+            repo = project.repo,
+            hold = "hold",
+            own = {"logins": [round_settings["owner"]], "emails": [round_settings["owner_email"]]},
+            gate_run = round_settings["union_gate"],
+            forbid_text = ATTRIBUTION + id_patterns([pr.item for pr in prs]),
+            integration = round_settings["integration_pr"],
+        )
 
     # A rejected item gets the reason as a comment and the hold status, so it does not come back until a person reads it.
+    # With hand_off, a pull request that is closed, or whose head moved after the ready mark, is rejected, and the one that moved is a draft again.
     for rejected in out.rejected:
         item_comment(name = "no-" + rejected.item, id = rejected.item, key = "rejected", text = rejected.reason, forbid_text = ATTRIBUTION)
         item_status(name = "hold-" + rejected.item, id = rejected.item, status = "hold")

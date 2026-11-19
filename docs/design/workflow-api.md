@@ -127,6 +127,7 @@ The Change column says how the pair differs from the contract that the five piec
 | `merge` | `base` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
 | `merge` | `forbid_text` | #585: from `batch_merge` | 1: `examples/remediation/workflow.star` |
 | `merge` | `gate_run` | #585: from `batch_merge` | 1: `examples/remediation/workflow.star` |
+| `merge` | `hand_off` | #653: new, marks the pull requests ready and waits for the owner to merge them | 1: `examples/remediation/workflow.star` |
 | `merge` | `hold` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
 | `merge` | `integration` | #585: from `batch_merge` | 1: `examples/remediation/workflow.star` |
 | `merge` | `name` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
