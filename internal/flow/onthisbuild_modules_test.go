@@ -288,3 +288,81 @@ func TestClient_ResumeOnThisBuildMovesARoundRunWhenOnlyAModuleThatTheRunDidNotUs
 
 	require.NoError(t, other.ResumeOnThisBuild(testRound), "the round module is the same, and the run recorded no gate step")
 }
+
+// recordSteps adds steps of the given names to the record of the first run of an item, after the steps that it recorded.
+func recordSteps(t *testing.T, h *harness, item string, names ...string) {
+	t.Helper()
+
+	for i, name := range names {
+		_, err := sqlOf(t, h).ExecContext(t.Context(), "INSERT INTO operation_outputs (workflow_uuid, function_id, function_name) VALUES (?, ?, ?)",
+			runID(item, 1), 9000+i, name)
+		require.NoError(t, err)
+	}
+}
+
+func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheSingleMergeAndNamesTheStepAndItsModule(t *testing.T) {
+	t.Parallel()
+
+	// A run of the build before the one merge builtin holds the steps of the single merge, which this build does not record.
+	tests := map[string]struct {
+		land   int
+		steps  []string
+		module string
+	}{
+		"a scope check and a merge":                          {4, []string{"scope-check:m#1", "merge:m#1"}, moduleRound},
+		"a scope check in the owner wait, under equal lists": {landVersion, []string{"scope-check:m#1", "wait:scope#1"}, moduleRound},
+		"a merge alone":                                      {4, []string{"merge:m#1"}, moduleLand},
+		"the read of the owner merge wait":                   {landVersion, []string{"watch", "DBOS.sleep", "watch"}, moduleCore},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			harness, other := olderRoundRun(t, testItem, moduleLand, test.land)
+			recordSteps(t, harness, testItem, test.steps...)
+
+			err := other.ResumeOnThisBuild(testItem)
+
+			require.ErrorIs(t, err, errStranded)
+			require.ErrorContains(t, err, fmt.Sprintf("the step %q, and an older build recorded it for the %s module, and this build does not record it", test.steps[0], test.module))
+			require.ErrorContains(t, err, "Start the item again: beehave run "+testItem)
+
+			row, rowErr := other.row(runID(testItem, 1))
+			require.NoError(t, rowErr)
+			assert.Equal(t, testVersion, buildVersion(row.ApplicationVersion), "a refused run stays where it was")
+		})
+	}
+}
+
+func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfNoModuleAndNamesTheStep(t *testing.T) {
+	t.Parallel()
+
+	for name, version := range map[string]int{"the lists differ": 4, "the lists are equal": landVersion} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			harness, other := olderRoundRun(t, testItem, moduleLand, version)
+			recordSteps(t, harness, testItem, "unknown_kind:u#1")
+
+			err := other.ResumeOnThisBuild(testItem)
+
+			require.ErrorIs(t, err, errStranded)
+			require.ErrorContains(t, err, `the step "unknown_kind:u#1", and no module of this build records that step`)
+			require.ErrorContains(t, err, "Start the item again: beehave run "+testItem)
+
+			row, rowErr := other.row(runID(testItem, 1))
+			require.NoError(t, rowErr)
+			assert.Equal(t, testVersion, buildVersion(row.ApplicationVersion), "a refused run stays where it was")
+		})
+	}
+}
+
+func TestClient_ResumeOnThisBuildMovesARunWhoseStepsEveryModuleOrTheEngineClaims(t *testing.T) {
+	t.Parallel()
+
+	harness, other := olderRoundRun(t, testItem, moduleLand, 4)
+	recordSteps(t, harness, testItem, "hold:start", "undo:write:w#1", "worktree", "others", "phase", "exclusive", "host_job", "DBOS.sleep")
+
+	require.NoError(t, other.ResumeOnThisBuild(testItem), "the run recorded no land step, and every step has a module or is a step of the engine")
+}
