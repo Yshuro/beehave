@@ -8,9 +8,12 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
+
+	"github.com/tobocop2/beehave/internal/batch"
 )
 
 // The recorded steps that keep the scope of a pull request. The first gate of an item fixes the scope. A merge that merges checks it.
@@ -56,17 +59,17 @@ func (s *script) fixScope(label string) error {
 // firstRead is the body of the scope step. A new run of the item (a restart after a cancel, a send-back round) takes the scope of the newest earlier run that fixed one,
 // so the issues of the first review stay the baseline. The forge is read only when no earlier run fixed a scope.
 func (s *script) firstRead(ctx context.Context) (scopeRead, error) {
-	earlier, err := s.earlierScope()
+	earlier, err := s.earlierScope(s.in.Item)
 	if err != nil || earlier.Found {
 		return earlier, err
 	}
 
-	return s.readClosing(ctx)
+	return s.readClosing(ctx, s.in.Item)
 }
 
 // earlierScope returns the scope of the newest earlier run of the item that recorded one, or a read with Found false.
-func (s *script) earlierScope() (scopeRead, error) {
-	ids, err := s.earlierRuns()
+func (s *script) earlierScope(item string) (scopeRead, error) {
+	ids, err := s.earlierRuns(item)
 	if err != nil {
 		return scopeRead{}, err
 	}
@@ -82,12 +85,12 @@ func (s *script) earlierScope() (scopeRead, error) {
 
 // earlierRuns lists the ids of the other runs of the item, the newest attempt first. It filters on no state and no attempt number, so a canceled, failed, live or newer run is in the list.
 // A caller that counts work over these runs counts a concurrent run as spent: that errs on the safe side for a cap.
-func (s *script) earlierRuns() ([]string, error) {
-	prefix := runPrefix + s.in.Item + attemptMarker
+func (s *script) earlierRuns(item string) ([]string, error) {
+	prefix := runPrefix + item + attemptMarker
 
 	rows, err := dbos.ListWorkflows(s.e.ctx, dbos.WithFilterWorkflowIDPrefix(prefix), dbos.WithFilterName(itemName))
 	if err != nil {
-		return nil, fmt.Errorf("list the earlier runs of item %s: %w", s.in.Item, err)
+		return nil, fmt.Errorf("list the earlier runs of item %s: %w", item, err)
 	}
 
 	// The prefix of item 12 also matches a run of item 12-r2, whose tail is not a number: only a numbered id is an attempt of this item.
@@ -136,10 +139,10 @@ func scopeOutput(step dbos.StepInfo) scopeRead {
 }
 
 // readClosing reads the closing issues of the pull request of the item, sorted and without a repeat.
-func (s *script) readClosing(ctx context.Context) (scopeRead, error) {
-	issues, found, err := s.e.deps.Forge.ClosingIssues(ctx, s.in.Project, s.in.Item)
+func (s *script) readClosing(ctx context.Context, item string) (scopeRead, error) {
+	issues, found, err := s.e.deps.Forge.ClosingIssues(ctx, s.in.Project, item)
 	if err != nil {
-		return scopeRead{}, fmt.Errorf("read the issues that the pull request of item %s closes: %w", s.in.Item, err)
+		return scopeRead{}, fmt.Errorf("read the issues that the pull request of item %s closes: %w", item, err)
 	}
 
 	return scopeRead{Found: found, Issues: sortedIssues(issues)}, nil
@@ -151,4 +154,125 @@ func sortedIssues(numbers []int) []int {
 	slices.Sort(out)
 
 	return slices.Compact(out)
+}
+
+// scopeCheckRead is the record of the scope step of a member: the issues that its pull request closes now, that are new since its first review, and that have no owner line.
+type scopeCheckRead struct {
+	Fresh []int `json:"fresh"`
+}
+
+// freshIssues reads the closing issues of the pull request of the item and returns the ones that are new since the first review and have no owner line.
+// The first review of the run's own item is the scope of its gate. The first review of another item is the scope of its newest earlier run.
+// An item with no recorded scope has nothing to compare, so it reads nothing. A read that fails, or a pull request that is gone, is an error.
+func (s *script) freshIssues(ctx context.Context, item string) ([]int, error) {
+	baseline := s.scope
+
+	if item != s.in.Item {
+		earlier, err := s.earlierScope(item)
+		if err != nil {
+			return nil, err
+		}
+
+		if !earlier.Found {
+			return []int{}, nil
+		}
+
+		baseline = earlier.Issues
+	} else if !s.fixed {
+		return []int{}, nil
+	}
+
+	read, err := s.readClosing(ctx, item)
+	if err != nil {
+		return nil, err
+	}
+
+	if !read.Found {
+		return nil, fmt.Errorf("read the issues that the pull request of item %s closes: the item has no pull request", item)
+	}
+
+	fresh := []int{}
+
+	for _, number := range read.Issues {
+		if !slices.Contains(baseline, number) && !slices.Contains(s.owned[item], number) {
+			fresh = append(fresh, number)
+		}
+	}
+
+	return fresh, nil
+}
+
+// holdScope runs before the merge of a member. A new issue makes the run ask the owner, and the answer is the owner line: it must name each new issue.
+// It returns the reason to refuse the member, or an empty text when the member may merge. The read is a recorded step of the member.
+func (b *batchBase) holdScope(m batch.Member) (string, error) {
+	read, err := runStep(b.s.e, b.s.ctx, b.stepName("scope", m.Item, 1), func(ctx context.Context) (scopeCheckRead, error) {
+		fresh, err := b.s.freshIssues(ctx, m.Item)
+
+		return scopeCheckRead{Fresh: fresh}, err
+	}, dbos.WithStepMaxRetries(stepRetries))
+	if err != nil {
+		return "", fmt.Errorf("%s of item %s: %w", scopeCheckStep, m.Item, err)
+	}
+
+	if len(read.Fresh) == 0 {
+		return "", nil
+	}
+
+	question := fmt.Sprintf("The pull request of item %s closes %s now, and did not at its first review. Answer in the form \"keep #N[, #N ...]\", for example \"keep %s\". Any other answer refuses the merge of the item.",
+		m.Item, issueList(read.Fresh), strings.Join(strings.Fields(issueList(read.Fresh)), ", "))
+
+	answer, err := b.s.e.waitOwner(b.s.ctx, b.s.in.Project, m.Item, question)
+	if err != nil {
+		return "", err
+	}
+
+	named, _ := keptIssues(answer)
+	missing := slices.DeleteFunc(slices.Clone(read.Fresh), func(number int) bool { return slices.Contains(named, number) })
+
+	if len(missing) > 0 {
+		return fmt.Sprintf("%v: item %s: %s has no owner line. The accepted answer is \"keep #N[, #N ...]\", for example beehave answer %s \"keep %s\". Or remove the closing keyword",
+			errScopeRefused, m.Item, issueList(missing), m.Item, strings.Join(strings.Fields(issueList(missing)), ", ")), nil
+	}
+
+	if b.s.owned == nil {
+		b.s.owned = map[string][]int{}
+	}
+
+	b.s.owned[m.Item] = append(b.s.owned[m.Item], read.Fresh...)
+
+	return "", nil
+}
+
+// keptIssues returns the issue numbers of an owner line in the form "keep #N[, #N ...]". Any other text, or a number too large for int, gives false.
+func keptIssues(text string) ([]int, bool) {
+	if !keepForm.MatchString(text) {
+		return nil, false
+	}
+
+	kept := []int{}
+
+	for _, digits := range issueNumber.FindAllString(text, -1) {
+		number, err := strconv.Atoi(digits)
+		if err != nil {
+			return nil, false
+		}
+
+		kept = append(kept, number)
+	}
+
+	return kept, true
+}
+
+// issueList shows issue numbers as "#12 #13", or "no issue" for none.
+func issueList(numbers []int) string {
+	if len(numbers) == 0 {
+		return "no issue"
+	}
+
+	parts := make([]string, len(numbers))
+	for i, number := range numbers {
+		parts[i] = "#" + strconv.Itoa(number)
+	}
+
+	return strings.Join(parts, " ")
 }

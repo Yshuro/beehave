@@ -255,6 +255,12 @@ The union records the tree after each member.
 - A member that conflicts with the base tip alone is rejected with the reason `conflict`, before any gate runs.
 - A member that conflicts only with an earlier member is held out.
 
+### Scope check
+
+Before the merge of each member, the recorded step `batch:<name>.scope#<item>` reads the issues that the pull request of the member closes. It compares them with the issues of the first review of that item. For the item of the run, the first review is the first `gate` call. For another item, it is the newest earlier run of that item.
+
+A new issue with no owner line makes the run ask the owner. The accepted answer is `keep #N[, #N ...]`. Any other answer rejects that member with the reason, and the member lands nothing. A member with no recorded first review has nothing to compare.
+
 ### Splitting a red union
 
 A red union is split in two halves in item order. Each half is gated on the tip that the earlier half left.

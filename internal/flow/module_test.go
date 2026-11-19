@@ -116,12 +116,12 @@ func TestNewEngine_RefusesTwoModulesThatRecordTheSameStepKind(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	h.opts.Modules = []step.Module{StepModule(), {Name: "extra", Kinds: []string{"merge"}}}
+	h.opts.Modules = []step.Module{StepModule(), {Name: "extra", Kinds: []string{"command"}}}
 
 	_, err := NewEngine(t.Context(), h.opts, h.deps())
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `module "flow" and module "extra" both record the step kind "merge"`)
+	assert.Contains(t, err.Error(), `module "flow" and module "extra" both record the step kind "command"`)
 }
 
 func TestNewEngine_RefusesAnEmptyModuleList(t *testing.T) {

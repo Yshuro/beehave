@@ -545,6 +545,15 @@ func (b *batchBase) Tip(ctx context.Context) (batch.Tip, error) {
 // Merge records the intent of the member, then merges through merge.Run with that intent. The intent step comes first, so a merge that the forge
 // made before a crash counts as ours on the replay. A mergeable state that stays UNKNOWN is read again after a durable sleep.
 func (b *batchBase) Merge(ctx context.Context, m batch.Member, prefixTree string) (batch.MergeOutcome, error) {
+	refused, err := b.holdScope(m)
+	if err != nil {
+		return batch.MergeOutcome{}, err
+	}
+
+	if refused != "" {
+		return batch.MergeOutcome{Status: batch.StatusRefused, Reason: refused}, nil
+	}
+
 	read, err := runStep(b.s.e, b.s.ctx, b.stepName("intent", m.Item, 1), func(ctx context.Context) (intentRead, error) {
 		return b.intent(ctx, m)
 	}, dbos.WithStepMaxRetries(stepRetries))

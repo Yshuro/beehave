@@ -49,7 +49,8 @@ const agentVersion = 9
 // Version 4 records the host job of the project gate of a batch in its own step (batch_gate:job) before the gate waits, records a lost job
 // that has a proof in the item run (batch:<call>.gate#<n>/host-loss, and @2 for the rerun), and adds host_loss and host_losses to the result of merge.
 // Version 5 merges with one call: `merge` is the old `batch_merge`, and a merge of one pull request records the batch steps. The step kind merge is gone.
-const landVersion = 5
+// Version 6 records the scope check of each member (batch:<call>.scope#<item>) before its intent.
+const landVersion = 6
 
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step.
 const forgeVersion = 2

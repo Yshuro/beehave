@@ -85,10 +85,10 @@ type script struct {
 	hostChosen string
 
 	// fixed is true once the first gate has recorded scope, the closing issues of the pull request at the first review.
-	// owned holds the issues that the owner kept by an answer.
+	// owned holds the issues that the owner kept by an answer, for each item.
 	fixed bool
 	scope []int
-	owned []int
+	owned map[string][]int
 }
 
 // name returns the name of the DBOS step of one call: `<builtin>:<label>#<n>`, or `<builtin>#<n>` for a call with no label.
