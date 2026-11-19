@@ -294,7 +294,7 @@ func (a *agentArgs) recall(outputs map[string]any) (err error) {
 	return err
 }
 
-// renderStep returns the step that renders the prompt of an agent call, records the sandbox, the login and the model of the call and marks its start commit.
+// renderStep returns the step that renders the prompt of an agent call, records the sandbox, the lane kind, the login and the model of the call and marks its start commit.
 func (s *script) renderStep(a agentArgs, login string) func(context.Context) (stepResult, error) {
 	return func(ctx context.Context) (stepResult, error) {
 		prompt, err := s.render(ctx, a)
@@ -307,7 +307,7 @@ func (s *script) renderStep(a agentArgs, login string) func(context.Context) (st
 			return stepResult{Note: prompt}, err
 		}
 
-		outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head, recordedLogin: login}
+		outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head, recordedLogin: login, recordedKind: workflow.LaneKind(a.kind, a.lane)}
 		if a.model != "" {
 			outputs[recordedModel] = a.model
 		}
@@ -361,7 +361,7 @@ func (a agentArgs) refusePlain(project string) error {
 // phase makes the input of the phase that runs the agent. treeStart is the commit of the worktree of a round item that the run made.
 func (a agentArgs) phase(in ItemInput, login, prompt, treeStart string) PhaseInput {
 	return PhaseInput{
-		Item: in.Item, Project: in.Project, Login: login, Kind: a.kind, Lane: a.lane, Prompt: prompt,
+		Item: in.Item, Project: in.Project, Login: login, Kind: a.kind, Prompt: prompt,
 		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, RequireSkills: a.requireSkills, MaxBudget: a.maxBudget,
 		Rounds: a.rounds, NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart,
 	}

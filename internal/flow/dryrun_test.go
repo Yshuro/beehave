@@ -50,8 +50,8 @@ func TestDryRun_ThePipelineOfTheExamplePrintsEachStepInOrderAndEndsClean(t *test
 
 	text := out.String()
 	assert.Contains(t, text, "step 1 ")
-	// The listing clips each line at dryOutLimit, so the test reads the head of each render record: the login and the model come first.
-	assert.Equal(t, 4, strings.Count(text, `"outputs":{"login":"dry-run","model":`), "each of the four agent calls records the fake login and its model before the agent runs")
+	// The listing clips each line at dryOutLimit, so the test reads the head of each render record: the kind, the login and the model come first.
+	assert.Equal(t, 4, strings.Count(text, `"login":"dry-run","model":`), "each of the four agent calls records the fake login and its model before the agent runs")
 	assert.Contains(t, text, `"model":"opus"`)
 	assert.Contains(t, text, `"model":"sonnet"`)
 	assert.Positive(t, strings.Index(text, " agent:plan#1"), text)

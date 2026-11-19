@@ -582,11 +582,11 @@ func TestStepLine_AnAgentLineNamesTheKindOfItsPhase(t *testing.T) {
 		return dbos.StepInfo{StepName: name, Output: string(data)}
 	}
 
-	review := callLine([]dbos.StepInfo{withChild(record("any-name", PhaseOutput{Outcome: "exited", Kind: "review"}))}, "agent:a#1")
+	review := callLine([]dbos.StepInfo{record("agent:a#1/render", map[string]any{"outputs": map[string]any{"kind": "review"}}), withChild(record("any-name", PhaseOutput{Outcome: "exited"}))}, "agent:a#1")
 	assert.Equal(t, "review", review.Kind)
 
-	rework := callLine([]dbos.StepInfo{withChild(record("any-name", PhaseOutput{Outcome: "exited", Kind: "rework"}))}, "agent:a#1")
-	assert.Equal(t, "rework", rework.Kind)
+	rework := callLine([]dbos.StepInfo{record("agent:a#1/render", map[string]any{"outputs": map[string]any{"kind": "rework"}})}, "agent:a#1")
+	assert.Equal(t, "rework", rework.Kind, "a step with no phase output yet has its kind")
 
 	gate := callLine([]dbos.StepInfo{withChild(record("gate:stop", map[string]any{"holder": "x"}))}, "gate:g#1")
 	assert.Empty(t, gate.Kind, "a gate is not a lane, so its line has no kind")

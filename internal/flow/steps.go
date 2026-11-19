@@ -476,19 +476,20 @@ func (l *StepLine) fromPhase(phase PhaseOutput) {
 
 	if phase.Outcome != "" {
 		l.ExitCode = &phase.ExitCode
-		l.Kind, l.Rounds = phase.Kind, phase.Rounds
+		l.Rounds = phase.Rounds
 	}
 }
 
-// renderFields are the login and the model that the render step of an agent call records.
+// renderFields are the lane kind, the login and the model that the render step of an agent call records.
 type renderFields struct {
+	Kind  string `json:"kind"`
 	Login string `json:"login"`
 	Model string `json:"model"`
 }
 
-// fromRender takes the login and the model of an agent call from its render step, which runs before the agent starts.
+// fromRender takes the lane kind, the login and the model of an agent call from its render step, which runs before the agent starts.
 func (l *StepLine) fromRender(read recorded[renderFields]) {
-	l.Login, l.Model = read.Outputs.Login, read.Outputs.Model
+	l.Kind, l.Login, l.Model = read.Outputs.Kind, read.Outputs.Login, read.Outputs.Model
 }
 
 // fromAgentRead takes the head, the cap that stopped the agent and the verdict from the read of its outputs.
