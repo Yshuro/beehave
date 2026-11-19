@@ -108,3 +108,47 @@ func TestCheck_LeavesAValueThatIsNotAWholeLiteralToTheRun(t *testing.T) {
 
 	assert.Empty(t, got)
 }
+
+func TestValues_AllowListRefusesTheListsThatCannotMatchAPathOfTheItemFolderAndNamesThePattern(t *testing.T) {
+	t.Parallel()
+
+	list := func(items ...string) starlark.Value {
+		values := make([]starlark.Value, len(items))
+		for i, item := range items {
+			values[i] = starlark.String(item)
+		}
+
+		return starlark.NewList(values)
+	}
+
+	for name, c := range map[string]struct {
+		value   starlark.Value
+		message string
+	}{
+		"an empty entry":     {list("src/**", ""), `allow has the empty pattern ""`},
+		"a dot slash only":   {list("./"), `allow has the empty pattern "./"`},
+		"an absolute path":   {list("/docs/**"), `allow has the absolute pattern "/docs/**"`},
+		"a path that leaves": {list("../docs"), `allow has the pattern "../docs", which leaves the item folder`},
+		"a double dot":       {list(".."), `allow has the pattern "..", which leaves the item folder`},
+		"a bad bracket":      {list("docs/["), `allow has the pattern "docs/[", which does not parse`},
+		"an empty list":      {list(), "allow is an empty list, which would allow every path"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, err := workflow.AllowList("allow", c.value)
+
+			require.ErrorContains(t, err, c.message)
+		})
+	}
+
+	patterns, globs, err := workflow.AllowList("allow", list("./src/**", "{docs,pkg}/*.md"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"./src/**", "{docs,pkg}/*.md"}, patterns)
+	assert.Equal(t, []string{"src/**", "{docs,pkg}/*.md"}, globs, "the dot slash is dropped and the braces stay")
+	assert.True(t, workflow.AllowsPath(globs, "docs/a.md"))
+	assert.True(t, workflow.AllowsPath(globs, "src/a/b.go"), "a double star crosses the slash")
+	assert.False(t, workflow.AllowsPath(globs, "docs/a/b.md"), "a single star stops at the slash")
+	assert.False(t, workflow.AllowsPath(globs, "other.go"))
+}

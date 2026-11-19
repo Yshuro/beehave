@@ -2,7 +2,7 @@
 
 Part of the [beehave architecture](../architecture.md).
 
-A workflow is one Starlark file. The engine calls its `main` function with the work item, and each builtin call except `struct` and `json` runs as a recorded DBOS step, so a restart replays the file and never runs a finished step again. This part lists the builtins, their arguments and results, the pinning of files, the static check and the examples.
+A workflow is one Starlark file. The engine calls its `main` function with the work item, and each builtin call except `struct`, `json`, `paths_outside` and `closing_references` runs as a recorded DBOS step, so a restart replays the file and never runs a finished step again. This part lists the builtins, their arguments and results, the pinning of files, the static check and the examples.
 
 ## Workflow files
 

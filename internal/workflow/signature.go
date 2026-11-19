@@ -266,6 +266,20 @@ func allowRule(v starlark.Value) error {
 	return err
 }
 
+// allowListRule is the rule of the allow keyword of paths_outside: the list of globs of the agent scope, read by the same function.
+func allowListRule(v starlark.Value) error {
+	_, _, err := AllowList(allowWord, v)
+
+	return err
+}
+
+// The builtins that match text and record no step.
+const (
+	pathsOutsideName      = "paths_outside"
+	closingReferencesName = "closing_references"
+	allowWord             = "allow"
+)
+
 func one(name string, values []string) Param {
 	return Param{Name: name, Kind: KindText, Values: values}
 }
@@ -328,6 +342,9 @@ func valueSignatures() map[string][]Param {
 		"env":     {req(nameKeyword, KindText), {Name: "default", Kind: KindText, AsValue: true}},
 		"now":     {},
 		factsName: {},
+		// The two matchers judge text and run no step. They read the dialect of the agent scope and the grammar of the merge guard.
+		pathsOutsideName:      {{Name: "allow", Kind: KindList, Required: true, Rule: allowListRule}, {Name: "paths", Kind: KindList, Required: true, Rule: wordsRule("paths")}},
+		closingReferencesName: {req("text", KindText)},
 	}
 }
 

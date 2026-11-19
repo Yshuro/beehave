@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -185,7 +186,13 @@ func SlotClass(v starlark.Value, host string) (string, error) {
 // AllowPaths reads the allow_paths argument: a list of globs in the doublestar dialect. A leading `./` is dropped from each glob, because the
 // paths that git lists have none. It returns the patterns as written and the clean globs. A missing argument gives none. An empty list is refused.
 func AllowPaths(v starlark.Value) (patterns, globs []string, err error) {
-	patterns, err = Words("allow_paths", v)
+	return AllowList("allow_paths", v)
+}
+
+// AllowList is AllowPaths for the keyword that has the given name. The agent scope and the path check of before_review read their lists with it,
+// so one dialect holds in both: an empty entry, an absolute path, a path that starts with `..` and a pattern that does not parse are refused, and each message names the pattern.
+func AllowList(keyword string, v starlark.Value) (patterns, globs []string, err error) {
+	patterns, err = Words(keyword, v)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -195,28 +202,41 @@ func AllowPaths(v starlark.Value) (patterns, globs []string, err error) {
 			return nil, nil, nil
 		}
 
-		return nil, nil, errors.New("allow_paths is an empty list, which would allow every path. To turn the check off, leave the keyword out")
+		return nil, nil, fmt.Errorf("%s is an empty list, which would allow every path. To turn the check off, leave the keyword out", keyword)
 	}
 
-	globs, err = cleanGlobs(patterns)
+	globs, err = cleanGlobs(keyword, patterns)
 
 	return patterns, globs, err
 }
 
-// cleanGlobs drops the leading `./` of each pattern and refuses a pattern that does not parse.
-func cleanGlobs(patterns []string) ([]string, error) {
+// cleanGlobs drops the leading `./` of each pattern and refuses a pattern that cannot match a path of the item folder, or that does not parse.
+func cleanGlobs(keyword string, patterns []string) ([]string, error) {
 	globs := make([]string, 0, len(patterns))
 
 	for _, pattern := range patterns {
 		clean := strings.TrimPrefix(pattern, "./")
-		if !doublestar.ValidatePattern(clean) {
-			return nil, fmt.Errorf("allow_paths has the pattern %q, which does not parse: %w", pattern, doublestar.ErrBadPattern)
+
+		switch {
+		case clean == "":
+			return nil, fmt.Errorf("%s has the empty pattern %q. Write a glob such as src/**", keyword, pattern)
+		case strings.HasPrefix(clean, "/"):
+			return nil, fmt.Errorf("%s has the absolute pattern %q. A path is relative to the item folder", keyword, pattern)
+		case clean == ".." || strings.HasPrefix(clean, "../"):
+			return nil, fmt.Errorf("%s has the pattern %q, which leaves the item folder", keyword, pattern)
+		case !doublestar.ValidatePattern(clean):
+			return nil, fmt.Errorf("%s has the pattern %q, which does not parse: %w", keyword, pattern, doublestar.ErrBadPattern)
 		}
 
 		globs = append(globs, clean)
 	}
 
 	return globs, nil
+}
+
+// AllowsPath reports whether one of the clean globs of AllowList matches the path. It judges nothing else: the agent scope and before_review both ask it.
+func AllowsPath(globs []string, name string) bool {
+	return slices.ContainsFunc(globs, func(g string) bool { return doublestar.MatchUnvalidated(g, name) })
 }
 
 // InputMap converts the inputs dict of an agent call into the data of its prompt template. An absent dict is empty.

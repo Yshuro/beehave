@@ -279,7 +279,7 @@ For `laptop-copy`, the scan does not see a copy that a script file, a variable o
 
 ### The setting allow_paths
 
-The setting `allow_paths` of an `agent` step is a list of globs, for a lane that may change only some files, such as papers or design files.
+The setting `allow_paths` of an `agent` step is a list of globs, for a lane that may change only some files, such as papers or design files. An empty list, an empty entry, an absolute path, a path that starts with `..` and a pattern that does not parse are refused, and the message names the pattern. The function `before_review` of the library reads its `allow` list with the same code.
 
 At the start, the step records in the recorded `/start` step:
 

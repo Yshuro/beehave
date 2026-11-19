@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"go.starlark.net/starlark"
 
 	"github.com/tobocop2/beehave/internal/workflow"
@@ -33,7 +32,7 @@ func readScope(v starlark.Value) (scope, error) {
 func (s scope) active() bool { return len(s.globs) > 0 }
 
 func (s scope) allows(name string) bool {
-	return slices.ContainsFunc(s.globs, func(g string) bool { return doublestar.MatchUnvalidated(g, name) })
+	return workflow.AllowsPath(s.globs, name)
 }
 
 // startMark is what an agent call with a scope records when it starts: the commit, and the untracked and ignored entries that were already
