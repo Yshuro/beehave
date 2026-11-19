@@ -12,6 +12,10 @@ Every builtin and every keyword that the engine registers has one use in `exampl
 
 A second test checks that `workflow.Builtins` and the registry hold the same builtins.
 
+A use counts only when an entry reaches it. The entries are the code at the top of each file, the function `main`, the function `finish`, and each function that a call names with `entry`. A function that no entry reaches, by a call or as a value, gives no use. One exception stays: `pr_state` (all its keywords) and `item_create.shared` are used only by `foreign_followup` of the remediation example. No entry calls it while the engine refuses every foreign pull request, and #438 wires it in. The test names these pairs and fails when an entry reaches one of them, so the exception ends with #438.
+
+Two more tests read this page. One checks that the Use column of each row gives the count of files and the first two files of the calls, and that the Change column holds `unchanged` or `#<number>: <text>`. The other checks that the table of `facts()` holds the ten fields that the check of workflow files and the `facts` struct hold.
+
 A call uses a keyword when it names the keyword, when it passes the value at the position of the keyword, or when it splats a dict that the same file builds with that key.
 
 ## The fields of `facts()`
