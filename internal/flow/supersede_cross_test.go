@@ -27,7 +27,7 @@ func TestSuperseded_AGateOfAnotherItemOfTheProjectIsNotStopped(t *testing.T) {
 
 	first := queueGate(engine, "A")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	// The other item has its own pull request and its own tip. It waits behind the first gate in the queue of the project.
 	other := queueGateOf(engine, testProject, "99", "X")
@@ -40,7 +40,7 @@ func TestSuperseded_AGateOfAnotherItemOfTheProjectIsNotStopped(t *testing.T) {
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
 
 	// The tick after the end has canceled the context of the gate. The gate counts its stop a moment later.
-	waitOn(t, condition(func() bool { return gated.stopped.Load() >= 1 }))
+	waitOn(t, stopsReach(t, engine, gated, 1))
 
 	close(gated.release)
 
@@ -58,13 +58,13 @@ func TestSuperseded_AGateOfAnotherProjectIsNotStopped(t *testing.T) {
 	first := queueGate(engine, "A")
 	foreign := queueGateOf(engine, "other-project", testItem, "X")
 
-	waitOn(t, condition(startedCount(gated, 2)))
+	waitOn(t, startsReach(t, engine, gated, 2))
 	setHead(h, "B")
 
 	current := queueGate(engine, "B")
 
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
-	waitOn(t, condition(startedCount(gated, 3)))
+	waitOn(t, startsReach(t, engine, gated, 3))
 
 	close(gated.release)
 
@@ -85,7 +85,7 @@ func TestSuperseded_AGateThatHasNoTipIsNotStoppedByAGateThatHasOne(t *testing.T)
 
 	unread := queueGate(engine, "")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	h.forge.mu.Lock()
 	h.forge.err = nil
@@ -134,7 +134,7 @@ func TestSuperseded_AGateWhoseReadOfTheHeadIsOldNeverStopsTheGateOfTheCurrentHea
 
 	first := queueGate(engine, "A")
 
-	waitOn(t, condition(startedCount(gated, 1)))
+	waitOn(t, startsReach(t, engine, gated, 1))
 
 	// The reads so far: the tip and the stop of gate A. Gate B reads its tip as read 3 and reads the head again for its stop as read 4.
 	// Before that fourth read the head moves to C, and the gate of head C queues and stops the old gates.
@@ -157,7 +157,7 @@ func TestSuperseded_AGateWhoseReadOfTheHeadIsOldNeverStopsTheGateOfTheCurrentHea
 
 	require.ErrorIs(t, endsAfterTicks(t, h, middle).err, errSuperseded)
 	require.ErrorIs(t, endsAfterTicks(t, h, first).err, errSuperseded)
-	waitOn(t, condition(startedCount(gated, 2)))
+	waitOn(t, startsReach(t, engine, gated, 2))
 
 	close(gated.release)
 
