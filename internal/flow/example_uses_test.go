@@ -7,7 +7,9 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+
 	"github.com/stretchr/testify/require"
+	"github.com/tobocop2/beehave/internal/agent"
 )
 
 // commandsWith returns the commands that the rig ran for which keep is true.
@@ -169,6 +171,61 @@ func TestExampleUses_ARoundWithNoAcceptanceScriptRunsNone(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Empty(t, commandsWith(rig, func(request CommandRequest) bool { return request.Host == "build" && request.Gate }))
+}
+
+// withPlanText makes the plan step of the example rig answer with the text.
+func withPlanText(rig *agentRig, text string) {
+	answer := rig.h.agents.result
+
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		result := answer(request)
+		if !strings.Contains(request.Prompt, reviewMarker) && slices.Contains(request.Outputs, "regressions") {
+			result.Text = text
+		}
+
+		return result
+	}
+}
+
+func TestExampleUses_ThePlanThatClosesAnIssueIsRefusedInTheApprovalCommentWhenTheBaseIsNotTheTrunk(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	withPlanText(rig, "Fix the retry.\n\nCloses #9")
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.ErrorContains(t, err, "closing keyword", "only the pull request into the trunk may close an issue")
+	assert.Empty(t, rig.h.forge.notes)
+}
+
+func TestExampleUses_ThePlanThatClosesAnIssueIsPostedInTheApprovalCommentWhenTheBaseIsTheTrunk(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	withPlanText(rig, "Fix the retry.\n\nCloses #9")
+	setRoundOf(&rig.project, "base", "main")
+	rig.baseAt(t, "main")
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.NoError(t, err)
+	require.Len(t, rig.h.forge.notes, 1)
+	assert.Contains(t, rig.h.forge.notes[0], "Closes #9")
+}
+
+func TestExampleUses_ThePlanWithAnAttributionLineIsRefusedInTheApprovalComment(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	withPlanText(rig, "Fix the retry.\n\nGenerated with [Claude Code](https://claude.com/claude-code)")
+	setRoundOf(&rig.project, "base", "main")
+	rig.baseAt(t, "main")
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.Error(t, err)
+	assert.Empty(t, rig.h.forge.notes, "the comment with the attribution is not posted")
 }
 
 func TestExampleUses_TheTeardownOfTheRoundNamesTheBuildHostOfTheProject(t *testing.T) {
