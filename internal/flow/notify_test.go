@@ -283,3 +283,70 @@ func TestNotify_AStepThatMergesItselfSendsNoNotice(t *testing.T) {
 	require.Equal(t, "merged", result.Merge)
 	require.Empty(t, notifyRequests(h))
 }
+
+// resumedAfterTheConfigChanges opens a wait of an hour under the facts of the first process, stops the engine in the sleep of the wait, moves the recorded deadline into the past and resumes the run under the facts of the second process.
+// It returns the notify requests that the resume sent and the outcome of the resumed run.
+func resumedAfterTheConfigChanges(t *testing.T, opened, resumed func(string) model.Project) (int, error) {
+	t.Helper()
+
+	h := newHarness(t)
+	h.facts = opened
+	file := writeFlow(t, formatWaitFlow("1h"))
+
+	stopCtx, stop := context.WithCancel(t.Context())
+	first, err := NewEngine(stopCtx, h.opts, h.deps())
+	require.NoError(t, err)
+	require.NoError(t, first.Launch())
+
+	ended := make(chan error, 1)
+
+	go func() {
+		_, runErr := first.RunFile(testItem, testProject, file)
+		ended <- runErr
+	}()
+
+	waitOn(t, inASleep(t, first))
+	stop()
+	require.NoError(t, first.Shutdown())
+	require.Error(t, receive(t, ended))
+
+	before := len(notifyRequests(h))
+
+	encoded := base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(time.Now().Add(-time.Second).UnixMilli(), 10)))
+	_, err = sqlOf(t, h).ExecContext(t.Context(), "UPDATE operation_outputs SET output = ? WHERE workflow_uuid = ? AND function_name = 'DBOS.sleep'", encoded, testRun)
+	require.NoError(t, err)
+
+	h.facts = resumed
+
+	next := h.engine(t)
+	done := make(chan error, 1)
+
+	go func() {
+		_, runErr := next.RunFile(testItem, testProject, file)
+		done <- runErr
+	}()
+
+	got := waitOn(t, waiting[error]{what: "the resumed wait to end", ch: done})
+
+	return len(notifyRequests(h)) - before, got
+}
+
+func TestNotify_AResumeAfterTheNotifyKeyIsRemovedReplaysTheWaitCleanly(t *testing.T) {
+	t.Parallel()
+
+	more, got := resumedAfterTheConfigChanges(t, notifyFacts(notifyProgram), func(project string) model.Project { return model.Project{Name: project} })
+
+	require.ErrorContains(t, got, "TIMED OUT", "the resumed wait ends on its recorded deadline, not on a step that the new config does not know")
+	require.NotContains(t, got.Error(), "UnexpectedStep")
+	require.Zero(t, more, "the resume reads the record and runs no command")
+}
+
+func TestNotify_AResumeAfterTheNotifyKeyIsAddedReplaysTheWaitCleanly(t *testing.T) {
+	t.Parallel()
+
+	more, got := resumedAfterTheConfigChanges(t, func(project string) model.Project { return model.Project{Name: project} }, notifyFacts(notifyProgram))
+
+	require.ErrorContains(t, got, "TIMED OUT", "the resumed wait ends on its recorded deadline, not on a step that the old config did not record")
+	require.NotContains(t, got.Error(), "UnexpectedStep")
+	require.Zero(t, more, "the wait opened with no notify, so the resume sends no late notice")
+}
