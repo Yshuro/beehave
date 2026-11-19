@@ -238,6 +238,7 @@ func TestNotify_TheWaitOfAMergeForTheOwnerRunsTheCommandOnceWithTheRunItem(t *te
 	got := notifyRequests(rig.h)
 	require.Len(t, got, 1, "the wait of the merge notified once")
 	require.Equal(t, append(append([]string{}, notifyProgram...), "9", question), got[0].Run, "the notice names the run whose wait the owner answers")
+	require.Equal(t, testProject, got[0].Project, "the notice runs in the project of the run")
 }
 
 // resumedAfterTheConfigChanges opens a wait of an hour under the facts of the first process, stops the engine in the sleep of the wait, moves the recorded deadline into the past and resumes the run under the facts of the second process.

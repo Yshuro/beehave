@@ -554,9 +554,7 @@ func (b *batchBase) Merge(ctx context.Context, m batch.Member, prefixTree string
 		return batch.MergeOutcome{Status: batch.StatusRefused, Reason: refused}, nil
 	}
 
-	read, err := runStep(b.s.e, b.s.ctx, b.stepName("intent", m.Item, 1), func(ctx context.Context) (intentRead, error) {
-		return b.intent(ctx, m)
-	}, dbos.WithStepMaxRetries(stepRetries))
+	read, err := b.recordedIntent(m)
 	if err != nil {
 		return batch.MergeOutcome{}, err
 	}
@@ -565,11 +563,23 @@ func (b *batchBase) Merge(ctx context.Context, m batch.Member, prefixTree string
 		return batch.MergeOutcome{Status: batch.StatusRefused, Reason: read.Refused}, nil
 	}
 
-	// The approval is a fact about this member only, so the call settings never carry one.
-	settings := b.call.settings
-	settings.GatedTree, settings.Intent, settings.Approved = prefixTree, &read.Intent, m.Approved
+	return b.mergeReads(ctx, m, b.memberSettings(m, prefixTree, &read.Intent))
+}
 
-	return b.mergeReads(ctx, m, settings)
+// recordedIntent is the intent step of the member.
+func (b *batchBase) recordedIntent(m batch.Member) (intentRead, error) {
+	return runStep(b.s.e, b.s.ctx, b.stepName("intent", m.Item, 1), func(ctx context.Context) (intentRead, error) {
+		return b.intent(ctx, m)
+	}, dbos.WithStepMaxRetries(stepRetries))
+}
+
+// memberSettings are the settings of the merge of one member. The approval, the tree, the intent and the kept issues are facts about this member only,
+// so the call settings never carry them.
+func (b *batchBase) memberSettings(m batch.Member, prefixTree string, intent *merge.Intent) MergeSettings {
+	settings := b.call.settings
+	settings.GatedTree, settings.Intent, settings.Approved, settings.Kept = prefixTree, intent, m.Approved, b.s.owned[m.Item]
+
+	return settings
 }
 
 // mergeReads merges the member and reads again after a durable sleep while the mergeable state stays UNKNOWN, up to unknownReads reads.

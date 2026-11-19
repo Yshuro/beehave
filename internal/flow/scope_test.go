@@ -2,6 +2,7 @@ package flow
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -159,11 +160,47 @@ func TestMerge_AMemberOfAnotherItemTakesItsBaselineFromTheEarlierRunOfThatMember
 
 	assert.Contains(t, question, "item 1 closes #13 now", "#12 is in the first review of item 1, so only #13 is new")
 	assert.NotContains(t, question, "#12 now")
+	assert.Contains(t, question, `Answer in the form "keep #N[, #N ...]", for example "keep #13".`, "the question shows the form and an example")
 	assert.Contains(t, question, "Answer with beehave answer 9.", "the question names the run whose wait the owner answers")
-	assert.ErrorContains(t, rig.h.client(t, testVersion).Answer("1", "keep #13"), "waits for no answer", "the member is not the run that waits")
+	require.ErrorContains(t, rig.h.client(t, testVersion).Answer("1", "keep #13"), "waits for no answer", "the member is not the run that waits")
 	require.NoError(t, rig.h.client(t, testVersion).Answer("9", "keep #13"))
 	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, []string{"1"}, rig.merger.landed())
+}
+
+func TestMerge_TheIssuesTheOwnerKeptGoToTheMergeAsKept(t *testing.T) {
+	t.Parallel()
+
+	rig, _ := answerTheScopeQuestion(t, [][]int{{12}, {12, 13}}, "keep #13")
+
+	require.Equal(t, []string{"1"}, rig.merger.landed())
+	require.Len(t, rig.merger.given, 1)
+	assert.Equal(t, []int{13}, rig.merger.given[0].Kept, "the closing keyword guard of the merge may name the kept issue")
+}
+
+func TestMerge_ASecondMergeCallOfAMemberInTheSameRunAsksNoSecondQuestionForAKeptIssue(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.h.forge.closing = [][]int{{12}, {12, 13}}
+	engine := rig.engine(t)
+	rig.fixScopeOf(t, engine, "1")
+
+	file := writeFlow(t, bodyFlow(rig.call("1", "")+strings.Replace(rig.call("1", ""), `name = "b"`, `name = "c"`, 1)))
+	done := make(chan runOutcome, 1)
+
+	go func() {
+		result, err := engine.RunFile("9", testProject, file)
+		done <- runOutcome{result: result, err: err}
+	}()
+
+	questionOf(t, rig.h, "9")
+	require.NoError(t, rig.h.client(t, testVersion).Answer("9", "keep #13"))
+	require.NoError(t, receive(t, done).err)
+
+	assert.Equal(t, []string{"1", "1"}, rig.merger.landed(), "the kept issue needs no second answer, so the second call lands the member")
+	require.Len(t, rig.merger.given, 2)
+	assert.Equal(t, []int{13}, rig.merger.given[1].Kept)
 }
 
 func TestMerge_AMemberOfAnotherItemWithAnEarlierRunWhoseIssuesDidNotGrowAsksNoQuestion(t *testing.T) {
@@ -275,10 +312,24 @@ func TestMerge_AnAnswerThatNamesOneOfTwoNewIssuesRejectsTheMemberAndNamesTheOthe
 func TestMerge_ASetThatChangesAfterTheFirstGateIsComparedWithTheFirstGate(t *testing.T) {
 	t.Parallel()
 
-	rig, report := answerTheScopeQuestion(t, [][]int{{12}, {12, 13}, {12, 13}}, "no")
+	rig := newBatchRig(t)
+	rig.h.forge.closing = [][]int{{12}, {12, 13}, {12, 13}}
+	engine := rig.engine(t)
+	done := make(chan runOutcome, 1)
+	file := writeFlow(t, bodyFlow("gate(name = \"first\")\ngate(name = \"second\")\n"+rig.call("1", "")))
 
+	go func() {
+		result, err := engine.RunFile("1", testProject, file)
+		done <- runOutcome{result: result, err: err}
+	}()
+
+	question := questionOf(t, rig.h, "1")
+	require.NoError(t, rig.h.client(t, testVersion).Answer("1", "no"))
+	require.NoError(t, receive(t, done).err)
+
+	assert.Contains(t, question, "item 1 closes #13 now", "the second gate reads nothing, so #13 is new against the first gate")
 	assert.Empty(t, rig.merger.landed())
-	assert.Contains(t, report, "#13 has no owner line")
+	assert.Equal(t, 2, rig.h.forge.closingReads, "the first gate and the check before the merge; the second gate reads nothing")
 }
 
 func TestMerge_ANewRunOfTheMemberKeepsTheScopeOfItsFirstReview(t *testing.T) {
@@ -345,12 +396,54 @@ func TestMerge_AFailedReadAtTheFirstGateEndsTheItem(t *testing.T) {
 	t.Parallel()
 
 	rig := newBatchRig(t)
-	rig.h.forge.closingErr = errors.New("the forge is down")
+	rig.h.forge.closingErr = errFake
 
 	_, err := rig.engine(t).RunFile("1", testProject, writeFlow(t, bodyFlow("gate(name = \"g\")\n")))
 
+	require.ErrorIs(t, err, errFake)
 	require.ErrorContains(t, err, "scope of item 1")
-	require.ErrorContains(t, err, "the forge is down")
+	require.ErrorContains(t, err, errFake.Error())
+}
+
+func TestMerge_AFailedReadBeforeTheMergeOfAMemberEndsTheCallAndLandsNothing(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.h.forge.closing = [][]int{{12}}
+	rig.h.forge.closingErr, rig.h.forge.closingOK = errFake, 1
+
+	_, err := rig.engine(t).RunFile("1", testProject, writeFlow(t, bodyFlow(rig.scopeBody())))
+
+	require.ErrorIs(t, err, errFake)
+	require.ErrorContains(t, err, "scope check of item 1")
+	assert.Empty(t, rig.merger.landed())
+}
+
+func TestMerge_AMemberWhoseGateFixedNoScopeLeavesTheMergeToReadNothing(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.h.forge.noPull = true
+
+	_, err := rig.engine(t).RunFile("1", testProject, writeFlow(t, bodyFlow(rig.scopeBody())))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"1"}, rig.merger.landed())
+	assert.Equal(t, 1, rig.h.forge.closingReads, "only the read of the gate: the merge has no first review to compare")
+}
+
+func TestMerge_ANewRunOfAMemberWithTheSameIssuesAsksNoQuestion(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.h.forge.closing = [][]int{{12}, {12}}
+	engine := rig.engine(t)
+	rig.fixScopeOf(t, engine, "1")
+
+	_, err := engine.RunFile("1", testProject, writeFlow(t, bodyFlow(rig.scopeBody())))
+
+	require.NoError(t, err, "the second run asks nothing: its issues equal the first review")
+	assert.Equal(t, []string{"1"}, rig.merger.landed())
 }
 
 func TestMerge_AMemberWhosePullRequestIsGoneBeforeItsMergeEndsTheCallAndLandsNothing(t *testing.T) {

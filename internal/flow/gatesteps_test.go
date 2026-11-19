@@ -17,6 +17,21 @@ var (
 	stepsUnknown = []GateStep{{Name: "command", Status: "pass"}, {Name: "tests", Status: "unknown"}}
 )
 
+func TestRecordGate_AStepThatCannotBeRecordedFailsTheCall(t *testing.T) {
+	t.Parallel()
+
+	engine, err := NewEngine(t.Context(), newHarness(t).opts, Deps{})
+	require.NoError(t, err)
+	require.NoError(t, engine.Shutdown())
+
+	s := &script{e: engine, ctx: engine.ctx, counts: map[string]int{}}
+
+	_, err = s.recordGate("g", gateOutputs(true, "h", "", "", nil, nil, nil))
+
+	require.Error(t, err)
+	assert.Empty(t, s.gated, "a gate that was not recorded is not a gate of the run")
+}
+
 func TestGateStep_TheResultOfEachStepIsAnOutputOfTheStep(t *testing.T) {
 	t.Parallel()
 

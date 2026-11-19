@@ -87,8 +87,8 @@ func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
 func TestStepModules_TheLandModuleIsAtVersionSix(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "land6", "the batch gate records its host job in batch_gate:job before it waits, "+
-		"the item run records a lost batch gate job as batch:<call>.gate#<n>/host-loss, and merge returns host_loss and host_losses")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "land6", "merge is the old batch_merge and a merge of one pull request records the batch steps, "+
+		"and each member records its scope check as batch:<call>.scope#<item> before its intent")
 }
 
 func TestStepModules_TheGateModuleIsAtVersionFive(t *testing.T) {

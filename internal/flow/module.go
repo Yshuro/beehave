@@ -49,7 +49,7 @@ func StepModule() step.Module {
 
 // recordsCountedStep is false for the builtins that record no counted step. merge names its steps batch:<name>.<kind>#<item>, and sandbox and struct record no step.
 func recordsCountedStep(builtin string) bool {
-	return !slices.Contains([]string{"merge", recordedSandbox, "struct"}, builtin)
+	return !slices.Contains([]string{mergeKey, recordedSandbox, "struct"}, builtin)
 }
 
 // stepDefs lists the builtins of this package. The names are the builtins of workflow.Builtins less json, which is the module of the Starlark library.

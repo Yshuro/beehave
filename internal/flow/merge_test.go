@@ -139,6 +139,19 @@ func TestAwaitQueued_ACancelDuringTheWaitTurnsOffTheQueuedMerge(t *testing.T) {
 	assert.Equal(t, []string{queuedMember}, harness.merge.disarms, "the queued merge is turned off once, after the cancel")
 }
 
+func TestAwaitQueued_AMergeStillQueuedAfterTheLastReadIsRefused(t *testing.T) {
+	t.Parallel()
+
+	harness, _ := queuedHarness(t, merge.Result{Stop: merge.Refused, Reason: merge.Queued})
+	engine := harness.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.ErrorIs(t, err, errMergeRefused)
+	require.ErrorContains(t, err, "the queued merge was still open after the last read")
+	assert.Len(t, harness.merge.lasts, queuedReads, "the wait reads the queue once for each of its rounds")
+}
+
 func TestAwaitQueued_AStepErrorTurnsOffTheQueuedMerge(t *testing.T) {
 	t.Parallel()
 

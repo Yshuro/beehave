@@ -187,25 +187,15 @@ func (s *script) freshIssues(ctx context.Context, item string) ([]int, error) {
 		return nil, fmt.Errorf("read the issues that the pull request of item %s closes: the item has no pull request", item)
 	}
 
-	fresh := []int{}
-
-	for _, number := range read.Issues {
-		if !slices.Contains(baseline, number) && !slices.Contains(s.owned[item], number) {
-			fresh = append(fresh, number)
-		}
-	}
-
-	return fresh, nil
+	return slices.DeleteFunc(slices.Clone(read.Issues), func(number int) bool {
+		return slices.Contains(baseline, number) || slices.Contains(s.owned[item], number)
+	}), nil
 }
 
 // holdScope runs before the merge of a member. A new issue makes the run ask the owner, and the answer is the owner line: it must name each new issue.
 // It returns the reason to refuse the member, or an empty text when the member may merge. The read is a recorded step of the member.
 func (b *batchBase) holdScope(m batch.Member) (string, error) {
-	read, err := runStep(b.s.e, b.s.ctx, b.stepName("scope", m.Item, 1), func(ctx context.Context) (scopeCheckRead, error) {
-		fresh, err := b.s.freshIssues(ctx, m.Item)
-
-		return scopeCheckRead{Fresh: fresh}, err
-	}, dbos.WithStepMaxRetries(stepRetries))
+	read, err := b.recordedFresh(m)
 	if err != nil {
 		return "", fmt.Errorf("scope check of item %s: %w", m.Item, err)
 	}
@@ -214,29 +204,65 @@ func (b *batchBase) holdScope(m batch.Member) (string, error) {
 		return "", nil
 	}
 
-	question := fmt.Sprintf("The pull request of item %s closes %s now, and did not at its first review. Answer in the form \"keep #N[, #N ...]\", for example \"keep %s\". Any other answer rejects item %s from this merge. The other members still land. Answer with beehave answer %s.",
-		m.Item, issueList(read.Fresh), strings.Join(strings.Fields(issueList(read.Fresh)), ", "), m.Item, b.s.in.Item)
-
-	answer, err := b.s.e.waitOwner(b.s.ctx, b.s.in.Project, b.s.in.Item, question)
+	answer, err := b.s.e.waitOwner(b.s.ctx, b.s.in.Project, b.s.in.Item, b.scopeQuestion(m.Item, read.Fresh))
 	if err != nil {
 		return "", err
 	}
 
-	named, _ := keptIssues(answer)
-	missing := slices.DeleteFunc(slices.Clone(read.Fresh), func(number int) bool { return slices.Contains(named, number) })
+	return b.judge(m.Item, read.Fresh, answer), nil
+}
 
-	if len(missing) > 0 {
-		return fmt.Sprintf("%v: item %s: %s has no owner line, so this merge rejects it and the other members still land. To keep it, run the merge again and answer with beehave answer %s \"keep %s\". Or remove the closing keyword",
-			errScopeRefused, m.Item, issueList(missing), b.s.in.Item, strings.Join(strings.Fields(issueList(missing)), ", ")), nil
+// judge reads the answer of the owner. When it keeps every new issue of the member, judge remembers them and returns no reason. Otherwise it returns the reason to reject the member.
+func (b *batchBase) judge(item string, fresh []int, answer string) string {
+	if missing := unnamed(fresh, answer); len(missing) > 0 {
+		return b.scopeRefusal(item, missing)
 	}
 
+	b.keep(item, fresh)
+
+	return ""
+}
+
+// unnamed returns the issues that the answer of the owner does not keep. An answer that is not the keep form keeps none.
+func unnamed(fresh []int, answer string) []int {
+	named, _ := keptIssues(answer)
+
+	return slices.DeleteFunc(slices.Clone(fresh), func(number int) bool { return slices.Contains(named, number) })
+}
+
+// recordedFresh is the scope step of the member: the new issues of its pull request, recorded so a replay asks the forge nothing.
+func (b *batchBase) recordedFresh(m batch.Member) (scopeCheckRead, error) {
+	return runStep(b.s.e, b.s.ctx, b.stepName("scope", m.Item, 1), func(ctx context.Context) (scopeCheckRead, error) {
+		fresh, err := b.s.freshIssues(ctx, m.Item)
+
+		return scopeCheckRead{Fresh: fresh}, err
+	}, dbos.WithStepMaxRetries(stepRetries))
+}
+
+// scopeQuestion is the question to the owner about the new issues of a member. It names the run that the answer goes to.
+func (b *batchBase) scopeQuestion(item string, fresh []int) string {
+	return fmt.Sprintf("The pull request of item %s closes %s now, and did not at its first review. Answer in the form \"keep #N[, #N ...]\", for example \"keep %s\". Any other answer rejects item %s from this merge. The other members still land. Answer with beehave answer %s.",
+		item, issueList(fresh), keepList(fresh), item, b.s.in.Item)
+}
+
+// scopeRefusal is the reason to reject a member whose new issues have no owner line. It tells how to keep them.
+func (b *batchBase) scopeRefusal(item string, missing []int) string {
+	return fmt.Sprintf("%v: item %s: %s has no owner line, so this merge rejects it and the other members still land. To keep it, run the merge again and answer with beehave answer %s \"keep %s\". Or remove the closing keyword",
+		errScopeRefused, item, issueList(missing), b.s.in.Item, keepList(missing))
+}
+
+// keepList shows issue numbers as "#12, #13", the list of the keep form.
+func keepList(numbers []int) string {
+	return strings.Join(strings.Fields(issueList(numbers)), ", ")
+}
+
+// keep remembers the issues that the owner kept for a member, so a later merge call of the same member in this run asks no second question.
+func (b *batchBase) keep(item string, issues []int) {
 	if b.s.owned == nil {
 		b.s.owned = map[string][]int{}
 	}
 
-	b.s.owned[m.Item] = append(b.s.owned[m.Item], read.Fresh...)
-
-	return "", nil
+	b.s.owned[item] = append(b.s.owned[item], issues...)
 }
 
 // keptIssues returns the issue numbers of an owner line in the form "keep #N[, #N ...]". Any other text, or a number too large for int, gives false.
