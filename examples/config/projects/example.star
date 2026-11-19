@@ -53,6 +53,7 @@ project(
     #     # "items": ["12", "15"],          # the explicit list of item ids, in place of "label"
     #     "next_base": "integration/r3",    # the branch of the next round; empty means the round does not cut
     #     "merge": False,                   # True lets the round land approved items; the default is False
+    #     "hand_off": False,                # True: the owner merges; the round marks the approved pull requests ready and waits, with merge True
     #     "integration_pr": 0,              # a number pins the integration pull request; 0 lets the round find it
     #     "wait_hours": 24,                 # the hours that the round waits for the owner, 1 or more; the default is 24
     #     "lane_kind": "impl",              # impl, papers or design; papers and design need "allow_paths"

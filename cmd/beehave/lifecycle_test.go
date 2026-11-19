@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"slices"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -32,13 +31,9 @@ type pullForge struct {
 	// refs and refsErr are the answer of ClosingRefs.
 	refs    model.ClosingRefs
 	refsErr error
-	// posted is the comments on the pull request. assigned holds each AddAssignee call as number|login.
+	// posted is the comments on the pull request.
 	posted     []model.Comment
 	commentErr error
-	assigned   []string
-	// assignErr fails each AddAssignee call after the first assignOK calls.
-	assignErr error
-	assignOK  int
 	// ready makes PRView report a pull request that is out of draft. readyOnCall does so once SetDraft has run. A fake that sets neither reports no draft state.
 	ready       bool
 	readyOnCall bool
@@ -50,7 +45,7 @@ func (f *pullForge) ClosingRefs(context.Context, int) (model.ClosingRefs, error)
 	return f.refs, f.refsErr
 }
 
-// Comments, PostComment and AddAssignee keep what the pulls type sent to the forge. commentErr and assignErr fail the matching write.
+// Comments and PostComment keep what the pulls type sent to the forge. commentErr fails the read.
 func (f *pullForge) Comments(context.Context, int) ([]model.Comment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -63,19 +58,6 @@ func (f *pullForge) PostComment(_ context.Context, _ int, body string) error {
 	defer f.mu.Unlock()
 
 	f.posted = append(f.posted, model.Comment{Body: body})
-
-	return nil
-}
-
-func (f *pullForge) AddAssignee(_ context.Context, number int, login string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.assigned = append(f.assigned, strconv.Itoa(number)+"|"+login)
-
-	if f.assignErr != nil && len(f.assigned) > f.assignOK {
-		return f.assignErr
-	}
 
 	return nil
 }
@@ -201,44 +183,6 @@ func TestPulls_CommentPostsOneCommentForOneKeyEvenWhenTheCallRunsTwice(t *testin
 
 	_, err = pullsOver(&pullForge{}).Comment(t.Context(), "p", "bb-1", "k", "x")
 	require.ErrorIs(t, err, forge.ErrNoPull)
-}
-
-func TestPulls_AssignAssignsThePullRequestAndWithLinkedItsClosingIssues(t *testing.T) {
-	t.Parallel()
-
-	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, refs: model.ClosingRefs{Issues: []int{12, 13}}}
-
-	number, issues, err := pullsOver(f).Assign(t.Context(), "p", "bb-1", "alice", false)
-	require.NoError(t, err)
-	assert.Equal(t, 7, number)
-	assert.Empty(t, issues)
-	assert.Equal(t, []string{"7|alice"}, f.assigned)
-
-	f.assigned = nil
-	_, issues, err = pullsOver(f).Assign(t.Context(), "p", "bb-1", "alice", true)
-	require.NoError(t, err)
-	assert.Equal(t, []int{12, 13}, issues)
-	assert.Equal(t, []string{"7|alice", "12|alice", "13|alice"}, f.assigned)
-}
-
-func TestPulls_AssignRefusesWhenAnyReadOrWriteFails(t *testing.T) {
-	t.Parallel()
-
-	open := map[string][]model.PullRequest{"open": {{Number: 7}}}
-
-	_, _, err := pullsOver(&pullForge{}).Assign(t.Context(), "p", "bb-1", "a", true)
-	require.ErrorIs(t, err, forge.ErrNoPull)
-
-	_, _, err = pullsOver(&pullForge{listed: open, assignErr: errFake}).Assign(t.Context(), "p", "bb-1", "a", false)
-	require.ErrorIs(t, err, errFake)
-
-	_, _, err = pullsOver(&pullForge{listed: open, refsErr: errFake}).Assign(t.Context(), "p", "bb-1", "a", true)
-	require.ErrorIs(t, err, errFake)
-	require.ErrorContains(t, err, "read the issues that pull request 7 closes")
-
-	late := &pullForge{listed: open, refs: model.ClosingRefs{Issues: []int{12}}, assignErr: errFake, assignOK: 1}
-	_, _, err = pullsOver(late).Assign(t.Context(), "p", "bb-1", "a", true)
-	require.ErrorIs(t, err, errFake)
 }
 
 func TestPulls_ClosingIssuesGivesTheIssuesOfTheForgeAndAnItemWithNoPullRequestIsNotFound(t *testing.T) {

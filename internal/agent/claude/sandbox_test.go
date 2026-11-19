@@ -14,7 +14,7 @@ import (
 func plan() agent.SandboxPlan {
 	return agent.SandboxPlan{
 		Work: "/work/tree", GitDirs: []string{"/repo/.git"}, Read: []string{"/opt/tools"},
-		Deny: []string{"/home/o/.ssh", "/home/o/.aws"}, Network: []string{"api.example.org"}, AllowWrite: []string{"/work/tree/out"},
+		Deny: []string{"/home/o/.ssh", "/home/o/.aws"}, Network: []string{"api.example.org"},
 	}
 }
 
@@ -60,8 +60,7 @@ func TestSandbox_WritesTheDenyByDefaultBaseTheCredentialLayerAndTheNetworkList(t
 	    "filesystem": {
 	      "denyRead": ["~/", "/home/o/.ssh", "/home/o/.aws"],
 	      "allowRead": ["/work/tree", "/repo/.git", "/opt/tools"],
-	      "denyWrite": ["/home/o/.ssh", "/home/o/.aws"],
-	      "allowWrite": ["/work/tree/out"]
+	      "denyWrite": ["/home/o/.ssh", "/home/o/.aws"]
 	    },
 	    "network": {"allowedDomains": ["api.example.org"], "strictAllowlist": true}
 	  },
@@ -137,7 +136,6 @@ func TestSandbox_AnEmptyPlanWritesEmptyListsAndNeverNull(t *testing.T) {
 	text := args[len(args)-1]
 
 	assert.Contains(t, text, `"allowedDomains":[]`)
-	assert.Contains(t, text, `"allowWrite":[]`)
 	assert.Contains(t, text, `"denyWrite":[]`)
 	assert.NotContains(t, text, "null")
 }
@@ -152,14 +150,14 @@ func TestSandbox_NeverSetsTheKeysThatWidenTheSandbox(t *testing.T) {
 		assert.NotContains(t, text, key)
 	}
 
-	// The shared git directory is readable, and it is not writable by an explicit entry.
+	// The shared git directory is readable, and no explicit entry makes it writable: the settings carry no allowWrite key.
 	_, settings := settingsOf(t, args)
 	box, ok := settings["sandbox"].(map[string]any)
 	require.True(t, ok)
 
 	files, ok := box["filesystem"].(map[string]any)
 	require.True(t, ok)
-	assert.NotContains(t, files["allowWrite"], "/repo/.git")
+	assert.NotContains(t, files, "allowWrite")
 }
 
 func TestSandbox_CarriesTheHookOfTheGuardInTheSameSettings(t *testing.T) {

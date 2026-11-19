@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -43,7 +43,7 @@ DBOS records a step only when the step ends. If the engine stops after the effec
 
 1. Check first. The step reads the state and sends no second write.
 2. A cited rule. The call is documented to treat a repeat as no change, and a test pins the exact call.
-3. The same value. A repeat sets the value that is set already, and no page states that this is a no-op. The edit half of `board_sync`, the beads `item_assign` and the status and comment writes of the `local` tracker use this basis.
+3. The same value. A repeat sets the value that is set already, and no page states that this is a no-op. The status and comment writes of the `local` tracker use this basis.
 4. The library. DBOS replays the step and not beehave: `spawn` and `wait`.
 
 Four cases are not safe today, and a later change fixes each of them.
@@ -53,11 +53,8 @@ Four cases are not safe today, and a later change fixes each of them.
 | `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. With `shared = True` the key is the `key` of the call alone. |
 | `item_comment` | Safe. | GitHub and beads read the comments first and find the key. The `local` tracker inserts the comment under its key and ignores a second insert of that key. |
 | `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
-| `item_assign` | Safe. | On GitHub the tracker reads the assignees first and sends no edit for a login that is on the issue. A test with a repeated call shows one edit. Beads reads the assignee and refuses a different login, but for the same login it sends the same update again, and it keeps one assignee. The local tracker refuses an assignee. |
 | `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
-| `pr_assign` | Safe. | The call is a POST that adds a login, and GitHub says: "Users already assigned to an issue are not replaced." ([Assignees](https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue)). A test pins the exact call of two runs, so a change to a call that replaces the assignees turns it red. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
-| `board_sync` | Safe. | The call adds the card by its address, and GitHub says: "If you try to add an item that already exists, the existing item ID is returned instead." ([Using the API to manage Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)). The step from `gh project item-add` to that mutation rests on the same page, which does not name the command. The edit then sets the Status field to the same option. This half rests on the call that sets the same value, and no GitHub page states that a repeat is a no-op. A test pins the exact calls of two runs. No test uses a real board. |
 | `merge`: each member | Safe. | The step `batch:<name>.intent#<item>` is recorded before the merge of the member. The forge shows the pull request as merged at the gated head, so the step counts it as done. |
 | `spawn` | Safe. It rests on the library. | The child run has a fixed workflow id, and DBOS returns the recorded child for it. A test stops the parent while it waits in `gather`, after `spawn` returned, and shows one child run with the same id after the resume. No test reaches the window inside the start call, between the child row and the record of it in the parent. |
 | `wait` | Safe. It rests on the library, and no test in this table stops a wait. | The deadline is the output of a recorded DBOS sleep, and the answer is a durable receive. A resume waits for the same answer. |
@@ -151,7 +148,6 @@ The `item_` builtins change or read the tracker of the project.
 | `item_create(title, key, body, parent, assignee, severity, operator, forbid_text, shared, name)` | `id`, `created` |
 | `item_status(id, status, name)` | `id`, `status` |
 | `item_comment(id, text, key, forbid_text, name)` | `id` |
-| `item_assign(id, assignee)` | `id` |
 | `item_read(of, name)` | `found`, `id`, `fields`, `comments`, `parent` |
 
 The `key` is required, and the engine joins it to the run id. `item_create` with `shared = True` is the one exception.
@@ -159,7 +155,7 @@ The `key` is required, and the engine joins it to the run id. `item_create` with
 #### `item_create`
 
 - When a resume follows a lost step record, `item_create` returns `created` false and the id of the first item.
-- `assignee` is optional. The default is no assignee.
+- `assignee` is optional. The default is no assignee. The `local` tracker keeps no assignee and refuses the keyword. GitHub files the issue with that assignee. beads files the item with that assignee.
 - `severity` is optional, one of `P0` to `P3`. The call refuses any other text before it writes.
 - `operator` is an optional bool.
 - `shared` is an optional bool. The default is false: the engine joins the `key` to the run id, so two runs never share an item. With `shared = True` the engine uses the `key` as it is, and it holds a file lock of the key in the state folder around the lookup and the create, so two runs of the project on this host that give the same key at the same time get one item. The lock does not reach another host: two hosts that share one tracker can still file two items for one key. Put in the key what makes the item unique in the project, such as the repository and a pull request number.
@@ -173,16 +169,6 @@ The `key` is required, and the engine joins it to the run id. `item_create` with
 #### `item_status`
 
 A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `hold` in the repository.
-
-#### `item_assign`
-
-`item_assign(id, assignee)` sets the assignee of a tracker item and returns `id`. `item_create` also takes an assignee.
-
-| Tracker | Result |
-| --- | --- |
-| `local` | Keeps no assignee, and refuses both `item_assign` and the `assignee` of `item_create`. |
-| GitHub | Adds the login and removes no one. |
-| `beads` | Keeps one assignee. Sets it when the item has none or the same login. Refuses an item that another login holds, and writes nothing. |
 
 #### `item_read`
 
@@ -200,18 +186,11 @@ A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `h
 
 ### Pull request builtins
 
-`pr_comment` and `pr_assign` refuse a project with no repository, and fail for an item with no pull request. In a dry run they act on the dry-run pull request and write nothing.
+`pr_comment` and `pr_open` refuse a project with no repository. `pr_comment` fails for an item with no pull request. In a dry run they act on the dry-run pull request and write nothing.
 
 #### `pr_comment`
 
 `pr_comment(text, key, forbid_text, integration)` adds a comment to the pull request of the item and returns `number`. The forge reads the comments first, and posts only when none holds the line `beehave-key: <run id>:<key>`. A replay after a crash therefore posts once.
-
-#### `pr_assign`
-
-`pr_assign(assignee, linked)` assigns the pull request of the item and returns `number` and `issues`.
-
-- When `linked` is true, it also assigns each issue that merging the pull request closes, and `issues` lists them.
-- The forge keeps one entry for a login, so the same call twice changes nothing.
 
 #### `pr_open`
 
@@ -304,7 +283,7 @@ The four steps that post public text (`item_create`, `item_comment`, `pr_comment
 
 ### `preflight`
 
-`preflight(head, base, hold, own, id, foreign, name)` reads the pull request of the item `id`, or of the item of the run when `id` is left out. It returns `ok`, `stop`, `code`, `reason`, `foreign`, `pr`, `head` and `author`. The last four are `False`, `0` and two empty texts unless the pull request is foreign.
+`preflight(head, base, hold, own, id, name)` reads the pull request of the item `id`, or of the item of the run when `id` is left out. It returns `ok`, `stop`, `code` and `reason`.
 
 It checks, in this order:
 
@@ -325,8 +304,6 @@ The assignee check reads the pull request and each linked issue once. A link is 
 - The reason also gives the recovery: leave the item to the holder, or ask the holder first.
 
 - A keyword that the call leaves out checks nothing of its kind. An item with no pull request passes.
-- `foreign = "review"` is the only value of `foreign`. With it, an open pull request by a login that is not in `own["logins"]` is not a stop. The call returns after the author check, before the `hold`, draft, head and base checks, with `foreign` set to `True` and `pr`, `head` and `author` set to the pull request, its head commit and its login. A merged or closed pull request still stops.
-- The foreign path is off. A build that gets a foreign result from the call turns it into the stop REFUSED, exit code 2, on every project, so a workflow never sees `foreign` as `True`. No setting changes this.
 - A stop is a result and not an error, so the workflow decides what to do with it. `code` is the exit code of the stop.
 - A stop also goes into the `stopped` field of the result of the run (step, exit code and reason).
 - A read that fails ends the step with an error. A build with no preflight reader fails the call.

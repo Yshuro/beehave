@@ -50,7 +50,7 @@ type ReadyReads interface {
 	ReadyMarks(ctx context.Context, pr int) ([]string, error)
 }
 
-// Boarder is the optional side of a forge that keeps project boards. A forge that lacks it cannot be used by board_sync.
+// Boarder is the optional side of a forge that keeps project boards. A forge that lacks it cannot be used by the board command of the remediation example.
 // PlaceCard puts the card on the board and sets its Status column. The same call again changes nothing, and a column that the board lacks is refused before any write.
 // CardStatus reads the Status column of the card from the board. It is an error when the card is not on the board.
 type Boarder interface {
@@ -101,8 +101,6 @@ type Activity interface {
 	CreateBranch(ctx context.Context, branch, sha string) error
 	SetBase(ctx context.Context, pr int, base string) error
 	SetBody(ctx context.Context, pr int, body string) error
-	// AddAssignee assigns a pull request or an issue to a login. The same login again changes nothing, so a repeated call is safe.
-	AddAssignee(ctx context.Context, number int, login string) error
 }
 
 // Lookup finds items and branches: a search, the default branch and the tip of a branch.

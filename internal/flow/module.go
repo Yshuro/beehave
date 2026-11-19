@@ -61,10 +61,8 @@ func stepDefs() []builtinDef {
 // repositoryDefs lists the builtins that read git or a forge. The engine refuses a call of one of them in a project with no repository.
 func repositoryDefs() []builtinDef {
 	return []builtinDef{
-		{name: "board_sync", call: (*script).boardSync, repository: true},
 		{name: "gate", call: (*script).gate, repository: true, exempt: "run"},
 		{name: "merge", call: (*script).batchMerge, repository: true},
-		{name: "pr_assign", call: (*script).prAssign, repository: true},
 		{name: "pr_comment", call: (*script).prComment, repository: true},
 		{name: "pr_open", call: (*script).prOpen, repository: true},
 		{name: prStateKind, call: (*script).prState, repository: true},
@@ -75,7 +73,6 @@ func repositoryDefs() []builtinDef {
 // itemDefs lists the builtins that read or write the tracker.
 func itemDefs() []builtinDef {
 	return []builtinDef{
-		{name: "item_assign", call: (*script).itemAssign},
 		{name: "item_comment", call: (*script).itemComment},
 		{name: "item_create", call: (*script).itemCreate},
 		{name: "item_read", call: (*script).itemRead},

@@ -10,14 +10,13 @@ The default is off. A project opts in with `sandbox = "on"` in its project file.
 
 ## The setting
 
-`sandbox = sandbox(network = ["api.example.org"], allow_write = ["out"])` turns the sandbox on for the step.
+`sandbox = sandbox(network = ["api.example.org"])` turns the sandbox on for the step.
 
 | Key | Default | Meaning |
 |---|---|---|
 | `network` | empty list (no network) | The domains that the shell can reach. |
-| `allow_write` | none | Extra paths that the shell can write. A relative path starts at the work folder. |
 
-The work folder, the temporary folder and the shared git directory of a linked work tree are writable already.
+The work folder, the temporary folder and the shared git directory of a linked work tree are writable. No other path is. A step has no keyword that opens one.
 
 - `sandbox = None` turns the sandbox off for the step. `beehave check workflow` prints a note for each such step.
 - A step that leaves out `sandbox` takes the default of the project.
@@ -55,7 +54,7 @@ It passes one `--settings` JSON that holds the sandbox object, the permission ru
 - The network list sets `allowedDomains` with `strictAllowlist`.
 - The permission rules set `blockReadsOutsideWorkingDirectories` and deny `WebFetch` and `WebSearch`.
 
-The adapter does not set `excludedCommands`, `allowLocalBinding`, `allowAllUnixSockets` or `allowAppleEvents`. It does not put the shared git directory in `allowWrite`. Claude Code makes it writable for a linked work tree and keeps `hooks` and `config` read-only, and an explicit entry could open them.
+The adapter does not set `excludedCommands`, `allowLocalBinding`, `allowAllUnixSockets` or `allowAppleEvents`. It sets no `allowWrite` list, so it never puts the shared git directory in it. Claude Code makes it writable for a linked work tree and keeps `hooks` and `config` read-only, and an explicit entry could open them.
 
 ### The credential list
 
@@ -76,14 +75,14 @@ A path in the sandbox alone leaves the Read tool open. A path in the rules alone
 
 ### Refused paths
 
-A step whose `allow_write` overlaps a credential path does not start. The same holds for an `allow_write` path that is, is inside or holds one of these, because a write there runs later outside the sandbox:
+A project whose `gate_allow_write` overlaps a credential path does not start its gate. The same holds for a `gate_allow_write` path that is, is inside or holds one of these, because a write there runs later outside the sandbox:
 
 - `.git`, `.claude`, `.husky`, `.githooks`;
 - the folder that `core.hooksPath` names.
 
-`beehave check workflow` refuses a literal path with one of these names at any depth. An `allow_write` path that is a link to a place that does not exist yet is checked at the place it points to.
+`beehave check workflow` refuses a literal path with one of these names at any depth. A `gate_allow_write` path that is a link to a place that does not exist yet is checked at the place it points to.
 
-`.claude` is refused in `allow_write` and is not denied as a whole, because Claude Code writes its own state there. Only its settings files and hooks are closed.
+`.claude` is refused in `gate_allow_write` and is not denied as a whole, because Claude Code writes its own state there. Only its settings files and hooks are closed.
 
 A `sandbox_read` path is refused, when the project loads and when the step starts, if it:
 
@@ -132,8 +131,7 @@ The step ends as `not-started`, with a note, when:
 - the adapter of the runner has no sandbox;
 - the system is Windows (Claude Code runs commands there with no sandbox);
 - the Claude Code version is below the minimum;
-- the version cannot be read;
-- `allow_write` overlaps a credential path.
+- the version cannot be read.
 
 A Claude Code that does not know a sandbox key ignores it and exits with code 0, so the minimum version is the only guard.
 

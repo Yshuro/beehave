@@ -10,14 +10,16 @@ import (
 )
 
 // maintFakes are the programs that the maintenance scripts call: the file in testdata and the name in the folder fake of the work folder.
-// go, npm and gh stand for the toolchain and the forge of the three repositories, which do not exist. beehave runs the real command, as the scheduler would.
+// go, npm and gh stand for the toolchain and the forge of the three repositories, which do not exist. systemd-run stands for the user manager that a Linux host may lack:
+// the step of the pull request sets max_new_processes, and the cap itself is tested in internal/proc. beehave runs the real command, as the scheduler would.
 var maintFakes = map[string]string{
-	"maint-claude.sh":    "claude",
-	"maint-go.sh":        "go",
-	"maint-gotestsum.sh": "gotestsum",
-	"maint-npm.sh":       "npm",
-	"maint-gh.sh":        "gh",
-	"maint-beehave.sh":   "beehave",
+	"maint-claude.sh":      "claude",
+	"maint-go.sh":          "go",
+	"maint-gotestsum.sh":   "gotestsum",
+	"maint-npm.sh":         "npm",
+	"maint-gh.sh":          "gh",
+	"maint-beehave.sh":     "beehave",
+	"maint-systemd-run.sh": "systemd-run",
 }
 
 // maintRepos are the repositories of the example and the manifest file that each one starts with.

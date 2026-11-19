@@ -335,6 +335,27 @@ func TestExampleBatch_AMergeSettingThatIsOffLandsNothing(t *testing.T) {
 	assert.Equal(t, "README", rig.mainFiles(t))
 }
 
+func TestExampleBatch_AHandOffRoundMarksTheApprovedPullRequestsReadyAndHoldsTheItemWhoseHeadMoved(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "1 3")
+	rig.setRound("hand_off", true)
+	rig.host.pr = &handForge{views: map[string][]fakePull{
+		"1": {{State: "OPEN", Draft: true, Head: rig.heads["1"]}, {State: "OPEN", Head: rig.heads["1"]}, {State: "MERGED", Head: rig.heads["1"]}},
+		"3": {{State: "OPEN", Draft: true, Head: rig.heads["3"]}, {State: "OPEN", Head: "beef"}},
+	}, reads: map[string]int{}, draftErr: map[bool]error{}}
+
+	_, err := rig.run(t)
+
+	require.NoError(t, err)
+	assert.Empty(t, rig.merger.asked, "the owner merges: the round lands nothing itself")
+	assert.Empty(t, rig.gate.ran(), "a hand-off runs no gate of the union")
+	assert.ElementsMatch(t, []string{"1:false", "3:false", "3:true"}, rig.host.pr.marked(), "both are marked ready, and the one whose head moved is a draft again")
+	assert.Equal(t, []string{testProject + "|1|closed"}, closedOf(rig.writer), "the item that the owner merged is recorded as merged")
+	assert.Equal(t, []string{testProject + "|3|hold"}, heldOf(rig.writer), "the item whose head moved holds")
+	assert.Contains(t, strings.Join(rig.writer.notes, "\n"), "the head moved to beef after the head "+rig.heads["3"]+" was marked ready", "the item gets the reason as a comment")
+}
+
 func TestExampleBatch_OneApprovedItemLandsAsABatchOfOne(t *testing.T) {
 	t.Parallel()
 

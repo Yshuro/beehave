@@ -98,7 +98,9 @@ ROUND_KEYS = {
     "source_checkout": ("string", "the checkout of the owner"),
     "integration_pr": ("int", "the number of the integration pull request, or 0 to let the round find it"),
     "merge": ("bool", "true to land approved items, false to land none"),
+    "hand_off": ("bool", "true when the owner merges the approved pull requests: the round marks them ready and waits, and lands none itself"),
     "acceptance": ("string", "the acceptance script, or an empty text for none"),
+    "union_gate": ("list", "the command that gates the union of a batch, a list of words, or an empty list for the gate of the project"),
     "base_result": ("string", "the file of the base result, or an empty text for none"),
     "base_reds": ("list", "the known base reds"),
     "base_reds_file": ("string", "the file of the known base reds"),
@@ -122,7 +124,9 @@ ROUND_DEFAULTS = {
     "source_checkout": "",
     "integration_pr": 0,
     "merge": False,
+    "hand_off": False,
     "acceptance": "",
+    "union_gate": [],
     "base_result": "",
     "base_reds": [],
     "base_reds_file": "base-reds.md",
@@ -138,6 +142,10 @@ ROUND_DEFAULTS = {
 
 # The most that a limit takes.
 LIMIT_MOST = 100
+
+# The time that one write of a record file and one run of the acceptance script may take.
+WRITE_TIMEOUT = "1m"
+ACCEPTANCE_TIMEOUT = "30m"
 
 ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
@@ -567,18 +575,24 @@ def land(approved, project, round_settings, n):
     if len(prs) == 0:
         return 0
 
-    out = merge(
-        name = "round-land-%d" % n,
-        prs = prs,
-        base = base,
-        repo = project.repo,
-        hold = "hold",
-        own = {"logins": [round_settings["owner"]], "emails": [round_settings["owner_email"]]},
-        forbid_text = ATTRIBUTION + id_patterns([pr.item for pr in prs]),
-        integration = round_settings["integration_pr"],
-    )
+    if round_settings["hand_off"]:
+        # The owner merges: the call marks each pull request ready at its reviewed head, tells the owner, and waits until each one is merged, closed or a draft again.
+        out = merge(name = "round-land-%d" % n, prs = prs, base = base, repo = project.repo, hand_off = True)
+    else:
+        out = merge(
+            name = "round-land-%d" % n,
+            prs = prs,
+            base = base,
+            repo = project.repo,
+            hold = "hold",
+            own = {"logins": [round_settings["owner"]], "emails": [round_settings["owner_email"]]},
+            gate_run = round_settings["union_gate"],
+            forbid_text = ATTRIBUTION + id_patterns([pr.item for pr in prs]),
+            integration = round_settings["integration_pr"],
+        )
 
     # A rejected item gets the reason as a comment and the hold status, so it does not come back until a person reads it.
+    # With hand_off, a pull request that is closed, whose head moved after the ready mark, or that has a reason to wait is rejected, and a ready one is a draft again.
     for rejected in out.rejected:
         item_comment(name = "no-" + rejected.item, id = rejected.item, key = "rejected", text = rejected.reason, forbid_text = ATTRIBUTION)
         item_status(name = "hold-" + rejected.item, id = rejected.item, status = "hold")
@@ -586,7 +600,7 @@ def land(approved, project, round_settings, n):
     # Each merged item moves its card to the merged column, as the pipeline of one item does. The item ids of a project with a board are issue numbers.
     heads = {entry.item: entry.head for entry in approved}
     for landed in out.merged:
-        _move_card(project, "merged", int(landed))
+        _move_card(project, "merged", issue = int(landed))
         record_merge(landed, heads[landed], base)
 
     # The read of the issues after the batch. A note means the read did not run, which is not a pass: the round prints it in the run record, because the round has no item issue for a comment.
@@ -600,6 +614,12 @@ def land(approved, project, round_settings, n):
 
     if len(out.findings) > 0:
         fail("REFUSE: the batch landed, but the issues are not as they must be. Fix the state of each issue by hand:\n" + "\n".join(out.findings))
+
+    # The acceptance script runs on the build host against the round branch after each batch that landed something. A red script stops the run, as a finding does.
+    if round_settings["acceptance"] != "" and len(out.merged) > 0:
+        accepted = gate(name = "round-acceptance-%d" % n, run = ["sh", round_settings["acceptance"]], host = "build", timeout = ACCEPTANCE_TIMEOUT)
+        if not accepted.passed:
+            fail("REFUSE: the batch landed, but the acceptance script %s failed on %s. Read its output, then fix the round branch by hand:\n%s" % (round_settings["acceptance"], base, accepted.report))
 
     return out.host_losses
 
@@ -864,7 +884,14 @@ def record_base_reds(round_settings):
     tip = command(name = "base-tip", run = ["git", "rev-parse", "origin/" + base], stop_on_rc = [2]).stdout.strip()
     text = "# Known base reds\n\nMeasured at %s on the tip %s of %s.\n\n%s\n" % (now(), tip, base, "\n".join(["- " + red for red in round_settings["base_reds"]]))
 
-    write(name = "base-reds", run = ["tee", round_settings["base_reds_file"]], stdin = text)
+    # Every lane reads the file, so the record is world-readable whatever the umask of the engine is. The path goes in the environment, so a path with a space stays one word.
+    write(
+        name = "base-reds",
+        run = ["sh", "-c", 'umask 022 && exec tee -- "$BASE_REDS_FILE"'],
+        env = {"BASE_REDS_FILE": round_settings["base_reds_file"]},
+        stdin = text,
+        timeout = WRITE_TIMEOUT,
+    )
 
 # A bound for the loop of the round, because Starlark has no while. A pass ends one run or starts one, so the bound is far above the work of any real round.
 MAX_PASSES = 500
@@ -972,23 +999,25 @@ def finish(item):
     """The engine calls finish after main on every end of the run except a cancel: success, error and command stop. A child run never calls it.
     It stops the build host once. A host that this round did not launch (host_up started it) is never stopped: another run may use it.
     The stop banks the work on the host first. A host that cannot bank its work stays up and finish prints the reason: the round has no item issue for a comment."""
-    stop = host_teardown(name = "round-teardown")
+    stop = host_teardown(name = "round-teardown", host = facts().build_host)
     if not stop.down:
         print("the build host stays up: " + stop.reason)
 
-def _move_card(project, stage, issue = 0):
+def _move_card(project, stage, pr = 0, issue = 0):
     """Moves the card to the column that `vars.board` of the project names for `stage` ("started" or "merged"), and reads it back.
-    `issue` names the issue card of a landed item, and 0 means the pull request of the item of the run. A project with no `vars.board` makes no call."""
+    `issue` names the issue card of a landed item, and `pr` the pull request of the item of the run. A project with no `vars.board` makes no call.
+    The `remedy board` command puts the card on the board, sets the column and reads the card back. Exit code 2 (a refusal, or a read-back that shows another column) stops the run."""
     board = project.vars.get("board")
     if board == None:
         return
 
-    board_sync(
+    card = ["--issue", str(issue)] if issue != 0 else ["--pr", str(pr)]
+    owner = ["--owner", board["owner"]] if board.get("owner", "") != "" else []
+
+    command(
         name = "board-" + stage + ("-" + str(issue) if issue != 0 else ""),
-        board = board["number"],
-        owner = board.get("owner", ""),
-        status = board[stage],
-        issue = issue,
+        run = ["remedy", "board", "--board", str(board["number"]), "--status", board[stage]] + owner + card,
+        stop_on_rc = [2],
     )
 
 def item_value(item, head, approved, reason, host_losses):
@@ -1067,9 +1096,14 @@ def pipeline(item):
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
     # when the item has a parent, links it into the native stack of the pull request of that item. The call owns only the closing line of the body:
     # `Closes #N` when the base is the default branch and `Addresses #N` on any other. An item id that is not an issue number gets no line, and a body that exists is kept.
-    pr_open(
+    # The body is the text of the item. Only the pull request into the trunk may close an issue, so a closing keyword in the text is allowed when the round branch is the trunk (integration)
+    # and the call refuses it when the base is another branch.
+    trunk = base == project.base_branch
+    draft = pr_open(
         name = "draft",
         title = item.title,
+        body = item.body,
+        integration = trunk,
         base = base,
         issue = int(item.id) if item.id.isdigit() else 0,
         parent = parent.id,
@@ -1078,7 +1112,7 @@ def pipeline(item):
 
     # The board is a project choice: the key `board` of the project vars. With none, the run makes no board call.
     # With one, the card of the item moves to the started column now and to the merged column after the merge, and each call reads the card back.
-    _move_card(project, "started")
+    _move_card(project, "started", pr = draft.number)
 
     # Five fix rounds need six candidates: the sixth checks the fifth fix. A candidate gets the gate on the base, the checks before review, the mutation run and a full review once.
     # Between candidates, scoped fixes and scoped reviews run with no gate. Each reviewer starts fresh and judges the commit it is pinned to.
@@ -1166,5 +1200,15 @@ def pipeline(item):
     missing = changelog_missing(project.vars.get("changelog", ""), base, loop.gate.head, item.id)
     if missing != "":
         fail(missing)
+
+    # The approval is on the pull request, with the plan that the review judged the change against. The key makes a replay after a crash post it once.
+    if loop.verdict == "approve":
+        pr_comment(
+            name = "approved",
+            key = "approved",
+            text = "The review approved the head %s.\n\nThe plan:\n\n%s" % (loop.gate.head, plan.text),
+            integration = trunk,
+            forbid_text = ATTRIBUTION,
+        )
 
     return item_value(item, loop.gate.head, loop.verdict == "approve", "" if loop.verdict == "approve" else loop.verdict, loop.host_losses)

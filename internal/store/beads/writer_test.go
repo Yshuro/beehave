@@ -243,56 +243,6 @@ func TestCreate_FilesTheOperatorFlagAsTheOperatorLabel(t *testing.T) {
 	assert.NotContains(t, fake.calls[3], "--labels")
 }
 
-func TestAssign_SetsTheAssigneeOfAnItemThatHasNoneOrTheSameOne(t *testing.T) {
-	t.Parallel()
-
-	for name, shown := range map[string]string{
-		"nobody": `[{"id":"p-1","title":"t","status":"open"}]`,
-		"same":   `[{"id":"p-1","title":"t","status":"open","assignee":"alice"}]`,
-	} {
-		run := &proctest.Scripted{}
-		run.Plan(shown, "show")
-		run.Plan("", "update")
-
-		bd, err := beads.New(run, beadstest.Block("p"))
-		require.NoError(t, err)
-		require.NoError(t, bd.Assign(t.Context(), "p-1", "alice"), name)
-		assert.Equal(t, [][]string{{"show", "p-1", "--json"}, {"update", "p-1", "--assignee", "alice"}}, run.Calls, name)
-	}
-}
-
-func TestAssign_RefusesAnItemThatAnotherLoginHoldsAndWritesNothing(t *testing.T) {
-	t.Parallel()
-
-	run := &proctest.Scripted{}
-	run.Plan(`[{"id":"p-1","title":"t","status":"open","assignee":"bob"}]`, "show")
-
-	bd, err := beads.New(run, beadstest.Block("p"))
-	require.NoError(t, err)
-
-	err = bd.Assign(t.Context(), "p-1", "alice")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "bob")
-	assert.Contains(t, err.Error(), "keeps one assignee")
-	assert.Equal(t, [][]string{{"show", "p-1", "--json"}}, run.Calls)
-}
-
-func TestAssign_RefusesWhenTheItemCannotBeReadOrUpdated(t *testing.T) {
-	t.Parallel()
-
-	down, err := beads.New(proctest.Always(model.CommandResult{ExitCode: 1}), beadstest.Block("p"))
-	require.NoError(t, err)
-	require.Error(t, down.Assign(t.Context(), "p-1", "alice"))
-
-	run := &proctest.Scripted{}
-	run.Plan(`[{"id":"p-1","title":"t","status":"open"}]`, "show")
-	run.PlanFail("bd failed", "update")
-
-	failing, err := beads.New(run, beadstest.Block("p"))
-	require.NoError(t, err)
-	require.Error(t, failing.Assign(t.Context(), "p-1", "alice"))
-}
-
 func TestCreate_AKeyThatPrefixesAnotherKeyIsNotAMatch(t *testing.T) {
 	t.Parallel()
 

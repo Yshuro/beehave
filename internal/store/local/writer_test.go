@@ -119,10 +119,6 @@ func TestAssignee_TheLocalStoreRefusesItPlainly(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "keeps no assignee")
 	assert.Zero(t, p.count(`SELECT count(*) FROM items`), "a refused item is not filed")
-
-	err = s.Assign(t.Context(), project+"-1", "alice")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "keeps no assignee")
 }
 
 func TestCreate_NumbersTheNewIdsPastTheIdsInUse(t *testing.T) {

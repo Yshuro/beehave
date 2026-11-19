@@ -28,13 +28,10 @@ const (
 	mergeName        = "merge"
 	preflightName    = "preflight"
 	queueName        = "queue"
-	itemAssignName   = "item_assign"
 	itemCommentName  = "item_comment"
 	itemCreateName   = "item_create"
 	itemReadName     = "item_read"
 	itemStatusName   = "item_status"
-	boardSyncName    = "board_sync"
-	prAssignName     = "pr_assign"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
 	prStateName      = "pr_state"
@@ -57,7 +54,7 @@ func resultFields() map[string][]string {
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
-		preflightName:    {"ok", "stop", "code", reasonField, "foreign", "pr", "head", "author"},
+		preflightName:    {"ok", "stop", "code", reasonField},
 		queueName:        {"rows", "free"},
 		spawnName:        {"runs"},
 		waitName:         {"answer", "answers", "timed_out"},
@@ -85,13 +82,10 @@ func factsResultFields() map[string][]string {
 // trackerResultFields holds the fields of the builtins that write the tracker or the pull request, and of pr_state, which reads the pull request.
 func trackerResultFields() map[string][]string {
 	return map[string][]string{
-		boardSyncName:   {numberField, statusField},
-		itemAssignName:  {"id"},
 		itemCommentName: {"id"},
 		itemCreateName:  {"id", "created"},
 		itemReadName:    {"found", "id", "fields", "comments", "parent"},
 		itemStatusName:  {"id", statusField},
-		prAssignName:    {numberField, "issues"},
 		prCommentName:   {numberField},
 		prOpenName:      {numberField, "created", "stack"},
 		prStateName:     {stateField},

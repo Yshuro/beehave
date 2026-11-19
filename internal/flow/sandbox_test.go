@@ -21,16 +21,16 @@ func sandboxSeen(t *testing.T, rig *agentRig) *model.Sandbox {
 	return rig.h.agents.seen()[0].Sandbox
 }
 
-func TestAgentStep_ASandboxCallGoesToTheAgentRequestWithItsLists(t *testing.T) {
+func TestAgentStep_ASandboxCallGoesToTheAgentRequestWithItsNetworkList(t *testing.T) {
 	t.Parallel()
 
 	rig := newAgentRig(t)
 	rig.reply("", exited)
 
-	_, err := rig.run(t, agentFlow(`sandbox = sandbox(network = ["api.example.org"], allow_write = ["out"]), `), "x")
+	_, err := rig.run(t, agentFlow(`sandbox = sandbox(network = ["api.example.org"]), `), "x")
 
 	require.NoError(t, err)
-	assert.Equal(t, &model.Sandbox{Network: []string{"api.example.org"}, AllowWrite: []string{"out"}}, sandboxSeen(t, rig))
+	assert.Equal(t, &model.Sandbox{Network: []string{"api.example.org"}}, sandboxSeen(t, rig))
 }
 
 func TestAgentStep_ASandboxCallWithNoListsTurnsTheSandboxOnWithNoDomain(t *testing.T) {
@@ -102,17 +102,15 @@ func TestAgentStep_ARefusedSandboxValueStopsTheStepBeforeTheAgentStarts(t *testi
 	t.Parallel()
 
 	for extra, want := range map[string]string{
-		`sandbox = "on", `:                                  "sandbox must be sandbox(...) or None",
-		`sandbox = True, `:                                  "sandbox must be sandbox(...) or None",
-		`sandbox = struct(network = []), `:                  "sandbox must be sandbox(...) or None",
-		`sandbox = sandbox(network = "x"), `:                "network must be a list, not a text.",
-		`sandbox = sandbox(allow_write = "x"), `:            "allow_write must be a list, not a text.",
-		`sandbox = sandbox(network = [3]), `:                "network must hold strings only",
-		`sandbox = sandbox(network = ["https://x.org"]), `:  "not a domain name",
-		`sandbox = sandbox(allow_write = [""]), `:           "empty path",
-		`sandbox = sandbox(allow_write = ["../outside"]), `: `holds ".."`,
-		`sandbox = sandbox(read = []), `:                    "sandbox takes no argument read. Use one of: network, allow_write.",
-		`sandbox = sandbox(network = [3] + []), `:           "network must hold strings only",
+		`sandbox = "on", `:                                 "sandbox must be sandbox(...) or None",
+		`sandbox = True, `:                                 "sandbox must be sandbox(...) or None",
+		`sandbox = struct(network = []), `:                 "sandbox must be sandbox(...) or None",
+		`sandbox = sandbox(network = "x"), `:               "network must be a list, not a text.",
+		`sandbox = sandbox(network = [3]), `:               "network must hold strings only",
+		`sandbox = sandbox(network = ["https://x.org"]), `: "not a domain name",
+		`sandbox = sandbox(allow_write = ["out"]), `:       "sandbox takes no argument allow_write. Use one of: network.",
+		`sandbox = sandbox(read = []), `:                   "sandbox takes no argument read. Use one of: network.",
+		`sandbox = sandbox(network = [3] + []), `:          "network must hold strings only",
 	} {
 		t.Run(extra, func(t *testing.T) {
 			t.Parallel()
@@ -130,13 +128,10 @@ func TestAgentStep_ARefusedSandboxValueStopsTheStepBeforeTheAgentStarts(t *testi
 func TestBoxOf_RefusesAListThatIsNoListOfStrings(t *testing.T) {
 	t.Parallel()
 
-	_, err := boxOf(starlark.MakeInt(1), nil)
+	_, err := boxOf(starlark.MakeInt(1))
 	require.ErrorContains(t, err, "network must be a list of strings")
 
-	_, err = boxOf(nil, starlark.NewList([]starlark.Value{starlark.MakeInt(1)}))
-	require.ErrorContains(t, err, "allow_write must hold strings only")
-
-	_, err = boxOf(starlark.NewList([]starlark.Value{starlark.String("https://x.org")}), nil)
+	_, err = boxOf(starlark.NewList([]starlark.Value{starlark.String("https://x.org")}))
 	require.ErrorContains(t, err, "not a domain name")
 }
 
@@ -155,7 +150,7 @@ func TestRecalledSandbox_AStepRecordedWithNoSandboxReplaysWithNoSandbox(t *testi
 func TestRecalledSandbox_ReadsBackWhatRecordSandboxWrote(t *testing.T) {
 	t.Parallel()
 
-	for _, box := range []*model.Sandbox{{}, {Network: []string{"a.example.org"}, AllowWrite: []string{"/x"}}} {
+	for _, box := range []*model.Sandbox{{}, {Network: []string{"a.example.org"}}} {
 		// The record goes through JSON in the step, so a value of the outputs is read back as text.
 		raw, err := json.Marshal(recordSandbox(box))
 		require.NoError(t, err)

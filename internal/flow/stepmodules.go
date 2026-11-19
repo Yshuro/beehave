@@ -50,7 +50,8 @@ const coreVersion = 6
 // Version 6 adds the agent/caps step to the phase, the call field of the phase input and the cap_stop field of the phase output.
 // Version 8 added the note field to the limit record, the limited field to the phase input and the resume_of field to the phase output, so the rerun after a provider limit resumes the limited session.
 // Version 9 adds the skills field to the result of an agent call, and records the label of the call in place of its kind.
-const agentVersion = 9
+// Version 10 removed the allow_write list from the recorded sandbox of an agent call.
+const agentVersion = 10
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
@@ -59,10 +60,15 @@ const agentVersion = 9
 // Version 5 merges with one call: `merge` is the old `batch_merge`, and a merge of one pull request records the batch steps. The step kind merge is gone.
 // Version 6 records the scope check of each member (batch:<call>.scope#<item>) before its intent.
 // Version 7 adds the moved field to the result of merge, and the hand-off steps batch:<call>.ready#<item> and batch:<call>.watch#<item>@<round>.
-const landVersion = 7
+// Version 8 removed the foreign, pr, head and author fields from the record of the preflight step.
+const landVersion = 8
 
-// forgeVersion is the version of the forge module. Version 2 added the pr_state step.
-const forgeVersion = 2
+// trackerVersion is the version of the tracker module. Version 2 retires the kind item_assign, which version 1 recorded. item_create takes an assignee.
+const trackerVersion = 2
+
+// forgeVersion is the version of the forge module. Version 2 added the pr_state step. Version 3 retires the kind pr_assign, which version 2 recorded.
+// Version 4 retires the kind board_sync, which version 3 recorded.
+const forgeVersion = 4
 
 // gateVersion is the version of the gate module. Version 3 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>
 // with a wait field), and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
@@ -101,8 +107,8 @@ func moduleTable() []stepModule {
 			steps:   []string{receiveStepName},
 		},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
-		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
-		{name: moduleForge, version: forgeVersion, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open", prStateKind}},
+		{name: moduleTracker, version: trackerVersion, kinds: []string{"item_comment", "item_create", "item_read", "item_status"}, retired: []string{"item_assign"}},
+		{name: moduleForge, version: forgeVersion, kinds: []string{"pr_comment", "pr_open", prStateKind}, retired: []string{"board_sync", "pr_assign"}},
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}, retired: []string{"merge"}},
 		{name: moduleGate, version: gateVersion, kinds: []string{kindGate}, retired: []string{"before_review"}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
@@ -121,7 +127,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land7.gate6.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core6.agent10.tracker2.forge4.land8.gate6.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

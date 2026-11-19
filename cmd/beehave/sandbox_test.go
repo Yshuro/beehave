@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -40,6 +41,17 @@ func (r *sandboxRig) touch(t *testing.T, path string) {
 	require.NoError(t, os.WriteFile(path, nil, 0o600))
 }
 
+// writeNote resolves one path as a write path against the protected paths of the rig: the credential paths and the closed paths of the work folder.
+// It returns the resolved paths and the refusal note, which is empty when the path is allowed.
+func (r *sandboxRig) writeNote(t *testing.T, paths ...string) ([]string, string) {
+	t.Helper()
+
+	deny := credentialPaths(r.home, filepath.Join(r.home, "login"), nil)
+	closed := closedPaths(t.Context(), r.work, r.home)
+
+	return writablePaths(paths, r.home, r.work, slices.Concat(deny, closed))
+}
+
 func TestSandboxPlan_ASandboxedStepGetsAPlanAndAStepWithoutOneGetsNone(t *testing.T) {
 	t.Parallel()
 
@@ -56,7 +68,6 @@ func TestSandboxPlan_ASandboxedStepGetsAPlanAndAStepWithoutOneGetsNone(t *testin
 	require.NotNil(t, r.f.spec.Sandbox)
 	assert.Equal(t, r.work, r.f.spec.Sandbox.Work)
 	assert.Equal(t, []string{"api.example.org"}, r.f.spec.Sandbox.Network)
-	assert.Empty(t, r.f.spec.Sandbox.AllowWrite)
 }
 
 func TestSandboxPlan_TheEngineListHoldsTheCredentialPathsTheRunnerFolderAndTheEnvFilesOfTheWorkFolder(t *testing.T) {
@@ -125,27 +136,18 @@ func TestSandboxPlan_AnAllowWritePathMayNotReopenGitTheAgentSettingsOrAHooksFold
 	runGit(t, r.work, "init", "-q")
 	runGit(t, r.work, "config", "core.hooksPath", "ci/hooks")
 
-	req := request()
-
 	for _, bad := range []string{
 		".git", ".git/hooks", ".git/config", ".claude", ".claude/settings.json", ".husky", ".husky/pre-commit", ".githooks", "ci/hooks", "ci/hooks/pre-push",
 		"app/.git/hooks", "sub/.claude", filepath.Join(r.work, ".git", "hooks"), ".",
 	} {
-		r.f.spec.Sandbox = nil
-		req.Sandbox = &model.Sandbox{AllowWrite: []string{bad}}
+		_, note := r.writeNote(t, bad)
 
-		got, err := r.f.agents.Run(t.Context(), req)
-
-		require.NoError(t, err)
-		assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, bad)
-		assert.Contains(t, got.Note, "The step did not start", bad)
-		assert.Nil(t, r.f.spec.Sandbox, "the agent never ran for "+bad)
+		assert.Contains(t, note, "The step did not start", bad)
 	}
 
-	req.Sandbox = &model.Sandbox{AllowWrite: []string{"cache", "out/.github"}}
-	_, err := r.f.agents.Run(t.Context(), req)
-	require.NoError(t, err)
-	assert.Equal(t, []string{filepath.Join(r.work, "cache"), filepath.Join(r.work, "out", ".github")}, r.f.spec.Sandbox.AllowWrite)
+	got, note := r.writeNote(t, "cache", "out/.github")
+	assert.Empty(t, note)
+	assert.Equal(t, []string{filepath.Join(r.work, "cache"), filepath.Join(r.work, "out", ".github")}, got)
 }
 
 func TestSandboxPlan_TheClosedPathsOfTheWorkFolderAreDeniedForWriteAndKeepTheirFilesReadable(t *testing.T) {
@@ -196,14 +198,9 @@ func TestSandboxPlan_APathIsComparedWithoutCaseAndAfterSymlinksAreResolved(t *te
 	req := request()
 
 	for _, bad := range []string{"lnk", "lnk/hooks", "sshlnk", "shared/new/deeper", filepath.Join(r.home, ".SSH")} {
-		r.f.spec.Sandbox = nil
-		req.Sandbox = &model.Sandbox{AllowWrite: []string{bad}}
+		_, note := r.writeNote(t, bad)
 
-		got, err := r.f.agents.Run(t.Context(), req)
-
-		require.NoError(t, err)
-		assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, bad)
-		assert.Nil(t, r.f.spec.Sandbox, bad)
+		assert.Contains(t, note, "overlaps the protected path", bad)
 	}
 
 	for _, link := range []string{"sshlnk", "shared"} {
@@ -218,12 +215,8 @@ func TestSandboxPlan_APathIsComparedWithoutCaseAndAfterSymlinksAreResolved(t *te
 		assert.Contains(t, got.Note, "sandbox_read path", link)
 	}
 
-	r.f.agents.projects = nil
-	r.f.spec.Sandbox = nil
-	req.Sandbox = &model.Sandbox{AllowWrite: []string{"fresh/dir"}}
-	_, err := r.f.agents.Run(t.Context(), req)
-	require.NoError(t, err)
-	assert.NotNil(t, r.f.spec.Sandbox)
+	_, note := r.writeNote(t, "fresh/dir")
+	assert.Empty(t, note)
 }
 
 func TestHooksPath_ReadsTheFolderThatCoreHooksPathNames(t *testing.T) {
@@ -301,23 +294,15 @@ func TestSandboxPlan_AnAllowWritePathStartsAtTheWorkFolderAndMayNotTouchACredent
 	t.Parallel()
 
 	r := newSandboxRig(t)
-	req := request()
-	req.Sandbox = &model.Sandbox{AllowWrite: []string{"out", "~/cache", "/var/data"}}
 
-	_, err := r.f.agents.Run(t.Context(), req)
-	require.NoError(t, err)
-	assert.Equal(t, []string{filepath.Join(r.work, "out"), filepath.Join(r.home, "cache"), "/var/data"}, r.f.spec.Sandbox.AllowWrite)
+	got, note := r.writeNote(t, "out", "~/cache", "/var/data")
+	assert.Empty(t, note)
+	assert.Equal(t, []string{filepath.Join(r.work, "out"), filepath.Join(r.home, "cache"), "/var/data"}, got)
 
 	for _, bad := range []string{"~/.ssh", "~/.ssh/keys", "~", filepath.Dir(r.home), "~/.config/beehave/state", ".env"} {
-		r.f.spec.Sandbox = nil
-		req.Sandbox = &model.Sandbox{AllowWrite: []string{bad}}
+		_, badNote := r.writeNote(t, bad)
 
-		got, runErr := r.f.agents.Run(t.Context(), req)
-
-		require.NoError(t, runErr)
-		assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, bad)
-		assert.Contains(t, got.Note, "The step did not start", bad)
-		assert.Nil(t, r.f.spec.Sandbox, "the agent never ran for "+bad)
+		assert.Contains(t, badNote, "The step did not start", bad)
 	}
 }
 

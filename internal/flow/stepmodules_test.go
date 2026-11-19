@@ -74,8 +74,8 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land7.gate6.host1.round2", applicationVersion("v1"))
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land7.gate7.host1.round2", versionWithModule("v1", moduleGate, 7))
+	assert.Equal(t, "v1+core6.agent10.tracker2.forge4.land8.gate6.host1.round2", applicationVersion("v1"))
+	assert.Equal(t, "v1+core6.agent10.tracker2.forge4.land8.gate7.host1.round2", versionWithModule("v1", moduleGate, 7))
 }
 
 func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
@@ -84,11 +84,12 @@ func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
 	assert.Contains(t, strings.Split(moduleVersions(), "."), "core6", "the facts step records ten fields: the method and board fields moved under vars at core5 and runners came at core6, so a run recorded at core5 replays no facts step")
 }
 
-func TestStepModules_TheLandModuleIsAtVersionSeven(t *testing.T) {
+func TestStepModules_TheLandModuleIsAtVersionEight(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "land7", "merge is the old batch_merge and a merge of one pull request records the batch steps, "+
-		"each member records its scope check as batch:<call>.scope#<item> before its intent, and a hand-off records batch:<call>.ready#<item> and batch:<call>.watch#<item>@<round>")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "land8", "merge is the old batch_merge and a merge of one pull request records the batch steps, "+
+		"each member records its scope check as batch:<call>.scope#<item> before its intent, a hand-off records batch:<call>.ready#<item> and batch:<call>.watch#<item>@<round>, "+
+		"and the preflight step records no foreign, pr, head or author field")
 }
 
 func TestStepModules_TheGateModuleIsAtVersionSix(t *testing.T) {
@@ -204,6 +205,9 @@ func TestUnreplayableStep_IsTheFirstStepThatThisBuildDoesNotRecordWithTheModuleO
 		"the scope check of a merge": {[]string{"claim", "scope-check:m#1", "merge:m#1"}, "scope-check:m#1", moduleRound},
 		"the merge of one pull":      {[]string{"merge:m#1"}, "merge:m#1", moduleLand},
 		"the builtin before_review":  {[]string{"before_review:b#1"}, "before_review:b#1", moduleGate},
+		"the builtin item_assign":    {[]string{"item_assign:a#1"}, "item_assign:a#1", moduleTracker},
+		"the builtin pr_assign":      {[]string{"pr_assign:a#1"}, "pr_assign:a#1", moduleForge},
+		"the builtin board_sync":     {[]string{"board_sync:a#1"}, "board_sync:a#1", moduleForge},
 		"the owner merge wait":       {[]string{"DBOS.sleep", "watch"}, "watch", moduleCore},
 	}
 
@@ -221,8 +225,8 @@ func TestUnreplayableStep_IsTheFirstStepThatThisBuildDoesNotRecordWithTheModuleO
 func TestChangedModule_OnlyAModuleThatTheRunUsedCounts(t *testing.T) {
 	t.Parallel()
 
-	was, _ := parseVersions(stepsVersion)
-	now, _ := parseVersions(versionWithModule("", moduleGate, gateVersion+1)[1:])
+	was, _ := parseVersions(versionWithModule("", moduleGate, gateVersion-1)[1:])
+	now, _ := parseVersions(versionWithModule("", moduleGate, gateVersion)[1:])
 
 	_, changed := changedModule(modulesUsed([]string{"item_read:own#1", "item_comment:c#2"}), was, now)
 	assert.False(t, changed, "a run that recorded only tracker steps does not use the gate module")

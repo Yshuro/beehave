@@ -163,9 +163,6 @@ var errNoLabels = store.Refuse("the local store keeps no labels, so it cannot ma
 // errNoSeverity is the refusal of a severity: the local store keeps none.
 var errNoSeverity = store.Refuse("the local store keeps no severity. Leave the severity out, or use a tracker that keeps one")
 
-// Assign refuses: the local store keeps no assignee.
-func (*Store) Assign(context.Context, string, string) error { return errNoAssignee }
-
 // Comment adds a comment to the item once for each key. The same key again changes nothing. An id that the project does not have is a refusal.
 func (s *Store) Comment(ctx context.Context, id, key, text string) error {
 	return inTx(ctx, s.db, "comment on "+id, func(tx *sql.Tx) error {

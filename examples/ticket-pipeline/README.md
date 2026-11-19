@@ -38,6 +38,8 @@ The data folder (`PIPE_HOME`, default `~/.pipe`, mode 700) is outside the reposi
 5. Run it: `beehave run bf-2025 pipeline --workflow backfill.star`.
 6. If the run waits for the budget, `beehave status` shows the question. Answer with `beehave answer bf-2025 500`.
 
+A project on a tracker that keeps assignees can set `vars = {"chunk_assignee": "dana"}`. Each chunk item is then filed with that person. The local tracker keeps no assignee, so the shipped project sets none.
+
 Tests need Go and the beehave source: `go test ./cmd/beehave -run TestScripts/pipe`. The scripts `pipe-*.txt` in `cmd/beehave/testdata/e2e` run the example with a stand-in for the source and a fake agent.
 
 ## Engine gaps

@@ -42,7 +42,6 @@ func resultShape(t *testing.T) []string {
 var goldenShapes = map[string][]string{
 	"star30": {
 		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,skills,stop,text,transcript,violations",
-		"board_sync: number,status",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
 		"facts: base_branch,build_host,forge,gate,gate_steps,repo,runners,source,tracker,vars",
@@ -50,17 +49,15 @@ var goldenShapes = map[string][]string{
 		"gather: results",
 		"host_teardown: down,reason",
 		"host_up: host,started",
-		"item_assign: id",
 		"item_comment: id",
 		"item_create: created,id",
 		"item_read: comments,fields,found,id,parent",
 		"item_status: id,status",
 		"merge: deferred,findings,gates,host_loss,host_losses,merged,moved,note,rejected,tip,tree,unproven",
-		"pr_assign: issues,number",
 		"pr_comment: number",
 		"pr_open: created,number,stack",
 		"pr_state: state",
-		"preflight: author,code,foreign,head,ok,pr,reason,stop",
+		"preflight: code,ok,reason,stop",
 		"queue: free,rows",
 		"spawn: runs",
 		"wait: answer,answers,timed_out",
@@ -81,9 +78,9 @@ func TestStepsVersion_TheShapeOfTheRecordedResultsIsTheGoldenShapeOfTheVersion(t
 // the table is the one the engine checks every step name against. A builtin with no result fields is in it too.
 var goldenKinds = map[string][]string{
 	"star30": {
-		"agent", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
-		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "now",
-		"pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "spawn", "wait", "write",
+		"agent", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
+		"item_comment", "item_create", "item_read", "item_status", "login", "now",
+		"pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "spawn", "wait", "write",
 	},
 }
 

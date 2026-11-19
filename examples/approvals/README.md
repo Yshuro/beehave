@@ -22,7 +22,7 @@ A document needs sign-off from several roles. One item is one request. The run f
 
 ## The extension question and the wait
 
-The extension question is a wait with `to` (the people in `escalate_to`) and `choices` (`extend`, `cancel`). A person answers with `beehave answer <item> --as rita extend`. The wait refuses a stranger. The ledger row of the extension names the person. The engine does not prove the name: anyone who can run `beehave answer` can give a listed name. The sign-offs stay signed files, because a wait proves no name.
+The extension question is a wait with `to` (the people in `escalate_to`), `quorum` (`extend_quorum` of them), `remind` (at half of its window) and `choices` (`extend`, `cancel`). Each person answers with `beehave answer <item> --as rita extend`. The extension needs `extend_quorum` answers, and one answer of `cancel` stops it. The wait refuses a stranger. The ledger row of the extension names the person. The engine does not prove the name: anyone who can run `beehave answer` can give a listed name. The sign-offs stay signed files, because a wait proves no name.
 
 The sign-offs do not use a wait with `quorum`. A quorum wait counts names that the engine does not prove, so it would add a weaker second path next to the signed inbox. The rounds that poll the inbox stay.
 

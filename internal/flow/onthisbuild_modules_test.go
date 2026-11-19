@@ -336,6 +336,34 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheSingleMergeAnd
 	}
 }
 
+func TestClient_ResumeOnThisBuildRefusesARunThatRecordedARetiredAssignStepAndNamesItsModule(t *testing.T) {
+	t.Parallel()
+
+	// Tracker module 1 recorded item_assign, forge module 2 recorded pr_assign and forge module 3 recorded board_sync. This build retired all three.
+	tests := map[string]struct {
+		module, step string
+		version      int
+	}{
+		"item_assign": {moduleTracker, "item_assign:a#1", 1},
+		"pr_assign":   {moduleForge, "pr_assign:a#1", 2},
+		"board_sync":  {moduleForge, "board_sync:a#1", 3},
+	}
+
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			harness, other := olderRoundRun(t, testItem, test.module, test.version)
+			recordSteps(t, harness, testItem, test.step)
+
+			err := other.ResumeOnThisBuild(testItem)
+
+			require.ErrorIs(t, err, errStranded)
+			require.ErrorContains(t, err, fmt.Sprintf("the step %q, and an older build recorded it for the %s module, and this build does not record it", test.step, test.module))
+		})
+	}
+}
+
 func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfNoModuleAndNamesTheStep(t *testing.T) {
 	t.Parallel()
 

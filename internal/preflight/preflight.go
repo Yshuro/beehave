@@ -78,25 +78,18 @@ func (s Stop) String() string {
 
 // Request names the pull request. ExpectHead is the full SHA the caller expects, ExpectBase the branch it gated against; an empty one is not checked.
 // Own lists the logins of the caller. An open pull request by any other login claims the item, and so does an assignee of the pull request or of a linked issue that is not in the list. An empty list checks no author and no assignee.
-// With Foreign set, a pull request claimed only by its author is not a stop: the result is Foreign, and no check after the author runs, so the head and the base are not compared. A foreign assignee still stops as Assigned, because that check comes first.
 type Request struct {
 	PR         int
 	ExpectHead string
 	ExpectBase string
 	Own        []string
-	Foreign    bool
 }
 
 // Result is the verdict: the stop, a one-line summary of the pull request, and the lines to show.
-// A foreign result has no stop. It names the pull request, its head commit and its author, so the caller can review that head.
 type Result struct {
 	Stop    Stop
 	Summary string
 	Lines   []string
-	Foreign bool
-	PR      int
-	Head    string
-	Author  string
 }
 
 // OK reports whether nothing changed.
@@ -158,27 +151,16 @@ func Check(ctx context.Context, r Reader, req Request, hold string) (Result, err
 		return Result{}, err
 	}
 
-	return verdict(v, req, summary, stop, lines), nil
+	return verdict(v, summary, stop, lines), nil
 }
 
-// verdict is the result for the first stop. In the foreign mode, the claim of another author is the foreign result and not a stop.
-func verdict(v view, req Request, summary string, stop Stop, lines []string) Result {
-	switch {
-	case stop == Claimed && req.Foreign:
-		return foreignResult(v, summary)
-	case stop == Unchanged:
+// verdict is the result for the first stop.
+func verdict(v view, summary string, stop Stop, lines []string) Result {
+	if stop == Unchanged {
 		lines = []string{fmt.Sprintf("OK: #%d is unchanged in every respect this checks.", v.pr)}
 	}
 
 	return Result{Stop: stop, Summary: summary, Lines: lines}
-}
-
-// foreignResult is the verdict for an open pull request of another author in the foreign mode: no stop, and the facts of the pull request.
-func foreignResult(v view, summary string) Result {
-	return Result{
-		Summary: summary, Foreign: true, PR: v.pr, Head: v.head, Author: v.author,
-		Lines: []string{fmt.Sprintf("OK: #%d is open and its author is '%s', who is not on the list of own logins. Review it.", v.pr, model.OrNull(v.author))},
-	}
 }
 
 // judge returns the first stop in the order, or Unchanged. Only the branch check reads the forge again.

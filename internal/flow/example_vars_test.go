@@ -172,7 +172,7 @@ func TestExampleVars_AProjectWithABadChangelogStopsTheItemRunBeforeAnyAgentStart
 
 	require.ErrorContains(t, err, "REFUSE: vars.changelog ")
 	assert.Empty(t, rig.h.agents.requests, "the refusal comes before the plan agent")
-	assert.Empty(t, rig.h.forge.placed)
+	assert.Empty(t, boardRuns(rig.h.commands.ran()))
 }
 
 func TestExampleVars_AProjectWithABadChangelogStopsTheRoundBeforeItStartsAChild(t *testing.T) {

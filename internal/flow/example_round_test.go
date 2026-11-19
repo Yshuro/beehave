@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -168,13 +169,15 @@ func TestRound_TheBaseRedsAreOneRecordWithTheTimeAndTheTip(t *testing.T) {
 	var written CommandRequest
 
 	for _, request := range rig.h.commands.requests {
-		if request.Run[0] == "tee" {
+		if slices.ContainsFunc(request.Env, func(pair string) bool { return strings.HasPrefix(pair, "BASE_REDS_FILE=") }) {
 			written = request
 		}
 	}
 
 	require.NotEmpty(t, written.Run, "the record is written by one program")
-	assert.Equal(t, []string{"tee", "base-reds.md"}, written.Run)
+	assert.Equal(t, []string{"sh", "-c", `umask 022 && exec tee -- "$BASE_REDS_FILE"`}, written.Run)
+	assert.Contains(t, written.Env, "BASE_REDS_FILE=base-reds.md", "the path goes in the environment of the program")
+	assert.Equal(t, time.Minute, written.Timeout)
 	assert.Contains(t, written.Stdin, "tip abc123 of main")
 	assert.Contains(t, written.Stdin, "Measured at 20")
 	assert.Contains(t, written.Stdin, "- lint-a\n- test-b\n")

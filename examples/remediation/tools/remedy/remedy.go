@@ -72,7 +72,7 @@ type command struct {
 
 // commands is the command table. The binary runs from it, `remedy --help` prints from it, and the test of workflow.star reads it.
 func commands() []command {
-	return slices.Concat(roundCommands(), mergeCommands(), syncCommands(), briefCommands(), ledgerCommands(), papersCommands(), spendCommands(), gateCommands())
+	return slices.Concat(roundCommands(), mergeCommands(), syncCommands(), briefCommands(), ledgerCommands(), boardCommands(), papersCommands(), spendCommands(), gateCommands())
 }
 
 // ledgerCommands are the subcommands that keep the lane ledger and check the scope of a pull request against it.
@@ -95,6 +95,18 @@ func ledgerCommands() []command {
 			usage:   scopeSyntax,
 			summary: "refuse a pull request that closes an issue it did not close at its first review, unless the ledger holds an owner-add row for it",
 			run:     scopeCommand,
+		},
+	}
+}
+
+// boardCommands are the subcommands that move a card on the project board.
+func boardCommands() []command {
+	return []command{
+		{
+			name:    "board",
+			usage:   boardSyntax,
+			summary: "put the pull request or issue on a GitHub Project board, set its status column, and refuse when the read-back shows another column",
+			run:     boardCommand,
 		},
 	}
 }
