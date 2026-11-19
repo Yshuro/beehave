@@ -226,7 +226,7 @@ func TestExampleBatch_TheChangelogChecksOfTwoItemsRecordTheirOwnSteps(t *testing
 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
-		if request.Run[0] == "git" {
+		if request.Run[0] == "git" && (request.Run[1] == "fetch" || request.Run[1] == "diff") {
 			return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil
 		}
 
@@ -255,7 +255,7 @@ func TestExampleBatch_AnItemWhoseHeadCannotBeFetchedIsHeldWithTheReasonAndTheOth
 			return CommandOutput{RC: 1, Stderr: "fatal: no such ref\n"}, nil
 		}
 
-		if request.Run[0] == "git" {
+		if request.Run[0] == "git" && (request.Run[1] == "fetch" || request.Run[1] == "diff") {
 			return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil
 		}
 
@@ -287,7 +287,7 @@ func TestExampleBatch_AnItemWhoseChangedPathsCannotBeReadIsHeldWithTheReasonAndT
 			return CommandOutput{RC: 1, Stderr: "fatal: bad revision\n"}, nil
 		}
 
-		if request.Run[0] == "git" {
+		if request.Run[0] == "git" && (request.Run[1] == "fetch" || request.Run[1] == "diff") {
 			return CommandOutput{Stdout: "CHANGELOG.md\n"}, nil
 		}
 

@@ -69,9 +69,6 @@ type script struct {
 	// undos are the finished writes of this run that name an undo, in the order of the writes. A failed run runs them in reverse.
 	undos []undoStep
 
-	// gated holds the head and the checks of each gate call of this run. before_review reads the checks of the gate call at the head that it judges.
-	gated []gatedCall
-
 	// stopped is the command that ended the item on a code of its stop_on_rc.
 	stopped *Stopped
 

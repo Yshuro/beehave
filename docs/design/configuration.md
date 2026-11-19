@@ -54,7 +54,7 @@ Each file is Starlark with the step limit of the workflow files. The limits and 
 
 The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `test_paths`, `notify`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
 
-`test_paths` is a list of globs for the test files, for example `["**/*_test.go", "**/testdata/**"]` or `["tests/**"]`. The revert run copies the added and changed test files of a candidate onto the base code, so a new test that needs a changed helper in a test file still builds there. A project with new tests and no `test_paths` gets a refusal from `before_review`.
+`test_paths` is a list of globs for the test files, for example `["**/*_test.go", "**/testdata/**"]` or `["tests/**"]`. The revert run copies the added and changed test files of a candidate onto the base code, so a new test that needs a changed helper in a test file still builds there. A project with new tests and no `test_paths` gets a refusal from the `before_review` function of `review_fix.star`.
 
 `notify` is a list of strings: a program and its arguments, for example `["ntfy", "publish", "beehave"]`. A wait for the owner is a `wait`, the wait for the owner after a gate job is lost, or the wait of a `merge` that asks the owner to decide a scope. When one opens, the engine runs the list once and adds two arguments, the item id and the question. The engine runs the program with no shell, so each argument stays one word, and it stops the program after 30 seconds. A program that fails, does not start or hangs gets a line in the log and never fails the wait. A reminder, a timeout and a dry run send no notice. A lost-job wait that opens again sends one notice for each opening. A project with no `notify` sends no notice. A run that waits for the owner resumes cleanly if you add or remove `notify` meanwhile: it sends no late notice and it does not repeat one. The config refuses a `notify` that is not a list of strings, an empty list and a list whose first item is empty.
 
@@ -92,7 +92,7 @@ The engine has no round settings. The remediation example keeps its own under th
 | `integration_pr` | Optional. A whole number of 0 or more. 0 means the round finds the pull request. |
 | `wait_hours` | Optional. A whole number of 1 or more. The default is 24. |
 | `merge` | Optional bool. The default is false. |
-| `base_reds`, `allow_paths` | Optional lists. |
+| `base_reds`, `allow_paths` | Optional lists. The globs of `allow_paths` follow [the setting `allow_paths`](agent-runs.md#the-setting-allow_paths) of an `agent` step, which lists the patterns that it refuses. |
 | `base_reds_file` | Optional. The default is `base-reds.md`. |
 | `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
 | `steps` | Optional dict from a step name to `{"model": text, "runner": text}`. The steps are `plan`, `implement`, `review`, `fix`, `fix_late`, `design`, `take_review`, `sync_review`, `sync_resolve`, `queue_audit` and `settle`. A step that the dict leaves out keeps its default model and the pool pick. A review on the model of the implementer is refused when two or more models are in use. See "The steps and the limits" in `durable-loop.md`. |

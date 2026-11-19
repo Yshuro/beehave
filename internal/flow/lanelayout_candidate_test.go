@@ -17,10 +17,10 @@ const candidateFlow = "load(\"@beehave//review_fix.star\", \"review_fix\")\n\n" 
 	"    loop = review_fix(item, impl, \"p.md\", \"p.md\", base = \"main\", rounds = 2, steps = " + loopSteps + ")\n" +
 	"    return {\"approved\": loop.review != None and loop.review.verdict == \"approve\"}\n"
 
-// loopEvent is one gate, before_review or agent step of a dry-run line: the kind and the label.
-var loopEvent = regexp.MustCompile(`^step \d+ (gate|before_review|agent):([a-z0-9-]+)#\d+(/read1)?: `)
+// loopEvent is one gate, agent or before-review command step of a dry-run line: the kind and the label.
+var loopEvent = regexp.MustCompile(`^step \d+ (gate|command|agent):((?:candidate-before-review-)?[a-z0-9-]+)#\d+(/read1)?: `)
 
-// loopEvents dry-runs the loop and returns its steps as "gate <label>", "before_review <label>" and "agent <name>", one for each step.
+// loopEvents dry-runs the loop and returns its steps as "gate <label>", "command <label>" and "agent <name>", one for each step.
 func loopEvents(t *testing.T, options ...DryOption) []string {
 	t.Helper()
 
@@ -51,16 +51,16 @@ func TestLaneLayout_TheInnerLoopIsScopedAndTheFullGateRunsOncePerCandidate(t *te
 	}{
 		"every_review_approves": {nil, []string{
 			"agent implement", "agent scoped-review-implement",
-			"gate candidate-gate", "before_review candidate-before-review", "agent candidate-review",
+			"gate candidate-gate", "command candidate-before-review-ancestor", "command candidate-before-review-keywords", "agent candidate-review",
 		}},
 		"the_first_review_sends_back": {[]DryOption{WithSendBack()}, []string{
 			"agent implement", "agent scoped-review-implement", "agent fix-scoped-2", "agent scoped-review-2",
-			"gate candidate-gate", "before_review candidate-before-review", "agent candidate-review",
+			"gate candidate-gate", "command candidate-before-review-ancestor", "command candidate-before-review-keywords", "agent candidate-review",
 		}},
 		"the_first_gate_is_red": {[]DryOption{WithRedGate()}, []string{
 			"agent implement", "agent scoped-review-implement", "gate candidate-gate",
 			"agent fix-scoped-1", "agent scoped-review-1",
-			"gate candidate-gate", "before_review candidate-before-review", "agent candidate-review",
+			"gate candidate-gate", "command candidate-before-review-ancestor", "command candidate-before-review-keywords", "agent candidate-review",
 		}},
 	}
 

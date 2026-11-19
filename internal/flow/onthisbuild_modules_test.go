@@ -312,6 +312,7 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheSingleMergeAnd
 		"a scope check and a merge":                          {4, []string{"scope-check:m#1", "merge:m#1"}, moduleRound},
 		"a scope check in the owner wait, under equal lists": {landVersion, []string{"scope-check:m#1", "wait:scope#1"}, moduleRound},
 		"a merge alone":                                      {4, []string{"merge:m#1"}, moduleLand},
+		"a before_review step":                               {gateVersion, []string{"before_review:candidate-before-review#1"}, moduleGate},
 		"the read of the owner merge wait":                   {landVersion, []string{"watch", "DBOS.sleep", "watch"}, moduleCore},
 	}
 
@@ -365,4 +366,28 @@ func TestClient_ResumeOnThisBuildMovesARunWhoseStepsEveryModuleOrTheEngineClaims
 	recordSteps(t, harness, testItem, "hold:start", "undo:write:w#1", "worktree", "others", "phase", "exclusive", "host_job", "DBOS.sleep")
 
 	require.NoError(t, other.ResumeOnThisBuild(testItem), "the run recorded no land step, and every step has a module or is a step of the engine")
+}
+
+func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAGateStepUnderGateModule5(t *testing.T) {
+	t.Parallel()
+
+	// Gate module 5 could record the step before_review, which this build retired. A run that recorded a gate step under it does not move.
+	harness := newHarness(t)
+	harness.flowIs(t, gateWaitFlow)
+	harness.gate.results = []GateResult{{Passed: true, Head: gatedHead}}
+
+	runInBackground(harness.engine(t), testItem)
+	waitOn(t, ownerAsks(t, harness))
+
+	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?",
+		versionWithModule(testVersion, moduleGate, 5), testRun)
+	require.NoError(t, err)
+	expireLease(harness)
+
+	other := harness.client(t, otherBuild)
+
+	err = other.ResumeOnThisBuild(testItem)
+
+	require.ErrorIs(t, err, errStranded)
+	require.ErrorContains(t, err, fmt.Sprintf("gate module at version 5 and this build has version %d", gateVersion))
 }

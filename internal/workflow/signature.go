@@ -260,11 +260,26 @@ func inputsRule(v starlark.Value) error {
 	return err
 }
 
-func allowRule(v starlark.Value) error {
-	_, _, err := AllowPaths(v)
+// pathsOutsideRule is the rule of the allow keyword of paths_outside.
+func pathsOutsideRule(v starlark.Value) error {
+	_, err := PathsOutsideAllow(v)
 
 	return err
 }
+
+// allowRule is the rule of allow_paths of agent, a list of globs of the agent scope.
+func allowRule(v starlark.Value) error {
+	_, _, err := AllowList("allow_paths", v)
+
+	return err
+}
+
+// The builtins that match text and record no step.
+const (
+	pathsOutsideName      = "paths_outside"
+	closingReferencesName = "closing_references"
+	allowWord             = "allow"
+)
 
 func one(name string, values []string) Param {
 	return Param{Name: name, Kind: KindText, Values: values}
@@ -328,6 +343,9 @@ func valueSignatures() map[string][]Param {
 		"env":     {req(nameKeyword, KindText), {Name: "default", Kind: KindText, AsValue: true}},
 		"now":     {},
 		factsName: {},
+		// The two matchers judge text and run no step. They read the dialect of the agent scope and the grammar of the merge guard.
+		pathsOutsideName:      {{Name: "allow", Kind: KindList, Required: true, Rule: pathsOutsideRule}, {Name: "paths", Kind: KindList, Required: true, Rule: wordsRule("paths")}},
+		closingReferencesName: {req("text", KindText)},
 	}
 }
 
@@ -374,9 +392,8 @@ func swarmSignatures() map[string][]Param {
 // readSignatures holds the builtins that read the tracker, the forge or the item folder.
 func readSignatures() map[string][]Param {
 	return map[string][]Param{
-		itemReadName:     {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
-		prStateName:      {req("pr", KindInt), opt(nameKeyword, KindText)},
-		beforeReviewName: {filled("base"), filled("head"), ruled("allow", KindList, allowRule), opt("integration", KindBool), opt(nameKeyword, KindText)},
+		itemReadName: {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
+		prStateName:  {req("pr", KindInt), opt(nameKeyword, KindText)},
 	}
 }
 

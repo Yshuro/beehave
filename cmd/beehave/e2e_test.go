@@ -240,8 +240,8 @@ func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, err
 	return flow.GateKey{}, nil
 }
 
-// e2eCommands answers the command calls of the example: the mutation job on the host of the project.
-// Each call adds its command line to mutation.log. The Nth call takes the Nth line of the file mutations: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, any other text or no line is a clean run.
+// e2eCommands answers the command calls of the example: the git steps of the checks before review and the mutation job on the host of the project.
+// Each call adds its command line to mutation.log. The Nth call of any command takes the Nth line of the file mutations: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, any other text or no line is a clean run.
 type e2eCommands struct{ dir string }
 
 func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.CommandOutput, error) {

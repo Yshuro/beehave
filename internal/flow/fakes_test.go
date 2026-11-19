@@ -568,6 +568,8 @@ type harness struct {
 	repository func(project string) bool
 	// facts is the project of a run as the config holds it. It is nil, and so every project has no facts, unless a test sets it.
 	facts func(project string) model.Project
+	// bare stops the harness from giving the facts a source when the test set none, so the project has no repository in its facts.
+	bare bool
 	// mutation is the command that the facts of the run hold as vars.mutation_command. It is nil, and so the vars hold none, unless a test sets it.
 	mutation []string
 	// refuseGate is the refusal of a gate on this machine. It is nil, and so no gate is refused, unless a test sets it.

@@ -29,7 +29,6 @@ func TestRecordGate_AStepThatCannotBeRecordedFailsTheCall(t *testing.T) {
 	_, err = s.recordGate("g", gateOutputs(true, "h", "", "", nil, nil, nil))
 
 	require.Error(t, err)
-	assert.Empty(t, s.gated, "a gate that was not recorded is not a gate of the run")
 }
 
 func TestGateStep_TheResultOfEachStepIsAnOutputOfTheStep(t *testing.T) {

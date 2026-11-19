@@ -304,10 +304,8 @@ func (e *Engine) lostProof(ctx context.Context, project string, lost LostJob) (m
 
 // lostJobWait is host.lost_job_wait of the project as the config of this engine holds it. A project with no host block waits for the default.
 func (e *Engine) lostJobWait(project string) time.Duration {
-	if e.deps.Facts != nil {
-		if block := e.deps.Facts(project).Host; block != nil {
-			return block.LostJobWait
-		}
+	if block := e.facts(project).Host; block != nil {
+		return block.LostJobWait
 	}
 
 	return config.DefaultLostJobWait

@@ -2,7 +2,7 @@
 
 Part of the [beehave architecture](../architecture.md).
 
-A workflow is one Starlark file. The engine calls its `main` function with the work item, and each builtin call except `struct` and `json` runs as a recorded DBOS step, so a restart replays the file and never runs a finished step again. This part lists the builtins, their arguments and results, the pinning of files, the static check and the examples.
+A workflow is one Starlark file. The engine calls its `main` function with the work item, and each builtin call except `struct`, `json`, `paths_outside` and `closing_references` runs as a recorded DBOS step, so a restart replays the file and never runs a finished step again. This part lists the builtins, their arguments and results, the pinning of files, the static check and the examples.
 
 ## Workflow files
 
@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -72,7 +72,7 @@ Four cases are not safe today, and a later change fixes each of them.
 | `host_teardown` on ssh and Slurm | Safe. | The step banks the work and leaves the machine up. The bank reads first and pushes only what is not banked, so a repeat pushes nothing. A test runs the bank once, and none runs it twice. |
 | `agent` | The step is a lost step. It resumes the session or runs again with a note. | `durable-loop.md` describes the start mark of a phase. |
 
-The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `before_review`, `earlier_calls`, `gather`) change nothing outside the run, so a repeat is safe.
+The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `earlier_calls`, `gather`) change nothing outside the run, so a repeat is safe.
 
 #### The folder of a program
 
@@ -347,11 +347,17 @@ At the start of a run, the engine lists the other orchestrators that hold items 
 
 ### `before_review`
 
-`before_review(base, head, allow, integration, name)` runs the checks between the last fix and the review. It returns `ok`, `findings`, `new_tests`, `revert`, `base` and `keywords`.
+`before_review` is not a builtin. It is a function of the library: `load("@beehave//review_fix.star", "before_review")`. `gate` judges the code of a head. `before_review` judges the head against the base, with the result of `gate`.
 
-The call needs a `gate` call in the same run with `base`, at the same `head`. It reads the checks of that gate: the new tests and the secret scan. Without that gate call, the step fails with an error that says so. A gate without `base` holds no checks, so the call refuses it as a cut log.
+`before_review(check, base, allow = None, name = "before-review")` returns `struct(ok, findings)`. `check` is the result of a `gate(base = ...)` call. The function reads `check.new_tests`, `check.checks` (the new tests and the secret scan) and `check.revert` from it. A gate without `base` holds no checks, so the function refuses it as a cut log. `base` is a git ref.
 
-A finding is a result, not an error. `ok` is true when `findings` is empty. The call gives a finding when:
+The function reads `facts()` first. If the project has no repository (no `source` and no `forge` in the project file), it stops the item before any step, with a message that names the keys to set. It is a refusal of the call, not a finding.
+
+`allow` is a list of globs in the dialect of `allow_paths` of `agent`. With no `allow`, every path is allowed. An empty list, an empty entry, an absolute path, a path with a `..` part and a pattern that does not parse stop the item before any step, with a message that names the pattern.
+
+The function runs git in the item folder with three `command` steps: `<name>-ancestor`, `<name>-paths` (only when `allow` is set) and `<name>-keywords`. The step `<name>-paths` lists the changed paths, and the builtin `paths_outside` matches them. The step `<name>-keywords` lists the commit messages, and the builtin `closing_references` reads them. A git command that fails with an exit code other than the ones that it documents stops the item with an error. It is never a finding.
+
+A finding is a result, not an error. `ok` is true when `findings` is empty. The function gives a finding when:
 
 - the log of the gate job has no end line (a cut log),
 - the head adds no new test,
@@ -359,10 +365,18 @@ A finding is a result, not an error. `ok` is true when `findings` is empty. The 
 - a new test passed or was skipped on the base code, or the revert run proves nothing (see the revert run in `gate.md`),
 - the secret scan did not exit with 0, or left no single exit code,
 - the head is not a descendant of `base`, by `git merge-base --is-ancestor`,
-- the head changed a path that `allow` does not allow (a list of globs, as `allow_paths` of `agent`),
-- a commit message between `base` and `head` has a closing keyword, unless `integration` is true.
+- the head changed a path that `allow` does not allow,
+- a commit message between `base` and `head` has a closing keyword. The grammar is the one of the merge guard, so a number on the next line counts. The finding names the commit and the issue.
 
-`new_tests` lists the new tests of the gate. `revert` is the verdict of the revert run of the gate, `pass` or `fail`; the result of `gate` carries the same field. `base` is true when the head descends from `base` and holds the scope. `keywords` lists the closing references of the commit messages. The step reads git in the item folder and records its outputs, so a replay reads them again.
+The steps are `command` steps, so a replay reads their records and runs no git again. A run recorded with the builtin step `before_review` does not move to this build with `resume --on-this-build`: the gate module is at version 6, and the refusal names it.
+
+#### `paths_outside` and `closing_references`
+
+`paths_outside(allow, paths)` returns the sorted paths in `paths` that no glob of `allow` matches. It reads `allow` with the same code as `allow_paths` of `agent`, so the two judge a path alike. Unlike `allow_paths`, `allow` must be a list: `None` is refused, because a check with no scope has nothing to compare.
+
+`closing_references(text)` returns the issues that `text` closes with a closing keyword, each as `#N` or `owner/repo#N`, in the order of the text. It reads the grammar of the merge guard.
+
+Both builtins match text. They run no command, record no step and need no repository.
 
 ### `queue`
 

@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/bmatcuk/doublestar/v4"
 	"go.starlark.net/starlark"
 
 	"github.com/tobocop2/beehave/internal/workflow"
@@ -25,7 +24,7 @@ type scope struct {
 // readScope reads the allow_paths argument: a list of globs in the doublestar dialect. A `*` stops at a slash and a `**` crosses it.
 // A missing argument gives no scope.
 func readScope(v starlark.Value) (scope, error) {
-	patterns, globs, err := workflow.AllowPaths(v)
+	patterns, globs, err := workflow.AllowList("allow_paths", v)
 
 	return scope{patterns: patterns, globs: globs}, err
 }
@@ -33,7 +32,7 @@ func readScope(v starlark.Value) (scope, error) {
 func (s scope) active() bool { return len(s.globs) > 0 }
 
 func (s scope) allows(name string) bool {
-	return slices.ContainsFunc(s.globs, func(g string) bool { return doublestar.MatchUnvalidated(g, name) })
+	return workflow.AllowsPath(s.globs, name)
 }
 
 // startMark is what an agent call with a scope records when it starts: the commit, and the untracked and ignored entries that were already

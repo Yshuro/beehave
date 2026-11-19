@@ -47,9 +47,10 @@ func StepModule() step.Module {
 	return module
 }
 
-// recordsCountedStep is false for the builtins that record no counted step. merge names its steps batch:<name>.<kind>#<item>, and sandbox and struct record no step.
+// recordsCountedStep is false for the builtins that record no counted step. merge names its steps batch:<name>.<kind>#<item>, and sandbox, struct,
+// paths_outside and closing_references record no step: the last two match text, so a replay computes the same answer from the same input.
 func recordsCountedStep(builtin string) bool {
-	return !slices.Contains([]string{mergeKey, recordedSandbox, "struct"}, builtin)
+	return !slices.Contains([]string{mergeKey, recordedSandbox, "struct", "paths_outside", "closing_references"}, builtin)
 }
 
 // stepDefs lists the builtins of this package. The names are the builtins of workflow.Builtins less json, which is the module of the Starlark library.
@@ -60,7 +61,6 @@ func stepDefs() []builtinDef {
 // repositoryDefs lists the builtins that read git or a forge. The engine refuses a call of one of them in a project with no repository.
 func repositoryDefs() []builtinDef {
 	return []builtinDef{
-		{name: "before_review", call: (*script).beforeReview, repository: true},
 		{name: "board_sync", call: (*script).boardSync, repository: true},
 		{name: "gate", call: (*script).gate, repository: true, exempt: "run"},
 		{name: "merge", call: (*script).batchMerge, repository: true},
@@ -87,6 +87,7 @@ func itemDefs() []builtinDef {
 func runDefs() []builtinDef {
 	return []builtinDef{
 		{name: "agent", call: (*script).agent},
+		{name: "closing_references", call: closingReferences},
 		{name: "command", call: (*script).command},
 		{name: "earlier_calls", call: (*script).earlierCalls},
 		{name: "env", call: (*script).env},
@@ -95,6 +96,7 @@ func runDefs() []builtinDef {
 		{name: "host_teardown", call: (*script).hostTeardown},
 		{name: "host_up", call: (*script).hostUp},
 		{name: "now", call: (*script).now},
+		{name: "paths_outside", call: pathsOutside},
 		{name: "queue", call: (*script).queue},
 		{name: "sandbox", call: (*script).sandbox},
 		{name: "spawn", call: (*script).spawn},
@@ -122,13 +124,9 @@ func scripted(call scriptCall) func(step.Call, *starlark.Builtin, starlark.Tuple
 	}
 }
 
-// Project is the project of the run as the config holds it. A nil Facts means that every project has no facts.
+// Project is the project of the run as the config holds it.
 func (s *script) Project() model.Project {
-	if s.e.deps.Facts == nil {
-		return model.Project{}
-	}
-
-	return s.e.deps.Facts(s.in.Project)
+	return s.e.facts(s.in.Project)
 }
 
 // Item is the id of the item of the run.
