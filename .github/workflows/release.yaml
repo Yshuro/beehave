@@ -21,10 +21,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: goreleaser/goreleaser-action@v7
-        with:
-          version: v2.20.2
-          args: release --clean
+      - name: Install goreleaser
+        run: make goreleaser-install
+
+      - name: Publish the release
+        run: goreleaser release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_SSH_KEY: ${{ secrets.HOMEBREW_TAP_SSH_KEY }}

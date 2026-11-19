@@ -37,6 +37,8 @@ jobs:
         with:
           version: v2.15.0
           args: --timeout=5m
+          # The action builds its cache key without GOOS, so this run would save under the key of the Linux run.
+          skip-cache: true
 
       - name: Vet the macOS files
         run: make vet GOOS=darwin
