@@ -264,7 +264,7 @@ Removal:
 - On an older kernel, the helper first loads a seccomp filter that refuses `socket(AF_UNIX)`, `io_uring_setup`, every system call of another interface than the native one, and `socket` for every address family with bit 0 set (`AF_UNIX`, `AF_KEY`, `AF_PACKET` and `AF_BLUETOOTH` among them). So the command makes no unix socket at all.
 - `socketpair` stays open: its sockets have no name and reach nothing outside the command.
 
-`Check` runs a child that applies the same filter and the same Landlock configuration to a command that does nothing. A kernel or a container that refuses either makes the enforcer unavailable. The gate is then refused, and never fails at run time.
+`Check` runs a child that applies the same filter and the same Landlock configuration to a command that does nothing. A kernel or a container that refuses either makes the enforcer unavailable. The gate is then refused. At run time the helper gives these exit codes before the command runs: 127 for a program that is not found, and 125 for a plan that it cannot read, a plan with no command, a confinement that fails, and an exec that fails (for example EAGAIN or ENOMEM under a process or memory limit). After the exec the exit code is the one of the command, or 128 plus the signal number when a signal ended it.
 
 ### When no enforcer can run
 

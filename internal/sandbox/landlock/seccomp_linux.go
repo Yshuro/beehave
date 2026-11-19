@@ -32,18 +32,20 @@ const (
 // newKernel returns the seccomp interface of this machine. A test builds a filterKernel with its own functions.
 func newKernel() filterKernel { return filterKernel{assemble: bpf.Assemble, call: rawCall} }
 
-// filterKernel is what the socket filter asks of the system: the assembler of the program and a system call.
+// filterKernel is what the socket filter asks of the system: the assembler of the program and a system call. The call returns the value of the system call
+// and its error.
 type filterKernel struct {
 	assemble func([]bpf.Instruction) ([]bpf.RawInstruction, error)
-	call     func(number, a, b uintptr, c unsafe.Pointer) error
+	call     func(number, a, b uintptr, c unsafe.Pointer) (uintptr, error)
 }
 
-func rawCall(number, a, b uintptr, c unsafe.Pointer) error {
-	if _, _, errno := unix.Syscall(number, a, b, uintptr(c)); errno != 0 {
-		return errno
+func rawCall(number, a, b uintptr, c unsafe.Pointer) (uintptr, error) {
+	result, _, errno := unix.Syscall(number, a, b, uintptr(c))
+	if errno != 0 {
+		return result, errno
 	}
 
-	return nil
+	return result, nil
 }
 
 // socketProgram is the filter. Whatever the call, it first refuses every system call of another interface than the native one of this machine (a 32-bit
@@ -85,18 +87,28 @@ func (k filterKernel) load() error {
 		return fmt.Errorf("assemble the socket filter: %w", err)
 	}
 
-	if err := k.call(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, nil); err != nil {
+	if _, err := k.call(unix.SYS_PRCTL, unix.PR_SET_NO_NEW_PRIVS, 1, nil); err != nil {
 		return fmt.Errorf("set no_new_privs for the socket filter: %w", err)
 	}
 
 	filter := sockFilters(raw)
 	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]} //nolint:gosec // the program has twelve instructions
 
-	err = k.call(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, unix.SECCOMP_FILTER_FLAG_TSYNC, unsafe.Pointer(&program)) //nolint:gosec // the call reads the program at once
+	failedThread, err := k.call(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, unix.SECCOMP_FILTER_FLAG_TSYNC, unsafe.Pointer(&program)) //nolint:gosec // the call reads the program at once
 	runtime.KeepAlive(filter)
 
+	return checkSync(failedThread, err)
+}
+
+// checkSync turns the answer of the filter load into an error. With the sync flag, the kernel answers a partial sync with the id of the thread that could not
+// take the filter and no error number.
+func checkSync(failedThread uintptr, err error) error {
 	if err != nil {
 		return fmt.Errorf("load the socket filter: %w", err)
+	}
+
+	if failedThread != 0 {
+		return fmt.Errorf("load the socket filter: thread %d did not take it", failedThread)
 	}
 
 	return nil
