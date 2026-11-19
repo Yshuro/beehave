@@ -41,6 +41,9 @@ const (
 	swarmClaude     = "swarm-claude.sh"
 )
 
+// swarmPoll is the interval at which the engine of a swarm script looks for work and for the result of a run. It is short, so that a script does not wait for the engine default (seconds) at every step.
+const swarmPoll = 50 * time.Millisecond
+
 // swarmLock orders the reads and writes of the pull request file: the engine calls the forge from several runs at once.
 var swarmLock sync.Mutex
 
@@ -59,7 +62,10 @@ func e2eSwarm() {
 		}
 		table.forges[forgegithub.Name] = swarmForge
 
-		return newEngineOn(ctx, cfg, opts, idle, table)
+		deps := depsOn(cfg, opts, loginsReading(cfg, idle), table)
+		deps.Clock.Poll = swarmPoll
+
+		return flow.NewEngine(ctx, withModules(opts), deps)
 	})
 	e2eRecordRun(os.Args[1:])
 
