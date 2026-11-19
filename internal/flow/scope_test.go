@@ -4,10 +4,14 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// secondCallBound is the time that a run needs after the answer to land a member twice. It stays far below the bound of the package, so a lost kept issue fails its test by name.
+const secondCallBound = 30 * time.Second
 
 // scopeBody gates the item once, which fixes its scope, then merges the pull request of the item.
 func (r *batchRig) scopeBody() string {
@@ -168,6 +172,22 @@ func TestMerge_AMemberOfAnotherItemTakesItsBaselineFromTheEarlierRunOfThatMember
 	assert.Equal(t, []string{"1"}, rig.merger.landed())
 }
 
+func TestMerge_TheScopeQuestionListsTheIssuesOfTheFirstReviewNextToTheNewIssue(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.h.forge.closing = [][]int{{12, 14}, {12, 13, 14}}
+	engine := rig.engine(t)
+	rig.fixScopeOf(t, engine, "1")
+	done := rig.runMergeAs(t, engine, "9", "1")
+
+	question := questionOf(t, rig.h, "9")
+
+	assert.Contains(t, question, "closes #13 now, and did not at its first review (then: #12 #14).", "the owner sees the issues that the new one is compared against")
+	require.NoError(t, rig.h.client(t, testVersion).Answer("9", "keep #13"))
+	require.NoError(t, receive(t, done).err)
+}
+
 func TestMerge_TheIssuesTheOwnerKeptGoToTheMergeAsKept(t *testing.T) {
 	t.Parallel()
 
@@ -196,7 +216,13 @@ func TestMerge_ASecondMergeCallOfAMemberInTheSameRunAsksNoSecondQuestionForAKept
 
 	questionOf(t, rig.h, "9")
 	require.NoError(t, rig.h.client(t, testVersion).Answer("9", "keep #13"))
-	require.NoError(t, receive(t, done).err)
+
+	select {
+	case outcome := <-done:
+		require.NoError(t, outcome.err)
+	case <-time.After(secondCallBound):
+		t.Fatalf("the run of item 9 did not end within %s after the answer: the second call of the member asked a second question, so the kept issue was lost", secondCallBound)
+	}
 
 	assert.Equal(t, []string{"1", "1"}, rig.merger.landed(), "the kept issue needs no second answer, so the second call lands the member")
 	require.Len(t, rig.merger.given, 2)
