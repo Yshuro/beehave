@@ -105,7 +105,9 @@ func TestExampleChangelog_TheMergeRefusesAChangeThatLeavesTheDeclaredChangelogAl
 			t.Parallel()
 
 			rig := newRoundRig(t, "1")
-			rig.project.Vars["changelog"] = tc.changelog
+			if tc.changelog != "" {
+				rig.project.Vars["changelog"] = tc.changelog
+			}
 
 			previous := rig.h.commands.reply
 			rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {

@@ -263,7 +263,7 @@ def _round_selector(block, got):
 def settings(project):
     """Returns the settings of the round as a dict, with the default of each key that the project vars leave out.
     The engine reads no setting. This function is the one check of them: it refuses project vars with no `round`, a missing key, a key of the wrong type, a value out of range and a key that is no setting,
-    each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
+    and it refuses a method setting of the vars (the lists, the dicts, the changelog and the board) of the wrong type or form, each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
     if "round" not in project.vars:
         fail("REFUSE: the project vars hold no round. Add the settings of the round to the project file: vars = {\"round\": {\"base\": \"integration/r2\", \"owner\": \"your-login\", \"lane_cap\": 4, \"fix_rounds\": 5, \"label\": \"beehave-round\"}}.")
 
@@ -296,8 +296,83 @@ def settings(project):
     _round_lists(got)
     _round_lane(got)
     _round_selector(block, got)
+    _method_vars(project.vars)
 
     return got
+
+# The method settings of the project vars that the example and its prompts read. Each key is optional. The lists hold text, the dicts map text to text.
+METHOD_LISTS = ["gate_files", "conventions", "brief_rules", "stacked_rules", "limits", "traps", "token_rules"]
+METHOD_DICTS = ["people", "epics"]
+BOARD_KEYS = ["number", "started", "merged", "owner"]
+
+def _vars_refuse(key, why):
+    fail("REFUSE: vars.%s %s" % (key, why))
+
+def _is_text(value):
+    return type(value) == "string" and value.strip() != ""
+
+def _method_vars(vars):
+    """Refuses a method setting of the project vars that has the wrong type or a blank entry, before any step runs. The engine keeps vars a free map, so this function is the one check of these keys.
+    The keys are the lists and dicts of facts, the changelog path and the board. A key that the project leaves out passes. Each refusal names the key and the fix."""
+    for key in METHOD_LISTS:
+        if key in vars:
+            _method_list(key, vars[key])
+
+    for key in METHOD_DICTS:
+        if key in vars:
+            _method_dict(key, vars[key])
+
+    if "changelog" in vars:
+        _method_changelog(vars["changelog"])
+
+    if "board" in vars:
+        _method_board(vars["board"])
+
+def _method_list(key, value):
+    if type(value) != "list":
+        _vars_refuse(key, "is %r, of type %s. Write a list of text, for example [\"a fact\"]." % (value, type(value)))
+
+    for entry in value:
+        if not _is_text(entry):
+            _vars_refuse(key, "lists %r. Write each fact as text that is not blank, or remove the item." % (entry,))
+
+def _method_dict(key, value):
+    if type(value) != "dict":
+        _vars_refuse(key, "is %r, of type %s. Write a dict of text to text, for example {\"name\": \"value\"}." % (value, type(value)))
+
+    for name, entry in value.items():
+        if not _is_text(name) or not _is_text(entry):
+            _vars_refuse(key, "holds a blank or non-text name or value (%r: %r). Write both as text or remove the entry." % (name, entry))
+
+def _method_changelog(value):
+    # The check compares the path with the lines that git prints, so only the exact form of such a line matches.
+    if not _is_text(value):
+        _vars_refuse("changelog", "is %r. Write the path of the changelog, a relative path to a file of the repository, or leave the key out." % (value,))
+
+    if value.startswith("/") or value.startswith("./") or value.endswith("/") or ".." in value.split("/"):
+        _vars_refuse("changelog", "is %r. The changelog is a file of the repository, and the check compares it with the paths that git prints. Use a relative path to a file, with no `..`, no leading `/` or `./` and no trailing `/`." % (value,))
+
+def _method_board(value):
+    if type(value) != "dict":
+        _vars_refuse("board", "is %r, of type %s. Write a dict, for example {\"number\": 3, \"started\": \"In Progress\", \"merged\": \"Done\"}; \"owner\" is optional." % (value, type(value)))
+
+    for key in value:
+        if key not in BOARD_KEYS:
+            _vars_refuse("board." + key, "is not a board setting. The settings are: %s." % ", ".join(BOARD_KEYS))
+
+    for key in ["number", "started", "merged"]:
+        if key not in value:
+            _vars_refuse("board", "has no %s. Write vars = {\"board\": {\"number\": 3, \"started\": \"In Progress\", \"merged\": \"Done\"}}; \"owner\" is optional." % key)
+
+    if type(value["number"]) != "int" or value["number"] <= 0:
+        _vars_refuse("board.number", "is %r. Write the number of the GitHub Project, a whole number above 0." % (value["number"],))
+
+    for key in ["started", "merged"]:
+        if not _is_text(value[key]):
+            _vars_refuse("board." + key, "is %r. Write the name of the column, text that is not blank." % (value[key],))
+
+    if "owner" in value and type(value["owner"]) != "string":
+        _vars_refuse("board.owner", "is %r. Write the login of the owner of the project as text, or leave the key out." % (value["owner"],))
 
 def regressions(value):
     """Returns the regression count that the output `regressions` of a report holds, or None when the count is unknown.
@@ -896,10 +971,6 @@ def _move_card(project, stage, issue = 0):
     board = project.vars.get("board")
     if board == None:
         return
-
-    for key in ["number", "started", "merged"]:
-        if key not in board:
-            fail("REFUSE: vars.board has no %s. Write vars = {\"board\": {\"number\": 3, \"started\": \"In Progress\", \"merged\": \"Done\"}}; \"owner\" is optional." % key)
 
     board_sync(
         name = "board-" + stage + ("-" + str(issue) if issue != 0 else ""),
