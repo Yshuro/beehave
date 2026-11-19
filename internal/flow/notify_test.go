@@ -350,3 +350,35 @@ func TestNotify_AResumeAfterTheNotifyKeyIsAddedReplaysTheWaitCleanly(t *testing.
 	require.NotContains(t, got.Error(), "UnexpectedStep")
 	require.Zero(t, more, "the wait opened with no notify, so the resume sends no late notice")
 }
+
+func TestNotify_AReminderOfAnOpenWaitSendsNoNotice(t *testing.T) {
+	t.Parallel()
+
+	clk := newRemindClock(time.Now())
+	h := newHarness(t)
+	h.facts = notifyFacts(notifyProgram)
+	h.flowIs(t, remindFlow)
+
+	engine := remindEngine(t, h, clk)
+	client := h.client(t, testVersion)
+	done := runInBackground(engine, testItem)
+
+	waitOn(t, notified(t, h, engine))
+	waitOn(t, waiting[struct{}]{what: "the run to show its next reminder", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) {
+		a := askedNow(t, client)
+
+		return struct{}{}, a != nil && !a.NextRemind.IsZero(), nil
+	}})
+	clk.advance(35 * time.Minute)
+	waitOn(t, waiting[struct{}]{what: "the run to send one reminder", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, remindedIs(t, client, 1), nil }})
+
+	require.NoError(t, client.AnswerAs(testItem, "ana", "yes"))
+	require.NoError(t, receive(t, done).err)
+	require.Len(t, notifyRequests(h), 1, "the open of the wait sent one notice, and the reminder sent none")
+}
+
+func TestNotify_TheDryRunFactsOfAProjectHoldNoNotifyCommand(t *testing.T) {
+	t.Parallel()
+
+	require.Empty(t, dryDeps(t.TempDir(), "head", "12", nil, dryChoice{}).Facts(testProject).Notify, "a dry run notifies nobody")
+}

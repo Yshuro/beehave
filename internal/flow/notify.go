@@ -17,21 +17,20 @@ const (
 )
 
 // announce runs the notify command of the project when a wait opens: the configured list, then the item id and the question, each as one argument.
+// The step is recorded at every wait, with or without a notify command, so the steps of a run do not depend on the config of the process that resumes it.
 // A notify that fails, cannot start or hangs is logged and never fails the wait. The step error is a cancel or a refused record, and the receive that follows reports it.
 func (e *Engine) announce(ctx dbos.Context, project, item, question string) {
-	if e.deps.Facts == nil {
-		return
-	}
-
-	notify := e.deps.Facts(project).Notify
-	if len(notify) == 0 {
-		return
-	}
-
-	request := CommandRequest{Project: project, Item: item, Run: append(slices.Clone(notify), item, e.redact(question)), Timeout: notifyTimeout}
-
 	_, _ = runStep(e, ctx, notifyStep, func(c context.Context) (struct{}, error) { //nolint:errcheck // the receive of the wait reports a cancel or a refused record
-		e.warnNotify(c, item, request)
+		if e.deps.Facts == nil {
+			return struct{}{}, nil
+		}
+
+		notify := e.deps.Facts(project).Notify
+		if len(notify) == 0 {
+			return struct{}{}, nil
+		}
+
+		e.warnNotify(c, item, CommandRequest{Project: project, Item: item, Run: append(slices.Clone(notify), item, e.redact(question)), Timeout: notifyTimeout})
 
 		return struct{}{}, nil
 	})
