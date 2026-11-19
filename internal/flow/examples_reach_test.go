@@ -14,6 +14,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.starlark.net/resolve"
+	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
 
 	"github.com/tobocop2/beehave/internal/model"
@@ -55,26 +57,18 @@ func contractLoadTarget(from, label string) string {
 	return path.Join(path.Dir(from), strings.TrimPrefix(label, "//"))
 }
 
-// contractScope is the code that a name is read in: a function (def is set) or a statement at the top of a file. bound holds the names that the code binds itself,
-// its parameters, its assignments and its loop variables. A read of a bound name is a read of a local variable, so it reaches no function.
-type contractScope struct {
-	rel   string
-	def   *syntax.DefStmt
-	node  syntax.Node
-	bound map[string]bool
-}
-
 // contractEntryParam is a function that starts a child run with a parameter as the entry: the child names are the strings that a call passes for the parameter.
 type contractEntryParam struct {
 	fn    contractFunc
 	param string
 }
 
-// contractGraph is the functions of the files, the names that the files load, and the functions that an entry reaches so far.
+// contractGraph is the functions of the files, the names that the files load, the values that each variable is bound to, and the functions that an entry reaches so far.
+// The resolver of go.starlark.net binds each name of a file. loads and sources are keyed by the name that first binds it (see contractFirst).
 type contractGraph struct {
 	defs        map[contractFunc]*syntax.DefStmt
-	loads       map[contractFunc]contractFunc
-	consts      map[contractFunc]string
+	loads       map[*syntax.Ident]contractFunc
+	sources     map[*syntax.Ident][]syntax.Expr
 	loaded      map[string]bool
 	calls       map[contractFunc][]*syntax.CallExpr
 	entryParams []contractEntryParam
@@ -82,23 +76,24 @@ type contractGraph struct {
 	queue       []contractFunc
 }
 
-// newContractGraph indexes the functions, the string constants and the loads of the files.
+// newContractGraph indexes the functions, the loads and the bound values of the files.
 func newContractGraph(files []contractParsed) *contractGraph {
 	g := &contractGraph{
-		defs: map[contractFunc]*syntax.DefStmt{}, loads: map[contractFunc]contractFunc{}, consts: map[contractFunc]string{}, loaded: map[string]bool{},
+		defs: map[contractFunc]*syntax.DefStmt{}, loads: map[*syntax.Ident]contractFunc{}, sources: map[*syntax.Ident][]syntax.Expr{}, loaded: map[string]bool{},
 		calls: map[contractFunc][]*syntax.CallExpr{}, reached: map[contractFunc]bool{},
 	}
 
 	for _, parsed := range files {
 		for _, stmt := range parsed.file.Stmts {
 			g.index(parsed.rel, stmt)
+			syntax.Walk(stmt, g.indexSource)
 		}
 	}
 
 	return g
 }
 
-// index records one top-level statement: a function, a load or a string constant.
+// index records one top-level statement: a function or a load.
 func (g *contractGraph) index(rel string, stmt syntax.Stmt) {
 	switch s := stmt.(type) {
 	case *syntax.DefStmt:
@@ -108,16 +103,66 @@ func (g *contractGraph) index(rel string, stmt syntax.Stmt) {
 		g.loaded[target] = true
 
 		for i, to := range s.To {
-			g.loads[contractFunc{rel, to.Name}] = contractFunc{target, s.From[i].Name}
-		}
-	case *syntax.AssignStmt:
-		name, isName := s.LHS.(*syntax.Ident)
-		text, isText := contractString(s.RHS)
-
-		if s.Op == syntax.EQ && isName && isText {
-			g.consts[contractFunc{rel, name.Name}] = text
+			g.loads[to] = contractFunc{target, s.From[i].Name}
 		}
 	}
+}
+
+// indexSource records the value that an assignment, a loop or a comprehension clause binds each name of its target to.
+func (g *contractGraph) indexSource(n syntax.Node) bool {
+	bindTo := func(value syntax.Expr) func(*syntax.Ident) {
+		return func(id *syntax.Ident) {
+			if first := contractFirst(id); first != nil {
+				g.sources[first] = append(g.sources[first], value)
+			}
+		}
+	}
+
+	switch x := n.(type) {
+	case *syntax.AssignStmt:
+		contractTargets(x.LHS, bindTo(x.RHS))
+	case *syntax.ForStmt:
+		contractTargets(x.Vars, bindTo(x.X))
+	case *syntax.ForClause:
+		contractTargets(x.Vars, bindTo(x.X))
+	}
+
+	return true
+}
+
+// contractBinding is the binding that the resolver gave a name, or nil for a name that it binds to nothing, such as a keyword of a call or an attribute.
+func contractBinding(id *syntax.Ident) *resolve.Binding {
+	binding, isBinding := id.Binding.(*resolve.Binding)
+	if !isBinding {
+		return nil
+	}
+
+	return binding
+}
+
+// contractFirst is the name that first binds the variable of a name. A read inside a function of a name of its file gets a binding of its own from the resolver,
+// a free variable, which carries the first name of the binding of the file. It is nil for a name with no binding and for a predeclared name.
+func contractFirst(id *syntax.Ident) *syntax.Ident {
+	if binding := contractBinding(id); binding != nil {
+		return binding.First
+	}
+
+	return nil
+}
+
+// funcOf is the function that a name reads: a function at the top of its file, or the function of the file that a load names.
+// A local variable, a predeclared name and a name with no binding read no function.
+func (g *contractGraph) funcOf(rel string, id *syntax.Ident) (contractFunc, bool) {
+	binding := contractBinding(id)
+	if binding == nil {
+		return contractFunc{}, false
+	}
+
+	if target, isLoad := g.loads[binding.First]; isLoad {
+		return target, true
+	}
+
+	return contractFunc{rel, id.Name}, binding.Scope == resolve.Global
 }
 
 // contractString is the text of a string literal.
@@ -132,12 +177,8 @@ func contractString(expr syntax.Expr) (string, bool) {
 	return text, isText
 }
 
-// reach marks the function of a name in a file as reached. A name that the file loads leads to the function of the file that the load names.
+// reach marks a function as reached.
 func (g *contractGraph) reach(fn contractFunc) {
-	if next, isLoad := g.loads[fn]; isLoad {
-		fn = next
-	}
-
 	if _, isDef := g.defs[fn]; isDef && !g.reached[fn] {
 		g.reached[fn] = true
 		g.queue = append(g.queue, fn)
@@ -162,108 +203,25 @@ func contractTargets(target syntax.Expr, into func(*syntax.Ident)) {
 	}
 }
 
-// contractParams calls into for each name that the parameters of a function or a lambda bind.
-func contractParams(params []syntax.Expr, into func(*syntax.Ident)) {
-	for _, param := range params {
-		switch p := param.(type) {
-		case *syntax.Ident:
-			into(p)
-		case *syntax.BinaryExpr:
-			contractTargets(p.X, into)
-		case *syntax.UnaryExpr:
-			contractTargets(p.X, into)
-		}
-	}
-}
-
-// contractBound is the names that the code binds itself: the parameters of the function and everything that its body assigns, loops over or defines.
-func contractBound(def *syntax.DefStmt) map[string]bool {
-	bound := map[string]bool{}
-	bind := func(id *syntax.Ident) { bound[id.Name] = true }
-
-	if def == nil {
-		return bound
-	}
-
-	contractParams(def.Params, bind)
-
-	for _, stmt := range def.Body {
-		syntax.Walk(stmt, func(n syntax.Node) bool {
-			switch x := n.(type) {
-			case *syntax.AssignStmt:
-				contractTargets(x.LHS, bind)
-			case *syntax.ForStmt:
-				contractTargets(x.Vars, bind)
-			case *syntax.ForClause:
-				contractTargets(x.Vars, bind)
-			case *syntax.DefStmt:
-				bind(x.Name)
-				contractParams(x.Params, bind)
-			case *syntax.LambdaExpr:
-				contractParams(x.Params, bind)
-			}
-
-			return true
-		})
-	}
-
-	return bound
-}
-
-// visit reaches every function that code of a scope reads by name.
-func (g *contractGraph) visit(scope contractScope) {
-	g.scan(scope, scope.node)
-}
-
-// scan walks a node of the scope. A name counts when the code reads it as a value or calls it. A keyword of a call, an attribute, and the name that an assignment,
-// a loop or a parameter binds are no reads, and a read of a name that the scope binds is the read of a local variable.
-func (g *contractGraph) scan(scope contractScope, node syntax.Node) {
+// scan walks code of a file, in the function def or at the top of the file when def is nil. A name counts when the resolver binds it to a function of a file:
+// in a call or as a value. A keyword of a call and an attribute have no binding, and a local variable is bound to its function, so none of them reaches a function.
+func (g *contractGraph) scan(rel string, def *syntax.DefStmt, node syntax.Node) {
 	syntax.Walk(node, func(n syntax.Node) bool {
 		switch x := n.(type) {
 		case *syntax.Ident:
-			if !scope.bound[x.Name] {
-				g.reach(contractFunc{scope.rel, x.Name})
+			if fn, isFunc := g.funcOf(rel, x); isFunc {
+				g.reach(fn)
 			}
-		case *syntax.DotExpr:
-			g.scan(scope, x.X)
-
-			return false
 		case *syntax.BinaryExpr:
-			if keyword, isKeyword := contractKeyword(x); isKeyword {
-				g.entryOf(scope, keyword, x.Y)
-				g.scan(scope, x.Y)
-
-				return false
+			if keyword, isKeyword := contractKeyword(x); isKeyword && keyword == "entry" {
+				g.entryOf(rel, def, x.Y)
 			}
 		case *syntax.CallExpr:
-			g.noteCall(scope, x)
-		case *syntax.AssignStmt, *syntax.ForStmt, *syntax.ForClause:
-			g.scanBinding(scope, x)
-
-			return false
+			g.noteCall(rel, x)
 		}
 
 		return true
 	})
-}
-
-// scanBinding walks an assignment, a loop or a comprehension clause: the target binds names, and the other parts are reads.
-func (g *contractGraph) scanBinding(scope contractScope, node syntax.Node) {
-	switch x := node.(type) {
-	case *syntax.AssignStmt:
-		g.scanTarget(scope, x.LHS)
-		g.scan(scope, x.RHS)
-	case *syntax.ForStmt:
-		g.scanTarget(scope, x.Vars)
-		g.scan(scope, x.X)
-
-		for _, stmt := range x.Body {
-			g.scan(scope, stmt)
-		}
-	case *syntax.ForClause:
-		g.scanTarget(scope, x.Vars)
-		g.scan(scope, x.X)
-	}
 }
 
 // contractKeyword is the name of a keyword argument, `name = value`.
@@ -276,65 +234,45 @@ func contractKeyword(bin *syntax.BinaryExpr) (string, bool) {
 	return name.Name, true
 }
 
-// scanTarget reads the parts of a target that are reads: an index or an attribute holds names that the code reads. A plain name is bound, and no read.
-func (g *contractGraph) scanTarget(scope contractScope, target syntax.Expr) {
-	switch t := target.(type) {
-	case *syntax.Ident:
-	case *syntax.TupleExpr:
-		for _, each := range t.List {
-			g.scanTarget(scope, each)
+// noteCall keeps a call of a function of a file, to read the strings that it passes for the entry of a child run.
+func (g *contractGraph) noteCall(rel string, call *syntax.CallExpr) {
+	if name, isName := call.Fn.(*syntax.Ident); isName {
+		if fn, isFunc := g.funcOf(rel, name); isFunc {
+			g.calls[fn] = append(g.calls[fn], call)
 		}
-	case *syntax.ListExpr:
-		for _, each := range t.List {
-			g.scanTarget(scope, each)
-		}
-	case *syntax.ParenExpr:
-		g.scanTarget(scope, t.X)
-	default:
-		g.scan(scope, target)
 	}
 }
 
-// noteCall keeps a call of a function of the file, to read the strings that it passes for the entry of a child run.
-func (g *contractGraph) noteCall(scope contractScope, call *syntax.CallExpr) {
-	if name, isName := call.Fn.(*syntax.Ident); isName && !scope.bound[name.Name] {
-		fn := contractFunc{scope.rel, name.Name}
-		if next, isLoad := g.loads[fn]; isLoad {
-			fn = next
-		}
+// entryOf reaches the child functions that the keyword entry of a call lists. A parameter of the function that holds the call names the strings that a call of that
+// function passes for it. Any other value names the strings that it holds, and a variable in it names the strings of the values that the variable is bound to.
+func (g *contractGraph) entryOf(rel string, def *syntax.DefStmt, value syntax.Expr) {
+	if name, isName := value.(*syntax.Ident); isName && def != nil && contractIsParam(def, contractFirst(name)) {
+		g.entryParams = append(g.entryParams, contractEntryParam{contractFunc{rel, def.Name.Name}, name.Name})
 
-		g.calls[fn] = append(g.calls[fn], call)
+		return
 	}
+
+	g.entryStrings(rel, value, map[*syntax.Ident]bool{})
 }
 
-// entryOf reaches the child functions that the keyword entry of a call lists. A string names a function of the file. A parameter of the function that holds the call
-// names the strings that a call of that function passes for it. Another name stands for the string constants of the file that the code reads.
-func (g *contractGraph) entryOf(scope contractScope, keyword string, value syntax.Expr) {
-	if keyword != "entry" {
-		return
-	}
+// entryStrings reaches the function that each string of the value names, and follows each variable of the value to the values that it is bound to.
+func (g *contractGraph) entryStrings(rel string, value syntax.Expr, seen map[*syntax.Ident]bool) {
+	syntax.Walk(value, func(n syntax.Node) bool {
+		switch x := n.(type) {
+		case *syntax.Literal:
+			if text, isText := contractString(x); isText {
+				g.reach(contractFunc{rel, text})
+			}
+		case *syntax.Ident:
+			first := contractFirst(x)
+			if first == nil || seen[first] {
+				return true
+			}
 
-	if text, isText := contractString(value); isText {
-		g.reach(contractFunc{scope.rel, text})
+			seen[first] = true
 
-		return
-	}
-
-	name, isName := value.(*syntax.Ident)
-	if !isName {
-		return
-	}
-
-	if scope.def != nil && contractIsParam(scope.def, name.Name) {
-		g.entryParams = append(g.entryParams, contractEntryParam{contractFunc{scope.rel, scope.def.Name.Name}, name.Name})
-
-		return
-	}
-
-	syntax.Walk(scope.node, func(n syntax.Node) bool {
-		if id, isID := n.(*syntax.Ident); isID {
-			if text, isConst := g.consts[contractFunc{scope.rel, id.Name}]; isConst {
-				g.reach(contractFunc{scope.rel, text})
+			for _, source := range g.sources[first] {
+				g.entryStrings(rel, source, seen)
 			}
 		}
 
@@ -342,13 +280,21 @@ func (g *contractGraph) entryOf(scope contractScope, keyword string, value synta
 	})
 }
 
-// contractIsParam is true when the function has a parameter of the name.
-func contractIsParam(def *syntax.DefStmt, name string) bool {
-	found := false
+// contractIsParam is true when first is the name of a parameter of the function, the name that binds the parameter.
+func contractIsParam(def *syntax.DefStmt, first *syntax.Ident) bool {
+	return first != nil && slices.ContainsFunc(def.Params, func(param syntax.Expr) bool { return contractParamName(param) == first })
+}
 
-	contractParams(def.Params, func(id *syntax.Ident) { found = found || id.Name == name })
+// contractParamName is the name part of a parameter: the name of `name`, `name = default`, `*name` and `**name`.
+func contractParamName(param syntax.Expr) syntax.Expr {
+	switch p := param.(type) {
+	case *syntax.BinaryExpr:
+		return p.X
+	case *syntax.UnaryExpr:
+		return p.X
+	}
 
-	return found
+	return param
 }
 
 // contractArgument is the argument that a call passes for a parameter: by keyword, or by position.
@@ -403,11 +349,9 @@ func (g *contractGraph) drain() {
 			g.queue = g.queue[1:]
 
 			def := g.defs[fn]
-			scope := contractScope{rel: fn.rel, def: def, bound: contractBound(def)}
 
 			for _, stmt := range def.Body {
-				scope.node = stmt
-				g.visit(scope)
+				g.scan(fn.rel, def, stmt)
 			}
 		}
 
@@ -417,20 +361,31 @@ func (g *contractGraph) drain() {
 	}
 }
 
+// scanTop walks a statement at the top of a file. Of a function, only the defaults of its parameters run there.
+func (g *contractGraph) scanTop(rel string, stmt syntax.Stmt) {
+	switch s := stmt.(type) {
+	case *syntax.LoadStmt:
+	case *syntax.DefStmt:
+		for _, param := range s.Params {
+			if withDefault, hasDefault := param.(*syntax.BinaryExpr); hasDefault {
+				g.scan(rel, nil, withDefault.Y)
+			}
+		}
+	default:
+		g.scan(rel, nil, stmt)
+	}
+}
+
 // contractReach is the functions that an entry reaches. The entries are the code at the top of every file; main of a file that runs, and finish of it, which the engine
 // calls after main; and the functions that a call lists with the keyword entry. A file runs when no other file loads it. A function is reached when code that is reached
 // reads its name: in a call or as a value. A keyword of a call, an attribute, a local variable and a string are no reads of a function. A name that a file loads leads
-// to the function of the file that the load names, and nothing else.
+// to the function of the file that the load names, and nothing else. The defaults of the parameters of a function at the top of a file are code at the top of the file.
 func contractReach(files []contractParsed) map[contractFunc]bool {
 	g := newContractGraph(files)
 
 	for _, parsed := range files {
 		for _, stmt := range parsed.file.Stmts {
-			switch stmt.(type) {
-			case *syntax.DefStmt, *syntax.LoadStmt:
-			default:
-				g.visit(contractScope{rel: parsed.rel, node: stmt, bound: map[string]bool{}})
-			}
+			g.scanTop(parsed.rel, stmt)
 		}
 
 		if !g.loaded[parsed.rel] {
@@ -444,6 +399,14 @@ func contractReach(files []contractParsed) map[contractFunc]bool {
 	return g.reached
 }
 
+// contractResolved parses a Starlark file and binds its names with the resolver, as the check of workflow files does. The files are workflow files and project files,
+// which see different builtins, so every name that a file does not bind counts as predeclared: such a name reads no function of a file.
+func contractResolved(name string, src any) (*syntax.File, error) {
+	file, _, err := starlark.SourceProgramOptions(model.StarlarkFileOptions(), name, src, func(string) bool { return true })
+
+	return file, err
+}
+
 // contractParse parses the Starlark files of the repository, with the path of each from the root.
 func contractParse(t *testing.T, repo string) []contractParsed {
 	t.Helper()
@@ -451,7 +414,7 @@ func contractParse(t *testing.T, repo string) []contractParsed {
 	var files []contractParsed
 
 	for _, found := range contractFiles(t, repo) {
-		file, err := model.StarlarkFileOptions().Parse(found, nil, 0)
+		file, err := contractResolved(found, nil)
 		require.NoError(t, err, "parse "+found)
 
 		rel, err := filepath.Rel(repo, found)
@@ -633,7 +596,7 @@ func contractReachOf(t *testing.T, sources map[string]string) []string {
 	var files []contractParsed
 
 	for _, name := range slices.Sorted(maps.Keys(sources)) {
-		file, err := model.StarlarkFileOptions().Parse(name, sources[name], 0)
+		file, err := contractResolved(name, sources[name])
 		require.NoError(t, err)
 
 		files = append(files, contractParsed{"e/" + name, file})
@@ -728,4 +691,51 @@ func TestContractReach_AnEntryThroughAConstantNamesTheConstantsThatTheCodeReads(
 	got := contractReachOf(t, map[string]string{"main.star": src})
 
 	assert.Equal(t, []string{"main.star:main", "main.star:resolve", "main.star:task"}, got)
+}
+
+func TestContractReach_AComprehensionVariableAtTheTopOfAFileIsNoCallOfAFunctionOfTheSameName(t *testing.T) {
+	t.Parallel()
+
+	got := contractReachOf(t, map[string]string{"main.star": "X = [plan for plan in [1]]\n\ndef main():\n    return X\n\ndef plan():\n    pass\n"})
+
+	assert.Equal(t, []string{"main.star:main"}, got)
+}
+
+func TestContractReach_AVariableEntryNamesOnlyTheStringsThatItsBindingHolds(t *testing.T) {
+	t.Parallel()
+
+	src := "TASK = \"task\"\nLONELY = \"lonely\"\n\ndef main():\n    for kind in [TASK]:\n        spawn([], entry = kind, name = LONELY)\n\n" +
+		"def task():\n    pass\n\ndef lonely():\n    pass\n"
+
+	got := contractReachOf(t, map[string]string{"main.star": src})
+
+	assert.Equal(t, []string{"main.star:main", "main.star:task"}, got, "name = LONELY is no entry, so lonely is not reached")
+}
+
+func TestContractReach_AVariableEntryFollowsTheVariableThatItsLoopReads(t *testing.T) {
+	t.Parallel()
+
+	src := "TASK = \"task\"\n\ndef main():\n    kinds = [TASK]\n    for kind in kinds:\n        spawn([], entry = kind)\n\ndef task():\n    pass\n"
+
+	got := contractReachOf(t, map[string]string{"main.star": src})
+
+	assert.Equal(t, []string{"main.star:main", "main.star:task"}, got)
+}
+
+func TestContractReach_AStringInAKeywordThatIsNotEntryNamesNoFunction(t *testing.T) {
+	t.Parallel()
+
+	got := contractReachOf(t, map[string]string{"main.star": "def main():\n    spawn([], entry = \"child\", name = \"lonely\")\n\ndef child():\n    pass\n\ndef lonely():\n    pass\n"})
+
+	assert.Equal(t, []string{"main.star:child", "main.star:main"}, got)
+}
+
+func TestContractReach_ADefaultOfAParameterAndACallAfterAComprehensionOfTheSameNameReachTheFunction(t *testing.T) {
+	t.Parallel()
+
+	src := "def main(step = first):\n    x = [second for second in [1]]\n    second()\n    return x\n\ndef first():\n    pass\n\ndef second():\n    pass\n"
+
+	got := contractReachOf(t, map[string]string{"main.star": src})
+
+	assert.Equal(t, []string{"main.star:first", "main.star:main", "main.star:second"}, got, "the default is read in the file, and the comprehension binds second only inside itself")
 }
