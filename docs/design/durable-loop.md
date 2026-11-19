@@ -261,7 +261,7 @@ The inner level runs in this order:
 Each candidate then gets the full checks once, in this order. The first entry with findings sends the candidate back to the inner level, and the entries after it do not run.
 
 1. The gate `candidate-gate` on the base. A void result reruns as `candidate-gate-void-<n>`. A void result with a host cause reruns as `candidate-gate-host-<k>`; see "The host loss limit".
-2. The checks before review `candidate-before-review`, which compare the head with `origin/<base>`. Their `command` steps are `candidate-before-review-ancestor`, `-paths` and `-keywords`.
+2. The checks before review `candidate-before-review`, which compare the head with `origin/<base>`. Their `command` steps are `candidate-before-review-ancestor`, `-paths` and `-keywords`. A closing keyword in a commit message is a refusal that no new commit repairs, because a fix adds commits and never rewrites history. The loop then stops the item at once with a stop text that names the commit, the issue and the repair (rebuild the branch without the keyword), lists every other finding of the same check so that one rebuild repairs all, and spends no fix round.
 3. Each function in the list `checks` of the caller. The example passes its mutation run.
 4. The fresh agent `candidate-review` reads the whole pull request at the head that the gate passed (`pin` is that head).
 
