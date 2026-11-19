@@ -52,6 +52,8 @@ type batchHost interface {
 	// Both serve a hand-off and write nothing else.
 	Pull(ctx context.Context, project, item, repo string) (PullView, error)
 	SetDraft(ctx context.Context, project, item, repo string, draft bool) error
+	// SameTree says whether two commits of the pull request hold the same tree. A head that was rewritten with the same tree is not a move.
+	SameTree(ctx context.Context, project, item, repo, was, now string) (bool, error)
 }
 
 // batchCall are the arguments of a merge call after the checks.
@@ -229,7 +231,7 @@ func (c *batchCall) refuseLanding(gateRun, forbid, own starlark.Value) error {
 
 	for _, keyword := range landing {
 		if keyword.set {
-			return fmt.Errorf("merge with `hand_off` lands nothing, so it takes no `%s`. Remove `%s` from the call", keyword.name, keyword.name)
+			return workflow.HandOffTakes(keyword.name)
 		}
 	}
 

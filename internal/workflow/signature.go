@@ -565,6 +565,24 @@ func (g *graph) pairs(call *syntax.CallExpr, builtin string, params []Param) {
 		g.hostWithSlots(call, params)
 	case waitName:
 		g.asking(call, params)
+	case mergeName:
+		g.handingOff(call, params)
+	}
+}
+
+// handingOff refuses a keyword of a landing on a merge call whose hand_off is the literal True, as the run does. A flag that only the run knows is left to the run.
+func (g *graph) handingOff(call *syntax.CallExpr, params []Param) {
+	flag, isName := paramArg(call, params, "hand_off").(*syntax.Ident)
+	if !isName || flag.Name != trueName {
+		return
+	}
+
+	for _, keyword := range handOffLanding() {
+		if paramArg(call, params, keyword) != nil {
+			g.reportRule(call, HandOffTakes(keyword))
+
+			return
+		}
 	}
 }
 
