@@ -95,7 +95,7 @@ func TestStepModules_TheGateModuleIsAtVersionFive(t *testing.T) {
 	t.Parallel()
 
 	assert.Contains(t, strings.Split(moduleVersions(), "."), "gate5", "the gate step records a lost job and host_losses, the wait for its proof records gate:lost-start and gate:lost-look.<k>, "+
-		"the owner wait records <call>/lost-ask.<n>, the item run records a lost job with a proof as <call>/host-loss, and gate and before_review record the revert field")
+		"the owner wait records <call>/lost-ask.<n>, the item run records a lost job with a proof as <call>/host-loss, and gate records the revert field")
 }
 
 func TestParseVersions_TheSingleVersionOfTheStepsIsEveryModuleAtVersionOne(t *testing.T) {
@@ -203,6 +203,7 @@ func TestUnreplayableStep_IsTheFirstStepThatThisBuildDoesNotRecordWithTheModuleO
 		"a kind of no module":        {[]string{"claim", "wait:w#1", "unknown_kind:u#1", "other_kind:o#1"}, "unknown_kind:u#1", ""},
 		"the scope check of a merge": {[]string{"claim", "scope-check:m#1", "merge:m#1"}, "scope-check:m#1", moduleRound},
 		"the merge of one pull":      {[]string{"merge:m#1"}, "merge:m#1", moduleLand},
+		"the builtin before_review":  {[]string{"before_review:b#1"}, "before_review:b#1", moduleGate},
 		"the owner merge wait":       {[]string{"DBOS.sleep", "watch"}, "watch", moduleCore},
 	}
 

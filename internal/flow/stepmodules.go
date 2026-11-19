@@ -67,7 +67,7 @@ const forgeVersion = 2
 // with a wait field), and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
 // At the wait limit the host job run ends with no failure and records the lost job with its wait.
 // Version 4 records a lost job that has a proof in the item run (<call>/host-loss), and the gate step records host_losses, the count of the host losses of the item tree.
-// Version 5 added the revert field to the results of gate and before_review, and the revert run to the checks of a candidate gate.
+// Version 5 added the revert field to the results of gate, and the revert run to the checks of a candidate gate. The kind before_review is retired.
 const gateVersion = 5
 
 // roundVersion is the version of the round module. Version 2 added the step of the engine that makes the worktree at the start of every round item.
@@ -102,7 +102,7 @@ func moduleTable() []stepModule {
 		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
 		{name: moduleForge, version: forgeVersion, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open", prStateKind}},
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}, retired: []string{"merge"}},
-		{name: moduleGate, version: gateVersion, kinds: []string{"before_review", kindGate}},
+		{name: moduleGate, version: gateVersion, kinds: []string{kindGate}, retired: []string{"before_review"}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
 		{name: moduleRound, version: roundVersion, kinds: []string{kindQueue, scopeStep}, engine: []string{kindHold}, retired: []string{"scope-check"}},
 	}

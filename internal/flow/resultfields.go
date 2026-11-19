@@ -8,7 +8,7 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-// revertField is the result field of gate and before_review that holds the verdict of the revert run.
+// revertField is the result field of gate that holds the verdict of the revert run.
 const revertField = "revert"
 
 // The outputs of each builtin that records a step, one function each. The fields of a function are the fields in workflow.ResultFields,

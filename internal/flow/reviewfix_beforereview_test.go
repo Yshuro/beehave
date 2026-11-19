@@ -4,14 +4,108 @@ import (
 	"bytes"
 	"errors"
 	"os/exec"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	gatepkg "github.com/tobocop2/beehave/internal/gate"
+	"github.com/tobocop2/beehave/internal/host/hosttest"
+	"github.com/tobocop2/beehave/internal/host/ssh"
+	"github.com/tobocop2/beehave/internal/host/sshtest"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc"
 )
+
+// tailBytes is the size of the log tail that the ssh host reads.
+const tailBytes = 16384
+
+// revertClean is the end marker of a revert run in which every new test failed on the base code.
+const revertClean = "beehave-revert-end new=2 passed=0 cases=3"
+
+// reviewTree is an item folder with a base commit, an unrelated commit on another branch, and a head one commit above the base.
+type reviewTree struct {
+	dir, base, other, head string
+}
+
+// reviewTreeOf makes the folder. The head commit adds the file with the message.
+func reviewTreeOf(t *testing.T, file, message string) reviewTree {
+	t.Helper()
+
+	dir, base := gitTree(t)
+	gitIn(t, dir, "checkout", "-q", "-b", "elsewhere")
+	putUnder(t, dir, "elsewhere.txt", "x")
+	gitIn(t, dir, "add", "elsewhere.txt")
+	gitIn(t, dir, "commit", "-q", "-m", "elsewhere")
+
+	other := gitIn(t, dir, "rev-parse", "HEAD")
+
+	gitIn(t, dir, "checkout", "-q", "-b", "work", base)
+	putUnder(t, dir, file, "x")
+	gitIn(t, dir, "add", file)
+	gitIn(t, dir, "commit", "-q", "-m", message)
+
+	return reviewTree{dir: dir, base: base, other: other, head: gitIn(t, dir, "rev-parse", "HEAD")}
+}
+
+// cleanChecks are the checks of a gate job that found one new test and a clean secret scan.
+func cleanChecks() *GateChecks {
+	zero := 0
+
+	return &GateChecks{NewTests: []string{"pkg TestA"}, New: 1, Complete: true, Secrets: &zero, Revert: model.RevertPass, RevertCases: 1}
+}
+
+// reviewHarness gates the head of the tree with the checks, and reads the item folder from the tree.
+func reviewHarness(t *testing.T, tree reviewTree, checks *GateChecks) *harness {
+	t.Helper()
+
+	h := reuseHarness(t, []GateResult{{Passed: true, Head: tree.head, Tree: "tree-1", Steps: stepsPass, Checks: checks}}, nil)
+	h.trees = &fakeTrees{dir: tree.dir}
+
+	return h
+}
+
+// jobLog is the log of a candidate job: a head gate that printed a lot, the two step markers, the name lines and marker lines of the check, and the end marker.
+func jobLog(noise int, secretsRC string, lines ...string) string {
+	return strings.Repeat("go test output line of the head gate\n", noise) +
+		"beehave-gate-step head-gate rc=0\n" + "beehave-gate-step secret-scan rc=" + secretsRC + "\n" + strings.Join(lines, "\n") + "\n"
+}
+
+// logChecks gives the log to the fake machine as the log of a submitted job, reads it back through the ssh host, and returns the length that the host read
+// and the checks that the engine reads from it.
+func logChecks(t *testing.T, log string) (read int, checks GateChecks) {
+	t.Helper()
+
+	m := sshtest.New(hosttest.Working)
+	n := 0
+
+	h, err := ssh.New("gates", model.HostConfig{
+		Provider: ssh.Name, MaxRun: 2 * time.Hour, StaleMinutes: 20, PrivateRemote: "private",
+		Block: model.NewBlock("test", []model.BlockEntry{
+			model.TextEntry(ssh.BlockUser, "lane"), model.TextEntry(ssh.BlockWorkRoot, sshtest.Root+"/work"), model.TextEntry(ssh.BlockKnownHosts, model.KnownHostsStrict),
+		}),
+	}, m.SSH(), ssh.WithNonce(func() string { n++; return "n" + strconv.Itoa(n) }))
+	require.NoError(t, err)
+
+	id, err := h.Submit(t.Context(), model.JobSpec{Name: "gate", Command: "x"})
+	require.NoError(t, err)
+
+	m.Units[string(id)].Log = log
+
+	tail, err := h.Log(t.Context(), id)
+	require.NoError(t, err)
+
+	got := gatepkg.ReadChecks(tail)
+	checks = GateChecks{
+		NewTests: got.NewTests, Failed: got.Failed, New: got.New, FailedCount: got.FailedCount, Secrets: got.Secrets, Complete: got.Complete, Problem: got.Problem,
+		Revert: got.Revert, RevertPassed: got.RevertPassed, RevertPassedCount: got.RevertPassedCount, RevertCases: got.RevertCases, RevertProblem: got.RevertProblem,
+	}
+
+	return len(tail), checks
+}
 
 // gitReply answers each command of git with the real git in the folder, and any other command with an empty output.
 func gitReply(t *testing.T, dir string) func(CommandRequest) (CommandOutput, error) {
@@ -22,8 +116,7 @@ func gitReply(t *testing.T, dir string) func(CommandRequest) (CommandOutput, err
 			return CommandOutput{}, nil
 		}
 
-		cmd := exec.CommandContext(t.Context(), "git", request.Run[1:]...)
-		cmd.Dir = dir
+		cmd := proc.GroupCommand(t.Context(), "git", request.Run[1:], dir)
 		cmd.Env = append(cmd.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 
 		var stdout, stderr bytes.Buffer
@@ -325,15 +418,6 @@ func TestReviewFixBeforeReview_AHeadWithNoNewTestGetsNoRevertFinding(t *testing.
 
 	require.NoError(t, err)
 	assert.Equal(t, "show False the head adds no new test. Add a test that fails without the change", shown)
-}
-
-// logChecks reads a job log into the checks that the engine records, and returns them with the length that the ssh host read.
-func logChecks(t *testing.T, log string) (read int, checks GateChecks) {
-	t.Helper()
-
-	read, _, checks = findingsOfLog(t, log)
-
-	return read, checks
 }
 
 func TestReviewFixBeforeReview_ALogOverSixteenKiBBeforeTheEndMarkerPassesWithItsNewTestNames(t *testing.T) {

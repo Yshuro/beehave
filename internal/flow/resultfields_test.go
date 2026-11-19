@@ -42,7 +42,6 @@ func TestResultFields_TheOutputsOfEachBuiltinAreTheFieldsOfTheTable(t *testing.T
 
 	got := map[string][]string{
 		"agent":         keysOf(agentOutputs("", "", "", "", "", "", agent.Spend{}, false, nil)),
-		"before_review": keysOf(reviewVerdict{}.outputs()),
 		"board_sync":    keysOf(boardOutputs(0, "")),
 		"command":       keysOf(commandOutputs("", "", 0)),
 		"earlier_calls": keysOf(earlierOutputs(0)),

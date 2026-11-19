@@ -312,6 +312,7 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheSingleMergeAnd
 		"a scope check and a merge":                          {4, []string{"scope-check:m#1", "merge:m#1"}, moduleRound},
 		"a scope check in the owner wait, under equal lists": {landVersion, []string{"scope-check:m#1", "wait:scope#1"}, moduleRound},
 		"a merge alone":                                      {4, []string{"merge:m#1"}, moduleLand},
+		"a before_review step":                               {gateVersion, []string{"before_review:candidate-before-review#1"}, moduleGate},
 		"the read of the owner merge wait":                   {landVersion, []string{"watch", "DBOS.sleep", "watch"}, moduleCore},
 	}
 
