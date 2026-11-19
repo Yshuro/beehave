@@ -64,17 +64,24 @@ const gateVersion = 5
 // No builtin records that step, so a move to this build compares the round module for every run of a round item (requireSameRoundModule).
 const roundVersion = 2
 
-// stepModule is one module of the table: its version and the step kinds that it records.
+// stepModule is one module of the table: its version, the step kinds that it records, and the whole step names that it records with no kind in front.
+// The steps are the steps of its waits that no kind names: the receive of an answer and the read of a ready pull request.
 type stepModule struct {
 	name    string
 	version int
 	kinds   []string
+	steps   []string
 }
 
 // moduleTable assigns each recorded step kind to its module. The order is the order of the application version.
 func moduleTable() []stepModule {
 	return []stepModule{
-		{name: moduleCore, version: coreVersion, kinds: []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"}},
+		{
+			name:    moduleCore,
+			version: coreVersion,
+			kinds:   []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"},
+			steps:   []string{receiveStepName, watchStep},
+		},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
 		{name: moduleForge, version: forgeVersion, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open", prStateKind}},
@@ -196,13 +203,31 @@ func kindOfStep(name string) (string, bool) {
 	return kind, known
 }
 
-// modulesUsed returns the modules that recorded one of the steps, in the order of the table.
+// receiveStepName is the name that DBOS gives to the recorded receive of an answer of the owner. Every wait for an answer records it.
+const receiveStepName = "DBOS.recv"
+
+// moduleOfStep returns the module that recorded a step: the module that names the whole step, else the module of the kind that the name starts with.
+func moduleOfStep(name string) (string, bool) {
+	for _, module := range moduleTable() {
+		if slices.Contains(module.steps, name) {
+			return module.name, true
+		}
+	}
+
+	kind, known := kindOfStep(name)
+	if !known {
+		return "", false
+	}
+
+	return moduleOfKind(kind)
+}
+
+// modulesUsed returns the modules that recorded one of the steps, in the order of the table. The waits of the owner count as steps of the core module.
 func modulesUsed(names []string) []string {
 	used := map[string]bool{}
 
 	for _, name := range names {
-		if kind, known := kindOfStep(name); known {
-			module, _ := moduleOfKind(kind)
+		if module, known := moduleOfStep(name); known {
 			used[module] = true
 		}
 	}
