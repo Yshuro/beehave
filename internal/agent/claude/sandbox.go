@@ -39,10 +39,9 @@ type sandboxBlock struct {
 }
 
 type filesystem struct {
-	DenyRead   []string `json:"denyRead"`
-	AllowRead  []string `json:"allowRead"`
-	DenyWrite  []string `json:"denyWrite"`
-	AllowWrite []string `json:"allowWrite"`
+	DenyRead  []string `json:"denyRead"`
+	AllowRead []string `json:"allowRead"`
+	DenyWrite []string `json:"denyWrite"`
 }
 
 type network struct {
@@ -93,10 +92,9 @@ func settingsOf(plan agent.SandboxPlan) sandboxSettings {
 			Enabled:           true,
 			FailIfUnavailable: true,
 			Filesystem: filesystem{
-				DenyRead:   join([]string{homeFolder}, plan.Deny, plan.DenyPatterns),
-				AllowRead:  join([]string{plan.Work}, plan.GitDirs, plan.Read),
-				DenyWrite:  join(plan.Deny, plan.DenyPatterns, plan.DenyWrite, plan.DenyWritePatterns),
-				AllowWrite: join(plan.AllowWrite),
+				DenyRead:  join([]string{homeFolder}, plan.Deny, plan.DenyPatterns),
+				AllowRead: join([]string{plan.Work}, plan.GitDirs, plan.Read),
+				DenyWrite: join(plan.Deny, plan.DenyPatterns, plan.DenyWrite, plan.DenyWritePatterns),
 			},
 			Network: network{AllowedDomains: join(plan.Network), StrictAllowlist: true},
 		},

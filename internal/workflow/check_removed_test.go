@@ -26,3 +26,22 @@ func TestCheck_ABuiltinThatTheAPIRemovedIsRefusedAsAnUndefinedNameAndNamed(t *te
 		})
 	}
 }
+
+func TestCheck_AKeywordThatTheAPIRemovedIsRefusedByNameWithTheBuiltinThatTookIt(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]struct{ call, want string }{
+		"sandbox.allow_write": {`sandbox(allow_write = ["out"])`, "sandbox takes no argument allow_write"},
+	}
+
+	for removed, test := range tests {
+		t.Run(removed, func(t *testing.T) {
+			t.Parallel()
+
+			got := checkText(t, "def main(item):\n    "+test.call+"\n")
+
+			require.Len(t, got, 1)
+			assert.Contains(t, got[0], test.want)
+		})
+	}
+}

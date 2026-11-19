@@ -10,10 +10,9 @@ import (
 )
 
 // Sandbox is the sandbox setting of one agent step as the run records it. A step with no sandbox records no value (nil), and a record
-// without the value replays as a step with no sandbox. Network lists the domains that the shell may reach. AllowWrite lists the extra paths that it may write.
+// without the value replays as a step with no sandbox. Network lists the domains that the shell may reach.
 type Sandbox struct {
-	Network    []string `json:"network,omitempty"`
-	AllowWrite []string `json:"allow_write,omitempty"`
+	Network []string `json:"network,omitempty"`
 }
 
 // SandboxMode is the sandbox default of a project: whether a step that sets no sandbox runs in the sandbox.

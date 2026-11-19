@@ -25,22 +25,21 @@ type sandboxChoice struct {
 	box *model.Sandbox
 }
 
-// sandbox is the builtin sandbox(network = [...], allow_write = [...]). It checks the lists and returns a value for the sandbox keyword of an agent call.
+// sandbox is the builtin sandbox(network = [...]). It checks the list and returns a value for the sandbox keyword of an agent call.
 func (s *script) sandbox(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
-	var network, allow starlark.Value
+	var network starlark.Value
 
-	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{"network": &network, "allow_write": &allow}); err != nil {
+	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{"network": &network}); err != nil {
 		return nil, err
 	}
 
-	box, err := boxOf(network, allow)
+	box, err := boxOf(network)
 	if err != nil {
 		return nil, err
 	}
 
 	return starlarkstruct.FromKeywords(sandboxMark, []starlark.Tuple{
 		{starlark.String("network"), stringList(box.Network)},
-		{starlark.String("allow_write"), stringList(box.AllowWrite)},
 	}), nil
 }
 
@@ -53,16 +52,14 @@ func stringList(items []string) *starlark.List {
 	return starlark.NewList(values)
 }
 
-// boxOf reads the two lists of a sandbox call.
-func boxOf(network, allow starlark.Value) (*model.Sandbox, error) {
-	domains, networkErr := workflow.NetworkDomains(network)
-	paths, writeErr := workflow.WritablePaths(allow)
-
-	if err := errors.Join(networkErr, writeErr); err != nil {
+// boxOf reads the network list of a sandbox call.
+func boxOf(network starlark.Value) (*model.Sandbox, error) {
+	domains, err := workflow.NetworkDomains(network)
+	if err != nil {
 		return nil, err
 	}
 
-	return &model.Sandbox{Network: domains, AllowWrite: paths}, nil
+	return &model.Sandbox{Network: domains}, nil
 }
 
 // readSandbox reads the sandbox keyword of an agent call. A nil value is a call that leaves the keyword out.
@@ -85,7 +82,7 @@ func sandboxFromStruct(value *starlarkstruct.Struct) (sandboxChoice, error) {
 	fields := starlark.StringDict{}
 	value.ToStringDict(fields)
 
-	box, err := boxOf(fields["network"], fields["allow_write"])
+	box, err := boxOf(fields["network"])
 
 	return sandboxChoice{set: true, box: box}, err
 }
@@ -138,7 +135,7 @@ func recordSandbox(box *model.Sandbox) map[string]any {
 		return nil
 	}
 
-	raw, _ := json.Marshal(box) //nolint:errcheck // two lists of strings always encode
+	raw, _ := json.Marshal(box) //nolint:errcheck // a list of strings always encodes
 
 	return map[string]any{recordedSandbox: string(raw)}
 }
