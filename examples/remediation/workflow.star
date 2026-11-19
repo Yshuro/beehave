@@ -1,7 +1,7 @@
 # The remediation workflow: plan, implement, then review and fix until the gate passes and the review approves.
 # Every method value is in this file, in the review loop it loads, or in a prompt next to it. Go holds none of it.
 
-load("@beehave//review_fix.star", "DESIGN_AFTER", "FIX_ESCALATE_AFTER", "HOST_LOSS_LIMIT", "VOID_ASKS", "VOID_RERUNS", "candidates_spent", "capped", "is_host_void", "review_fix")
+load("@beehave//review_fix.star", "DESIGN_AFTER", "FIX_ESCALATE_AFTER", "HOST_LOSS_LIMIT", "VOID_ASKS", "VOID_RERUNS", "candidates_spent", "capped", "is_host_void", "restart_steps", "review_fix")
 
 # The model of each step of the method. This table is the one place a model is named. A project overrides the model or the runner of a step with vars.round.steps.
 # fix runs the fix rounds up to vars.round.escalate_after, and fix_late runs the rounds after them.
@@ -741,7 +741,7 @@ def sync_land(item, project, round_settings, line, n):
     head = line["head"]
     for step, run in [("sync-fetch-%d" % n, ["git", "fetch", "origin", line["branch"]]), ("sync-checkout-%d" % n, ["git", "checkout", "--detach", head])]:
         if command(name = step, run = run).rc != 0:
-            fail("REFUSE: the step %s could not put the folder of the round at the head %s of %s. Check the folder of the round, then run beehave resume %s." % (step, head, line["branch"], item.id))
+            fail("REFUSE: the step %s could not put the folder of the round at the head %s of %s. Check the folder of the round. %s" % (step, head, line["branch"], restart_steps(item)))
 
     check = gate(name = "sync-gate-%d" % n, head = head)
     losses = check.host_losses
@@ -779,7 +779,7 @@ def sync_land(item, project, round_settings, line, n):
 
     landed = line_fields(command(name = "sync-land-%d" % n, run = ["remedy", "sync", "land", "--pr", line["pr"], "--head", head, "--base-tip", line["base_tip"]]).stdout)
     if landed.get("state", "") not in SYNC_LAND_STATES:
-        fail("REFUSE: the landing of the sync pull request %s gave the fields %r. Read the pull request, then run beehave resume %s." % (line["pr"], landed, item.id))
+        fail("REFUSE: the landing of the sync pull request %s gave the fields %r. Read the pull request. %s" % (line["pr"], landed, restart_steps(item)))
 
     return sync_end("", losses)
 
@@ -1041,8 +1041,7 @@ def pipeline(item):
         inputs = {"item": item, "facts": project},
     )
 
-    if plan.stop != "":
-        fail("REFUSE: the plan step stopped at the %s cap before it finished. Raise the cap or split the item, then run beehave resume %s." % (plan.stop, item.id))
+    capped(plan, "plan", item)
 
     implement = agent(
         name = "implement",
@@ -1058,12 +1057,11 @@ def pipeline(item):
     )
 
     # A cap ended the run (the output `stop` is "turns" or "budget"), so the work may be half done. The item stops here, before the gate and the review.
-    if implement.stop != "":
-        fail("REFUSE: the implement step stopped at the %s cap before it finished. Raise the cap or split the item, then run beehave resume %s." % (implement.stop, item.id))
+    capped(implement, "implement", item)
 
     # The implementer must run the skill blast-radius-review. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
     if "blast-radius-review" not in implement.skills:
-        fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls. A plain beehave resume replays this stop. To start the item again, run beehave resume %s, then beehave cancel %s, then beehave run %s." % (item.id, item.id, item.id))
+        fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls. %s" % restart_steps(item))
 
     # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the agent pushed.
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
@@ -1156,8 +1154,7 @@ def pipeline(item):
             **scope
         )
 
-        if settle.stop != "":
-            fail("REFUSE: the settle step stopped at the %s cap before it finished. Raise the cap or split the item, then run beehave resume %s." % (settle.stop, item.id))
+        capped(settle, "settle", item)
 
         # Each finding that the owner parked stays open after the last round: it gets its own issue, so it is not lost with the pull request.
         file_parked(settle.parked)

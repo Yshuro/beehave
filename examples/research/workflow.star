@@ -30,7 +30,7 @@ NO_TEXT = "The reviewer left a finding open and wrote no text for it."
 def capped(step, name, item):
     """Stops the item when a cap ended the agent step. The output `stop` is "turns" or "budget", and the notes of a capped run may be half done."""
     if step.stop != "":
-        fail("REFUSE: the %s step stopped at the %s cap before it finished. Raise the cap or split the item, then run beehave resume %s." % (name, step.stop, item.id))
+        fail("REFUSE: the %s step stopped at the %s cap before it finished. Raise the cap or split the item. A plain beehave resume replays this stop. To start the item again, run beehave resume %s, then beehave cancel %s, then beehave run %s." % (name, step.stop, item.id, item.id, item.id))
 
 def notes_file(number):
     return "notes/%d.md" % number

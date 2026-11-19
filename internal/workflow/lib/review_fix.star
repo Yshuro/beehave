@@ -22,15 +22,19 @@ def candidates_spent():
         spent += earlier_calls(call = call, name = "spent-" + call).count
     return spent
 
+def restart_steps(item):
+    """The sentence that ends a stop text: a plain resume replays the recorded stop, so the item starts again with a resume, a cancel and a run."""
+    return "A plain beehave resume replays this stop. To start the item again, run beehave resume %s, then beehave cancel %s, then beehave run %s." % (item.id, item.id, item.id)
+
 def capped(step, name, item):
     """Stops the item when a cap ended the agent step. The output `stop` is "turns" or "budget", and the work of a capped run may be half done."""
     if step.stop != "":
-        fail("REFUSE: the %s step stopped at the %s cap before it finished. Raise the cap or split the item, then run beehave resume %s." % (name, step.stop, item.id))
+        fail("REFUSE: the %s step stopped at the %s cap before it finished. Raise the cap or split the item. %s" % (name, step.stop, restart_steps(item)))
 
 def kept_history(step, name, item):
     """Stops the item when an agent step rewrote history (amend, squash, reset). The reviewed commits must stay, and a rewrite can reach the remote only through a force-push."""
     if step.rewrote:
-        fail("REFUSE: the %s step rewrote the history of the item folder. A step adds commits and never amends, squashes or resets. Check the folder, then run beehave resume %s." % (name, item.id))
+        fail("REFUSE: the %s step rewrote the history of the item folder. A step adds commits and never amends, squashes or resets. Check the folder. %s" % (name, restart_steps(item)))
 
 DECISIONS = ["keep", "replace", "delete"]
 
@@ -276,10 +280,10 @@ def design_round(loop, pending, fixes, decided, outer, lane):
     capped(design, "design", loop.item)
 
     if design.violations != "":
-        fail("REFUSE: the design step changed the item folder, and it is read-only. %s Check the folder, then run beehave resume %s." % (design.violations, loop.item.id))
+        fail("REFUSE: the design step changed the item folder, and it is read-only. %s Check the folder. %s" % (design.violations, restart_steps(loop.item)))
 
     if design.decision not in DECISIONS:
-        fail("REFUSE: the design step wrote the decision %r. Use one of: %s. Run beehave resume %s." % (design.decision, ", ".join(DECISIONS), loop.item.id))
+        fail("REFUSE: the design step wrote the decision %r. Use one of: %s. %s" % (design.decision, ", ".join(DECISIONS), restart_steps(loop.item)))
 
     if design.decision != "keep":
         return struct(end = ended(loop, lane.head_sha, gate = pending.gate, review = pending.review, design =struct(mechanism = mechanism, decision = design.decision, reason = design.reason)))
