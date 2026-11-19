@@ -64,7 +64,7 @@ func (e *Engine) playScript(s *script, sources *workflow.Sources, fields map[str
 		err = errors.Join(err, finishErr)
 	}
 
-	return ItemResult{Item: s.in.Item, Merge: s.mergeState, SentBack: s.sentBack, Closed: s.closed, Stopped: s.stopped, Value: s.value}, err
+	return ItemResult{Item: s.in.Item, Stopped: s.stopped, Value: s.value}, err
 }
 
 // thread makes the thread of a run. It logs print at the debug level and stops after model.StarlarkMaxSteps instructions.

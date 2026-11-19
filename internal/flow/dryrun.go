@@ -226,10 +226,10 @@ func dryDeps(tree, head, item string, chosen dryChoice) Deps {
 
 	return Deps{
 		Agents: agents, Gate: newDryGate(tree, head, chosen.redGate), Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
-		Forge: dryForge{head: head}, Watch: dryWatch{}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
+		Forge: dryForge{head: head}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
 		Writer: dryWriter{}, Reader: dryReader{}, Preflight: dryPreflight{}, Slots: drySlots,
 		Facts: func(string) model.Project { return model.Project{Vars: chosen.vars} },
-		Clock: clock{Poll: dryPoll, Watch: dryWait, Settle: dryWait, Reading: dryReading()},
+		Clock: clock{Poll: dryPoll, Settle: dryWait, Reading: dryReading()},
 	}
 }
 
@@ -464,12 +464,6 @@ func (f dryForge) Pull(context.Context, string, string) (review.Standing, error)
 	return review.Standing{Number: dryPull, Head: f.head}, nil
 }
 
-func (f dryForge) Reviewed(ctx context.Context, project, item, _ string) (review.Standing, error) {
-	return f.Pull(ctx, project, item)
-}
-
-func (dryForge) Ready(context.Context, string, string) error { return nil }
-
 func (dryForge) ClosingIssues(context.Context, string, string) ([]int, bool, error) {
 	return nil, true, nil
 }
@@ -498,15 +492,6 @@ func (dryForge) ReadCard(_ context.Context, _, _ string, req CardRequest) (strin
 func (dryForge) Assign(context.Context, string, string, string, bool) (int, []int, error) {
 	return dryPull, nil, nil
 }
-
-// dryWatch shows the pull request as merged.
-type dryWatch struct{}
-
-func (dryWatch) Watch(context.Context, string, int) (review.Outcome, error) {
-	return review.Outcome{Kind: review.Merged}, nil
-}
-
-func (dryWatch) SetDraft(context.Context, string, int, bool) error { return nil }
 
 type dryTrees struct{ dir string }
 

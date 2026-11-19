@@ -42,7 +42,7 @@ func TestCancel_WithNoEngineTurnsOffTheQueuedMerge(t *testing.T) {
 
 	require.NoError(t, client.Cancel(testItem))
 
-	assert.Equal(t, []string{testItem}, harness.merge.snapshot(), "no live wait is left to turn it off, so the cancel does")
+	assert.Equal(t, []string{queuedMember}, harness.merge.snapshot(), "no live wait is left to turn it off, so the cancel does")
 }
 
 func TestCancel_AnEngineThatStartsLaterTurnsOffTheQueuedMergeOfACancelItMissed(t *testing.T) {
@@ -60,7 +60,7 @@ func TestCancel_AnEngineThatStartsLaterTurnsOffTheQueuedMergeOfACancelItMissed(t
 	harness.engine(t)
 
 	waitOn(t, condition(func() bool { return len(harness.merge.snapshot()) == 1 }))
-	assert.Equal(t, []string{testItem}, harness.merge.snapshot())
+	assert.Equal(t, []string{queuedMember}, harness.merge.snapshot())
 }
 
 func TestCancel_AnEngineThatCannotTurnOffTheQueuedMergeOfAMissedCancelStillGivesTheItemBack(t *testing.T) {
@@ -78,7 +78,7 @@ func TestCancel_AnEngineThatCannotTurnOffTheQueuedMergeOfAMissedCancelStillGives
 	harness.engine(t)
 
 	waitOn(t, condition(func() bool { return countOf(harness.life.seen(), "release") == 1 }))
-	assert.Equal(t, []string{testItem}, harness.merge.snapshot(), "the disarm was tried once, and its failure did not stop the give-back")
+	assert.Equal(t, []string{queuedMember}, harness.merge.snapshot(), "the disarm was tried once, and its failure did not stop the give-back")
 }
 
 // rowOf builds the stored row of a child workflow whose input is in.

@@ -350,7 +350,7 @@ func TestBatchResult_ALossRecordThatAWorkflowCannotHoldFailsTheResult(t *testing
 
 	_, err := batchResult(batch.Result{}, batch.Report{}, nil, []hostLoss{{Loss: func() {}}})
 
-	require.ErrorContains(t, err, "the host loss records of batch_merge: ")
+	require.ErrorContains(t, err, "the host loss records of merge: ")
 }
 
 func TestBatchGate_AGateRunProgramIsOneStepAndSubmitsNoHostJob(t *testing.T) {

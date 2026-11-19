@@ -64,10 +64,6 @@ func answerOutputs(answer string, answers map[string]string, timedOut bool) map[
 	return map[string]any{"answer": answer, "answers": answers, "timed_out": timedOut}
 }
 
-func mergeOutputs(state, reason string) map[string]any {
-	return map[string]any{stateField: state, reasonKey: reason}
-}
-
 func createOutputs(id string, created bool) map[string]any {
 	return map[string]any{"id": id, "created": created}
 }

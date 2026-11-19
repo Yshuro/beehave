@@ -172,3 +172,5 @@ func TestStepsOf_ARecordThatIsNotAPassOnEveryStepReadsAsNotFound(t *testing.T) {
 	_, ok = stepsOf(map[string]any{"passed": true, "steps": "text"})
 	assert.False(t, ok)
 }
+
+const rewrittenHead = "89abcdef0123456789abcdef0123456789abcdef"

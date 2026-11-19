@@ -88,21 +88,6 @@ func TestDryRun_ACommandWithASlotClassRunsItsFakeProgram(t *testing.T) {
 	assert.NotContains(t, out.String(), "FAILED")
 }
 
-// The pipeline of the example holds no merge, so this file walks one: the dry forge reads the reviewed head and the dry watch shows the pull request as merged.
-func TestDryRun_AMergeMarksThePullRequestReadyAndTheWatchShowsItMerged(t *testing.T) {
-	t.Parallel()
-
-	var out bytes.Buffer
-
-	file := dryFile(t, bodyFlow("c = gate(name = \"check\")\nm = merge(head = c.head, tree = c.tree, steps = c.steps, name = \"ship\")\nif m.state != \"merged\":\n    fail(\"the merge state is \" + m.state)"))
-
-	require.NoError(t, DryRun(t.Context(), file, "12", map[string]string{}, &out), out.String())
-	assert.Contains(t, out.String(), " ready")
-	assert.Contains(t, out.String(), " watch")
-	assert.Contains(t, out.String(), "merge:ship#1")
-	assert.NotContains(t, out.String(), "FAILED")
-}
-
 func TestDryRun_AFailedRunNamesTheErrorWithItsLineAndTheLastStepOnItsOwnLine(t *testing.T) {
 	t.Parallel()
 
@@ -140,8 +125,7 @@ func TestDryRun_AStepThatTheDryRunDoesNotFakeIsNotRunAndIsNotAnError(t *testing.
 		"host":  {body: "host_teardown(name = \"stop\")", want: "not run in a dry run: stop the build host"},
 		"queue": {body: "queue(name = \"q\")", want: "not run in a dry run: read the open work of the project"},
 		"state": {body: "pr_state(pr = 41, name = \"s\")", want: "not run in a dry run: read the state of a pull request"},
-		"merge": {body: shipCall("merge = True, "), want: "not run in a dry run: merge the pull request"},
-		"batch": {body: "batch_merge(prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", name = \"b\")", want: "not run in a dry run: merge a batch of pull requests"},
+		"batch": {body: "merge(prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", name = \"b\")", want: "not run in a dry run: merge a batch of pull requests"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -491,7 +475,7 @@ func TestDryDeps_EveryCollaboratorIsADryOne(t *testing.T) {
 	deps := dryDeps("/t", "h", "12", dryChoice{})
 
 	for name, held := range map[string]any{
-		"Agents": deps.Agents, "Gate": deps.Gate, "Logins": deps.Logins, "Lifecycle": deps.Lifecycle, "Forge": deps.Forge, "Watch": deps.Watch,
+		"Agents": deps.Agents, "Gate": deps.Gate, "Logins": deps.Logins, "Lifecycle": deps.Lifecycle, "Forge": deps.Forge,
 		"Trees": deps.Trees, "Beats": deps.Beats, "Commands": deps.Commands, "Items": deps.Items, "Writer": deps.Writer, "Reader": deps.Reader, "Preflight": deps.Preflight,
 	} {
 		assert.Contains(t, fmt.Sprintf("%T", held), "flow.dry", name)
@@ -690,8 +674,6 @@ func TestDryFakes_AnswerWithoutTouchingAnything(t *testing.T) {
 	assert.True(t, renewed.IsZero())
 
 	require.NoError(t, dryLifecycle{}.Release(ctx, "p", "1", "o"))
-	require.NoError(t, dryForge{}.Ready(ctx, "p", "1"))
-	require.NoError(t, dryWatch{}.SetDraft(ctx, "p", 1, true))
 	require.NoError(t, dryWriter{}.SetStatus(ctx, "p", "1", ""))
 	require.NoError(t, dryWriter{}.Comment(ctx, "p", "1", "k", "t"))
 

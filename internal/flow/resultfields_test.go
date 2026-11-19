@@ -52,7 +52,6 @@ func TestResultFields_TheOutputsOfEachBuiltinAreTheFieldsOfTheTable(t *testing.T
 		"item_create":   keysOf(createOutputs("", true)),
 		"item_read":     keysOf(readOutputs(false, "", nil, nil, "")),
 		"item_status":   keysOf(statusOutputs("", "")),
-		"merge":         keysOf(mergeOutputs("", "")),
 		"host_teardown": keysOf(teardownOutputs(true, "")),
 		"host_up":       keysOf(upOutputs(true, "")),
 		"pr_assign":     keysOf(prOutputs(0, nil)),
@@ -88,10 +87,10 @@ func TestResultFields_TheStructsOfTheSwarmBuiltinsAreTheFieldsOfTheTable(t *test
 	require.NoError(t, err)
 
 	got := map[string][]string{
-		"batch_merge": batchStruct(t, landed).AttrNames(),
-		"gather":      gathered.AttrNames(),
-		"queue":       queuedValue(queued{}).AttrNames(),
-		"spawn":       runsValue([]spawnedRun{{}}).AttrNames(),
+		"merge":  batchStruct(t, landed).AttrNames(),
+		"gather": gathered.AttrNames(),
+		"queue":  queuedValue(queued{}).AttrNames(),
+		"spawn":  runsValue([]spawnedRun{{}}).AttrNames(),
 	}
 
 	for builtin, names := range got {

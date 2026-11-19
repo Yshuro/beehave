@@ -53,13 +53,12 @@ const (
 func resultFields() map[string][]string {
 	fields := map[string][]string{
 		agentName:        {"text", "session", "transcript", "head_sha", "violations", "stop", "cost_usd", "cost_estimated", "cost_unknown", "rewrote", "skills"},
-		batchMergeName:   {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", "findings", "note", "unproven", "host_loss", "host_losses"},
+		mergeName:        {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", "findings", "note", "unproven", "host_loss", "host_losses"},
 		commandName:      {"stdout", "stderr", "rc"},
 		earlierCallsName: {"count"},
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
-		mergeName:        {stateField, reasonField},
 		preflightName:    {"ok", "stop", "code", reasonField, "foreign", "pr", "head", "author"},
 		queueName:        {"rows", "free"},
 		spawnName:        {"runs"},

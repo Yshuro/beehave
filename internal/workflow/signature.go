@@ -59,9 +59,6 @@ const ofKeyword = "of"
 // ItemTargets lists the values of the of argument of an item_read call: the item of the run, or its parent.
 func ItemTargets() []string { return []string{"self", "parent"} }
 
-// ChildrenValues lists the values of the children argument of a merge call.
-func ChildrenValues() []string { return []string{"refuse", "retarget"} }
-
 // ForeignModes lists the values of the foreign argument of a preflight call.
 func ForeignModes() []string { return []string{"review"} }
 
@@ -316,7 +313,7 @@ func runParam() Param {
 // runWord is the keyword that names the program of a call.
 const runWord = "run"
 
-// treeKeyword is the keyword of merge that carries the tree that the gate recorded, and the name of that field in a result.
+// treeKeyword is the name of the tree field in the result of gate and merge.
 const treeKeyword = "tree"
 
 // processCap is the keyword max_new_processes of command. The run reads it as a value, so a None reaches the check of the hostWithCap pair.
@@ -362,7 +359,7 @@ func swarmSignatures() map[string][]Param {
 	label := opt(nameKeyword, KindText)
 
 	return map[string][]Param{
-		batchMergeName: {
+		mergeName: {
 			{Name: "prs", Kind: KindList, Required: true, Rule: prsRule, Members: true},
 			filled("base"), filled("repo"), opt("hold", KindText), ruled("own", KindDict, ownRule),
 			forbidText(), words("gate_run"), opt("integration", KindInt),
@@ -399,11 +396,6 @@ func itemSignatures() map[string][]Param {
 		prCommentName:  {filled("text"), filled("key"), forbidText(), opt("integration", KindBool), label},
 		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), opt("integration", KindBool), label},
 		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), one("foreign", ForeignModes()), label},
-		mergeName: {
-			req("head", KindText), opt("repo", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("approved", KindBool),
-			{Name: treeKeyword, Kind: KindText, AsValue: true},
-			opt("steps", KindList), forbidText(), one("children", ChildrenValues()), opt("merge", KindBool), label,
-		},
 	}
 }
 
@@ -554,54 +546,14 @@ func (g *graph) pairs(call *syntax.CallExpr, builtin string, params []Param) {
 	case commandName:
 		g.hostWithCap(call, params)
 		g.hostWithSlots(call, params)
-	case mergeName:
-		g.proof(call, params)
 	case waitName:
 		g.asking(call, params)
-	}
-}
-
-// proof checks the tree and steps arguments of a merge call with the rules of the run. The run reads them only when the call sets merge to True,
-// so the check does the same. An empty list of steps is reported by mergeNeedsSteps, and a value of the wrong kind by the kind check.
-func (g *graph) proof(call *syntax.CallExpr, params []Param) {
-	if merges, isIdent := paramArg(call, params, "merge").(*syntax.Ident); !isIdent || merges.Name != trueName {
-		return
-	}
-
-	if tree := paramArg(call, params, treeKeyword); tree != nil && g.proofFits(tree, KindText) {
-		_, err := GatedTree(g.literal(tree))
-		g.proofError(tree, err)
-	}
-
-	if steps := paramArg(call, params, "steps"); steps != nil && !emptyList(steps) && g.proofFits(steps, KindList) {
-		g.proofError(steps, GateSteps(g.literal(steps)))
 	}
 }
 
 // paramArg returns the expression of the keyword of a call, found by the place of the keyword in the signature. It is nil when the call leaves it out.
 func paramArg(call *syntax.CallExpr, params []Param, keyword string) syntax.Expr { //nolint:ireturn // the syntax tree of starlark-go holds expressions as an interface
 	return argument(call, keyword, slices.IndexFunc(params, func(p Param) bool { return p.Name == keyword }))
-}
-
-// proofFits reports whether an argument is a literal of the kind, or None.
-func (g *graph) proofFits(arg syntax.Expr, kind Kind) bool {
-	value, ok := literalValue(arg)
-
-	return ok && (value == starlark.None || kindOf(arg) == kind)
-}
-
-// literal returns the value of an argument that proofFits accepted.
-func (g *graph) literal(arg syntax.Expr) starlark.Value { //nolint:ireturn // the value is any of the Starlark types
-	value, _ := literalValue(arg)
-
-	return value
-}
-
-// proofError reports an error of the run for an argument of a merge call.
-func (g *graph) proofError(arg syntax.Expr, err error) {
-	if err != nil {
-		g.report(placeOf(syntax.Start(arg)), mergeName+": "+err.Error()+".")
-	}
 }
 
 // hostWithCap checks max_new_processes of a command call with the rule of the run and the real pair of values the run passes it: the value and
@@ -747,38 +699,6 @@ func textList(value syntax.Expr) (texts []string, ok bool) {
 	}
 
 	return texts, true
-}
-
-// mergeNeedsSteps reports a merge call that can merge and names no gate steps: it leaves out `steps` or passes an empty list literal.
-// A call that sets `merge` to False, or leaves `merge` out, is an owner merge and needs none. A computed `merge` can be True, so it needs them.
-func (g *graph) mergeNeedsSteps(call *syntax.CallExpr, params []Param) {
-	if splat(call) {
-		return
-	}
-
-	merges := paramArg(call, params, "merge")
-	if ident, isIdent := merges.(*syntax.Ident); merges == nil || (isIdent && ident.Name == falseName) {
-		return
-	}
-
-	steps := paramArg(call, params, "steps")
-	if steps != nil && !emptyList(steps) {
-		return
-	}
-
-	g.report(placeOf(call.Lparen), "merge needs the gate steps when it merges. Add steps = <gate>.steps to the call, or set merge = False and the owner merges.")
-}
-
-// emptyList reports whether an expression is a list or a tuple literal with no item.
-func emptyList(expr syntax.Expr) bool {
-	switch e := expr.(type) {
-	case *syntax.ListExpr:
-		return len(e.List) == 0
-	case *syntax.TupleExpr:
-		return len(e.List) == 0
-	}
-
-	return false
 }
 
 // value checks one literal against the closed set and the kind of its keyword.

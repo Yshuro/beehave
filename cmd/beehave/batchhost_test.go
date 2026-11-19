@@ -250,7 +250,7 @@ func TestBatchHost_AnItemWithNoWorktreeIsRefusedAndGitNeverRunsInTheFolderOfTheP
 	t.Parallel()
 
 	host := hostOver("", hostForge{tip: "abc", found: true}, nil)
-	fix := "item 7 of project p has no worktree, so batch_merge cannot run git for it. Make the worktree of the item first"
+	fix := "item 7 of project p has no worktree, so merge cannot run git for it. Make the worktree of the item first"
 
 	_, err := host.Git(t.Context(), "p", "7")
 	require.EqualError(t, err, fix)

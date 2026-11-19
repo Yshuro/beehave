@@ -175,13 +175,6 @@ func (f *crashForge) PlaceCard(ctx context.Context, project, item string, req Ca
 	return number, err
 }
 
-func (f *crashForge) Ready(ctx context.Context, project, item string) error {
-	err := f.forge.Ready(ctx, project, item)
-	f.stop("ready")
-
-	return err
-}
-
 func (f *crashForge) stop(method string) {
 	if method == f.on {
 		f.crash.after()

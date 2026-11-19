@@ -166,13 +166,13 @@ def wait_for_one(swarm, p):
             swarm.waiting[orig] = head
 
 def land(tag, swarm):
-    """One batch_merge for each priority, P0 first. batch_merge folds its members in the order of the item id, so one call for each priority makes P0 win."""
+    """One merge for each priority, P0 first. merge folds its members in the order of the item id, so one call for each priority makes P0 win."""
     total = struct(merged = [], rejected = [], deferred = [], unproven = [])
     for tier in TIERS:
         group = [struct(item = i, head = swarm.waiting[i]) for i in sorted(swarm.waiting.keys()) if swarm.prio[i] == tier]
         if len(group) == 0:
             continue
-        out = batch_merge(
+        out = merge(
             name = "land-%s-%s" % (tag, tier),
             prs = group,
             base = env("BASE"),

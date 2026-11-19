@@ -216,10 +216,6 @@ func (deadlineGate) Key(context.Context, string, string, string) (GateKey, error
 
 func (slowGate) Key(context.Context, string, string, string) (GateKey, error) { return GateKey{}, nil }
 
-func (cancelGate) Key(context.Context, string, string, string) (GateKey, error) {
-	return GateKey{}, nil
-}
-
 // Submit counts the host jobs that it started and gives each one an id.
 func (g *fakeGate) Submit(_ context.Context, _, _, host, base string) (GateJob, error) {
 	g.mu.Lock()
@@ -556,7 +552,6 @@ type harness struct {
 	batch     batchHost   // nil unless a test sets it
 	preflight preflighter // nil unless a test sets it
 	forge     *fakeForge
-	watch     *fakeWatch
 	trees     *fakeTrees
 	beats     *fakeBeats
 	commands  *fakeCommands
@@ -631,7 +626,6 @@ func newHarness(t *testing.T) *harness {
 		logins:   fakeLogins{login: testLogin},
 		life:     life,
 		forge:    &fakeForge{life: life, state: review.Standing{Number: testPull}},
-		watch:    &fakeWatch{outcomes: []review.Outcome{{Kind: review.Merged}}},
 		trees:    &fakeTrees{dir: tree},
 		beats:    &fakeBeats{},
 		commands: &fakeCommands{},
@@ -652,9 +646,9 @@ func newHarness(t *testing.T) *harness {
 
 func (h *harness) deps() Deps {
 	deps := Deps{
-		Agents: h.agents, Gate: h.gate, Logins: h.logins, Lifecycle: h.life, Forge: h.forge, Watch: h.watch, Trees: h.trees, Beats: h.beats, Commands: h.commands, Items: h.items, Writer: h.writer, Reader: h.reader,
+		Agents: h.agents, Gate: h.gate, Logins: h.logins, Lifecycle: h.life, Forge: h.forge, Trees: h.trees, Beats: h.beats, Commands: h.commands, Items: h.items, Writer: h.writer, Reader: h.reader,
 		Kept:  []error{errFake},
-		Clock: clock{Tick: h.ticks, Poll: storePoll, Watch: cmp.Or(h.sleep, time.Millisecond), Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, Reading: h.reading, CapWait: cmp.Or(h.capWait, time.Millisecond), Overload: cmp.Or(h.overload, time.Millisecond), LostPoll: cmp.Or(h.lostPoll, time.Millisecond)},
+		Clock: clock{Tick: h.ticks, Poll: storePoll, Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, Reading: h.reading, CapWait: cmp.Or(h.capWait, time.Millisecond), Overload: cmp.Or(h.overload, time.Millisecond), LostPoll: cmp.Or(h.lostPoll, time.Millisecond)},
 	}
 	if h.merge != nil {
 		deps.Merge = h.merge
@@ -1164,18 +1158,14 @@ type runOutcome struct {
 // fakeForge answers every read with state, or fails with err. It records the items it was asked about.
 type fakeForge struct {
 	mu    sync.Mutex
-	life  *fakeLifecycle // the log that a Ready call goes to, in order with the claim and the release
+	life  *fakeLifecycle
 	state review.Standing
 	err   error
 	asked []string
 	// heads is the head of the pull request of each item that has its own. An item that is not in it gets the head of state.
 	heads map[string]string
-	// rewritten makes Reviewed report a head other than the reviewed commit as a rewrite of it.
-	rewritten bool
 	// failFrom, when above zero, makes the read of that number and every later read fail with errFake.
 	failFrom int
-	// pushAfterReady, when set, moves the head of the pull request to it once Ready has run: a push between the standing read and the ready call.
-	pushAfterReady string
 	// closing is the closing issues that each read of ClosingIssues gives, in order; the last repeats. closingReads counts the reads.
 	closing      [][]int
 	closingReads int
@@ -1296,75 +1286,6 @@ func (f *fakeForge) ClosingIssues(_ context.Context, _, _ string) ([]int, bool, 
 	}
 
 	return f.closing[min(f.closingReads, len(f.closing))-1], true, nil
-}
-
-// Reviewed answers as Pull does. When rewritten is set and the head is not the reviewed commit, the standing says the head is a rewrite of it.
-func (f *fakeForge) Reviewed(ctx context.Context, project, item, reviewed string) (review.Standing, error) {
-	standing, err := f.Pull(ctx, project, item)
-	if f.rewritten && standing.Head != reviewed {
-		standing.Rewritten = reviewed
-	}
-
-	return standing, err
-}
-
-// Ready records the call in the log of the lifecycle fake, and fails when a test sets failing["ready"].
-func (f *fakeForge) Ready(_ context.Context, project, item string) error {
-	err := f.life.step("ready", project, item)
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if f.pushAfterReady != "" {
-		f.state.Head = f.pushAfterReady
-	}
-
-	return err
-}
-
-// fakeWatch answers each read with the next of outcomes and then repeats the last. A non-nil err fails every read.
-// It records the pull requests it read and the draft calls.
-type fakeWatch struct {
-	mu       sync.Mutex
-	outcomes []review.Outcome
-	err      error
-	errs     []error // the error of read n, the last one repeats; it replaces err
-	draftErr error
-	reads    []int
-	drafts   []int
-}
-
-func (f *fakeWatch) Watch(_ context.Context, _ string, pr int) (review.Outcome, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.reads = append(f.reads, pr)
-
-	next := f.outcomes[min(len(f.reads), len(f.outcomes))-1]
-
-	if len(f.errs) > 0 {
-		return next, f.errs[min(len(f.reads), len(f.errs))-1]
-	}
-
-	return next, f.err
-}
-
-func (f *fakeWatch) SetDraft(_ context.Context, _ string, pr int, draft bool) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	if draft {
-		f.drafts = append(f.drafts, pr)
-	}
-
-	return f.draftErr
-}
-
-func (f *fakeWatch) seen() (reads, drafts []int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	return append([]int(nil), f.reads...), append([]int(nil), f.drafts...)
 }
 
 // fakeTrees answers every lookup with dir, or fails with err. A fakeTrees with late set has no folder until Ensure makes it.

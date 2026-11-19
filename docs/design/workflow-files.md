@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `before_review`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -33,7 +33,7 @@ The engine predeclares `agent`, `batch_merge`, `before_review`, `board_sync`, `c
 
 - Each builtin except `struct` and `json` takes keyword arguments, runs as a recorded DBOS step, and returns a struct of its outputs.
 - The step is recorded under the name `<builtin>:<name>#<n>`. `name` is the argument of the call. `n` counts the calls of that builtin, whatever their names, so a call in a loop gets a new record in each round.
-- Every `merge` and `wait` call also records a step under this name, after the work of the call.
+- Every `wait` call also records a step under this name, after the work of the call.
 - A restart replays `main` from the top. Each call finds its record and returns the recorded outputs, so a finished step never runs again. The same code makes the same calls in the same order.
 - A step that was running when the engine stopped has no record, so it runs again on resume. The next subsection says what that means for each builtin.
 
@@ -58,9 +58,7 @@ Four cases are not safe today, and a later change fixes each of them.
 | `pr_assign` | Safe. | The call is a POST that adds a login, and GitHub says: "Users already assigned to an issue are not replaced." ([Assignees](https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue)). A test pins the exact call of two runs, so a change to a call that replaces the assignees turns it red. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
 | `board_sync` | Safe. | The call adds the card by its address, and GitHub says: "If you try to add an item that already exists, the existing item ID is returned instead." ([Using the API to manage Projects](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)). The step from `gh project item-add` to that mutation rests on the same page, which does not name the command. The edit then sets the Status field to the same option. This half rests on the call that sets the same value, and no GitHub page states that a repeat is a no-op. A test pins the exact calls of two runs. No test uses a real board. |
-| `merge`: the ready mark | Safe. | The step reads the draft state first and makes no `gh pr ready` call for a pull request that is ready. A test with a ready pull request shows no call. |
-| `merge`: the merge | Safe when a batch host is set, which the real build always does. | The step `merge:intent` is recorded before the merge. The forge shows the pull request as merged at the gated head, and the intent shows the merge is ours. A build with no batch host has no intent step. |
-| `batch_merge`: each member | Safe. | The step `batch:<name>.intent#<item>` does the same for each member. |
+| `merge`: each member | Safe. | The step `batch:<name>.intent#<item>` is recorded before the merge of the member. The forge shows the pull request as merged at the gated head, so the step counts it as done. |
 | `spawn` | Safe. It rests on the library. | The child run has a fixed workflow id, and DBOS returns the recorded child for it. A test stops the parent while it waits in `gather`, after `spawn` returned, and shows one child run with the same id after the resume. No test reaches the window inside the start call, between the child row and the record of it in the parent. |
 | `wait` | Safe. It rests on the library, and no test in this table stops a wait. | The deadline is the output of a recorded DBOS sleep, and the answer is a durable receive. A resume waits for the same answer. |
 | `write` with `read_back` | Safe. | The read-back runs first and finds a write that is done. |
@@ -68,7 +66,7 @@ Four cases are not safe today, and a later change fixes each of them.
 | `write` undo | The undo is a recorded step named `undo:<write step>`. A crash during the undos runs the one that has no record again with the same key. | The undo must be safe when nothing happened (see `undo`). A repeat after the effect depends on the program. |
 | `command` with no `host`, and `gate` with a program on this machine | Runs again. | By design. Put an outside effect in `write`. |
 | `sandbox` | Safe. | The call builds a setting value and changes nothing outside the run. |
-| `gate` with a host job, `command` with `host` or `slots`, and the gate of `batch_merge` | Not safe today. A crash after the host accepts the job and before the record submits a second job. | The job has no key that the host honors. A later change adds one. |
+| `gate` with a host job, `command` with `host` or `slots`, and the gate of `merge` | Not safe today. A crash after the host accepts the job and before the record submits a second job. | The job has no key that the host honors. A later change adds one. |
 | `host_up` | Not safe today. If the crash came after the launch, the repeat finds the host up and reports `started` false, so `host_teardown` does not stop it. | The step cannot tell its own launch from a host that was up already. A later change adds a start mark. |
 | `host_teardown` on SkyPilot | Not safe today. If the crash came after the delete, the repeat cannot read the work root of the deleted cluster and reports `down` false with a reason. | The step reads the host before it checks that the host exists. A later change makes a missing host count as down. |
 | `host_teardown` on ssh and Slurm | Safe. | The step banks the work and leaves the machine up. The bank reads first and pushes only what is not banked, so a repeat pushes nothing. A test runs the bank once, and none runs it twice. |
@@ -266,7 +264,7 @@ The four steps that post public text (`item_create`, `item_comment`, `pr_comment
 - The match is per line, as in `merge`, so a pattern such as `^$` matches any blank line.
 - The refusal names the pattern and the argument, never the text. The pattern lands in the run error and in local logs, so a pattern must not be a secret.
 - Each call sets its own patterns, so core holds no word list. A call that leaves `forbid_text` out posts without a scan.
-- `beehave check workflow` refuses a `forbid_text` literal that is not a list of RE2 strings, on these four steps and on `merge` and `batch_merge`.
+- `beehave check workflow` refuses a `forbid_text` literal that is not a list of RE2 strings, on these four steps and on `merge`.
 - The setting changes no recorded output, so the version of the step records stays the same.
 
 ### Build host builtins
@@ -394,87 +392,9 @@ A run that `spawn` started reads the hold of its item in the tracker again befor
 
 ### `merge`
 
-A `merge` step has these settings besides `head`, `merge` and `name`: `repo`, `base`, `hold`, `own`, `approved`, `tree`, `forbid_text` and `children`. A file keeps no login or address: it reads them with `env("<NAME>")`.
+`merge(prs, base, repo, hold, own, forbid_text, gate_run, integration, name)` lands a list of `struct(item, head, approved)` with one gate run on the union tree of the base tip and all heads. It splits the list when the gate is red. A forge with a native merge queue needs no `merge`.
 
-| Setting | Meaning |
-| --- | --- |
-| `repo` | The repository. It must be the repository of the project, or the step refuses. |
-| `base` | The branch: the integration branch, never the default branch. |
-| `hold` | A label. A pull request with that label is never merged. Case does not count. |
-| `own` | `{"logins": [...], "emails": [...]}`, the identities of the owner and of the runners. |
-| `approved` | A boolean that the file computes, such as `review.verdict == "approve"`. |
-| `tree` | The tree id that the gate recorded as its output `tree`. |
-| `forbid_text` | A list of RE2 patterns for the lines of the pull request body and of each commit message. |
-| `children` | `refuse` (the default) or `retarget`. |
-
-#### The `tree` proof
-
-- After the merge, the step compares the tree of the base tip with `tree`, and stops on a difference.
-- A call without `tree` asks for no proof.
-- A call that merges and sets `tree` to the empty text is refused, because a gate that runs a program, or a resumed host job whose head is not the current head, records no tree.
-- A call that does not merge never reads `tree`. A workflow that merges passes `tree`.
-- The proof runs after the merge. If the base moved between the gate and the merge, the merged tree was never gated, and the run stops as refused. The merge is not undone, and the item ends failed with the pull request merged.
-- The remediation example does not merge, so it passes no `tree`.
-
-#### The `steps` proof
-
-`steps` is the output `steps` of the gate: a list of `{"name", "status"}`, one for each step, where the status is `pass`, `fail` or `unknown`.
-
-- A call that merges is refused, before it marks anything ready, when it leaves out `steps`, when the list is empty, or when any step is not `pass`.
-- The workflow check refuses such a call before the run when `steps` is missing or an empty list literal and `merge` is not `False`.
-- A call that does not merge (`merge = False`, or no `merge`) needs no `steps`.
-
-A gate gives these steps:
-
-| Step | Status |
-| --- | --- |
-| `command` | Its exit code, or the state of its host job. |
-| `tests` | `unknown` when the report is missing, stale, not valid or empty, or when the command failed, because the report is read only after an exit code 0. On a build host it is `pass` only when the job succeeded. |
-
-A gate that runs a program gives the step `command` only.
-
-#### The host loss fields
-
-A `gate` result has two fields for a host job that was lost. See "The wait for a proof" in [hosts.md](hosts.md).
-
-- `host_loss` holds `kind`, `job`, `host`, `head_or_commit`, `proof`, `note` and `at` when the gate lost its job and a proof came. It is an empty dict when the gate lost nothing.
-- `host_losses` is the number of host losses in the item tree of the run, this one included. It is 0 when the gate lost nothing, and the engine then reads no other run.
-- The item run records each loss as the step `<call>/host-loss`, with the loss and the count. The step counts the `/host-loss` steps of every item run of the tree from its root, so a replay reads the recorded count. If two runs of the tree record a loss at the same time, each count can leave out the other loss. The status reads the count again and holds both.
-- `beehave status <run id> --json` shows `host_losses` for the tree of the run, and leaves it out at 0.
-- The engine sets no limit on the count. A workflow reads `host_losses` and decides when to ask the owner.
-- The library `review_fix.star` reruns a void gate with a host cause as `candidate-gate-host-<k>` at no cost to the item, and stops the loop at `HOST_LOSS_LIMIT` (5). Its result carries `host_losses` and `host_lost`. See "The host loss limit" in [durable-loop.md](durable-loop.md).
-
-#### The pinned head
-
-The step pins the merge to the head of the pull request, not to `head`, when a rewrite left that head with the same tree as the reviewed `head`: the review stands for it. A head with another tree is refused.
-
-#### `own` and `approved`
-
-Nobody merges their own work, and our pull requests merge only on a verdict that another step gave.
-
-- A pull request of an `own` identity merges only when `approved` is true.
-- If `approved` is not set, the step refuses our own pull requests.
-- A pull request of any other author does not depend on `approved`.
-- A standing changes-requested review of another person blocks the merge in every case.
-- The review step must not be the step that wrote the code. Nothing checks this, because the file does not say which step wrote the head.
-
-#### What the merge step refuses
-
-When it runs, the merge step refuses:
-
-- `merge = True` with no `repo`, `base` or `own`.
-- An `own` that is not a dict with `logins` and `emails`, each a list of strings, or that has an unknown key or two empty lists.
-- A `hold` with a comma.
-- A `forbid_text` item that is not a string, is empty or is not RE2.
-- An unknown `children` value.
-
-A value of another type fails the step and names the value. An environment name that is unset fails the step and names the variable.
-
-### `batch_merge`
-
-`batch_merge(prs, base, repo, hold, own, forbid_text, gate_run, integration, name)` lands a list of `struct(item, head, approved)` with one gate run on the union tree of the base tip and all heads. It splits the list when the gate is red. A forge with a native merge queue needs no `batch_merge`.
-
-`approved` is an optional bool of each member, and a member that leaves it out is not approved. It is the `approved` of `merge` for that member only: a pull request of an `own` identity merges only when its own member sets `approved = True`. The call has no `approved` of its own, so the approval of one member never reaches another. A value that is not a bool fails the call and names the field.
+`approved` is an optional bool of each member, and a member that leaves it out is not approved. It applies to that member only: a pull request of an `own` identity merges only when its own member sets `approved = True`. The call has no `approved` of its own, so the approval of one member never reaches another. A value that is not a bool fails the call and names the field.
 
 `beehave check workflow` reads each `struct(...)` member of a `prs` list with the parser that the run uses, so a wrong field is a problem before the run. The error names the member and the field, for example ``prs[1]: `approved` of a member of `prs` must be a bool, not string``, and is the same text that the run gives. The check reads the first wrong field of a member. A member that is a literal but not a struct, such as `1`, a dict or a list, is refused. A list, a dict or a struct that a field or a member holds counts as that type, whatever it contains. A value that only the run knows, such as a variable or a call, is left to the run: the check skips that field or that member and still reads the other fields. A file that defines its own `struct` is not read as the builtin.
 
@@ -487,7 +407,7 @@ It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`,
 - `host_losses` is the count of the host losses in the item tree that the last record of the call read. It is 0 when the call lost nothing.
 - `name` is required, and each call of a run needs its own.
 - The union is gated in the worktree of the item that runs the workflow.
-- Each member merges through the same guards as `merge`, pinned to its head and to the tree of its prefix.
+- Each member merges through the guards of the merge package, pinned to its head and to the tree of its prefix.
 - Git 2.38 or newer is the minimum on the gate host.
 - For each member, the step `batch:<name>.intent#<item>` records the pull request as OPEN before the step `batch:<name>.merge#<item>` merges it. A resume after a crash therefore counts a merge that the forge already made as done.
 
@@ -507,6 +427,30 @@ The project gate of the union is two steps in its gate run: `batch_gate:job` che
 - A read that fails is a finding, never a pass.
 - `note` says why no read ran: a base that is not the default branch with no `integration`, an integration pull request that is not merged, or a tracker with no issue numbers.
 - The read never closes or reopens an issue. A finding does not fail the call, because the batch has landed and the merge cannot be undone. The workflow reads `findings` and decides what to tell the owner.
+
+#### The host loss fields
+
+A `gate` result has two fields for a host job that was lost. See "The wait for a proof" in [hosts.md](hosts.md).
+
+- `host_loss` holds `kind`, `job`, `host`, `head_or_commit`, `proof`, `note` and `at` when the gate lost its job and a proof came. It is an empty dict when the gate lost nothing.
+- `host_losses` is the number of host losses in the item tree of the run, this one included. It is 0 when the gate lost nothing, and the engine then reads no other run.
+- The item run records each loss as the step `<call>/host-loss`, with the loss and the count. The step counts the `/host-loss` steps of every item run of the tree from its root, so a replay reads the recorded count. If two runs of the tree record a loss at the same time, each count can leave out the other loss. The status reads the count again and holds both.
+- `beehave status <run id> --json` shows `host_losses` for the tree of the run, and leaves it out at 0.
+- The engine sets no limit on the count. A workflow reads `host_losses` and decides when to ask the owner.
+- The library `review_fix.star` reruns a void gate with a host cause as `candidate-gate-host-<k>` at no cost to the item, and stops the loop at `HOST_LOSS_LIMIT` (5). Its result carries `host_losses` and `host_lost`. See "The host loss limit" in [durable-loop.md](durable-loop.md).
+
+
+#### `own` and `approved`
+
+Nobody merges their own work, and our pull requests merge only on a verdict that another step gave.
+
+- A pull request of an `own` identity merges only when `approved` is true.
+- If `approved` is not set, the step refuses our own pull requests.
+- A pull request of any other author does not depend on `approved`.
+- A standing changes-requested review of another person blocks the merge in every case.
+- The review step must not be the step that wrote the code. Nothing checks this, because the file does not say which step wrote the head.
+
+
 
 ### `spawn` and `gather`
 

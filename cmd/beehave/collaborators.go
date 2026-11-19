@@ -899,38 +899,6 @@ func (p pulls) Pull(ctx context.Context, project, item string) (review.Standing,
 	return review.Pull(ctx, built, number), nil
 }
 
-// Reviewed reads the standing as Pull does, then lets a review of the commit reviewed stand for a head that holds the same tree.
-func (p pulls) Reviewed(ctx context.Context, project, item, reviewed string) (review.Standing, error) {
-	built, number, err := p.find(ctx, project, item)
-	if err != nil {
-		return review.Standing{}, err
-	}
-
-	standing := review.Pull(ctx, built, number)
-	standing.Compare(ctx, built, reviewed)
-
-	return standing, nil
-}
-
-// Ready takes the pull request of the item out of draft. It reads the draft state first and makes no call for a pull request that is ready, so a step that runs again changes nothing.
-func (p pulls) Ready(ctx context.Context, project, item string) error {
-	built, number, err := p.find(ctx, project, item)
-	if err != nil {
-		return err
-	}
-
-	view, err := built.PRView(ctx, number, "isDraft")
-	if err != nil {
-		return err
-	}
-
-	if view.IsDraft != nil && !*view.IsDraft {
-		return nil
-	}
-
-	return built.SetDraft(ctx, number, false)
-}
-
 // ClosingIssues reads the issues that merging the pull request of the item closes, as the forge lists them.
 // An item with no pull request, and a project with no forge, give found false: there is no scope to fix.
 // GitHub lists closing references only for a pull request into the default branch, so a pull request into another base has an empty set.
@@ -997,16 +965,6 @@ func assignClosing(ctx context.Context, built forge.Forge, number int, assignee 
 	}
 
 	return refs.Issues, nil
-}
-
-// Watch reads the pull request once.
-func (p pulls) Watch(ctx context.Context, project string, pr int) (review.Outcome, error) {
-	built, err := p.forgeOf(project)
-	if err != nil {
-		return review.Outcome{}, err
-	}
-
-	return review.Watch(ctx, built, pr)
 }
 
 // Merge merges the pull request of the item at head, through the guards of the merge package and the settings of the merge step.
@@ -1232,16 +1190,6 @@ func (p pulls) target(ctx context.Context, project, item, repo string) (opened, 
 	}
 
 	return p.numberOf(ctx, built, item)
-}
-
-// SetDraft sets or clears the draft state of the pull request.
-func (p pulls) SetDraft(ctx context.Context, project string, pr int, draft bool) error {
-	built, err := p.forgeOf(project)
-	if err != nil {
-		return err
-	}
-
-	return built.SetDraft(ctx, pr, draft)
 }
 
 // leases takes, renews and gives back the claim of an item in the claim store of its project.

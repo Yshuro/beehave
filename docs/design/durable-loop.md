@@ -241,7 +241,7 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 - Each child run writes the cost of each agent step to a ledger file (`scripts/ledger.sh`).
 - The parent reads the total and the file `STOP` before each pass. At the cap, the parent starts no new run and lets the runs that started finish.
 - The parent files one item for each backlog line and starts the ready items by priority within `queue.free`.
-- It lands the finished pull requests with one `batch_merge` for each priority, `P0` first.
+- It lands the finished pull requests with one `merge` for each priority, `P0` first.
 - A conflict gets a fix item at most twice, then the status `hold`.
 
 ### Fix rounds
@@ -591,27 +591,7 @@ The note is one paragraph after the prompt. It says:
 
 The text is the same for every workflow. It is in the record of the step `agent/lost<n>`, so a replay uses the same prompt. A first start gets no note.
 
-### Ready and release
-
-#### The ready step
-
-Before the ready step marks a pull request ready, it reads the forge. The read is `review.Pull`, and it returns one `review.Standing`.
-
-`Standing.Reasons` is the only list of reasons. The reasons come in this order:
-
-1. A read that failed.
-2. A head that is not the commit the review read.
-3. A review that asks for changes.
-4. A conflict with the base branch.
-5. An unresolved thread.
-
-The ready step refuses with the pull request and each reason. The refusal lists the reasons in this order, so its text differs from the text of the earlier flow check. A failed read refuses the step too, because an empty fact is not a clean one.
-
-The ready step reads the standing, calls ready, then reads the head again. The ready call cannot name a head. If the head moved or cannot be read, the step sets the pull request back to draft and refuses. A cancel of the run does not stop that call: it runs on a context that the cancel does not end, with a limit of 30 seconds. If the call fails, its failure is part of the error of the step, and the error says to convert the pull request to a draft by hand.
-
-When the merge after the ready step fails or is refused, or the owner cancels the run during the merge, the step makes the pull request a draft again with the same call and the same limit. A stop of the engine does not: the run resumes at the merge, and a draft would make the merge refuse the pull request. A cancel during the ready call itself makes no draft call: the pull request can stay ready, at the head that the gate and the review passed, until the owner makes it a draft.
-
-After the ready step marks the pull request ready, the item runs the watch step (see [Ready watch](#ready-watch)).
+### Release
 
 #### The release steps
 
@@ -624,42 +604,6 @@ The worktree step removes the worktree only when all of these are true:
 - HEAD equals that tip.
 
 In every other case the tree stays, and the log says why. One timeout covers all the git calls. The claim release runs last.
-
-### Ready watch
-
-#### One read: `review.Watch`
-
-`review.Watch` reads a ready pull request once and returns `Merged`, `Waiting` or `SendBack` with a reason.
-
-| Fact | Result |
-|---|---|
-| The pull request merged | `Merged`. This wins over every other fact. |
-| A change request or a conflict | `SendBack`. |
-| An open thread or a moved head | `Waiting`. `review.Watch` returns the head it read in `Head`. |
-| A failed read | An `UnreadError`, never `Waiting`. |
-
-The watch loop of the engine compares `Head` with the head that the ready step marked ready. A head that differs is a send back: the review no longer covers it.
-
-#### The watch step
-
-The watch step of the item reads the pull request number through the forge. Then it reads with `review.Watch` and waits with `dbos.Sleep` between two reads.
-
-- The sleep is durable, so a restart resumes the watch and no timer of ours runs.
-- The clock of the engine sets the length of the sleep. The default is one hour.
-- A day of waiting adds 48 reads and 48 sleeps, 96 durable rows, to the history of the run. A restart replays all of them.
-- Three failed reads in a row end the watch with the last error. A good read resets the count.
-
-#### The outcomes
-
-**`Merged`.** The step ends.
-
-**`SendBack`.** The step reads the pull request again. It calls `SetDraft` only if the fresh read still says send back and does not show a draft. Then it ends the item with a finished run.
-
-- A replay after a crash between the draft call and the record finds the pull request in draft and makes no second call.
-- The result of the run holds the reason, and `beehave status` shows it as `sent back to draft`.
-- The run did not fail, so the next `beehave run <item>` starts a new attempt.
-
-**`Closed`.** The step ends the item with the merge state `closed`. It makes no draft call, and the item is not sent back. The result holds the text "the pull request was closed", and `beehave status` shows it as `ended`.
 
 ### Status, resume and cancel
 
@@ -684,7 +628,8 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core6.agent9.tracker1.forge2.land4.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A recorded receive of the answer of the owner and a recorded read of a ready pull request (the wait for the owner to merge) count as steps of the core module, so a run that only waited is refused when the core version differs. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core6.agent9.tracker1.forge2.land6.gate5.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A recorded receive of the answer of the owner counts as a step of the core module, so a run that only waited is refused when the core version differs. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step that this build does not record. The steps of the engine (the claim, the worktree, a step that DBOS records) are recorded by every build. A kind that only an older build recorded keeps its module in the table: `merge:<label>#<n>` of the single merge (land), `scope-check:<label>#<n>` (round) and the `watch` read of the owner merge wait (core). The replay cannot reach such a step, so the move fails closed, even when the stored list equals the list of this build. | Names the step and the module of the older build, or says that no module records it, and says to start the item again. |
 | The run is a run of a round item, and the version of the round module differs from the version in this build. The version of the round module covers the step that makes the worktree at the start of every round item, so every round run uses the module, even a run that an older build recorded with no such step. | Names the step that makes the worktree, and says to finish the run on the build that started it or to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
 

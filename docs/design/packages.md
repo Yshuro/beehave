@@ -144,7 +144,7 @@ File locks come from `github.com/gofrs/flock`. `flow`, `merge` and `store` open 
 
 The composition root builds the list of modules and passes it to `flow.NewEngine` in `flow.Options`. The engine builds its builtin map, its table of step kinds and its tables of signatures and results from that list. Two modules that name the same builtin or the same step kind are a start error.
 
-Today one module, built inside `flow`, holds every builtin. A table in `flow` assigns each recorded step kind to its future module (core, agent, tracker, forge, land, gate, host or round), and each of the eight modules has a version of its recorded steps. The application version holds those eight versions after the build version, such as `+core6.agent9.tracker1.forge2.land4.gate5.host1.round2`. `resume --on-this-build` compares only the modules whose kinds the run recorded. A stored version that ends in the old single version `+star30` stands for every module at version 1.
+Today one module, built inside `flow`, holds every builtin. A table in `flow` assigns each recorded step kind to its future module (core, agent, tracker, forge, land, gate, host or round), and each of the eight modules has a version of its recorded steps. The application version holds those eight versions after the build version, such as `+core6.agent9.tracker1.forge2.land6.gate5.host1.round2`. `resume --on-this-build` compares only the modules whose kinds the run recorded. A stored version that ends in the old single version `+star30` stands for every module at version 1.
 
 ### Layer 2 interfaces
 
@@ -228,7 +228,7 @@ No step reads git there:
 - An agent call records no start commit, and `rewrote` is false.
 - `pin` and `allow_paths` are refused.
 - A cancel or a release with no engine running reads no git.
-- The builtins `merge`, `batch_merge` and `preflight`, and a `gate` call with no `run`, refuse the project with a plain message.
+- The builtins `merge` and `preflight`, and a `gate` call with no `run`, refuse the project with a plain message.
 - A `gate` call that names `run` runs its own program, reads no git, and records an empty `head` and an empty `tree`.
 
 `beehave run` and `beehave check workflow --project <name>` refuse each such call for a project with no repository. `beehave run` refuses it before any step runs.

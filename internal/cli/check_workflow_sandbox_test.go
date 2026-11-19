@@ -50,5 +50,5 @@ func TestCheckConfig_TheNoteForASandboxedLocalProjectNamesTheProgramGates(t *tes
 	_, _, stderr := runCheckConfig(t, map[string]string{}, "--config", dir)
 
 	require.Contains(t, stderr, "a gate call that names run")
-	require.Contains(t, stderr, "batch_merge")
+	require.Contains(t, stderr, "merge")
 }

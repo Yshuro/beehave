@@ -78,7 +78,7 @@ type Schedule struct {
 }
 
 // HasRepository reports whether the project has a git repository: it sets a source or a forge, and the forge gives the clone URL.
-// A project with no repository runs its items in plain folders, and it cannot call gate, merge, batch_merge or preflight.
+// A project with no repository runs its items in plain folders, and it cannot call gate, merge or preflight.
 func (p Project) HasRepository() bool { return p.Source != "" || p.Forge != "" }
 
 // ToolGit is the program that every project needs on the path. The tools of an adapter arrive with its registration.

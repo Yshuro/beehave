@@ -14,14 +14,13 @@ func TestCheck_ReportsAFieldThatTheResultOfABuiltinDoesNotHave(t *testing.T) {
 
 	cases := []struct{ name, call, want string }{
 		{"agent", `agent("p", "m")`, "3:11 haed is not a field of the result of agent. It has: text, session, transcript, head_sha, violations, stop, cost_usd, cost_estimated, cost_unknown, rewrote, skills."},
-		{"batch_merge", `batch_merge(item.id, "b", "r", name = "n")`, "3:11 haed is not a field of the result of batch_merge. It has: merged, rejected, deferred, tip, tree, gates, findings, note, unproven, host_loss, host_losses."},
+		{"merge", `merge(name = "n", prs = [struct(item = "1", head = "h")], base = "b", repo = "r")`, "3:11 haed is not a field of the result of merge. It has: merged, rejected, deferred, tip, tree, gates, findings, note, unproven, host_loss, host_losses."},
 		{"command", `command(["a"])`, "3:11 haed is not a field of the result of command. It has: stdout, stderr, rc."},
 		{"gate", `gate()`, "3:11 haed is not a field of the result of gate. It has: passed, head, tree, report, steps, required, checks, new_tests, revert, host_loss, host_losses."},
 		{"gather", `gather([])`, "3:11 haed is not a field of the result of gather. It has: results."},
 		{"item_comment", `item_comment("1", "t", "k")`, "3:11 haed is not a field of the result of item_comment. It has: id."},
 		{"item_create", `item_create("t", "k")`, "3:11 haed is not a field of the result of item_create. It has: id, created."},
 		{"item_status", `item_status("1", "open")`, "3:11 haed is not a field of the result of item_status. It has: id, status."},
-		{"merge", `merge("h")`, "3:11 haed is not a field of the result of merge. It has: state, reason."},
 		{"board_sync", `board_sync(board = 3, status = "Done")`, "3:11 haed is not a field of the result of board_sync. It has: number, status."},
 		{"pr_open", `pr_open(title = "t", base = "b")`, "3:11 haed is not a field of the result of pr_open. It has: number, created, stack."},
 		{"preflight", `preflight()`, "3:11 haed is not a field of the result of preflight. It has: ok, stop, code, reason, foreign, pr, head, author."},
@@ -47,16 +46,15 @@ func TestCheck_AcceptsEachFieldThatABuiltinReturns(t *testing.T) {
 
 	got := checkText(t, `def main(item):
     a = agent("p", "m", outputs = ["verdict", "findings"])
-    b = batch_merge(item.id, "b", "r", name = "n")
+    b = merge(name = "n", prs = [struct(item = "1", head = "h")], base = "b", repo = "r")
     c = command(["a"])
     g = gate()
     h = gather([])
     i = item_create("t", "k")
-    m = merge("h")
     s = spawn(["1"])
     w = wait()
     command(["x", a.text, a.verdict, a.findings, a.session, a.transcript, a.head_sha, a.violations, a.stop, a.cost_usd, a.rewrote, b.merged, b.tip, b.tree, b.gates, c.stdout, c.rc])
-    command(["x", g.passed, g.head, g.tree, g.report, h.results, i.id, i.created, m.state, m.reason, s.runs, w.answer, b.rejected, b.deferred])
+    command(["x", g.passed, g.head, g.tree, g.report, h.results, i.id, i.created, s.runs, w.answer, b.rejected, b.deferred])
 `)
 
 	assert.Empty(t, got)
@@ -189,7 +187,7 @@ func TestCheck_AFieldOfACallThatIsNotTheBuiltinIsLeftToTheRun(t *testing.T) {
 func TestResults_ListsTheBuiltinsWithFixedFields(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, []string{"agent", "batch_merge", "before_review", "board_sync", "command", "earlier_calls", "facts", "gate", "gather", "host_teardown", "host_up", "item_assign", "item_comment", "item_create", "item_read", "item_status", "merge", "pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "spawn", "wait", "write"}, workflow.Results())
+	assert.Equal(t, []string{"agent", "before_review", "board_sync", "command", "earlier_calls", "facts", "gate", "gather", "host_teardown", "host_up", "item_assign", "item_comment", "item_create", "item_read", "item_status", "merge", "pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "spawn", "wait", "write"}, workflow.Results())
 }
 
 func TestResultFields_ReturnACopyAndNoFieldsForAnotherName(t *testing.T) {

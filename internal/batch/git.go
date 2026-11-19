@@ -35,11 +35,11 @@ func CheckGit(ctx context.Context, g Git) error {
 
 	found := versionPattern.FindString(text)
 	if found == "" {
-		return fmt.Errorf("git 2.38 or newer is needed for batch_merge; git --version printed %q. Upgrade git on the gate host", text)
+		return fmt.Errorf("git 2.38 or newer is needed for merge; git --version printed %q. Upgrade git on the gate host", text)
 	}
 
 	if semver.Compare("v"+found, minGit) < 0 {
-		return fmt.Errorf("git 2.38 or newer is needed for batch_merge; found %s. Upgrade git on the gate host", found)
+		return fmt.Errorf("git 2.38 or newer is needed for merge; found %s. Upgrade git on the gate host", found)
 	}
 
 	return nil

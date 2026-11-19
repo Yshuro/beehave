@@ -217,7 +217,7 @@ func walkExampleMerge(t *testing.T, visit func(map[string]syntax.Expr)) {
 
 	// The round of the example lands its approved items with one batch merge, which runs the guards of the merge for each item.
 	for _, call := range calls {
-		if call.Builtin == "batch_merge" {
+		if call.Builtin == "merge" {
 			visit(call.Args)
 		}
 	}

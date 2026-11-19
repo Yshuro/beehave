@@ -14,7 +14,7 @@ import (
 	storegithub "github.com/tobocop2/beehave/internal/store/github"
 )
 
-// batchGitTimeout is the time that one git call of batch_merge may run.
+// batchGitTimeout is the time that one git call of merge may run.
 const batchGitTimeout = 10 * time.Minute
 
 // batchIdentity is the author and committer of the union commits. They exist in the object database of the worktree only, and no forge sees them.
@@ -22,7 +22,7 @@ func batchIdentity() []string {
 	return []string{"-c", "user.name=beehave", "-c", "user.email=beehave@localhost"}
 }
 
-// batchHost serves batch_merge: git in the worktree of the item, the base tip on the forge, and the intent of a member merge.
+// batchHost serves merge: git in the worktree of the item, the base tip on the forge, and the intent of a member merge.
 type batchHost struct {
 	pulls    pulls
 	programs programs
@@ -46,7 +46,7 @@ func (h batchHost) folder(ctx context.Context, project, item string) (string, er
 	}
 
 	if dir == "" {
-		return "", fmt.Errorf("item %s of project %s has no worktree, so batch_merge cannot run git for it. Make the worktree of the item first", item, project)
+		return "", fmt.Errorf("item %s of project %s has no worktree, so merge cannot run git for it. Make the worktree of the item first", item, project)
 	}
 
 	return dir, nil

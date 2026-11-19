@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // The builtins of this package belong to eight modules that move out of it one by one. Each module has a version of its recorded steps.
@@ -26,8 +28,14 @@ const (
 const (
 	kindPreflight = "preflight"
 	kindQueue     = "queue"
-	// kindBatch starts the names of the steps of batch_merge, which has no counted step of its own.
+	// kindBatch starts the names of the steps of merge, which has no counted step of its own.
 	kindBatch = "batch"
+	// kindUndo starts the name of the step that runs the undo of a write: undo:<the name of the write step>.
+	kindUndo = "undo"
+	// kindHold starts the name of the step that reads the hold of an item at the start of a run that spawn started (holdStep).
+	kindHold = "hold"
+	// retiredWatchKind is the read of a ready pull request in the wait of the single merge for the owner to merge. Only an older build records it.
+	retiredWatchKind = "watch"
 )
 
 // coreVersion is the version of the core module. Version 2 added the vars field to the result of facts. Version 3 removed the round_* fields from it.
@@ -47,8 +55,10 @@ const agentVersion = 9
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
 // Version 4 records the host job of the project gate of a batch in its own step (batch_gate:job) before the gate waits, records a lost job
-// that has a proof in the item run (batch:<call>.gate#<n>/host-loss, and @2 for the rerun), and adds host_loss and host_losses to the result of batch_merge.
-const landVersion = 4
+// that has a proof in the item run (batch:<call>.gate#<n>/host-loss, and @2 for the rerun), and adds host_loss and host_losses to the result of merge.
+// Version 5 merges with one call: `merge` is the old `batch_merge`, and a merge of one pull request records the batch steps. The step kind merge is gone.
+// Version 6 records the scope check of each member (batch:<call>.scope#<item>) before its intent.
+const landVersion = 6
 
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step.
 const forgeVersion = 2
@@ -65,11 +75,15 @@ const gateVersion = 5
 const roundVersion = 2
 
 // stepModule is one module of the table: its version, the step kinds that it records, and the whole step names that it records with no kind in front.
-// The steps are the steps of its waits that no kind names: the receive of an answer and the read of a ready pull request.
+// The kinds are the kinds of its builtins. The engine kinds are kinds that the engine records for a builtin of the module, under a name that no builtin has.
+// The retired kinds are kinds that an older build recorded for the module and this build does not record. They keep their module, so a refusal can name it.
+// The steps are the steps of its waits that no kind names: the receive of an answer.
 type stepModule struct {
 	name    string
 	version int
 	kinds   []string
+	engine  []string
+	retired []string
 	steps   []string
 }
 
@@ -80,22 +94,24 @@ func moduleTable() []stepModule {
 			name:    moduleCore,
 			version: coreVersion,
 			kinds:   []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"},
-			steps:   []string{receiveStepName, watchStep},
+			engine:  []string{kindUndo},
+			retired: []string{retiredWatchKind},
+			steps:   []string{receiveStepName},
 		},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
 		{name: moduleForge, version: forgeVersion, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open", prStateKind}},
-		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, mergeKey, kindPreflight}},
+		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}, retired: []string{"merge"}},
 		{name: moduleGate, version: gateVersion, kinds: []string{"before_review", kindGate}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
-		{name: moduleRound, version: roundVersion, kinds: []string{kindQueue, scopeStep, scopeCheckStep}},
+		{name: moduleRound, version: roundVersion, kinds: []string{kindQueue, scopeStep}, engine: []string{kindHold}, retired: []string{"scope-check"}},
 	}
 }
 
 // moduleOfKind returns the module that records a step kind, and false for a kind that no module records.
 func moduleOfKind(kind string) (string, bool) {
 	for _, module := range moduleTable() {
-		if slices.Contains(module.kinds, kind) {
+		if slices.Contains(module.kinds, kind) || slices.Contains(module.engine, kind) || slices.Contains(module.retired, kind) {
 			return module.name, true
 		}
 	}
@@ -103,7 +119,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land4.gate5.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land6.gate5.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))
@@ -220,6 +236,44 @@ func moduleOfStep(name string) (string, bool) {
 	}
 
 	return moduleOfKind(kind)
+}
+
+// dbosStepPrefix starts the names of the steps that DBOS records for a workflow, such as DBOS.sleep and DBOS.getResult.
+const dbosStepPrefix = "DBOS."
+
+// engineStep reports whether the engine records a step under the name for every run, apart from any module: the read of the item, the claim and its end,
+// the worktree, the cancel of other runs, the start of a child run, and a step that DBOS records.
+func engineStep(name string) bool {
+	engine := []string{
+		itemName, string(model.StepClaim), string(model.StepReady), string(model.StepRelease), treeStepName, treeMakeStepName, othersStep,
+		phaseName, exclusiveName, hostJobName,
+	}
+
+	return strings.HasPrefix(name, dbosStepPrefix) || slices.Contains(engine, name)
+}
+
+// recordedHere reports whether this build records a step under the name: a step of the engine, a whole step of a module, or a step whose kind
+// a builtin of a module or the engine records for it. A retired kind is not recorded here.
+func recordedHere(name string) bool {
+	kind, _ := kindOfStep(name)
+
+	return engineStep(name) || slices.ContainsFunc(moduleTable(), func(module stepModule) bool {
+		return slices.Contains(module.steps, name) || slices.Contains(module.kinds, kind) || slices.Contains(module.engine, kind)
+	})
+}
+
+// unreplayableStep returns the first step that this build does not record, with the module of the older build that recorded it.
+// The module is empty for a step that no module claims. A run that recorded such a step cannot replay here, whatever the module versions are.
+func unreplayableStep(names []string) (step, module string, found bool) {
+	for _, name := range names {
+		if !recordedHere(name) {
+			module, _ = moduleOfStep(name)
+
+			return name, module, true
+		}
+	}
+
+	return "", "", false
 }
 
 // modulesUsed returns the modules that recorded one of the steps, in the order of the table. The waits of the owner count as steps of the core module.

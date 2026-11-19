@@ -33,7 +33,7 @@ const (
 )
 
 // holdStep is the name of the step that reads the hold of an item at the start of a run that spawn started.
-const holdStep = "hold:start"
+const holdStep = kindHold + ":start"
 
 var errNoQueue = &absentError{message: "this build cannot read the open work. Use a build that sets a queue reader", step: "read the open work of the project"}
 

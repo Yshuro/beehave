@@ -639,6 +639,15 @@ func stuckEvent(key string) func(dbos.Context, string) (string, error) {
 	}
 }
 
+func TestResultOf_ARunWithNoOutputHasAnEmptyResult(t *testing.T) {
+	t.Parallel()
+
+	got, err := resultOf(dbos.WorkflowStatus{ID: stuckItemID})
+
+	require.NoError(t, err)
+	assert.Equal(t, ItemResult{}, got)
+}
+
 func TestClient_StatusReportsAnEventThatIsNotInItsShape(t *testing.T) {
 	t.Parallel()
 

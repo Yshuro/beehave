@@ -33,7 +33,7 @@ func TestStepModuleTable_EveryStepKindOfTheModuleBelongsToExactlyOneModule(t *te
 	owners := map[string][]string{}
 
 	for _, module := range moduleTable() {
-		for _, kind := range module.kinds {
+		for _, kind := range slices.Concat(module.kinds, module.engine, module.retired) {
 			owners[kind] = append(owners[kind], module.name)
 		}
 	}
@@ -74,8 +74,8 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land4.gate5.host1.round2", applicationVersion("v1"))
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land4.gate6.host1.round2", versionWithModule("v1", moduleGate, 6))
+	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land6.gate5.host1.round2", applicationVersion("v1"))
+	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land6.gate6.host1.round2", versionWithModule("v1", moduleGate, 6))
 }
 
 func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
@@ -84,11 +84,11 @@ func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
 	assert.Contains(t, strings.Split(moduleVersions(), "."), "core6", "the facts step records ten fields: the method and board fields moved under vars at core5 and runners came at core6, so a run recorded at core5 replays no facts step")
 }
 
-func TestStepModules_TheLandModuleIsAtVersionFour(t *testing.T) {
+func TestStepModules_TheLandModuleIsAtVersionSix(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "land4", "the batch gate records its host job in batch_gate:job before it waits, "+
-		"the item run records a lost batch gate job as batch:<call>.gate#<n>/host-loss, and batch_merge returns host_loss and host_losses")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "land6", "merge is the old batch_merge and a merge of one pull request records the batch steps, "+
+		"and each member records its scope check as batch:<call>.scope#<item> before its intent")
 }
 
 func TestStepModules_TheGateModuleIsAtVersionFive(t *testing.T) {
@@ -177,8 +177,44 @@ func TestModulesUsed_TheStepsOfTheWaitsOfTheOwnerAreStepsOfTheCoreModule(t *test
 	t.Parallel()
 
 	assert.Equal(t, []string{"core"}, modulesUsed([]string{"claim", "DBOS.recv"}), "the receive of an answer")
-	assert.Equal(t, []string{"core"}, modulesUsed([]string{"claim", "watch", "DBOS.sleep", "watch"}), "the read of a ready pull request")
+	assert.Equal(t, []string{"core"}, modulesUsed([]string{"claim", "watch", "DBOS.sleep", "watch"}), "the read of a ready pull request that an older build recorded")
 	assert.Empty(t, modulesUsed([]string{"claim", "DBOS.sleep"}), "a sleep alone is the wait of a cap or a limit, not of the owner")
+}
+
+func TestModulesUsed_TheStepsThatTheEngineOrAnOlderBuildRecordsForAModuleAreStepsOfThatModule(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"core"}, modulesUsed([]string{"undo:write:w#1"}), "the undo of a write")
+	assert.Equal(t, []string{"round"}, modulesUsed([]string{holdStep}), "the read of the hold at the start of a spawned run")
+	assert.Equal(t, []string{"land", "round"}, modulesUsed([]string{"scope-check:m#1", "merge:m#1"}), "the scope check and the merge of the single merge of an older build")
+}
+
+func TestUnreplayableStep_IsTheFirstStepThatThisBuildDoesNotRecordWithTheModuleOfTheOlderBuild(t *testing.T) {
+	t.Parallel()
+
+	engine := []string{"item", "claim", "ready", "release", "worktree", "make worktree", "others", "phase", "exclusive", "host_job", "DBOS.sleep", "DBOS.getResult"}
+	_, _, found := unreplayableStep(slices.Concat(engine, []string{"wait:w#1", "agent:a#1/render", "batch:b.issues", "now#1", "undo:write:w#1", holdStep}))
+	assert.False(t, found, "this build records every step")
+
+	tests := map[string]struct {
+		names        []string
+		step, module string
+	}{
+		"a kind of no module":        {[]string{"claim", "wait:w#1", "unknown_kind:u#1", "other_kind:o#1"}, "unknown_kind:u#1", ""},
+		"the scope check of a merge": {[]string{"claim", "scope-check:m#1", "merge:m#1"}, "scope-check:m#1", moduleRound},
+		"the merge of one pull":      {[]string{"merge:m#1"}, "merge:m#1", moduleLand},
+		"the owner merge wait":       {[]string{"DBOS.sleep", "watch"}, "watch", moduleCore},
+	}
+
+	for name, test := range tests {
+		step, module, found := unreplayableStep(test.names)
+		assert.True(t, found, name)
+		assert.Equal(t, test.step, step, name)
+		assert.Equal(t, test.module, module, name)
+	}
+
+	_, _, found = unreplayableStep(nil)
+	assert.False(t, found)
 }
 
 func TestChangedModule_OnlyAModuleThatTheRunUsedCounts(t *testing.T) {

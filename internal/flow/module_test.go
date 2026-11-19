@@ -96,7 +96,7 @@ func TestStepModule_GuardsTheBuiltinsThatReadGitOrAForge(t *testing.T) {
 	}
 
 	assert.Equal(t, map[string]string{
-		"batch_merge": "", "before_review": "", "board_sync": "", "gate": "run", "merge": "", "pr_assign": "", "pr_comment": "", "pr_open": "", "pr_state": "", "preflight": "",
+		"before_review": "", "board_sync": "", "gate": "run", "merge": "", "pr_assign": "", "pr_comment": "", "pr_open": "", "pr_state": "", "preflight": "",
 	}, guarded)
 }
 
@@ -116,12 +116,12 @@ func TestNewEngine_RefusesTwoModulesThatRecordTheSameStepKind(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	h.opts.Modules = []step.Module{StepModule(), {Name: "extra", Kinds: []string{"merge"}}}
+	h.opts.Modules = []step.Module{StepModule(), {Name: "extra", Kinds: []string{"command"}}}
 
 	_, err := NewEngine(t.Context(), h.opts, h.deps())
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `module "flow" and module "extra" both record the step kind "merge"`)
+	assert.Contains(t, err.Error(), `module "flow" and module "extra" both record the step kind "command"`)
 }
 
 func TestNewEngine_RefusesAnEmptyModuleList(t *testing.T) {

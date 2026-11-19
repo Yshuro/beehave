@@ -26,7 +26,7 @@ const (
 	LocalHost = "local"
 	// GateSandboxRefusal says why a gate on this machine does not run when the sandbox is on.
 	GateSandboxRefusal = "no sandbox enforcer can run on this machine, so the gate does not run here. " +
-		"This holds for the project gate, for a gate call that names run, and for the gate of batch_merge. " +
+		"This holds for the project gate, for a gate call that names run, and for the gate of merge. " +
 		"Set sandbox = \"off\" in the project file, or build on a host. The project gate of a build host runs as before."
 )
 

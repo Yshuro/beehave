@@ -567,7 +567,7 @@ def land(approved, project, round_settings, n):
     if len(prs) == 0:
         return 0
 
-    out = batch_merge(
+    out = merge(
         name = "round-land-%d" % n,
         prs = prs,
         base = base,
