@@ -99,6 +99,6 @@ def main(item):
     budget = int(job.get("budget_cents", DEFAULT_BUDGET_CENTS))
     day = load_day(job["day"], job.get("backfill", item.id), budget, ask = True)
     if day.state in (DAY.FAILED, DAY.OPEN, DAY.BUDGET):
-        fail("REFUSE: %s. Fix the cause, run beehave resume %s, then run the item again." % (day.note, item.id))
+        fail("REFUSE: %s. Fix the cause. A plain beehave resume replays this stop. To start the item again, run beehave resume %s, then beehave cancel %s, then beehave run %s." % (day.note, item.id, item.id, item.id))
     item_comment(name = "report", id = item.id, key = "report", text = "%s %s at version %s. %s" % (job["day"], day.state, VERSION, day.note))
     item_status(name = "close", id = item.id, status = STATUS.CLOSED)
