@@ -220,6 +220,26 @@ func TestNotify_TheQuestionPassesThroughTheRedactor(t *testing.T) {
 	require.NotContains(t, strings.Join(got[0].Run, " "), "abcdefghijklmnop")
 }
 
+func TestNotify_TheWaitOfAMergeForTheOwnerRunsTheCommandOnceWithTheRunItem(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.h.facts = notifyFacts(notifyProgram)
+	rig.h.forge.closing = [][]int{{12}, {12, 13}}
+	engine := rig.engine(t)
+	rig.fixScopeOf(t, engine, "1")
+	done := rig.runMergeAs(t, engine, "9", "1")
+
+	question := questionOf(t, rig.h, "9")
+	waitOn(t, notified(t, rig.h, engine))
+	require.NoError(t, rig.h.client(t, testVersion).Answer("9", "keep #13"))
+	require.NoError(t, receive(t, done).err)
+
+	got := notifyRequests(rig.h)
+	require.Len(t, got, 1, "the wait of the merge notified once")
+	require.Equal(t, append(append([]string{}, notifyProgram...), "9", question), got[0].Run, "the notice names the run whose wait the owner answers")
+}
+
 // resumedAfterTheConfigChanges opens a wait of an hour under the facts of the first process, stops the engine in the sleep of the wait, moves the recorded deadline into the past and resumes the run under the facts of the second process.
 // It returns the notify requests that the resume sent and the outcome of the resumed run.
 func resumedAfterTheConfigChanges(t *testing.T, opened, resumed func(string) model.Project) (int, error) {

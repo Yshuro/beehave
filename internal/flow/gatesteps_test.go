@@ -7,7 +7,6 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.starlark.net/starlark"
 
 	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
@@ -52,14 +51,6 @@ func TestGateStep_TheRecordOfAGateHoldsTheNamesOfTheListThatItWasGivenTo(t *test
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"show fmt lint"}, h.commands.ran())
-}
-
-func TestRecordedNames_AGateRecordWithoutTheFieldAsksForNoStepAndAListGivesItsNames(t *testing.T) {
-	t.Parallel()
-
-	assert.Nil(t, recordedNames(nil))
-	assert.Nil(t, recordedNames(starlark.String("lint")))
-	assert.Equal(t, []string{"fmt", "lint"}, recordedNames(starlark.NewList([]starlark.Value{starlark.String("fmt"), starlark.MakeInt(1), starlark.String("lint")})))
 }
 
 func TestFacts_ALineOfAGateListShowsTheNamesOfTheListAndAGateStringShowsNone(t *testing.T) {

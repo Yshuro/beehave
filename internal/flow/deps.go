@@ -184,7 +184,7 @@ type beats interface {
 // Poll replaces the interval at which the agents queue looks for work, at which a run looks for the result of a phase,
 // at which a phase looks again for the first trust of its run, and at which a run tries again the first renewal of a claim it did not take.
 // Release replaces the time that the git calls of one worktree release share.
-// Beat replaces the time that one claim renewal may take. Draft replaces the time that the return of a pull request to draft may take. OwnerWait replaces the time of one wait for the owner before the wait starts again.
+// Beat replaces the time that one claim renewal may take. OwnerWait replaces the time of one wait for the owner before the wait starts again.
 // Retain replaces the age at which Launch deletes a finished run. Now replaces the monotonic reading of the clock that measures the time since the last good claim renewal.
 // Wall replaces the wall reading of that clock: when it is nil, the wall reading is the one that Now returns.
 // Reading replaces the time that the now builtin returns, and the time from which a wait counts its deadline and its reminders. The lease age keeps using Wall.
@@ -203,7 +203,6 @@ type clock struct {
 	Poll      time.Duration
 	Release   time.Duration
 	Beat      time.Duration
-	Draft     time.Duration
 	OwnerWait time.Duration
 	Retain    time.Duration
 	Now       func() time.Time

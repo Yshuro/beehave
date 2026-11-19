@@ -19,24 +19,6 @@ type gatedCall struct {
 	checks GateChecks
 }
 
-// recordedNames reads the required names of a gate record. A record without the field, or with anything else in it, asks for none.
-func recordedNames(v starlark.Value) []string {
-	list, ok := v.(*starlark.List)
-	if !ok {
-		return nil
-	}
-
-	names := make([]string, 0, list.Len())
-
-	for i := range list.Len() {
-		if name, isText := starlark.AsString(list.Index(i)); isText {
-			names = append(names, name)
-		}
-	}
-
-	return names
-}
-
 // requiredSteps are the names of the steps that the gate list of the project gives now. A project with a gate string has no list, and a gate records none.
 // The gate calls it and records the names, so the merge reads the record and never the config.
 func (e *Engine) requiredSteps(project string) []string {

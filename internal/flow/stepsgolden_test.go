@@ -84,7 +84,7 @@ var goldenKinds = map[string][]string{
 	"star30": {
 		"agent", "before_review", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
 		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "now",
-		"pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
+		"pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "spawn", "wait", "write",
 	},
 }
 

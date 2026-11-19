@@ -90,7 +90,7 @@ func moduleTable() []stepModule {
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}},
 		{name: moduleGate, version: gateVersion, kinds: []string{"before_review", kindGate}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
-		{name: moduleRound, version: roundVersion, kinds: []string{kindQueue, scopeStep, scopeCheckStep}},
+		{name: moduleRound, version: roundVersion, kinds: []string{kindQueue, scopeStep}},
 	}
 }
 
@@ -105,7 +105,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land4.gate5.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land6.gate5.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

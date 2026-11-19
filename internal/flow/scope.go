@@ -16,11 +16,8 @@ import (
 	"github.com/tobocop2/beehave/internal/batch"
 )
 
-// The recorded steps that keep the scope of a pull request. The first gate of an item fixes the scope. A merge that merges checks it.
-const (
-	scopeStep      = "scope"
-	scopeCheckStep = "scope-check"
-)
+// scopeStep is the recorded step that keeps the scope of a pull request. The first gate of an item fixes the scope. A merge checks it for each member.
+const scopeStep = "scope"
 
 // errScopeRefused ends an item whose pull request closes an issue that is new since the first review and has no owner line.
 var errScopeRefused = errors.New("the pull request closes an issue that is new since its first review")
@@ -161,25 +158,24 @@ type scopeCheckRead struct {
 	Fresh []int `json:"fresh"`
 }
 
-// freshIssues reads the closing issues of the pull request of the item and returns the ones that are new since the first review and have no owner line.
+// firstReview returns the issues of the first review of the item, and false when the item has none.
 // The first review of the run's own item is the scope of its gate. The first review of another item is the scope of its newest earlier run.
+func (s *script) firstReview(item string) (issues []int, known bool, err error) {
+	if item == s.in.Item {
+		return s.scope, s.fixed, nil
+	}
+
+	earlier, err := s.earlierScope(item)
+
+	return earlier.Issues, earlier.Found, err
+}
+
+// freshIssues reads the closing issues of the pull request of the item and returns the ones that are new since the first review and have no owner line.
 // An item with no recorded scope has nothing to compare, so it reads nothing. A read that fails, or a pull request that is gone, is an error.
 func (s *script) freshIssues(ctx context.Context, item string) ([]int, error) {
-	baseline := s.scope
-
-	if item != s.in.Item {
-		earlier, err := s.earlierScope(item)
-		if err != nil {
-			return nil, err
-		}
-
-		if !earlier.Found {
-			return []int{}, nil
-		}
-
-		baseline = earlier.Issues
-	} else if !s.fixed {
-		return []int{}, nil
+	baseline, known, err := s.firstReview(item)
+	if err != nil || !known {
+		return []int{}, err
 	}
 
 	read, err := s.readClosing(ctx, item)
@@ -211,17 +207,17 @@ func (b *batchBase) holdScope(m batch.Member) (string, error) {
 		return scopeCheckRead{Fresh: fresh}, err
 	}, dbos.WithStepMaxRetries(stepRetries))
 	if err != nil {
-		return "", fmt.Errorf("%s of item %s: %w", scopeCheckStep, m.Item, err)
+		return "", fmt.Errorf("scope check of item %s: %w", m.Item, err)
 	}
 
 	if len(read.Fresh) == 0 {
 		return "", nil
 	}
 
-	question := fmt.Sprintf("The pull request of item %s closes %s now, and did not at its first review. Answer in the form \"keep #N[, #N ...]\", for example \"keep %s\". Any other answer refuses the merge of the item.",
-		m.Item, issueList(read.Fresh), strings.Join(strings.Fields(issueList(read.Fresh)), ", "))
+	question := fmt.Sprintf("The pull request of item %s closes %s now, and did not at its first review. Answer in the form \"keep #N[, #N ...]\", for example \"keep %s\". Any other answer rejects item %s from this merge. The other members still land. Answer with beehave answer %s.",
+		m.Item, issueList(read.Fresh), strings.Join(strings.Fields(issueList(read.Fresh)), ", "), m.Item, b.s.in.Item)
 
-	answer, err := b.s.e.waitOwner(b.s.ctx, b.s.in.Project, m.Item, question)
+	answer, err := b.s.e.waitOwner(b.s.ctx, b.s.in.Project, b.s.in.Item, question)
 	if err != nil {
 		return "", err
 	}
@@ -230,8 +226,8 @@ func (b *batchBase) holdScope(m batch.Member) (string, error) {
 	missing := slices.DeleteFunc(slices.Clone(read.Fresh), func(number int) bool { return slices.Contains(named, number) })
 
 	if len(missing) > 0 {
-		return fmt.Sprintf("%v: item %s: %s has no owner line. The accepted answer is \"keep #N[, #N ...]\", for example beehave answer %s \"keep %s\". Or remove the closing keyword",
-			errScopeRefused, m.Item, issueList(missing), m.Item, strings.Join(strings.Fields(issueList(missing)), ", ")), nil
+		return fmt.Sprintf("%v: item %s: %s has no owner line, so this merge rejects it and the other members still land. To keep it, run the merge again and answer with beehave answer %s \"keep %s\". Or remove the closing keyword",
+			errScopeRefused, m.Item, issueList(missing), b.s.in.Item, strings.Join(strings.Fields(issueList(missing)), ", ")), nil
 	}
 
 	if b.s.owned == nil {
