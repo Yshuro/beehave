@@ -54,8 +54,6 @@ func (m *memWriter) SetStatus(_ context.Context, id string, status store.Status)
 	return nil
 }
 
-func (m *memWriter) Assign(context.Context, string, string) error { return errIf(m.down) }
-
 func errIf(down bool) error {
 	if down {
 		return errDown
@@ -127,5 +125,5 @@ func TestCheckWriterFails_AcceptsAWriterThatReturnsErrors(t *testing.T) {
 
 	rec = &recorder{}
 	storetest.CheckWriterFails(rec, newMemWriter())
-	assert.Len(t, rec.failures, 4)
+	assert.Len(t, rec.failures, 3)
 }

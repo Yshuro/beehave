@@ -75,7 +75,6 @@ func repositoryDefs() []builtinDef {
 // itemDefs lists the builtins that read or write the tracker.
 func itemDefs() []builtinDef {
 	return []builtinDef{
-		{name: "item_assign", call: (*script).itemAssign},
 		{name: "item_comment", call: (*script).itemComment},
 		{name: "item_create", call: (*script).itemCreate},
 		{name: "item_read", call: (*script).itemRead},

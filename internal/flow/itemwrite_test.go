@@ -25,8 +25,7 @@ type fakeWriter struct {
 	created  []string
 	statuses []string
 	notes    []string
-	// assigned holds each Assign call. assignees holds the assignee that each Create call carried, as key|assignee.
-	assigned  []string
+	// assignees holds the assignee that each Create call carried, as key|assignee.
 	assignees []string
 	// severities holds the severity that each Create call carried, as key|severity.
 	severities []string
@@ -57,15 +56,6 @@ func (w *fakeWriter) Create(_ context.Context, project, key string, item tracker
 	w.operators = append(w.operators, key+"|"+strconv.FormatBool(item.Operator))
 
 	return id, true, nil
-}
-
-func (w *fakeWriter) Assign(_ context.Context, project, id, assignee string) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	w.assigned = append(w.assigned, project+"|"+id+"|"+assignee)
-
-	return w.err
 }
 
 func (w *fakeWriter) SetStatus(_ context.Context, project, id string, status trackerstore.Status) error {
@@ -225,7 +215,6 @@ func TestItemWrite_ACrashBetweenEachWriteAndItsRecordRepeatsTheCallWithTheSameKe
 		"item_create":  {`item_create(title = "t", key = "k", name = "c")`, "create", "create|" + testProject + "|" + testRun + ":k|t"},
 		"item_comment": {`item_comment(id = "n-1", text = "hi", key = "k", name = "c")`, "comment", "comment|" + testProject + "|n-1|" + testRun + ":k|hi"},
 		"item_status":  {`item_status(id = "n-1", status = "closed", name = "c")`, "status", "status|" + testProject + "|n-1|closed"},
-		"item_assign":  {`item_assign(id = "n-1", assignee = "alice", name = "c")`, "assign", "assign|" + testProject + "|n-1|alice"},
 	}
 
 	for name, tt := range tests {

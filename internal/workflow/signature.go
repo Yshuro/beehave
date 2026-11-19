@@ -402,7 +402,6 @@ func itemSignatures() map[string][]Param {
 	label := opt(nameKeyword, KindText)
 
 	return map[string][]Param{
-		itemAssignName:  {filled("id"), filled("assignee"), label},
 		itemCommentName: {filled("id"), filled("text"), filled("key"), forbidText(), label},
 		itemCreateName: {
 			filled("title"), filled("key"), opt("body", KindText), opt("parent", KindText), opt("assignee", KindText), opt("severity", KindText), opt("operator", KindBool), forbidText(), opt("shared", KindBool), label,

@@ -89,22 +89,6 @@ command(run = [str(own.number), str(len(own.issues)), str(len(both.issues))])
 	assert.Equal(t, []string{"7 0 2"}, h.commands.ran())
 }
 
-func TestPRWrite_AssignOfAnItemCallsTheWriter(t *testing.T) {
-	t.Parallel()
-
-	h := newHarness(t)
-	w := newFakeWriter()
-	h.writer = w
-
-	_, err := walkBody(t, h, `done = item_assign(id = "n-1", assignee = "alice", name = "own")
-command(run = [done.id])
-`)
-	require.NoError(t, err)
-
-	assert.Equal(t, []string{testProject + "|n-1|alice"}, w.assigned)
-	assert.Equal(t, []string{"n-1"}, h.commands.ran())
-}
-
 func TestPRWrite_ItemCreateTakesAnAssigneeAndTheDefaultIsNone(t *testing.T) {
 	t.Parallel()
 
@@ -152,8 +136,6 @@ func TestPRWrite_ArefusedArgumentWritesNothing(t *testing.T) {
 		"comment without a text":     `pr_comment(text = "", key = "k")`,
 		"comment without a key":      `pr_comment(text = "x", key = "")`,
 		"assign without an assignee": `pr_assign(assignee = "")`,
-		"item assign without an id":  `item_assign(id = "", assignee = "alice")`,
-		"item assign no assignee":    `item_assign(id = "1", assignee = "")`,
 		"linked that is not a bool":  `pr_assign(assignee = "a", linked = "yes")`,
 	} {
 		h, f := prHarness(t)
@@ -165,7 +147,7 @@ func TestPRWrite_ArefusedArgumentWritesNothing(t *testing.T) {
 		assert.Contains(t, err.Error(), "workflow.star:", name)
 		assert.Empty(t, f.notes, name)
 		assert.Empty(t, f.assigned, name)
-		assert.Empty(t, w.assigned, name)
+		assert.Empty(t, w.assignees, name)
 	}
 }
 
@@ -214,9 +196,9 @@ func TestPRWrite_AProjectWithNoRepositoryRefusesThePullRequestBuiltins(t *testin
 	}
 }
 
-func TestPRWrite_ABuildWithNoWriterRefusesItemAssign(t *testing.T) {
+func TestPRWrite_ABuildWithNoWriterRefusesItemCreate(t *testing.T) {
 	t.Parallel()
 
-	_, err := walkBody(t, newHarness(t), "item_assign(id = \"1\", assignee = \"a\")\n")
+	_, err := walkBody(t, newHarness(t), "item_create(title = \"t\", key = \"k\", assignee = \"a\")\n")
 	require.ErrorContains(t, err, "this build cannot write to a tracker")
 }

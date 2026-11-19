@@ -74,8 +74,8 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land6.gate6.host1.round2", applicationVersion("v1"))
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land6.gate7.host1.round2", versionWithModule("v1", moduleGate, 7))
+	assert.Equal(t, "v1+core6.agent9.tracker2.forge2.land6.gate6.host1.round2", applicationVersion("v1"))
+	assert.Equal(t, "v1+core6.agent9.tracker2.forge2.land6.gate7.host1.round2", versionWithModule("v1", moduleGate, 7))
 }
 
 func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
@@ -204,6 +204,7 @@ func TestUnreplayableStep_IsTheFirstStepThatThisBuildDoesNotRecordWithTheModuleO
 		"the scope check of a merge": {[]string{"claim", "scope-check:m#1", "merge:m#1"}, "scope-check:m#1", moduleRound},
 		"the merge of one pull":      {[]string{"merge:m#1"}, "merge:m#1", moduleLand},
 		"the builtin before_review":  {[]string{"before_review:b#1"}, "before_review:b#1", moduleGate},
+		"the builtin item_assign":    {[]string{"item_assign:a#1"}, "item_assign:a#1", moduleTracker},
 		"the owner merge wait":       {[]string{"DBOS.sleep", "watch"}, "watch", moduleCore},
 	}
 

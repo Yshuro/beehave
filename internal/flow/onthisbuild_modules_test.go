@@ -336,6 +336,19 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheSingleMergeAnd
 	}
 }
 
+func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAnItemAssignStepAndNamesTheTrackerModule(t *testing.T) {
+	t.Parallel()
+
+	// Tracker module 1 recorded item_assign, which this build retired.
+	harness, other := olderRoundRun(t, testItem, moduleTracker, 1)
+	recordSteps(t, harness, testItem, "item_assign:a#1")
+
+	err := other.ResumeOnThisBuild(testItem)
+
+	require.ErrorIs(t, err, errStranded)
+	require.ErrorContains(t, err, `the step "item_assign:a#1", and an older build recorded it for the tracker module, and this build does not record it`)
+}
+
 func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfNoModuleAndNamesTheStep(t *testing.T) {
 	t.Parallel()
 

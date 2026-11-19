@@ -518,8 +518,6 @@ func (dryWriter) SetStatus(context.Context, string, string, trackerstore.Status)
 
 func (dryWriter) Comment(context.Context, string, string, string, string) error { return nil }
 
-func (dryWriter) Assign(context.Context, string, string, string) error { return nil }
-
 // dryPreflight finds the pull request as the owner left it.
 type dryPreflight struct{}
 

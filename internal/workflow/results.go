@@ -28,7 +28,6 @@ const (
 	mergeName        = "merge"
 	preflightName    = "preflight"
 	queueName        = "queue"
-	itemAssignName   = "item_assign"
 	itemCommentName  = "item_comment"
 	itemCreateName   = "item_create"
 	itemReadName     = "item_read"
@@ -86,7 +85,6 @@ func factsResultFields() map[string][]string {
 func trackerResultFields() map[string][]string {
 	return map[string][]string{
 		boardSyncName:   {numberField, statusField},
-		itemAssignName:  {"id"},
 		itemCommentName: {"id"},
 		itemCreateName:  {"id", "created"},
 		itemReadName:    {"found", "id", "fields", "comments", "parent"},

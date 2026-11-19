@@ -60,6 +60,9 @@ const agentVersion = 9
 // Version 6 records the scope check of each member (batch:<call>.scope#<item>) before its intent.
 const landVersion = 6
 
+// trackerVersion is the version of the tracker module. Version 2 retires the kind item_assign, which version 1 recorded. item_create takes an assignee.
+const trackerVersion = 2
+
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step.
 const forgeVersion = 2
 
@@ -100,7 +103,7 @@ func moduleTable() []stepModule {
 			steps:   []string{receiveStepName},
 		},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
-		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
+		{name: moduleTracker, version: trackerVersion, kinds: []string{"item_comment", "item_create", "item_read", "item_status"}, retired: []string{"item_assign"}},
 		{name: moduleForge, version: forgeVersion, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open", prStateKind}},
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}, retired: []string{"merge"}},
 		{name: moduleGate, version: gateVersion, kinds: []string{kindGate}, retired: []string{"before_review"}},
@@ -120,7 +123,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land6.gate6.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker2.forge2.land6.gate6.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

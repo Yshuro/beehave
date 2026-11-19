@@ -132,13 +132,6 @@ func (w *crashWriter) Comment(ctx context.Context, project, id, key, text string
 	return err
 }
 
-func (w *crashWriter) Assign(ctx context.Context, project, id, assignee string) error {
-	err := w.writer.Assign(ctx, project, id, assignee)
-	w.note("assign", project+"|"+id+"|"+assignee)
-
-	return err
-}
-
 // crashForge crashes the run after the first call of the forge method in on. The fake forge under it keeps the log of each call.
 type crashForge struct {
 	forge

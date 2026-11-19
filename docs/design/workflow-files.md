@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_assign`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `board_sync`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_assign`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -43,7 +43,7 @@ DBOS records a step only when the step ends. If the engine stops after the effec
 
 1. Check first. The step reads the state and sends no second write.
 2. A cited rule. The call is documented to treat a repeat as no change, and a test pins the exact call.
-3. The same value. A repeat sets the value that is set already, and no page states that this is a no-op. The edit half of `board_sync`, the beads `item_assign` and the status and comment writes of the `local` tracker use this basis.
+3. The same value. A repeat sets the value that is set already, and no page states that this is a no-op. The edit half of `board_sync` and the status and comment writes of the `local` tracker use this basis.
 4. The library. DBOS replays the step and not beehave: `spawn` and `wait`.
 
 Four cases are not safe today, and a later change fixes each of them.
@@ -53,7 +53,6 @@ Four cases are not safe today, and a later change fixes each of them.
 | `item_create` | Safe. It files no second item, and `created` is false. | The tracker finds the item by the key, which is the run id plus the `key` of the call. With `shared = True` the key is the `key` of the call alone. |
 | `item_comment` | Safe. | GitHub and beads read the comments first and find the key. The `local` tracker inserts the comment under its key and ignores a second insert of that key. |
 | `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
-| `item_assign` | Safe. | On GitHub the tracker reads the assignees first and sends no edit for a login that is on the issue. A test with a repeated call shows one edit. Beads reads the assignee and refuses a different login, but for the same login it sends the same update again, and it keeps one assignee. The local tracker refuses an assignee. |
 | `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
 | `pr_assign` | Safe. | The call is a POST that adds a login, and GitHub says: "Users already assigned to an issue are not replaced." ([Assignees](https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue)). A test pins the exact call of two runs, so a change to a call that replaces the assignees turns it red. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
@@ -151,7 +150,6 @@ The `item_` builtins change or read the tracker of the project.
 | `item_create(title, key, body, parent, assignee, severity, operator, forbid_text, shared, name)` | `id`, `created` |
 | `item_status(id, status, name)` | `id`, `status` |
 | `item_comment(id, text, key, forbid_text, name)` | `id` |
-| `item_assign(id, assignee)` | `id` |
 | `item_read(of, name)` | `found`, `id`, `fields`, `comments`, `parent` |
 
 The `key` is required, and the engine joins it to the run id. `item_create` with `shared = True` is the one exception.
@@ -159,7 +157,7 @@ The `key` is required, and the engine joins it to the run id. `item_create` with
 #### `item_create`
 
 - When a resume follows a lost step record, `item_create` returns `created` false and the id of the first item.
-- `assignee` is optional. The default is no assignee.
+- `assignee` is optional. The default is no assignee. The `local` tracker keeps no assignee and refuses the keyword. GitHub files the issue with that assignee. beads files the item with that assignee.
 - `severity` is optional, one of `P0` to `P3`. The call refuses any other text before it writes.
 - `operator` is an optional bool.
 - `shared` is an optional bool. The default is false: the engine joins the `key` to the run id, so two runs never share an item. With `shared = True` the engine uses the `key` as it is, and it holds a file lock of the key in the state folder around the lookup and the create, so two runs of the project on this host that give the same key at the same time get one item. The lock does not reach another host: two hosts that share one tracker can still file two items for one key. Put in the key what makes the item unique in the project, such as the repository and a pull request number.
@@ -173,16 +171,6 @@ The `key` is required, and the engine joins it to the run id. `item_create` with
 #### `item_status`
 
 A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `hold` in the repository.
-
-#### `item_assign`
-
-`item_assign(id, assignee)` sets the assignee of a tracker item and returns `id`. `item_create` also takes an assignee.
-
-| Tracker | Result |
-| --- | --- |
-| `local` | Keeps no assignee, and refuses both `item_assign` and the `assignee` of `item_create`. |
-| GitHub | Adds the login and removes no one. |
-| `beads` | Keeps one assignee. Sets it when the item has none or the same login. Refuses an item that another login holds, and writes nothing. |
 
 #### `item_read`
 

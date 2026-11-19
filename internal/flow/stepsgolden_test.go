@@ -50,7 +50,6 @@ var goldenShapes = map[string][]string{
 		"gather: results",
 		"host_teardown: down,reason",
 		"host_up: host,started",
-		"item_assign: id",
 		"item_comment: id",
 		"item_create: created,id",
 		"item_read: comments,fields,found,id,parent",
@@ -82,7 +81,7 @@ func TestStepsVersion_TheShapeOfTheRecordedResultsIsTheGoldenShapeOfTheVersion(t
 var goldenKinds = map[string][]string{
 	"star30": {
 		"agent", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
-		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "now",
+		"item_comment", "item_create", "item_read", "item_status", "login", "now",
 		"pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "spawn", "wait", "write",
 	},
 }
