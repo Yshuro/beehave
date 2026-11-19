@@ -67,8 +67,9 @@ const forgeVersion = 2
 // with a wait field), and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
 // At the wait limit the host job run ends with no failure and records the lost job with its wait.
 // Version 4 records a lost job that has a proof in the item run (<call>/host-loss), and the gate step records host_losses, the count of the host losses of the item tree.
-// Version 5 added the revert field to the results of gate, and the revert run to the checks of a candidate gate. The kind before_review is retired.
-const gateVersion = 5
+// Version 5 added the revert field to the results of gate, and the revert run to the checks of a candidate gate.
+// Version 6 retires the kind before_review, which version 5 recorded. The function before_review of the library judges a head with command steps.
+const gateVersion = 6
 
 // roundVersion is the version of the round module. Version 2 added the step of the engine that makes the worktree at the start of every round item.
 // No builtin records that step, so a move to this build compares the round module for every run of a round item (requireSameRoundModule).
@@ -119,7 +120,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land6.gate5.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land6.gate6.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))
