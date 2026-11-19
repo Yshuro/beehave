@@ -84,7 +84,7 @@ func e2eFlow(dir, path string) cli.Flow {
 			files := e2eFiles{dir: dir}
 
 			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
-				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg.Projects, nil),
+				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg, newAdapters(nil, nil, nil)),
 				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
 			}, dir, cfg))
 			if err != nil {

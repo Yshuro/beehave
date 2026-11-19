@@ -186,14 +186,16 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 		SandboxDefault: func(project string) bool { return cfg.Projects[project].SandboxByDefault() },
 		RefuseGate:     gateRefusal(cfg.Projects, enforcers.Refusal),
 		Repository:     repositoryOf(cfg.Projects),
-		Facts:          factsOf(cfg.Projects, runnerSkills(cfg.Runners, table)), Slots: slotsOf(cfg.Projects),
+		Facts:          factsOf(cfg, table), Slots: slotsOf(cfg.Projects),
 	}
 }
 
-// factsOf returns the project as the config holds it, with the runner facts. A project that the config does not hold has no facts.
-func factsOf(projects map[string]config.Project, skills map[string]bool) func(string) model.Project {
+// factsOf returns the project as the config holds it, with the runner facts that the agents of the table give. A project that the config does not hold has no facts.
+func factsOf(cfg config.Config, table adapters) func(string) model.Project {
+	skills := runnerSkills(cfg.Runners, table)
+
 	return func(project string) model.Project {
-		found, ok := projects[project]
+		found, ok := cfg.Projects[project]
 		if !ok {
 			return model.Project{}
 		}
