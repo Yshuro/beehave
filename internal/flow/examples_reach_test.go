@@ -722,6 +722,16 @@ func TestContractReach_AVariableEntryFollowsTheVariableThatItsLoopReads(t *testi
 	assert.Equal(t, []string{"main.star:main", "main.star:task"}, got)
 }
 
+func TestContractReach_AVariableEntryFollowsTheIterableThatItsComprehensionReads(t *testing.T) {
+	t.Parallel()
+
+	src := "TASK = \"task\"\n\ndef main():\n    return [spawn([], entry = kind) for kind in [TASK]]\n\ndef task():\n    pass\n\ndef lonely():\n    pass\n"
+
+	got := contractReachOf(t, map[string]string{"main.star": src})
+
+	assert.Equal(t, []string{"main.star:main", "main.star:task"}, got)
+}
+
 func TestContractReach_AStringInAKeywordThatIsNotEntryNamesNoFunction(t *testing.T) {
 	t.Parallel()
 
