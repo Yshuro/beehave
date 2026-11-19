@@ -592,7 +592,7 @@ def land(approved, project, round_settings, n):
         )
 
     # A rejected item gets the reason as a comment and the hold status, so it does not come back until a person reads it.
-    # With hand_off, a pull request that is closed, or whose head moved after the ready mark, is rejected, and the one that moved is a draft again.
+    # With hand_off, a pull request that is closed, whose head moved after the ready mark, or that has a reason to wait is rejected, and a ready one is a draft again.
     for rejected in out.rejected:
         item_comment(name = "no-" + rejected.item, id = rejected.item, key = "rejected", text = rejected.reason, forbid_text = ATTRIBUTION)
         item_status(name = "hold-" + rejected.item, id = rejected.item, status = "hold")
