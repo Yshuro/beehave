@@ -19,6 +19,8 @@ func TestCheck_RefusesTheArgumentsOfTheRunThatAreText(t *testing.T) {
 		{"env after a computed entry", `command(run = ["x"], env = {"B": 1, "A": str(item)})`, "command: env must hold strings only"},
 		{"sandbox network element", `sandbox(network = [1])`, "sandbox: network must hold strings only"},
 		{"sandbox network tuple", `sandbox(network = (1,))`, "sandbox: network must hold strings only"},
+		{"sandbox network tuple beside a computed element", `sandbox(network = (str(item), 1))`, "sandbox: network must hold strings only"},
+		{"sandbox network list in parentheses beside a computed element", `sandbox(network = ([str(item), 1]))`, "sandbox: network must hold strings only"},
 		{"sandbox network beside a computed element", `sandbox(network = [str(item), 1])`, "sandbox: network must hold strings only"},
 		{"sandbox network domain beside a computed element", `sandbox(network = [str(item), "https://x.org"])`, `sandbox network lists "https://x.org"`},
 		{"item_create title", `item_create(title = "", key = "k")`, "item_create: title must not be empty"},
