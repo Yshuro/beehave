@@ -14,10 +14,10 @@ func TestWaitVoices_ReportAnEventThatCannotBeShown(t *testing.T) {
 
 	engine := idleEngine(t, newHarness(t))
 
-	_, err := engine.waitVoices(engine.ctx, testItem, waitPlan{question: "q", asked: Asked{Choices: []string{"a"}}})
+	_, err := engine.waitVoices(engine.ctx, testProject, testItem, waitPlan{question: "q", asked: Asked{Choices: []string{"a"}}})
 	require.ErrorContains(t, err, "item 12 cannot show who it asks")
 
-	_, err = engine.listen(engine.ctx, testItem, waitPlan{question: "q", asked: Asked{Choices: []string{"a"}}})
+	_, err = engine.listen(engine.ctx, testProject, testItem, waitPlan{question: "q", asked: Asked{Choices: []string{"a"}}})
 	require.Error(t, err, "the id of a wait is a recorded step of a run")
 
 	_, err = engine.within(engine.ctx, testItem, time.Hour, nil, &Asked{}, &tally{})

@@ -189,12 +189,14 @@ func (s *script) awaitOwner(label, pinned string, ownerMerges bool) (starlark.Va
 	})
 }
 
-// watchOwner shows that the run waits for the owner when ownerMerges is true, then watches the pull request.
+// watchOwner shows that the run waits for the owner and tells the owner through the notify command when ownerMerges is true, then watches the pull request.
 func (s *script) watchOwner(pinned string, ownerMerges bool) (watchEnd, error) {
 	if ownerMerges {
 		if err := show(s.ctx, s.in.Item, mergeKey, mergeOwner, "that it waits for the owner to merge"); err != nil {
 			return watchEnd{}, err
 		}
+
+		s.e.announce(s.ctx, s.in.Project, s.in.Item, fmt.Sprintf("The pull request of item %s is ready. Merge it, or send it back.", s.in.Item))
 	}
 
 	return s.e.watchReady(s.ctx, s.in.Project, s.in.Item, pinned)

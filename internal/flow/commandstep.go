@@ -450,7 +450,7 @@ func (s *script) wait(b *starlark.Builtin, args starlark.Tuple, kwargs []starlar
 		return nil, err
 	}
 
-	heard, err := s.e.listen(s.ctx, s.in.Item, plan)
+	heard, err := s.e.listen(s.ctx, s.in.Project, s.in.Item, plan)
 	if err != nil {
 		return nil, err
 	}

@@ -121,7 +121,7 @@ func (t *tally) enough(a Asked) bool {
 
 // waitVoices asks the people a wait names and counts their answers until the quorum is reached or the deadline passes.
 // Each answer is one recorded receive, and each receive that follows reads the deadline from one recorded step, so a replay counts the same answers.
-func (e *Engine) waitVoices(ctx dbos.Context, item string, plan waitPlan) (heard, error) {
+func (e *Engine) waitVoices(ctx dbos.Context, project, item string, plan waitPlan) (heard, error) {
 	asked, count := plan.asked, &tally{answers: map[string]string{}}
 	asked.Question, asked.Wait = plan.question, plan.id
 
@@ -130,6 +130,8 @@ func (e *Engine) waitVoices(ctx dbos.Context, item string, plan waitPlan) (heard
 	if err := show(ctx, item, askKey, asked, "who it asks"); err != nil {
 		return heard{}, err
 	}
+
+	e.announce(ctx, project, item, plan.question)
 
 	timedOut, err := e.within(ctx, item, plan.deadline, plan.remind, &asked, count)
 	if err == nil {
@@ -301,7 +303,7 @@ func (t *tally) outcome(timedOut bool) heard {
 }
 
 // listen waits for the owner. A wait that names people or choices counts their answers; any other wait takes the first plain answer.
-func (e *Engine) listen(ctx dbos.Context, item string, plan waitPlan) (heard, error) {
+func (e *Engine) listen(ctx dbos.Context, project, item string, plan waitPlan) (heard, error) {
 	if plan.addressed() {
 		id, err := runStep(e, ctx, waitIDStep, func(context.Context) (string, error) {
 			return strconv.FormatInt(time.Now().UnixNano(), 36), nil
@@ -312,10 +314,10 @@ func (e *Engine) listen(ctx dbos.Context, item string, plan waitPlan) (heard, er
 
 		plan.id = id
 
-		return e.waitVoices(ctx, item, plan)
+		return e.waitVoices(ctx, project, item, plan)
 	}
 
-	answer, timedOut, err := e.waitOwnerUntil(ctx, item, plan.question, plan.deadline)
+	answer, timedOut, err := e.waitOwnerUntil(ctx, project, item, plan.question, plan.deadline)
 
 	return heard{answer: answer, timedOut: timedOut}, err
 }

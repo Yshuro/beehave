@@ -3,6 +3,7 @@ package flow
 import (
 	"fmt"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -19,6 +20,25 @@ const factsWaitFlow = "def main(item):\n    facts()\n    wait(name = \"ask\", qu
 // buildWithModule is a client of another build whose module is at another version.
 func buildWithModule(c *Client, module string, version int) *Client {
 	c.version = versionWithModule(otherBuild, module, version)
+
+	return c
+}
+
+// buildAtVersionOne is a client of another build whose core and agent modules, the two that every waiting run of the harness recorded a step of, are at version 1.
+func buildAtVersionOne(c *Client) *Client {
+	table := moduleTable()
+	parts := make([]string, len(table))
+
+	for i, entry := range table {
+		number := entry.version
+		if entry.name == moduleCore || entry.name == moduleAgent {
+			number = 1
+		}
+
+		parts[i] = entry.name + strconv.Itoa(number)
+	}
+
+	c.version = otherBuild + "+" + strings.Join(parts, ".")
 
 	return c
 }
@@ -71,6 +91,22 @@ func TestClient_ResumeOnThisBuildRefusesARunRecordedUnderAgentModule5(t *testing
 	require.ErrorContains(t, err, fmt.Sprintf("agent module at version 5 and this build has version %d", agentVersion))
 }
 
+func TestClient_ResumeOnThisBuildRefusesARunRecordedUnderCoreModule3(t *testing.T) {
+	t.Parallel()
+
+	// Core module 3 recorded no wait:notify step. A replay of its wait under this build expects that step where the record holds the receive.
+	harness, _, other := strandedHarness(t)
+	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?",
+		versionWithModule(testVersion, moduleCore, 3), testRun)
+	require.NoError(t, err)
+	expireLease(harness)
+
+	err = other.ResumeOnThisBuild(testItem)
+
+	require.ErrorIs(t, err, errStranded)
+	require.ErrorContains(t, err, fmt.Sprintf("core module at version 3 and this build has version %d", coreVersion))
+}
+
 func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAGateStepWhenTheGateModuleChanged(t *testing.T) {
 	t.Parallel()
 
@@ -97,10 +133,10 @@ func TestClient_ResumeOnThisBuildMovesARunStoredUnderTheSingleVersionOfTheSteps(
 	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+"+stepsVersion, testRun)
 	require.NoError(t, err)
 
-	buildWithModule(other, moduleAgent, 1)
+	buildAtVersionOne(other)
 	expireLease(harness)
 
-	require.NoError(t, other.ResumeOnThisBuild(testItem), "the single version stands for the agent module at version 1, and this build has the agent module at version 1")
+	require.NoError(t, other.ResumeOnThisBuild(testItem), "the single version stands for every module at version 1, and this build has the core module (wait:notify) and the agent module at version 1")
 
 	row, rowErr := other.row(testRun)
 	require.NoError(t, rowErr)
@@ -122,7 +158,7 @@ func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionOfTheStep
 
 	expireLease(harness)
 
-	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), "core module at version 1 and this build has version 3", "the facts result of the old build has the round_* fields and no vars field")
+	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), fmt.Sprintf("core module at version 1 and this build has version %d", coreVersion), "the facts result of the old build has the round_* fields and no vars field")
 }
 
 func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionWhenAUsedModuleChanged(t *testing.T) {
@@ -132,6 +168,7 @@ func TestClient_ResumeOnThisBuildRefusesARunStoredUnderTheSingleVersionWhenAUsed
 	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+"+stepsVersion, testRun)
 	require.NoError(t, err)
 
+	other.version = versionWithModule(otherBuild, moduleCore, 1) // the core module matches, so the agent module is the first that differs
 	expireLease(harness)
 
 	require.ErrorContains(t, other.ResumeOnThisBuild(testItem), fmt.Sprintf("agent module at version 1 and this build has version %d", agentVersion))
@@ -174,7 +211,7 @@ func TestClient_ResumeOnThisBuildMovesARunStoredUnderAListOfSomeModules(t *testi
 	t.Parallel()
 
 	harness, _, other := strandedHarness(t)
-	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+core1.agent"+strconv.Itoa(agentVersion), testRun)
+	_, err := sqlOf(t, harness).ExecContext(t.Context(), "UPDATE workflow_status SET application_version = ? WHERE workflow_uuid = ?", testVersion+"+core"+strconv.Itoa(coreVersion)+".agent"+strconv.Itoa(agentVersion), testRun)
 	require.NoError(t, err)
 
 	buildWithModule(other, moduleGate, gateVersion+1)

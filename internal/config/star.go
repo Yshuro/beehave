@@ -300,6 +300,23 @@ func (p *paths) collect(seq starlark.Sequence) error {
 	return nil
 }
 
+// command is an argument that takes a program and its arguments as a list of strings. It records whether the file gave the list, so an empty list differs from none.
+type command struct {
+	Words paths
+	Set   bool
+}
+
+// Unpack stores a list or a tuple of strings. It refuses any other value.
+func (c *command) Unpack(v starlark.Value) error {
+	if err := c.Words.Unpack(v); err != nil {
+		return err
+	}
+
+	c.Set = true
+
+	return nil
+}
+
 // table is an argument that takes a dict of strings to strings.
 type table map[string]string
 

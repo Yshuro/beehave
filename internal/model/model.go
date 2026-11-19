@@ -37,7 +37,9 @@ type Project struct {
 	TestCommand string
 	// TestPaths are the globs of the test files. The revert run copies the added and changed ones of the head onto the base commit.
 	TestPaths []string
-	PinFile   string
+	// Notify is the program and its arguments that the engine runs when a wait for the owner opens. Empty means no notice.
+	Notify  []string
+	PinFile string
 	// Changelog is the path of the changelog file of the repository, or empty when the project declares none. It is a fact for the workflow, which refuses a merge that leaves it unchanged.
 	Changelog string
 	BuildHost string
