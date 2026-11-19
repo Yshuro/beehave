@@ -235,6 +235,11 @@ def closing_findings(base, head, name):
             findings.append("the commit %s (%s) closes %s with a closing keyword. Only the integration pull request may close an issue. Remove the keyword" % (sha[:7], message.strip().split("\n")[0], ", ".join(refs)))
     return findings
 
+def checked_allow(allow):
+    """Stops the item when allow is a list that the allow_paths of an agent refuses. None is no scope."""
+    if allow != None:
+        paths_outside(allow = allow, paths = [])
+
 def before_review(check, base, allow = None, name = "before-review"):
     """Judges the head of a gate result before review. Returns struct(ok, findings): ok is true when there is no finding.
     It reads the new tests, the revert run and the secret scan from check, the result of gate(base = ...). A gate with no base gives a cut log, which is a finding.
@@ -245,8 +250,7 @@ def before_review(check, base, allow = None, name = "before-review"):
     if project.source == "" and project.forge == "":
         fail("REFUSE: before_review needs a repository, and this project has no repository. Set `source` or `forge` in the project file, or remove the before_review call.")
 
-    if allow != None:
-        paths_outside(allow = allow, paths = [])
+    checked_allow(allow)
 
     head = check.head
     findings = gate_findings(check)
@@ -266,7 +270,7 @@ def before_review(check, base, allow = None, name = "before-review"):
 
 def check_before_review(loop, check):
     """Runs the checks before review on the head that the gate passed. Returns an empty text when the head is clean, or the findings as text."""
-    judged = before_review(check, base = "origin/" + loop.base, allow = loop.allow or None, name = "candidate-before-review")
+    judged = before_review(check, base = "origin/" + loop.base, allow = loop.allow, name = "candidate-before-review")
     if judged.ok:
         return ""
 
@@ -447,7 +451,7 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     # The last scoped review asked for changes. Its findings go to the full checks, and its violations keep the full review from a clean approve.
     return struct(end = None, lane = lane, open = pending.findings, breach = review.violations)
 
-def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER):
+def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = None, review_outputs = [], facts = {}, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER):
     """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, verdict, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
 
     steps is a dict from a step name to {"model": text, "runner": text}. The entries implement, review and fix are required, design is required with a design_prompt, and fix_late is optional.
@@ -457,7 +461,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
     Each returns an empty text for a clean head, or the findings as text, which send the candidate back to a fix.
     review_check is a function of one argument, the full review, that runs after each full review whose verdict is not reject. A reason ends the loop: held holds it.
     guard holds the settings of the preflight call before every agent of the loop: base, hold and own. A stop ends the loop with stopped set.
-    protect lists the directories that no command of a review or a fix may write in. allow lists the globs that a fix may change.
+    protect lists the directories that no command of a review or a fix may write in. allow lists the globs that a fix may change, and None is no scope. A list that before_review refuses stops the item before the first step of the loop.
     design_prompt turns on the design round: each review then writes the output `mechanism`. review_outputs lists more outputs of the full review.
     facts is the value of the facts() builtin, passed to each agent.
     follow_ups is "allow" or "forbid". With "forbid", each review writes the output `open`, one text with a line for each open finding and an empty text for none,
@@ -466,6 +470,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
     if follow_ups not in ["allow", "forbid"]:
         fail("REFUSE: review_fix got follow_ups %r. Use \"allow\" or \"forbid\"." % (follow_ups,))
 
+    checked_allow(allow)
     kept_history(impl, "implement", item)
 
     loop = struct(
@@ -477,7 +482,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
         follow_ups = follow_ups,
         protect = protect,
         extra = ["protected-path"] if protect else [],
-        scope = {"allow_paths": allow} if allow else {},
+        scope = {"allow_paths": allow} if allow != None else {},
         allow = allow,
         design_prompt = design_prompt,
         steps = checked_steps(steps, design_prompt),

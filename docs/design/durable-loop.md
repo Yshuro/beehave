@@ -299,6 +299,8 @@ The status caps follow from `rounds`: the review cap is `rounds * (MAX_INNER + 1
 
 The keyword `base` of `review_fix` is required: the base branch of the item. The gate of each candidate runs on it.
 
+The argument `allow` of `review_fix` is the list of globs that a fix may change. The default `None` is no scope. A list that `before_review` refuses, the empty list included, stops the item before the first step of the loop, with the text of `before_review`.
+
 The argument `checks` is a list of functions of one argument, the passed gate. Each one returns an empty text for a clean head, or the findings as text.
 
 #### The result of the loop

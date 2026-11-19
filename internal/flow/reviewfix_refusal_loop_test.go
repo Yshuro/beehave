@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -96,6 +97,16 @@ func workRig(t *testing.T, files ...string) *agentRig {
 func driveLoop(t *testing.T, rig *agentRig, extra string, fix func()) refusalRun {
 	t.Helper()
 
+	run, err := tryLoop(t, rig, extra, fix)
+	require.NoError(t, err)
+
+	return run
+}
+
+// tryLoop is driveLoop for a run that may stop with an error: it returns the error, and the step names of the run in either case.
+func tryLoop(t *testing.T, rig *agentRig, extra string, fix func()) (refusalRun, error) {
+	t.Helper()
+
 	run := refusalRun{gate: &headGate{t: t, dir: rig.dir}}
 	rig.h.gate.via = run.gate
 	rig.h.gate.checks = cleanChecks()
@@ -123,13 +134,48 @@ func driveLoop(t *testing.T, rig *agentRig, extra string, fix func()) refusalRun
 
 	engine := rig.h.engine(t)
 	result, err := runPipelineOf(engine, testItem, file)
-
-	require.NoError(t, err)
-	require.NoError(t, json.Unmarshal(result.Value, &run.value))
-
 	run.names = stepNamesOf(t, engine, testRun)
 
-	return run
+	if err != nil {
+		return run, err
+	}
+
+	return run, json.Unmarshal(result.Value, &run.value)
+}
+
+func TestReviewFixBeforeReview_ReviewFixRefusesABadAllowBeforeItsFirstAgentWithTheTextOfBeforeReview(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ allow, want string }{
+		"an absolute path": {`["/docs/**"]`, `allow has the absolute pattern "/docs/**". A path is relative to the item folder`},
+		"an empty entry":   {`["src/**", ""]`, `allow has the empty pattern "". Write a glob such as src/**`},
+		"an empty list":    {`[]`, "allow is an empty list, which would allow every path. To turn the check off, leave the keyword out"},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := workRig(t, "src/a.go")
+			run, err := tryLoop(t, rig, ", allow = "+c.allow, func() {})
+
+			require.ErrorContains(t, err, c.want)
+			assert.Empty(t, slices.DeleteFunc(run.names, func(name string) bool {
+				loop := strings.HasPrefix(name, "agent:") || strings.HasPrefix(name, "gate:") || strings.HasPrefix(name, "command:")
+
+				return !loop || strings.HasPrefix(name, "agent:implement#1/")
+			}), "the implement agent of the workflow is the only agent, and no gate or command step of the loop runs")
+		})
+	}
+}
+
+func TestReviewFixBeforeReview_ReviewFixWithNoAllowHasNoScope(t *testing.T) {
+	t.Parallel()
+
+	rig := workRig(t, "src/a.go", "docs/any.md")
+	run := driveLoop(t, rig, "", func() {})
+
+	assert.True(t, run.value.Approved, "with no allow every path is allowed, and the full review approves")
+	assert.Zero(t, stepsNamed(run.names, "command:candidate-before-review-paths"), "no path check runs")
 }
 
 // TestReviewFixBeforeReview_ARefusalSendsTheLoopToAFixRoundAndTheFixedHeadGetsItsReview drives the loop through the refusal of a head that does not hold the base.
