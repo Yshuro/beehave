@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -124,10 +123,11 @@ func renderText(expr syntax.Expr) string {
 			return restartSentence
 		}
 	case *syntax.BinaryExpr:
-		switch node.Op {
-		case syntax.PLUS:
+		if node.Op == syntax.PLUS {
 			return renderText(node.X) + renderText(node.Y)
-		case syntax.PERCENT:
+		}
+
+		if node.Op == syntax.PERCENT {
 			return formatText(renderText(node.X), node.Y)
 		}
 	}
@@ -325,7 +325,7 @@ func TestRestartText_EveryStopTextInTheExamplesAndTheLibraryThatNamesAResumeHold
 
 				stops++
 
-				assert.Contains(t, stop.text, restartSentence, fmt.Sprintf("%s:%d: the stop text names resume, then cancel, then run", path, stop.line))
+				assert.Contains(t, stop.text, restartSentence, "%s:%d: the stop text names resume, then cancel, then run", path, stop.line)
 			}
 
 			return nil
