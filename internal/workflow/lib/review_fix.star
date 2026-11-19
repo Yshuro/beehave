@@ -172,11 +172,9 @@ def check_gate(loop):
 
     return check
 
-# A closing keyword of GitHub (the nine, in any case) followed by an issue: "#N", "owner/repo#N" or an issue URL. A plain "#N" closes nothing.
-# https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
-# git reads it as an extended regular expression, one line of a message at a time: git-log, options --grep, -E and -i.
-REPO_NAME = "[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+"
-CLOSING_KEYWORD = "(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+((" + REPO_NAME + ")?#[0-9]+|https?://github[.]com/" + REPO_NAME + "/issues/[0-9]+)"
+# The records of git log in the keyword step: each starts with RECORD, and the commit id and the message are apart by FIELD.
+RECORD = "\x1e"
+FIELD = "\x1f"
 
 def secret_findings(code):
     """The finding of the secret scan of the gate: none for a clean exit, one for another exit or for a log that holds no exit code."""
@@ -221,23 +219,34 @@ def git_step(name, run, ok = [0]):
         fail("REFUSE: before_review could not run git %s (exit %d): %s" % (" ".join(run), done.rc, done.stderr.strip()))
     return done
 
-def paths_outside(allow, base, head, name):
-    """The paths that the head changed since the merge base and that no glob of allow covers, sorted. git reads each glob as a pathspec with glob magic."""
-    if not allow:
-        return []
+def changed_outside(allow, base, head, name):
+    """The paths that the head changed since the merge base and that no glob of allow covers, sorted. git lists the paths and the builtin paths_outside matches them, so allow has the dialect of the allow_paths of an agent."""
+    done = git_step(name, ["diff", "--name-only", "--no-renames", "-z", base + "..." + head])
+    return paths_outside(allow = allow, paths = [path for path in done.stdout.split("\x00") if path])
 
-    excluded = [":(exclude,glob)" + (glob[2:] if glob.startswith("./") else glob) for glob in allow]
-    done = git_step(name, ["diff", "--name-only", "--no-renames", "-z", base + "..." + head, "--", "."] + excluded)
-    return sorted([path for path in done.stdout.split("\x00") if path])
+def closing_findings(base, head, name):
+    """One finding for each commit between base and head whose message has a closing keyword. closing_references reads the grammar of the merge guard."""
+    done = git_step(name, ["log", "--format=" + RECORD + "%H" + FIELD + "%B", base + ".." + head])
+    findings = []
+    for record in done.stdout.split(RECORD)[1:]:
+        sha, _, message = record.partition(FIELD)
+        refs = closing_references(text = message)
+        if refs:
+            findings.append("the commit %s (%s) closes %s with a closing keyword. Only the integration pull request may close an issue. Remove the keyword" % (sha[:7], message.strip().split("\n")[0], ", ".join(refs)))
+    return findings
 
-def before_review(check, base, allow = [], name = "before-review"):
+def before_review(check, base, allow = None, name = "before-review"):
     """Judges the head of a gate result before review. Returns struct(ok, findings): ok is true when there is no finding.
     It reads the new tests, the revert run and the secret scan from check, the result of gate(base = ...). A gate with no base gives a cut log, which is a finding.
-    With git it checks that the head holds the base, that the changed paths are inside allow (no allow, every path), and that no commit closes an issue.
+    With git it checks that the head holds the base, that the changed paths are inside allow (None, every path), and that no commit closes an issue.
+    allow is a list of globs in the dialect of the allow_paths of an agent. An empty list, an empty entry, an absolute path, a path that starts with .. and a pattern that does not parse stop the item before any step.
     base is a git ref. The steps are named name-ancestor, name-paths and name-keywords."""
     project = facts()
     if project.source == "" and project.forge == "":
         fail("REFUSE: before_review needs a repository, and this project has no repository. Set `source` or `forge` in the project file, or remove the before_review call.")
+
+    if allow != None:
+        paths_outside(allow = allow, paths = [])
 
     head = check.head
     findings = gate_findings(check)
@@ -246,18 +255,18 @@ def before_review(check, base, allow = [], name = "before-review"):
     if descends.rc == 1:
         return struct(ok = False, findings = findings + ["the head %s is not a descendant of the base %s. Rebase the work on the base" % (head, base)])
 
-    outside = paths_outside(allow, base, head, name + "-paths")
-    if outside:
-        findings.append("the head changed %d path(s) outside allow [%s]: %s" % (len(outside), ", ".join(allow), ", ".join(outside)))
+    if allow != None:
+        outside = changed_outside(allow, base, head, name + "-paths")
+        if outside:
+            findings.append("the head changed %d path(s) outside allow [%s]: %s" % (len(outside), ", ".join(allow), ", ".join(outside)))
 
-    closing = git_step(name + "-keywords", ["log", "-E", "-i", "--grep=" + CLOSING_KEYWORD, "--format=%h %s", base + ".." + head])
-    findings += ["the commit %s has a closing keyword. Only the integration pull request may close an issue. Remove the keyword" % line for line in closing.stdout.splitlines()]
+    findings += closing_findings(base, head, name + "-keywords")
 
     return struct(ok = len(findings) == 0, findings = findings)
 
 def check_before_review(loop, check):
     """Runs the checks before review on the head that the gate passed. Returns an empty text when the head is clean, or the findings as text."""
-    judged = before_review(check, base = "origin/" + loop.base, allow = loop.allow, name = "candidate-before-review")
+    judged = before_review(check, base = "origin/" + loop.base, allow = loop.allow or None, name = "candidate-before-review")
     if judged.ok:
         return ""
 

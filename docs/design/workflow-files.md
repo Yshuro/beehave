@@ -349,11 +349,13 @@ At the start of a run, the engine lists the other orchestrators that hold items 
 
 `before_review` is not a builtin. It is a function of the library: `load("@beehave//review_fix.star", "before_review")`. `gate` judges the code of a head. `before_review` judges the head against the base, with the result of `gate`.
 
-`before_review(check, base, allow = [], name = "before-review")` returns `struct(ok, findings)`. `check` is the result of a `gate(base = ...)` call. The function reads `check.new_tests`, `check.checks` (the new tests and the secret scan) and `check.revert` from it. A gate without `base` holds no checks, so the function refuses it as a cut log. `base` is a git ref.
+`before_review(check, base, allow = None, name = "before-review")` returns `struct(ok, findings)`. `check` is the result of a `gate(base = ...)` call. The function reads `check.new_tests`, `check.checks` (the new tests and the secret scan) and `check.revert` from it. A gate without `base` holds no checks, so the function refuses it as a cut log. `base` is a git ref.
 
 The function reads `facts()` first. If the project has no repository (no `source` and no `forge` in the project file), it stops the item before any step, with a message that names the keys to set. It is a refusal of the call, not a finding.
 
-The function runs git in the item folder with three `command` steps: `<name>-ancestor`, `<name>-paths` (only when `allow` is not empty) and `<name>-keywords`. A git command that fails with an exit code other than the ones that it documents stops the item with an error. It is never a finding.
+`allow` is a list of globs in the dialect of `allow_paths` of `agent`. With no `allow`, every path is allowed. An empty list, an empty entry, an absolute path, a path that starts with `..` and a pattern that does not parse stop the item before any step, with a message that names the pattern.
+
+The function runs git in the item folder with three `command` steps: `<name>-ancestor`, `<name>-paths` (only when `allow` is set) and `<name>-keywords`. The step `<name>-paths` lists the changed paths, and the builtin `paths_outside` matches them. The step `<name>-keywords` lists the commit messages, and the builtin `closing_references` reads them. A git command that fails with an exit code other than the ones that it documents stops the item with an error. It is never a finding.
 
 A finding is a result, not an error. `ok` is true when `findings` is empty. The function gives a finding when:
 
@@ -363,10 +365,18 @@ A finding is a result, not an error. `ok` is true when `findings` is empty. The 
 - a new test passed or was skipped on the base code, or the revert run proves nothing (see the revert run in `gate.md`),
 - the secret scan did not exit with 0, or left no single exit code,
 - the head is not a descendant of `base`, by `git merge-base --is-ancestor`,
-- the head changed a path that `allow` does not allow (a list of globs, as `allow_paths` of `agent`; git reads each glob as a pathspec with `glob` magic),
-- a commit message between `base` and `head` has a closing keyword. `git log -E -i --grep` finds it, one line of the message at a time, and the finding names the commit.
+- the head changed a path that `allow` does not allow,
+- a commit message between `base` and `head` has a closing keyword. The grammar is the one of the merge guard, so a number on the next line counts. The finding names the commit and the issue.
 
-The steps are `command` steps, so a replay reads their records and runs no git again. A run recorded with the builtin step `before_review` does not move to this build with `resume --on-this-build`: the refusal names the step.
+The steps are `command` steps, so a replay reads their records and runs no git again. A run recorded with the builtin step `before_review` does not move to this build with `resume --on-this-build`: the gate module is at version 6, and the refusal names it.
+
+#### `paths_outside` and `closing_references`
+
+`paths_outside(allow, paths)` returns the sorted paths in `paths` that no glob of `allow` matches. It reads `allow` with the same code as `allow_paths` of `agent`, so the two judge a path alike.
+
+`closing_references(text)` returns the issues that `text` closes with a closing keyword, each as `#N` or `owner/repo#N`, in the order of the text. It reads the grammar of the merge guard.
+
+Both builtins match text. They run no command, record no step and need no repository.
 
 ### `queue`
 

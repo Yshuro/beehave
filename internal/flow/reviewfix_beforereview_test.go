@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -228,16 +229,17 @@ func TestReviewFixBeforeReview_AClosingKeywordInACommitIsARefusalThatNamesTheCom
 
 	cases := map[string]struct {
 		message string
-		refused bool
+		issue   string
 	}{
-		"fixes_number":      {"add a\n\nFixes #12", true},
-		"closes_cross_repo": {"add a\n\ncloses owner/repo#3", true},
-		"resolved_colon":    {"add a\n\nResolved: #7", true},
-		"issue_url":         {"add a\n\nfix https://github.com/owner/repo/issues/9", true},
-		"keyword_in_header": {"fix #5", true},
-		"plain_number":      {"add a\n\nsee #12", false},
-		"word_ends_in_fix":  {"add a\n\nsuffix #12", false},
-		"keyword_no_issue":  {"add a\n\nfixes the build", false},
+		"fixes_number":            {"add a\n\nFixes #12", "#12"},
+		"closes_cross_repo":       {"add a\n\ncloses owner/repo#3", "owner/repo#3"},
+		"resolved_colon":          {"add a\n\nResolved: #7", "#7"},
+		"issue_url":               {"add a\n\nfix https://github.com/owner/repo/issues/9", "owner/repo#9"},
+		"keyword_in_header":       {"fix #5", "#5"},
+		"number_on_the_next_line": {"add a\n\nCloses\n#12", "#12"},
+		"plain_number":            {"add a\n\nsee #12", ""},
+		"word_ends_in_fix":        {"add a\n\nsuffix #12", ""},
+		"keyword_no_issue":        {"add a\n\nfixes the build", ""},
 	}
 
 	for name, c := range cases {
@@ -250,10 +252,10 @@ func TestReviewFixBeforeReview_AClosingKeywordInACommitIsARefusalThatNamesTheCom
 
 			require.NoError(t, err)
 
-			if c.refused {
+			if c.issue != "" {
 				assert.Contains(t, shown, "show False")
-				assert.Contains(t, shown, "the commit "+tree.head[:7])
-				assert.Contains(t, shown, "has a closing keyword. Only the integration pull request may close an issue")
+				assert.Contains(t, shown, "the commit "+tree.head[:7]+" (")
+				assert.Contains(t, shown, "closes "+c.issue+" with a closing keyword. Only the integration pull request may close an issue")
 			} else {
 				assert.Equal(t, "show True ", shown)
 			}
@@ -486,4 +488,85 @@ func TestReviewFixBeforeReview_AProjectWithNoRepositoryStopsBeforeAnyCommandWith
 	for _, line := range h.commands.ran() {
 		assert.NotContains(t, line, "git", "no git command runs in a project with no repository")
 	}
+}
+
+func TestReviewFixBeforeReview_TheAllowListHasTheDialectOfTheAgentScope(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		allow   string
+		outside bool
+	}{
+		"braces name two trees":                       {`["{docs,src}/**"]`, false},
+		"a bare directory name is the directory only": {`["docs"]`, true},
+		"a glob that crosses the slash":               {`["docs/**"]`, false},
+		"a star stops at the slash":                   {`["docs/*"]`, false},
+		"a star does not cross a directory":           {`["*"]`, true},
+		"the magic prefix of a pathspec is text":      {`[":(glob)docs/**"]`, true},
+		"the dot slash prefix is dropped":             {`["./docs/**"]`, false},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tree := reviewTreeOf(t, "docs/a.md", "add a")
+
+			shown, err := reviewShown(t, tree, cleanChecks(), tree.base, "allow = "+c.allow+", ")
+
+			require.NoError(t, err)
+
+			if c.outside {
+				assert.Contains(t, shown, "show False")
+				assert.Contains(t, shown, "1 path(s) outside allow [")
+				assert.Contains(t, shown, ": docs/a.md")
+			} else {
+				assert.Equal(t, "show True ", shown)
+			}
+		})
+	}
+}
+
+func TestReviewFixBeforeReview_ABadAllowListStopsTheItemBeforeAnyStepAndNamesThePattern(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ allow, message string }{
+		"an empty entry":           {`[""]`, `has the empty pattern ""`},
+		"an absolute path":         {`["/docs/**"]`, `has the absolute pattern "/docs/**"`},
+		"a path that leaves up":    {`["../docs/**"]`, `has the pattern "../docs/**", which leaves the item folder`},
+		"a bare double dot":        {`[".."]`, `has the pattern "..", which leaves the item folder`},
+		"a bracket that opens":     {`["docs/["]`, `has the pattern "docs/[", which does not parse`},
+		"a list with no entry":     {`[]`, "is an empty list, which would allow every path"},
+		"an entry that is no text": {`[3]`, "must hold strings only"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tree := reviewTreeOf(t, "docs/a.md", "add a")
+			h := reviewHarness(t, tree, cleanChecks())
+			h.commands.reply = gitReply(t, tree.dir)
+
+			_, err := walkText(t, h, libReviewFlow(tree.base, "allow = "+c.allow+", "))
+
+			require.ErrorContains(t, err, "allow "+c.message, "the message names the keyword and the pattern")
+			assert.Empty(t, slices.DeleteFunc(h.commands.ran(), func(line string) bool { return !strings.HasPrefix(line, "git") }), "no git command runs")
+		})
+	}
+}
+
+func TestReviewFixBeforeReview_AProjectWithAForgeAndNoSourceHasARepository(t *testing.T) {
+	t.Parallel()
+
+	tree := reviewTreeOf(t, "src/a.go", "add a")
+	h := reviewHarness(t, tree, cleanChecks())
+	h.bare = true
+	h.facts = func(string) model.Project { return model.Project{Forge: "github"} }
+	h.commands.reply = gitReply(t, tree.dir)
+
+	_, err := walkText(t, h, libReviewFlow(tree.base, ""))
+
+	require.NoError(t, err)
+	assert.Contains(t, h.commands.ran(), "show True ", "the checks ran: a forge alone is a repository")
 }
