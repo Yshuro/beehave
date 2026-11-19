@@ -694,6 +694,8 @@ No undo runs:
 - The call takes one free `label`, a text that shows in `beehave status`. A label never changes what the step does. `edits = False` makes the step read-only and puts it on the review queue.
 - The call takes no `kind`, `lane`, `rounds`, `follow_ups` or `require_skills`. `beehave check workflow` refuses each one by name, for example "agent takes no argument kind".
 - The result of the call has the field `skills`: the list of the skills that the agent called, in the order of the calls. A workflow that needs a skill tests it, for example `"lint-pass" not in implement.skills`, and stops the item itself.
+- In a dry run, the fake agent reports every skill that the workflow tests for. The dry run reads the syntax tree of the workflow file and of the files it loads, and runs no code. A skill counts when the file tests a text literal with `in` or `not in` against `<expression>.skills`, or against a name that the file assigns from `<expression>.skills`. `not (...)`, parentheses, either quote style, and a test inside a helper function all count. A mention in a comment or in a string does not count.
+- The dry run does not find a skill name that the test does not hold as a literal, for example a helper `def need(r, name)` that tests `name not in r.skills`. A call `need(r, "lint-pass")` then stops the dry run with the refusal of the workflow. Write the literal in the test: `"lint-pass" not in r.skills`.
 
 ### `beehave check workflow`
 

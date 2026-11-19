@@ -96,6 +96,8 @@ type graph struct {
 	repositoryCalls []Diagnostic
 	// gateCalls are the calls that run a gate on this machine. The text of each is the name of the builtin.
 	gateCalls []hereGate
+	// skills are the skills that the files test for in the skills of a step.
+	skills []string
 }
 
 func predeclared(name string) bool { return slices.Contains(Builtins(), name) }
@@ -190,6 +192,7 @@ func (g *graph) inspect(name string, parsed *syntax.File) {
 	found, dynamic := programs(parsed)
 	g.programs = append(g.programs, found...)
 	g.dynamic += dynamic
+	g.skills = append(g.skills, skillChecks(parsed)...)
 	g.sandboxes(parsed)
 	g.swarm(parsed)
 
