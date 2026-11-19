@@ -241,7 +241,9 @@ func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, err
 }
 
 // e2eCommands answers the command calls of the example: the git steps of the checks before review and the mutation job on the host of the project.
-// Each call adds its command line to mutation.log. The Nth call of any command takes the Nth line of the file mutations: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, any other text or no line is a clean run.
+// Each call adds its command line to mutation.log. A line of the file mutations is "<command> => <answer>", where the command is the words of the step.
+// The Nth call of a command takes the Nth line that names it: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, any other text is a clean run.
+// A call with no line for its command is a clean run, so a new step in the workflow moves no answer.
 type e2eCommands struct{ dir string }
 
 func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.CommandOutput, error) {
@@ -250,7 +252,10 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 		return flow.CommandOutput{}, err
 	}
 
-	if _, err := log.WriteString(request.Host + " " + request.SlotClass + " " + strings.Join(request.Run, " ") + "\n"); err != nil {
+	words := strings.Join(request.Run, " ")
+	entry := request.Host + " " + request.SlotClass + " " + words
+
+	if _, err := log.WriteString(entry + "\n"); err != nil {
 		return flow.CommandOutput{}, errJoin(err, log.Close())
 	}
 
@@ -264,14 +269,7 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 		return flow.CommandOutput{}, err
 	}
 
-	lines := strings.Split(string(answers), "\n")
-
-	n := strings.Count(string(text), "\n")
-	if n > len(lines) {
-		return flow.CommandOutput{}, nil
-	}
-
-	switch lines[n-1] {
+	switch keyedAnswer(string(answers), words, callsOf(string(text), entry)) {
 	case "lived":
 		return flow.CommandOutput{Stdout: "      KILLED CONDITIONALS_NEGATION at internal/a.go:30:4\nfinding: internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION\n", RC: 1}, nil
 	case "silent":
@@ -279,6 +277,36 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 	}
 
 	return flow.CommandOutput{}, nil
+}
+
+// callsOf is the number of lines of the log that equal the entry.
+func callsOf(log, entry string) int {
+	n := 0
+
+	for _, line := range strings.Split(log, "\n") {
+		if line == entry {
+			n++
+		}
+	}
+
+	return n
+}
+
+// keyedAnswer returns the answer of the nth call of a command: the nth line of the answers that starts with the command. It is empty when no such line exists.
+func keyedAnswer(answers, words string, nth int) string {
+	var keyed []string
+
+	for _, line := range strings.Split(answers, "\n") {
+		if answer, found := strings.CutPrefix(line, words+" => "); found {
+			keyed = append(keyed, answer)
+		}
+	}
+
+	if nth < 1 || nth > len(keyed) {
+		return ""
+	}
+
+	return keyed[nth-1]
 }
 
 // e2eAgents starts the claude program of the script PATH through the real agent runner.
