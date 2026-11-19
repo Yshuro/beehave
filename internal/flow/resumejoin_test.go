@@ -36,5 +36,8 @@ func resumeRunOf(t *testing.T, engine *Engine, client *Client, item string) dbos
 func resumeAndJoin(t *testing.T, engine *Engine, client *Client) (ItemResult, error) {
 	t.Helper()
 
-	return resultOfHandle(t, resumeRun(t, engine, client))
+	result, err := resultOfHandle(t, resumeRun(t, engine, client))
+	printStateIfTheTestFails(t, engine, err, func() string { return "" })
+
+	return result, err
 }
