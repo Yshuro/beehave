@@ -232,7 +232,7 @@ def closing_findings(base, head, name):
         sha, _, message = record.partition(FIELD)
         refs = closing_references(text = message)
         if refs:
-            findings.append("the commit %s (%s) closes %s with a closing keyword. Only the integration pull request may close an issue. Remove the keyword" % (sha[:7], message.strip().split("\n")[0], ", ".join(refs)))
+            findings.append("the commit %s (%s) closes %s with a closing keyword. Only the integration pull request may close an issue. Rebuild the branch without the keyword" % (sha[:7], message.strip().split("\n")[0], ", ".join(refs)))
     return findings
 
 def checked_allow(allow):
@@ -241,7 +241,8 @@ def checked_allow(allow):
         paths_outside(allow = allow, paths = [])
 
 def before_review(check, base, allow = None, name = "before-review"):
-    """Judges the head of a gate result before review. Returns struct(ok, findings): ok is true when there is no finding.
+    """Judges the head of a gate result before review. Returns struct(ok, findings, unrepairable): ok is true when there is no finding.
+    unrepairable lists the findings that no new commit repairs, which are the closing keywords: a fix adds commits and never rewrites the history that holds the keyword.
     It reads the new tests, the revert run and the secret scan from check, the result of gate(base = ...). A gate with no base gives a cut log, which is a finding.
     With git it checks that the head holds the base, that the changed paths are inside allow (None, every path), and that no commit closes an issue.
     allow is a list of globs in the dialect of the allow_paths of an agent. An empty list, an empty entry, an absolute path, a path with a .. part and a pattern that does not parse stop the item before any step.
@@ -257,20 +258,24 @@ def before_review(check, base, allow = None, name = "before-review"):
 
     descends = git_step(name + "-ancestor", ["merge-base", "--is-ancestor", base, head], ok = [0, 1])
     if descends.rc == 1:
-        return struct(ok = False, findings = findings + ["the head %s is not a descendant of the base %s. Rebase the work on the base" % (head, base)])
+        return struct(ok = False, findings = findings + ["the head %s is not a descendant of the base %s. Rebase the work on the base" % (head, base)], unrepairable = [])
 
     if allow != None:
         outside = changed_outside(allow, base, head, name + "-paths")
         if outside:
             findings.append("the head changed %d path(s) outside allow [%s]: %s" % (len(outside), ", ".join(allow), ", ".join(outside)))
 
-    findings += closing_findings(base, head, name + "-keywords")
+    closing = closing_findings(base, head, name + "-keywords")
 
-    return struct(ok = len(findings) == 0, findings = findings)
+    return struct(ok = len(findings) + len(closing) == 0, findings = findings + closing, unrepairable = closing)
 
 def check_before_review(loop, check):
-    """Runs the checks before review on the head that the gate passed. Returns an empty text when the head is clean, or the findings as text."""
+    """Runs the checks before review on the head that the gate passed. Returns an empty text when the head is clean, or the findings as text.
+    A finding that no new commit repairs stops the item at once: no fix round is spent on it."""
     judged = before_review(check, base = "origin/" + loop.base, allow = loop.allow, name = "candidate-before-review")
+    if judged.unrepairable:
+        fail("REFUSE: the checks before review refused the head of %s, and no new commit repairs it:\n%s\nA fix adds commits and never rewrites history. Rebuild the branch without the keyword. %s" % (loop.item.id, "\n".join(["- " + finding for finding in judged.unrepairable]), restart_steps(loop.item)))
+
     if judged.ok:
         return ""
 

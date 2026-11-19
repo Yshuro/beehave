@@ -349,7 +349,7 @@ At the start of a run, the engine lists the other orchestrators that hold items 
 
 `before_review` is not a builtin. It is a function of the library: `load("@beehave//review_fix.star", "before_review")`. `gate` judges the code of a head. `before_review` judges the head against the base, with the result of `gate`.
 
-`before_review(check, base, allow = None, name = "before-review")` returns `struct(ok, findings)`. `check` is the result of a `gate(base = ...)` call. The function reads `check.new_tests`, `check.checks` (the new tests and the secret scan) and `check.revert` from it. A gate without `base` holds no checks, so the function refuses it as a cut log. `base` is a git ref.
+`before_review(check, base, allow = None, name = "before-review")` returns `struct(ok, findings, unrepairable)`. `unrepairable` lists the findings that no new commit repairs: the closing keywords. `check` is the result of a `gate(base = ...)` call. The function reads `check.new_tests`, `check.checks` (the new tests and the secret scan) and `check.revert` from it. A gate without `base` holds no checks, so the function refuses it as a cut log. `base` is a git ref.
 
 The function reads `facts()` first. If the project has no repository (no `source` and no `forge` in the project file), it stops the item before any step, with a message that names the keys to set. It is a refusal of the call, not a finding.
 
@@ -366,7 +366,7 @@ A finding is a result, not an error. `ok` is true when `findings` is empty. The 
 - the secret scan did not exit with 0, or left no single exit code,
 - the head is not a descendant of `base`, by `git merge-base --is-ancestor`,
 - the head changed a path that `allow` does not allow,
-- a commit message between `base` and `head` has a closing keyword. The grammar is the one of the merge guard, so a number on the next line counts. The finding names the commit and the issue.
+- a commit message between `base` and `head` has a closing keyword. The grammar is the one of the merge guard, so a number on the next line counts. The finding names the commit and the issue, and it is unrepairable: `review_fix` stops the item at once on it, and spends no fix round.
 
 The steps are `command` steps, so a replay reads their records and runs no git again. A run recorded with the builtin step `before_review` does not move to this build with `resume --on-this-build`: the gate module is at version 6, and the refusal names it.
 
