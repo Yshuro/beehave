@@ -172,9 +172,88 @@ def check_gate(loop):
 
     return check
 
+# A closing keyword of GitHub (the nine, in any case) followed by an issue: "#N", "owner/repo#N" or an issue URL. A plain "#N" closes nothing.
+# https://docs.github.com/en/issues/tracking-your-work-with-issues/using-issues/linking-a-pull-request-to-an-issue
+# git reads it as an extended regular expression, one line of a message at a time: git-log, options --grep, -E and -i.
+REPO_NAME = "[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+"
+CLOSING_KEYWORD = "(^|[^[:alnum:]_])(close[sd]?|fix(es|ed)?|resolve[sd]?):?[[:space:]]+((" + REPO_NAME + ")?#[0-9]+|https?://github[.]com/" + REPO_NAME + "/issues/[0-9]+)"
+
+def secret_findings(code):
+    """The finding of the secret scan of the gate: none for a clean exit, one for another exit or for a log that holds no exit code."""
+    if code == None:
+        return ["the log of the gate job has no exit code of the secret scan, so the scan proves nothing"]
+    if code != 0:
+        return ["the secret scan of the head exited with code %d. Remove the secret from every commit of the branch" % code]
+    return []
+
+def revert_findings(check):
+    """The findings of the revert run of the gate, for a head with new tests: a test that passed or was skipped on the base code, or a run that proves nothing."""
+    checks = check.checks
+    if not checks["complete"] or checks["new"] == 0 or check.revert == "pass":
+        return []
+
+    findings = ["the new test %s passes or is skipped on the base code. A test must fail without the change" % test for test in checks["revert_passed"]]
+    if checks["revert_passed_count"] > len(checks["revert_passed"]):
+        findings.append("%d new tests pass or are skipped on the base code in all, and the log names the first %d" % (checks["revert_passed_count"], len(checks["revert_passed"])))
+    if not findings:
+        findings.append("the revert run proves nothing: " + (checks.get("revert_problem") or "the log of the gate job has no end marker of the revert run"))
+    return findings
+
+def gate_findings(check):
+    """The findings that the checks of the gate job give: the new tests, the revert run and the secret scan. A cut log proves nothing."""
+    checks = check.checks
+    findings = []
+    if not checks["complete"]:
+        findings.append("the log of the gate job has no end marker, so the new-tests check is cut and proves nothing" + (": " + checks["problem"] if checks.get("problem") else ""))
+    elif checks["new"] == 0:
+        findings.append("the head adds no new test. Add a test that fails without the change")
+
+    findings += ["a new test failed a check: " + reason for reason in checks["failed"]]
+    if checks["failed_count"] > len(checks["failed"]):
+        findings.append("%d new tests failed a check in all, and the log names the first %d" % (checks["failed_count"], len(checks["failed"])))
+
+    return findings + revert_findings(check) + secret_findings(checks.get("secrets_rc"))
+
+def git_step(name, run, ok = [0]):
+    """Runs git in the item folder in a command step. An exit code outside ok is an error of git and stops the item, never a finding."""
+    done = command(run = ["git"] + run, name = name)
+    if done.rc not in ok:
+        fail("REFUSE: before_review could not run git %s (exit %d): %s" % (" ".join(run), done.rc, done.stderr.strip()))
+    return done
+
+def paths_outside(allow, base, head, name):
+    """The paths that the head changed since the merge base and that no glob of allow covers, sorted. git reads each glob as a pathspec with glob magic."""
+    if not allow:
+        return []
+
+    excluded = [":(exclude,glob)" + (glob[2:] if glob.startswith("./") else glob) for glob in allow]
+    done = git_step(name, ["diff", "--name-only", "--no-renames", "-z", base + "..." + head, "--", "."] + excluded)
+    return sorted([path for path in done.stdout.split("\x00") if path])
+
+def before_review(check, base, allow = [], name = "before-review"):
+    """Judges the head of a gate result before review. Returns struct(ok, findings): ok is true when there is no finding.
+    It reads the new tests, the revert run and the secret scan from check, the result of gate(base = ...). A gate with no base gives a cut log, which is a finding.
+    With git it checks that the head holds the base, that the changed paths are inside allow (no allow, every path), and that no commit closes an issue.
+    base is a git ref. The steps are named name-ancestor, name-paths and name-keywords."""
+    head = check.head
+    findings = gate_findings(check)
+
+    descends = git_step(name + "-ancestor", ["merge-base", "--is-ancestor", base, head], ok = [0, 1])
+    if descends.rc == 1:
+        return struct(ok = False, findings = findings + ["the head %s is not a descendant of the base %s. Rebase the work on the base" % (head, base)])
+
+    outside = paths_outside(allow, base, head, name + "-paths")
+    if outside:
+        findings.append("the head changed %d path(s) outside allow [%s]: %s" % (len(outside), ", ".join(allow), ", ".join(outside)))
+
+    closing = git_step(name + "-keywords", ["log", "-E", "-i", "--grep=" + CLOSING_KEYWORD, "--format=%h %s", base + ".." + head])
+    findings += ["the commit %s has a closing keyword. Only the integration pull request may close an issue. Remove the keyword" % line for line in closing.stdout.splitlines()]
+
+    return struct(ok = len(findings) == 0, findings = findings)
+
 def check_before_review(loop, check):
     """Runs the checks before review on the head that the gate passed. Returns an empty text when the head is clean, or the findings as text."""
-    judged = before_review(name = "candidate-before-review", base = "origin/" + loop.base, head = check.head, **loop.scope_check)
+    judged = before_review(check, base = "origin/" + loop.base, allow = loop.allow, name = "candidate-before-review")
     if judged.ok:
         return ""
 
@@ -386,7 +465,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
         protect = protect,
         extra = ["protected-path"] if protect else [],
         scope = {"allow_paths": allow} if allow else {},
-        scope_check = {"allow": allow} if allow else {},
+        allow = allow,
         design_prompt = design_prompt,
         steps = checked_steps(steps, design_prompt),
         design_after = design_after,
