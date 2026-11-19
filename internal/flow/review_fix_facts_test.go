@@ -14,7 +14,7 @@ import (
 // so the fake agent answers them. The probe reads the input `facts` with `index`, so a step with no such input renders NO-FACTS-INPUT and the assertion fails;
 // no template error stands in for it.
 const (
-	factsProbe       = "OWNER-IS={{ with index . \"facts\" }}{{ .people.owner }}{{ else }}NO-FACTS-INPUT{{ end }}\n"
+	factsProbe       = "OWNER-IS={{ with index . \"facts\" }}{{ .vars.people.owner }}{{ else }}NO-FACTS-INPUT{{ end }}\n"
 	reviewProbe      = reviewMarker + "\nWrite it to {{ .output_file }} as JSON\n" + factsProbe
 	designProbe      = designMarker + "\nWrite it to {{ .output_file }} as JSON\n" + factsProbe
 	fixProbe         = "FIX-PROBE\n" + factsProbe
@@ -32,7 +32,7 @@ func TestReviewFix_EveryAgentTheLoopStartsGetsTheFactsInItsInputs(t *testing.T) 
 
 		return "approve"
 	}, noFindings, sameMechanism, `{"decision":"keep","reason":"the retry is the smallest part"}`)
-	rig.project.People = map[string]string{"owner": "ann"}
+	rig.project.Vars["people"] = map[string]any{"owner": "ann"}
 
 	prompts := filepath.Join(filepath.Dir(file), "prompts")
 	for name, probe := range map[string]string{"review.md": reviewProbe, "design.md": designProbe, "fix.md": fixProbe} {

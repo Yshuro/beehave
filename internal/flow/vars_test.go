@@ -197,9 +197,9 @@ func TestDryRun_TheFactsHoldTheVarsOfTheProjectAndNothingElse(t *testing.T) {
 
 	var out bytes.Buffer
 
-	file := dryFile(t, "def main(item):\n    f = facts()\n    fail(\"V=%r/P=%r/R=%r\" % (f.vars, f.people, f.repo))\n")
+	file := dryFile(t, "def main(item):\n    f = facts()\n    fail(\"V=%r/R=%r\" % (f.vars, f.repo))\n")
 	err := DryRun(t.Context(), file, "12", map[string]string{}, &out, WithVars(projectVars()))
 
 	require.Error(t, err)
-	assert.Contains(t, out.String(), `V={"a": 1, "b": ["x"], "c": {"d": True}, "e": 1.5}/P={}/R=""`)
+	assert.Contains(t, out.String(), `V={"a": 1, "b": ["x"], "c": {"d": True}, "e": 1.5}/R=""`)
 }

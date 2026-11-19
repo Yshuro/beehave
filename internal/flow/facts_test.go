@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"testing"
 
@@ -16,12 +17,12 @@ func ownedBy(owner string) func(string) model.Project {
 	return func(project string) model.Project {
 		return model.Project{
 			Name: project, Repo: "o/n", BaseBranch: "main", Gate: "make check",
-			People: map[string]string{"owner": owner}, Limits: []string{"never run rm on a glob"}, Traps: []string{"the cache hides a stale build"},
+			Vars: map[string]any{"people": map[string]any{"owner": owner}, "limits": []any{"never run rm on a glob"}, "traps": []any{"the cache hides a stale build"}},
 		}
 	}
 }
 
-const factsPrompt = "owner={{ .facts.people.owner }} base={{ .facts.base_branch }} repo={{ .facts.repo }}\n{{ range .facts.limits }}limit={{ . }}\n{{ end }}{{ range .facts.traps }}trap={{ . }}\n{{ end }}tokens={{ len .facts.token_rules }}\n"
+const factsPrompt = "owner={{ .facts.vars.people.owner }} base={{ .facts.base_branch }} repo={{ .facts.repo }}\n{{ range .facts.vars.limits }}limit={{ . }}\n{{ end }}{{ range .facts.vars.traps }}trap={{ . }}\n{{ end }}tokens={{ range index .facts.vars \"token_rules\" }}x{{ end }}.\n"
 
 func TestFacts_TheFactsOfTheProjectReachThePromptInputOfAnAgent(t *testing.T) {
 	t.Parallel()
@@ -38,35 +39,28 @@ func TestFacts_TheFactsOfTheProjectReachThePromptInputOfAnAgent(t *testing.T) {
 	assert.Contains(t, seen[0].Prompt, "owner=ann base=main repo=o/n")
 	assert.Contains(t, seen[0].Prompt, "limit=never run rm on a glob")
 	assert.Contains(t, seen[0].Prompt, "trap=the cache hides a stale build")
-	assert.Contains(t, seen[0].Prompt, "tokens=0", "a fact the file leaves out is an empty list, not a missing key")
+	assert.Contains(t, seen[0].Prompt, "tokens=.", "a setting that vars leaves out reads as nothing to range over, and the template does not fail")
 }
 
-func TestFacts_TheBoardOfTheProjectIsReadAsFourFieldsAndIsEmptyWhenTheProjectHasNone(t *testing.T) {
+func TestFacts_TheFactsHoldTheNineFieldsOfThePlumbingAndTheVarsAndNothingElse(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	h.facts = func(project string) model.Project {
-		return model.Project{Name: project, Board: model.Board{Owner: "acme", Number: 3, Started: "In Progress", Merged: "Done"}}
+		return model.Project{Name: project, Vars: map[string]any{"board": map[string]any{"number": json.Number("3")}}}
 	}
-	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"B=%d/%s/%s/%s\" % (f.board_number, f.board_owner, f.board_started, f.board_merged))\n")
+	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"FIELDS=\" + \",\".join(sorted(dir(f))) + \" N=%d\" % f.vars[\"board\"][\"number\"])\n")
 
 	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
-	require.ErrorContains(t, outcome.err, "B=3/acme/In Progress/Done")
-
-	none := newHarness(t)
-	none.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"B=%d/%r\" % (f.board_number, f.board_owner))\n")
-
-	outcome = receive(t, runInBackground(none.engine(t), testItem))
-
-	require.ErrorContains(t, outcome.err, "B=0/\"\"")
+	require.ErrorContains(t, outcome.err, "FIELDS=base_branch,build_host,forge,gate,gate_steps,repo,source,tracker,vars N=3")
 }
 
 func TestFacts_AProjectThatTheConfigDoesNotHoldHasEmptyFacts(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"N=%d/%d/%r\" % (len(f.limits), len(f.people), f.base_branch))\n")
+	h.flowIs(t, "def main(item):\n    f = facts()\n    fail(\"N=%d/%d/%r\" % (len(f.vars), len(f.gate_steps), f.base_branch))\n")
 
 	outcome := receive(t, runInBackground(h.engine(t), testItem))
 
@@ -107,7 +101,7 @@ func TestFacts_AReplayKeepsTheFactsOfTheFirstRead(t *testing.T) {
 
 	h := newHarness(t)
 	h.facts = ownedBy("ann")
-	file := writeFlow(t, "def main(item):\n    f = facts()\n    wait(name = \"ask\", question = \"go?\")\n    fail(\"OWNER \" + f.people[\"owner\"])\n")
+	file := writeFlow(t, "def main(item):\n    f = facts()\n    wait(name = \"ask\", question = \"go?\")\n    fail(\"OWNER \" + f.vars[\"people\"][\"owner\"])\n")
 
 	stopCtx, stop := context.WithCancel(t.Context())
 	first, err := NewEngine(stopCtx, h.opts, h.deps())

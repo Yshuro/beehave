@@ -47,7 +47,7 @@ var goldenShapes = map[string][]string{
 		"board_sync: number,status",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
-		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,source,stacked_rules,token_rules,tracker,traps,vars",
+		"facts: base_branch,build_host,forge,gate,gate_steps,repo,source,tracker,vars",
 		"gate: checks,head,host_loss,host_losses,new_tests,passed,report,required,revert,steps,tree",
 		"gather: results",
 		"host_teardown: down,reason",

@@ -149,10 +149,20 @@ func TestCheck_ATopLevelStatementThatIsNotAFunctionIsSkipped(t *testing.T) {
 func TestCheck_AFieldThatFactsDoesNotReturnIsRefused(t *testing.T) {
 	t.Parallel()
 
-	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.limits[0], f.limit])\n")
+	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.vars[\"limits\"][0], f.limit])\n")
 
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0], "limit is not a field of the result of facts")
+}
+
+func TestCheck_AMethodSettingIsNoFieldOfFactsAndTheVarsHoldIt(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.traps[0], f.board_number, f.vars[\"traps\"][0]])\n")
+
+	require.Len(t, got, 2)
+	assert.Contains(t, got[0], "traps is not a field of the result of facts")
+	assert.Contains(t, got[1], "board_number is not a field of the result of facts")
 }
 
 func TestResults_ListsTheBuiltinsWithFixedFields(t *testing.T) {

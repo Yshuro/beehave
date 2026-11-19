@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -8,17 +9,26 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/merge"
-	"github.com/tobocop2/beehave/internal/model"
 )
 
-// setBoard makes the facts of the project of the rig hold a board.
+// boardVars is the key `board` of the vars of a project. An empty owner leaves the key out, as a project file does.
+func boardVars(owner string) map[string]any {
+	board := map[string]any{"number": json.Number("3"), "started": "In Progress", "merged": "Done"}
+	if owner != "" {
+		board["owner"] = owner
+	}
+
+	return board
+}
+
+// setBoard makes the vars of the project of the rig hold a board.
 func setBoard(rig *agentRig, owner string) {
-	rig.project.Board = model.Board{Owner: owner, Number: 3, Started: "In Progress", Merged: "Done"}
+	rig.project.Vars["board"] = boardVars(owner)
 }
 
 // roundBoard gives the project of a round rig the board of the tests.
 func roundBoard(rig *roundRig, owner string) {
-	rig.project.Board = model.Board{Owner: owner, Number: 3, Started: "In Progress", Merged: "Done"}
+	rig.project.Vars["board"] = boardVars(owner)
 }
 
 func TestExampleBoard_AProjectWithABoardMovesTheCardAtTheLaneStartAndReadsItBackAndTheChildMovesNoMergedCard(t *testing.T) {
