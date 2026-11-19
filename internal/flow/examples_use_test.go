@@ -330,3 +330,32 @@ func TestContractSplats_AnAssignmentInAnotherFileAddsNoKey(t *testing.T) {
 	assert.Equal(t, []string{"name"}, own["more"])
 	assert.Equal(t, []string{"timeout"}, other["extra"])
 }
+
+func TestContractCall_OnlyTheExactNameOfABuiltinAndTheKeywordsOfThatCallCount(t *testing.T) {
+	t.Parallel()
+
+	code := map[contractPair]bool{{"wait", noKeyword}: true, {"wait", "quorum"}: true, {"wait", "remind"}: true}
+	order := map[string][]string{"wait": {"prompt", "quorum", "remind"}}
+
+	uses := func(src string) contractUses {
+		file, err := model.StarlarkFileOptions().Parse("f.star", src, 0)
+		require.NoError(t, err)
+
+		found := contractUses{}
+
+		syntax.Walk(file, func(node syntax.Node) bool {
+			if call, ok := node.(*syntax.CallExpr); ok {
+				contractCall(call, "f.star", code, order, contractSplats(file), found)
+			}
+
+			return true
+		})
+
+		return found
+	}
+
+	assert.Empty(t, uses(`waiter(quorum = 2)`), "a name that holds the builtin name is no use")
+	assert.Empty(t, uses(`other(quorum = 2, remind = 1)`), "a keyword of another call is no use")
+	assert.Len(t, uses("wait(\"p\", 2)\nwait(\"p\", 2)"), 2, "two calls with the same keyword count once")
+	assert.Equal(t, uses(`wait("p", remind = 1, quorum = 2)`), uses(`wait("p", quorum = 2, remind = 1)`), "the order of the keywords does not matter")
+}
