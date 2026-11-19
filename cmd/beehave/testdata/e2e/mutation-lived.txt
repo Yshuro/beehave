@@ -22,7 +22,11 @@ grep -count=1 '^- internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION$' find
 cmp events.log expected-events.log
 
 -- mutations --
+clean
+clean
 lived
+clean
+clean
 clean
 -- verdicts --
 approve
