@@ -100,9 +100,11 @@ check "chat adapter prints the message key" jq -e '.key == "chat-c1" and .channe
 echo "--- mask and intake"
 sh "$GATEWAY/intake.sh" > "$T/intake.out" 2> "$T/intake.err"
 check "intake prints both messages" test "$(wc -l < "$T/intake.out" | tr -d ' ')" -eq 2
-check "intake masks the email address" hasnt 'ann@example.com' "$T/intake.out"
-check "intake masks the card number" hasnt '4111' "$T/intake.out"
-check "intake masks the phone number" hasnt '555 123' "$T/intake.out"
+# The src field holds the random test folder path, so the masked fields alone are searched for the values.
+jq -r '.from, .subject, .text' "$T/intake.out" > "$T/intake.masked"
+check "intake masks the email address" hasnt 'ann@example.com' "$T/intake.masked"
+check "intake masks the card number" hasnt '4111' "$T/intake.masked"
+check "intake masks the phone number" hasnt '555 123' "$T/intake.masked"
 check "intake masks the sender name" hasnt 'Ann Smith' "$T/intake.out"
 check "intake keeps the booking reference" has 'BK-123456' "$T/intake.out"
 check "intake keeps the travel date" has '2026-12-01' "$T/intake.out"
