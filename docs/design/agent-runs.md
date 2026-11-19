@@ -14,6 +14,15 @@ An `agent` step starts one AI coding CLI through an adapter, feeds it the prompt
 - `cmd/beehave` holds the table that maps an agent name to the constructor of its adapter. It puts the adapter in the `Spec` of each run. A run with no adapter does not start.
 - `agent/agenttest` is the conformance suite. It starts a fake CLI and checks the profile, the arguments and the call reader of an adapter. Every new adapter calls it from its tests.
 
+### Time limits of a step
+
+The keys `timeout` and `idle_timeout` of the `agent` call take a duration text, such as `"90s"` or `"10m"`. `beehave check workflow` refuses any other text.
+
+- `timeout` limits the whole run.
+- `idle_timeout` limits the time with no output. Each write of the CLI to its standard output or its standard error starts the time again.
+- A key that is left out, an empty text, or a duration of 0 or less sets no limit of that kind. OpenCode is the one exception: with no `timeout`, its total limit is one hour.
+- A run that a limit ends has the outcome `timed-out` or `idle`. The step fails with an error that names the outcome and the item, and the item stops.
+
 ### The OpenCode adapter and its limits
 
 The adapter starts `opencode run --format json` and reads its event stream. The prompt goes on stdin; no message argument follows `run`. The adapter never passes `--auto`, so a file tool that reaches outside the work folder stays refused.
