@@ -33,6 +33,7 @@ func TestCheck_AKeywordThatTheAPIRemovedIsRefusedByNameWithTheBuiltinThatTookIt(
 
 	tests := map[string]struct{ call, want string }{
 		"sandbox.allow_write": {`sandbox(allow_write = ["out"])`, "sandbox takes no argument allow_write"},
+		"preflight.foreign":   {`preflight(foreign = "review")`, "preflight takes no argument foreign"},
 	}
 
 	for removed, test := range tests {

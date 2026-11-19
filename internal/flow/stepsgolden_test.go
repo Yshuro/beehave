@@ -57,7 +57,7 @@ var goldenShapes = map[string][]string{
 		"pr_comment: number",
 		"pr_open: created,number,stack",
 		"pr_state: state",
-		"preflight: author,code,foreign,head,ok,pr,reason,stop",
+		"preflight: code,ok,reason,stop",
 		"queue: free,rows",
 		"spawn: runs",
 		"wait: answer,answers,timed_out",

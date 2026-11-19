@@ -59,9 +59,6 @@ const ofKeyword = "of"
 // ItemTargets lists the values of the of argument of an item_read call: the item of the run, or its parent.
 func ItemTargets() []string { return []string{"self", "parent"} }
 
-// ForeignModes lists the values of the foreign argument of a preflight call.
-func ForeignModes() []string { return []string{"review"} }
-
 // ForbidKinds lists the values that an element of the forbid_commands argument takes: the names of the finding kinds.
 // The check and the run both read it.
 func ForbidKinds() []string { return model.FindingKindNames() }
@@ -409,7 +406,7 @@ func itemSignatures() map[string][]Param {
 		itemStatusName: {filled("id"), {Name: statusField, Kind: KindText, Required: true, Values: StatusValues()}, label},
 		prCommentName:  {filled("text"), filled("key"), forbidText(), opt("integration", KindBool), label},
 		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), opt("integration", KindBool), label},
-		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), one("foreign", ForeignModes()), label},
+		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), label},
 	}
 }
 

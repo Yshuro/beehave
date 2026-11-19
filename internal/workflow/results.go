@@ -54,7 +54,7 @@ func resultFields() map[string][]string {
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
-		preflightName:    {"ok", "stop", "code", reasonField, "foreign", "pr", "head", "author"},
+		preflightName:    {"ok", "stop", "code", reasonField},
 		queueName:        {"rows", "free"},
 		spawnName:        {"runs"},
 		waitName:         {"answer", "answers", "timed_out"},

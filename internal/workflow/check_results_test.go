@@ -22,7 +22,7 @@ func TestCheck_ReportsAFieldThatTheResultOfABuiltinDoesNotHave(t *testing.T) {
 		{"item_create", `item_create("t", "k")`, "3:11 haed is not a field of the result of item_create. It has: id, created."},
 		{"item_status", `item_status("1", "open")`, "3:11 haed is not a field of the result of item_status. It has: id, status."},
 		{"pr_open", `pr_open(title = "t", base = "b")`, "3:11 haed is not a field of the result of pr_open. It has: number, created, stack."},
-		{"preflight", `preflight()`, "3:11 haed is not a field of the result of preflight. It has: ok, stop, code, reason, foreign, pr, head, author."},
+		{"preflight", `preflight()`, "3:11 haed is not a field of the result of preflight. It has: ok, stop, code, reason."},
 		{"queue", `queue()`, "3:11 haed is not a field of the result of queue. It has: rows, free."},
 		{"spawn", `spawn(["1"])`, "3:11 haed is not a field of the result of spawn. It has: runs."},
 		{"wait", `wait()`, "3:11 haed is not a field of the result of wait. It has: answer, answers, timed_out."},
