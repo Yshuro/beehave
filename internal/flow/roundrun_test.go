@@ -135,6 +135,22 @@ func TestRoundRun_CancelRunRefusesAnOpenRunOfAnotherBuildAndAFinishedRunOfAnyBui
 	require.ErrorIs(t, same.CancelRun("item-12-r1"), errWrongState)
 }
 
+func TestRoundRun_CancelRunByIdRefusesARunOfAnotherBuildWithTheExactText(t *testing.T) {
+	t.Parallel()
+
+	harness, _, other := strandedHarness(t)
+	same := harness.client(t, testVersion)
+	run, err := other.row(testRun)
+	require.NoError(t, err)
+
+	err = other.CancelRun(testRun)
+
+	require.EqualError(t, err, "the run belongs to another version of beehave: "+testRun+" started under version "+run.ApplicationVersion+
+		" and this is "+other.version+". Start version "+testVersion+" to finish it, or run beehave resume "+testItem+
+		" --on-this-build to move the run to this build from its last finished step")
+	assert.Equal(t, runRunning, stateOfRun(t, same, testRun), "the refused cancel leaves the run running")
+}
+
 func TestRoundRun_CancelRunRefusesAnIdNoRunHas(t *testing.T) {
 	t.Parallel()
 
