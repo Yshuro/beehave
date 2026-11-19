@@ -13,7 +13,7 @@
 //
 // Check runs a command that does nothing under the whole confinement in a throw-away child: the child loads the filter (below ABI 9) and applies the
 // Landlock configuration of the kernel, exactly as the helper does for a gate. A kernel or a container that refuses either makes Check fail, so the
-// gate is refused and never fails at run time with exit code 125.
+// gate is refused. A gate can still exit with code 125 at run time when the exec of the command fails under a process or memory limit (EAGAIN, ENOMEM).
 //
 // ABI 9 is not verified on a real kernel. The build host runs Linux 7.0.0-1014-gcp, and its kernel reports ABI 8 (the raw answer of the
 // landlock_create_ruleset call, logged by the contract test), so the contract suite passes there on the path below ABI 9: the seccomp filter and the

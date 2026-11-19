@@ -94,11 +94,21 @@ func (k filterKernel) load() error {
 	filter := sockFilters(raw)
 	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]} //nolint:gosec // the program has twelve instructions
 
-	_, err = k.call(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, unix.SECCOMP_FILTER_FLAG_TSYNC, unsafe.Pointer(&program)) //nolint:gosec // the call reads the program at once
+	failedThread, err := k.call(unix.SYS_SECCOMP, unix.SECCOMP_SET_MODE_FILTER, unix.SECCOMP_FILTER_FLAG_TSYNC, unsafe.Pointer(&program)) //nolint:gosec // the call reads the program at once
 	runtime.KeepAlive(filter)
 
+	return checkSync(failedThread, err)
+}
+
+// checkSync turns the answer of the filter load into an error. With the sync flag, the kernel answers a partial sync with the id of the thread that could not
+// take the filter and no error number.
+func checkSync(failedThread uintptr, err error) error {
 	if err != nil {
 		return fmt.Errorf("load the socket filter: %w", err)
+	}
+
+	if failedThread != 0 {
+		return fmt.Errorf("load the socket filter: thread %d did not take it", failedThread)
 	}
 
 	return nil
