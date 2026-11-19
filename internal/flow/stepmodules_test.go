@@ -173,6 +173,14 @@ func TestModulesUsed_AreTheModulesOfTheKindsThatTheStepsStartWith(t *testing.T) 
 	assert.Empty(t, modulesUsed(nil))
 }
 
+func TestModulesUsed_TheStepsOfTheWaitsOfTheOwnerAreStepsOfTheCoreModule(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, []string{"core"}, modulesUsed([]string{"claim", "DBOS.recv"}), "the receive of an answer")
+	assert.Equal(t, []string{"core"}, modulesUsed([]string{"claim", "watch", "DBOS.sleep", "watch"}), "the read of a ready pull request")
+	assert.Empty(t, modulesUsed([]string{"claim", "DBOS.sleep"}), "a sleep alone is the wait of a cap or a limit, not of the owner")
+}
+
 func TestChangedModule_OnlyAModuleThatTheRunUsedCounts(t *testing.T) {
 	t.Parallel()
 

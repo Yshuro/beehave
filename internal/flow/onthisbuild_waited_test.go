@@ -1,10 +1,15 @@
 package flow
 
 import (
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/merge"
+	"github.com/tobocop2/beehave/internal/review"
 )
 
 // waitThenFail is a workflow file that waits and then fails, so the run ends failed after it received the answer.
@@ -12,9 +17,20 @@ func waitThenFail(arguments string) string {
 	return "def main(item):\n    wait(name = \"ask\", question = \"What now?\"" + arguments + ")\n    fail(\"stop\")\n"
 }
 
-// waitedRun runs a workflow file that waits, answers it, and leaves the failed run with the receive of the answer as its only record of the wait.
-// The named steps of the wait are deleted, as a run that an older build recorded holds none of them.
-func waitedRun(t *testing.T, flowText, from string) (*harness, *Client) {
+// forgetSteps deletes the recorded steps of the run whose names match the patterns, as a run that an older build recorded holds none of them.
+func forgetSteps(t *testing.T, h *harness, patterns ...string) {
+	t.Helper()
+
+	for _, pattern := range patterns {
+		_, err := sqlOf(t, h).ExecContext(t.Context(), "DELETE FROM operation_outputs WHERE workflow_uuid = ? AND function_name LIKE ?", testRun, pattern)
+		require.NoError(t, err)
+	}
+}
+
+// waitedRun runs a workflow file that waits, answers it, and leaves the run failed after the receive of the answer.
+// The run is the record of an older build at the moment after the receive: it holds the receive, and neither the step that runs the notify command
+// (an older build did not write it) nor the step that closes the wait (the run did not reach it).
+func waitedRun(t *testing.T, flowText, from string) *harness {
 	t.Helper()
 
 	harness := newHarness(t)
@@ -28,30 +44,40 @@ func waitedRun(t *testing.T, flowText, from string) (*harness, *Client) {
 	require.Error(t, receive(t, done).err, "the file fails after the wait")
 	require.NoError(t, engine.Shutdown())
 
-	_, err := sqlOf(t, harness).ExecContext(t.Context(), "DELETE FROM operation_outputs WHERE workflow_uuid = ? AND function_name LIKE 'wait:%'", testRun)
-	require.NoError(t, err)
+	forgetSteps(t, harness, "wait:ask%", notifyStep)
 
-	other := buildWithModule(harness.client(t, otherBuild), moduleCore, coreVersion+1)
-
-	names, err := other.stepNames(testRun)
-	require.NoError(t, err)
-	require.Contains(t, names, "DBOS.recv", "the run recorded the receive of the answer")
-
-	for _, name := range names {
-		_, named := kindOfStep(name)
-		require.False(t, named, "the run recorded no named step of any module, and %q is one: %v", name, names)
-	}
-
-	return harness, other
+	return harness
 }
 
-func TestClient_ResumeOnThisBuildRefusesARunThatOnlyWaitedWhenTheCoreModuleChanged(t *testing.T) {
+// namesOf reads the recorded steps of the test run through a client of another build.
+func namesOf(t *testing.T, c *Client) []string {
+	t.Helper()
+
+	names, err := c.stepNames(testRun)
+	require.NoError(t, err)
+
+	return names
+}
+
+// requireStranded asserts that the move is refused for the module, and that the run stays on its build.
+func requireStranded(t *testing.T, c *Client, module string) {
+	t.Helper()
+
+	err := c.ResumeOnThisBuild(testItem)
+
+	require.ErrorIs(t, err, errStranded)
+	require.ErrorContains(t, err, module+" module")
+
+	row, rowErr := c.row(testRun)
+	require.NoError(t, rowErr)
+	assert.Equal(t, testVersion, buildVersion(row.ApplicationVersion), "a refused run stays where it was")
+}
+
+func TestClient_ResumeOnThisBuildRefusesAWaitedRunWhoseOnlyCoreStepIsTheReceiveWhenTheCoreModuleChanged(t *testing.T) {
 	t.Parallel()
 
 	forms := map[string]struct{ arguments, from string }{
 		"plain wait":            {"", ""},
-		"wait by id":            {", to = [\"ana\"]", "ana"},
-		"wait with a deadline":  {", to = [\"ana\"], timeout = \"1h\"", "ana"},
 		"plain wait, a timeout": {", timeout = \"1h\"", ""},
 	}
 
@@ -59,18 +85,94 @@ func TestClient_ResumeOnThisBuildRefusesARunThatOnlyWaitedWhenTheCoreModuleChang
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			_, other := waitedRun(t, waitThenFail(form.arguments), form.from)
+			harness := waitedRun(t, waitThenFail(form.arguments), form.from)
+			other := buildWithModule(harness.client(t, otherBuild), moduleCore, coreVersion+1)
 
-			err := other.ResumeOnThisBuild(testItem)
+			names := namesOf(t, other)
+			require.Contains(t, names, "DBOS.recv", "the run recorded the receive of the answer")
 
-			require.ErrorIs(t, err, errStranded)
-			require.ErrorContains(t, err, "core module")
+			for _, step := range names {
+				_, named := kindOfStep(step)
+				require.False(t, named, "the run recorded no named step of any module, and %q is one: %v", step, names)
+			}
 
-			row, rowErr := other.row(testRun)
-			require.NoError(t, rowErr)
-			assert.Equal(t, testVersion, buildVersion(row.ApplicationVersion), "a refused run stays where it was")
+			requireStranded(t, other, "core")
 		})
 	}
+}
+
+func TestClient_ResumeOnThisBuildRefusesAnAddressedWaitWhenTheCoreModuleChanged(t *testing.T) {
+	t.Parallel()
+
+	forms := map[string]struct{ arguments, step string }{
+		"wait by id":           {", to = [\"ana\"]", "wait:id"},
+		"wait with a deadline": {", to = [\"ana\"], timeout = \"1h\"", "wait:deadline"},
+	}
+
+	for name, form := range forms {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			harness := waitedRun(t, waitThenFail(form.arguments), "ana")
+			other := buildWithModule(harness.client(t, otherBuild), moduleCore, coreVersion+1)
+
+			names := namesOf(t, other)
+			require.Contains(t, names, form.step, "every build records the step of an addressed wait before the receive")
+			require.Contains(t, names, "DBOS.recv")
+
+			requireStranded(t, other, "core")
+		})
+	}
+}
+
+func TestClient_ResumeOnThisBuildMovesAWaitedRunWhenTheCoreModuleDidNotChange(t *testing.T) {
+	t.Parallel()
+
+	harness := waitedRun(t, waitThenFail(""), "")
+	other := buildWithModule(harness.client(t, otherBuild), moduleGate, gateVersion+1)
+
+	names := namesOf(t, other)
+	require.Contains(t, names, "DBOS.recv", "the run waited")
+	require.NotContains(t, modulesUsed(names), moduleGate, "the run recorded no step of the gate module")
+
+	require.NoError(t, other.ResumeOnThisBuild(testItem))
+
+	row, rowErr := other.row(testRun)
+	require.NoError(t, rowErr)
+	assert.Equal(t, other.version, row.ApplicationVersion)
+}
+
+func TestClient_ResumeOnThisBuildRefusesARunInTheOwnerMergeWaitWhenTheCoreModuleChanged(t *testing.T) {
+	t.Parallel()
+
+	h := mergeHarness(t, merge.Result{Stop: merge.Done})
+	h.watch.outcomes = []review.Outcome{{Kind: review.Waiting}}
+	h.sleep = time.Hour
+
+	engine := h.engine(t)
+	runInBackground2(engine, writeFlow(t, shipFlow("")))
+
+	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool {
+		names := stepNamesOf(t, engine, testRun)
+
+		return slices.Contains(names, notifyStep) && slices.Contains(names, sleepStep)
+	}))
+
+	forgetSteps(t, h, notifyStep)
+	expireLease(h)
+
+	other := buildWithModule(h.client(t, otherBuild), moduleCore, coreVersion+1)
+
+	names := namesOf(t, other)
+	require.Contains(t, names, watchStep, "the run waits for the owner to merge")
+	require.NotContains(t, names, "DBOS.recv", "the owner merge wait records no receive")
+
+	for _, step := range names {
+		_, named := kindOfStep(step)
+		require.False(t, named, "the run recorded no named step of any module, and %q is one: %v", step, names)
+	}
+
+	requireStranded(t, other, "core")
 }
 
 func TestClient_ResumeOnThisBuildMovesARunThatRecordedNothingOfCoreAndDidNotWaitWhenTheCoreModuleChanged(t *testing.T) {
@@ -90,8 +192,7 @@ func TestClient_ResumeOnThisBuildMovesARunThatRecordedNothingOfCoreAndDidNotWait
 
 	other := buildWithModule(harness.client(t, otherBuild), moduleCore, coreVersion+1)
 
-	names, namesErr := other.stepNames(testRun)
-	require.NoError(t, namesErr)
+	names := namesOf(t, other)
 	require.NotContains(t, names, "DBOS.recv", "the run did not wait")
 	require.NotContains(t, modulesUsed(names), moduleCore, "the run recorded no step of the core module")
 
