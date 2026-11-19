@@ -16,3 +16,11 @@ func TestClosingReferences_ListsEachClosingKeywordAndIgnoresAPlainNumber(t *test
 	assert.Equal(t, []string{"#12", "other/repo#3", "owner/repo#7"}, merge.ClosingReferences(text))
 	assert.Empty(t, merge.ClosingReferences("Part of #5, no keyword."))
 }
+
+func TestClosingReferences_AKeywordAtTheEndOfALineClosesTheIssueOnTheNextLine(t *testing.T) {
+	t.Parallel()
+
+	text := "add a\n\nCloses\n#12\nfixes:\n\towner/repo#3\nsee #4"
+
+	assert.Equal(t, []string{"#12", "owner/repo#3"}, merge.ClosingReferences(text), "GitHub reads a line break after the keyword as a space")
+}
