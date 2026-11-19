@@ -341,22 +341,22 @@ func (f swarmForgeAt) failsMerge(pr int) bool {
 }
 
 // pauseAfterMerge is the barrier of a landing. If the file pause-after-merge exists in the forge folder, the first merge waits, after it is recorded,
-// until the spend ledger holds the cost of the task that the file names. The cost is the last step of a task run, so the run is over when the landing goes on,
-// and a script can end a run in the middle of a landing on every run, and not only under load.
-// It waits for the ledger line of that task. It ends when the line is there (nil), when the context of the merge ends (the error of ctx), or at bound (errBarrierClosed).
+// until the stand-in agent has ended the task that the file names. The agent step is the last step of a task run, and the agent writes the file ended-<id> as it ends,
+// so the run ends at the moment when the landing goes on, and a script can end a run in the middle of a landing on every run, and not only under load.
+// It waits for that file. It ends when the file is there (nil), when the context of the merge ends (the error of ctx), or at bound (errBarrierClosed).
 func (f swarmForgeAt) pauseAfterMerge(ctx context.Context, bound time.Duration) error {
 	named, err := os.ReadFile(f.path("pause-after-merge"))
 	if err != nil {
 		return nil //nolint:nilerr // no barrier file: the merge goes on at once
 	}
 
-	want := "\t" + strings.TrimSpace(string(named)) + "\ttask\t"
+	id := strings.TrimSpace(string(named))
 	opened := true
 
-	waitOn(func(string, ...any) { opened = false }, e2eWaiting{what: "the ledger line of the task " + strings.TrimSpace(string(named)), ended: ctx.Done(), bound: bound, found: func() bool {
-		ledger, err := os.ReadFile(filepath.Join(f.dir, "..", "home", ".swarm", "swarm-1", "ledger.tsv"))
+	waitOn(func(string, ...any) { opened = false }, e2eWaiting{what: "the end of the task " + id, ended: ctx.Done(), bound: bound, found: func() bool {
+		_, err := os.Stat(filepath.Join(f.dir, "..", "ended-"+id)) //nolint:gosec // G703: a test reads a file of the folder of its own script
 
-		return err == nil && strings.Contains(string(ledger), want)
+		return err == nil
 	}})
 
 	switch {
@@ -440,8 +440,8 @@ func swarmInit(ts *testscript.TestScript, dir string, work *os.Root) {
 	}
 
 	for name, value := range map[string]string{
-		"REPO": "o/r", "BASE": "main", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SWARM": "swarm-1", "SWARM_DIR": filepath.Join(dir, "swarm"),
-		"CAP_USD": "100", "REMOTE": remote, swarmRemote: remote, swarmFolder: filepath.Join(dir, "forge"), "HOME": filepath.Join(dir, "home"),
+		"REPO": "o/r", "BASE": "main", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "SWARM": "swarm-1",
+		"REMOTE": remote, swarmRemote: remote, swarmFolder: filepath.Join(dir, "forge"), "HOME": filepath.Join(dir, "home"),
 	} {
 		ts.Setenv(name, value)
 	}

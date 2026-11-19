@@ -2,11 +2,11 @@
 # Run: SWARM=<item> beehave run <item> <project> --workflow workflow.star
 # The body of the parent item holds one task on each line: a priority (P0 to P3), a tab, the title, and optionally a tab and a body.
 #
+# The spend cap is agents.max_tree_budget_usd in runners.star. At the cap, the engine holds each agent step that has not started (see durable-loop.md).
+#
 # Variables of the environment:
 #   REPO, BASE, OWNER_LOGIN, OWNER_EMAIL  the repository as owner/name, the integration branch, and the identity for the merge guard.
-#   SWARM        the id of the parent item. The spend ledger and the STOP file are named by it.
-#   SWARM_DIR    the absolute path of the folder that holds this file. The ledger script runs from there.
-#   CAP_USD      the most the swarm spends. The parent starts no new run at the cap.
+#   SWARM        the id of the parent item. The STOP file is named by it.
 #   REMOTE       optional address of the repository for the branch reads. Default: https://github.com/<REPO>.git
 #   DEADLINE_MIN optional, default 480: the most minutes that the swarm starts new runs.
 #   BATCH        optional, default 8: the number of finished pull requests that starts a landing pass.
@@ -23,9 +23,6 @@ CONFLICT_PREFIXES = ["conflict", "red on top"]
 TASK = "task"
 RESOLVE = "resolve"
 
-def sh(verb, args):
-    return ["sh", env("SWARM_DIR") + "/scripts/ledger.sh", verb, env("SWARM")] + args
-
 def seconds(stamp):
     """Seconds since 1970 of an RFC 3339 UTC time such as 2026-11-03T10:20:30Z (days from civil date)."""
     year, month, day = int(stamp[0:4]), int(stamp[5:7]), int(stamp[8:10])
@@ -36,8 +33,8 @@ def seconds(stamp):
     days = era * 146097 + yoe * 365 + yoe // 4 - yoe // 100 + doy - 719468
     return days * 86400 + int(stamp[11:13]) * 3600 + int(stamp[14:16]) * 60 + int(stamp[17:19])
 
-def run_step(item, name, kind, prompt, inputs):
-    """One agent step of a child run. Its cost goes to the ledger before any check of the step."""
+def run_step(name, prompt, inputs):
+    """One agent step of a child run."""
     done = agent(
         name = name,
         prompt = prompt,
@@ -47,7 +44,6 @@ def run_step(item, name, kind, prompt, inputs):
         idle_timeout = IDLE_TIMEOUT,
         max_budget_usd = 6,
     )
-    command(name = "cost-" + name, run = sh("add", [item.id, kind, str(done.cost_usd)]), timeout = SHORT_TIMEOUT)
     if done.stop != "":
         fail("REFUSE: the %s step stopped at the %s cap before it finished." % (name, done.stop))
     if done.violations != "":
@@ -55,12 +51,12 @@ def run_step(item, name, kind, prompt, inputs):
 
 def task(item):
     """One task as a child run. The agent pushes the branch that has the id of the item."""
-    run_step(item, "implement", TASK, "prompts/task.md", {"item": item, "base": env("BASE")})
+    run_step("implement", "prompts/task.md", {"item": item, "base": env("BASE")})
 
 def resolve(item):
     """A merge fix as a child run. The body of the item names the original item."""
     note = json.decode(item.body)
-    run_step(item, "resolve", RESOLVE, "prompts/resolve.md", {"item": item, "branch": note["orig"], "reason": note["reason"], "base": env("BASE")})
+    run_step("resolve", "prompts/resolve.md", {"item": item, "branch": note["orig"], "reason": note["reason"], "base": env("BASE")})
 
 def tip(name, branch):
     remote = env("REMOTE", default = "https://github.com/" + env("REPO") + ".git")
@@ -92,9 +88,9 @@ def check_limits(swarm, p, started):
     """A limit stops new runs only. Runs that already started finish."""
     if swarm.stop["why"] != "":
         return
-    over = command(name = "budget-%d" % p, run = sh("check", [env("CAP_USD")]), timeout = SHORT_TIMEOUT)
-    if over.rc != 0:
-        halt(swarm, "no new runs: " + over.stdout.strip())
+    free = command(name = "stop-%d" % p, run = ["sh", "-c", 'test ! -e "$HOME/.swarm/$1/STOP"', "stop", env("SWARM")], timeout = SHORT_TIMEOUT)
+    if free.rc != 0:
+        halt(swarm, "no new runs: the file STOP exists")
     elif seconds(now()) - started > int(env("DEADLINE_MIN", default = "480")) * 60:
         halt(swarm, "the swarm ran for more than %s minutes" % env("DEADLINE_MIN", default = "480"))
 
@@ -255,13 +251,12 @@ def main(item):
         if not run_pass(item, swarm, p, started):
             break
     left = [i for i in swarm.kind.keys() if swarm.kind[i] == TASK and i not in swarm.landed and i not in swarm.held]
-    spent = command(name = "ledger-report", run = sh("report", []), timeout = SHORT_TIMEOUT).stdout.strip()
     stopped = ("Stopped: " + swarm.stop["why"]) if swarm.stop["why"] != "" else ""
     item_comment(
         name = "report",
         id = item.id,
         key = "report",
-        text = "%d landed, %d need a person, %d not started. %s Spend: %s" % (len(swarm.landed), len(swarm.held), len(left), stopped, spent),
+        text = "%d landed, %d need a person, %d not started. %s" % (len(swarm.landed), len(swarm.held), len(left), stopped),
     )
     if swarm.stop["why"] == "" and len(left) == 0 and len(swarm.held) == 0:
         item_status(name = "close", id = item.id, status = "closed")

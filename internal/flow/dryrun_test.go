@@ -636,10 +636,10 @@ func TestDryRun_ARoundRunsWithNoEnvironmentVariables(t *testing.T) {
 	assert.NotContains(t, out.String(), "env:")
 }
 
-func TestDryRun_TheSwarmExampleFilesItsBacklogAndChecksTheBudgetThenEndsEarlyAtTheReadOfTheOpenWork(t *testing.T) {
+func TestDryRun_TheSwarmExampleFilesItsBacklogAndChecksTheStopFileThenEndsEarlyAtTheReadOfTheOpenWork(t *testing.T) {
 	t.Parallel()
 
-	env := map[string]string{"SWARM_DIR": "/swarm", "SWARM": "s1", "REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "CAP_USD": "100"}
+	env := map[string]string{"SWARM": "s1", "REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com"}
 
 	var out bytes.Buffer
 
@@ -647,7 +647,7 @@ func TestDryRun_TheSwarmExampleFilesItsBacklogAndChecksTheBudgetThenEndsEarlyAtT
 	require.ErrorIs(t, err, ErrDryRunEndedEarly, out.String())
 
 	assert.Contains(t, out.String(), "item_create:create-1")
-	assert.Contains(t, out.String(), "command:budget-0")
+	assert.Contains(t, out.String(), "command:stop-0")
 	assert.Contains(t, out.String(), "not run in a dry run: read the open work of the project")
 }
 

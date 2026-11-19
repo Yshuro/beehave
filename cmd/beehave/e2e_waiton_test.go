@@ -211,7 +211,7 @@ func TestMergePR_EndsItsBarrierWithItsOwnContext(t *testing.T) {
 	hostGit(t, work, "commit", "-q", "-m", "feature")
 	hostGit(t, work, "push", "-q", remote, "feature")
 
-	// The barrier names a task that never writes its ledger line, so only the context of the merge can end the wait before the bound of 30 seconds.
+	// The barrier names a task that never ends, so only the context of the merge can end the wait before the bound of 30 seconds.
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pause-after-merge"), []byte("c\n"), e2eFileMode))
 
 	ctx, cancel := context.WithTimeout(t.Context(), swarmBarrierBound/6)
@@ -247,13 +247,11 @@ func TestPauseAfterMerge_FailsAtTheBoundWhenNothingOpensTheBarrier(t *testing.T)
 	require.ErrorIs(t, barrierForge(t).pauseAfterMerge(context.Background(), time.Millisecond), errBarrierClosed)
 }
 
-func TestPauseAfterMerge_ReturnsWhenTheLedgerHoldsTheTask(t *testing.T) {
+func TestPauseAfterMerge_ReturnsWhenTheTaskHasEnded(t *testing.T) {
 	t.Parallel()
 
 	forge := barrierForge(t)
-	ledger := filepath.Join(forge.dir, "..", "home", ".swarm", "swarm-1")
-	require.NoError(t, os.MkdirAll(ledger, e2eFolderMode))
-	require.NoError(t, os.WriteFile(filepath.Join(ledger, "ledger.tsv"), []byte("1\tc\ttask\t0.1\n"), e2eFileMode))
+	require.NoError(t, os.WriteFile(filepath.Join(forge.dir, "..", "ended-c"), nil, e2eFileMode))
 
 	require.NoError(t, forge.pauseAfterMerge(context.Background(), time.Minute))
 }

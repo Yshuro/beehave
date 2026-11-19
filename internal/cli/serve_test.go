@@ -309,3 +309,15 @@ func TestServe_AConfigWithProblemsExitsTwoAndOpensNoEngine(t *testing.T) {
 	assert.Contains(t, stderr, "agents.max_concurrent must be 1 or more")
 	assert.Zero(t, rig.engines, "a config with problems opens no engine")
 }
+
+func TestServe_TheHelpSaysTheEngineAppliesTheReviewPollAndStartsEachSentenceWithASpace(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+
+	code, stdout, _ := rig.execute(t.Context(), "serve", "--help")
+
+	assert.Equal(t, 0, code)
+	assert.Contains(t, stdout, "applies the review poll and waits. A beehave run on the same state folder")
+	assert.NotContains(t, stdout, "project schedules")
+}

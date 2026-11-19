@@ -94,13 +94,9 @@ func (l *loader) constructor(s spec, once bool, fn func(at syntax.Position, kwar
 	})
 }
 
-// record makes the entry of a block. A block is held by the argument of its own name, or by the list argument of its name with an "s", such as schedules.
+// record makes the entry of a block. A block is held by the argument of its own name.
 func (l *loader) record(at syntax.Position, name string) *made {
-	if owner := l.ownerOf(name); owner != "" {
-		return &made{at: at, name: name, owner: owner, usage: name + " = " + name + "(...)"}
-	}
-
-	return &made{at: at, name: name, owner: l.ownerOf(name + "s"), usage: name + "s = [" + name + "(...)]"}
+	return &made{at: at, name: name, owner: l.ownerOf(name), usage: name + " = " + name + "(...)"}
 }
 
 // blocks makes the builtin of a block that another block holds as an argument. The call gives the block.

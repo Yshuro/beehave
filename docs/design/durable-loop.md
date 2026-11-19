@@ -231,15 +231,15 @@ A CLI with no budget option refuses the run, unless it reports the dollars of ea
 
 #### Not covered
 
-- A cap for an item tree, for a week or for a swarm. A spawned run is a run of its own with its own sum.
+- A cap for a week.
 - The check starts no agent step late and stops no agent step that already runs. The cap of one agent run does that.
 
-#### The swarm ledger
+#### The swarm example
 
-`examples/swarm` closes that gap for one swarm with a script, because the results of `gather` carry no cost.
+`examples/swarm` caps the spend of one swarm with `agents.max_tree_budget_usd`, because the parent and its child runs are one item tree.
 
-- Each child run writes the cost of each agent step to a ledger file (`scripts/ledger.sh`).
-- The parent reads the total and the file `STOP` before each pass. At the cap, the parent starts no new run and lets the runs that started finish.
+- At the cap, the engine holds each agent step that has not started. An agent step that started finishes.
+- The parent reads the file `STOP` before each pass. When the file exists, the parent starts no new run.
 - The parent files one item for each backlog line and starts the ready items by priority within `queue.free`.
 - It lands the finished pull requests with one `merge` for each priority, `P0` first.
 - A conflict gets a fix item at most twice, then the status `hold`.
