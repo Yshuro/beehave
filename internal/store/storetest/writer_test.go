@@ -54,14 +54,6 @@ func (m *memWriter) SetStatus(_ context.Context, id string, status store.Status)
 	return nil
 }
 
-func errIf(down bool) error {
-	if down {
-		return errDown
-	}
-
-	return nil
-}
-
 func (m *memWriter) Comment(_ context.Context, id, key, _ string) error {
 	if m.down {
 		return errDown

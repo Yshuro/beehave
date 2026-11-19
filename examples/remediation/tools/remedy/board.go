@@ -52,6 +52,30 @@ func (f boardFlags) card() model.Card {
 	return model.Card{Board: f.board, Owner: f.owner, Number: f.issue, Status: f.status}
 }
 
+// placeAndRead puts the card on the board of the forge of the folder and returns the status that the board shows for it afterwards.
+func placeAndRead(ctx context.Context, deps Deps, card model.Card) (string, error) {
+	repo, err := originRepo(ctx, deps)
+	if err != nil {
+		return "", err
+	}
+
+	opened, err := deps.Forge(repo)
+	if err != nil {
+		return "", err
+	}
+
+	boarder, ok := opened.(forge.Boarder)
+	if !ok {
+		return "", errNoBoard
+	}
+
+	if err := boarder.PlaceCard(ctx, card); err != nil {
+		return "", err
+	}
+
+	return boarder.CardStatus(ctx, card)
+}
+
 // boardCommand puts the card on the project board, sets its status column, and reads the card back. A read-back that shows another status is exit code 2,
 // so a board that lost the write, or a column that the board lacks, stops the run instead of passing as done. The same call again changes nothing.
 func boardCommand(ctx context.Context, deps Deps, s streams, args []string) int {
@@ -60,32 +84,18 @@ func boardCommand(ctx context.Context, deps Deps, s streams, args []string) int 
 		return ExitRefused
 	}
 
-	repo, err := originRepo(ctx, deps)
-	if err != nil {
-		return refused(s, "board", err)
-	}
-
-	opened, err := deps.Forge(repo)
-	if err != nil {
-		return refused(s, "board", err)
-	}
-
-	boarder, ok := opened.(forge.Boarder)
-	if !ok {
-		return refused(s, "board", errNoBoard)
-	}
-
 	card := given.card()
 
-	if err := boarder.PlaceCard(ctx, card); err != nil {
-		return refused(s, "board", err)
-	}
-
-	shown, err := boarder.CardStatus(ctx, card)
+	shown, err := placeAndRead(ctx, deps, card)
 	if err != nil {
 		return refused(s, "board", err)
 	}
 
+	return reportCard(s, card, shown)
+}
+
+// reportCard says where the card is. A status other than the wanted one is exit code 2.
+func reportCard(s streams, card model.Card, shown string) int {
 	if shown != card.Status {
 		say(s.err, "remedy board: the board %d shows %q for the card after the write; wanted %q\n", card.Board, shown, card.Status)
 

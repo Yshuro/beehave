@@ -1178,7 +1178,6 @@ type fakeForge struct {
 	// notes holds each Comment call as project|item|key|text. writeErr fails it.
 	notes    []string
 	opened   []string // each Open call as project|item|title|body|issue|base|parent
-	readErr  error
 	writeErr error
 }
 

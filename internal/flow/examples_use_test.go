@@ -62,7 +62,7 @@ func contractCode() (pairs map[contractPair]bool, order map[string][]string) {
 func contractRows(t *testing.T, path string) map[contractPair]bool {
 	t.Helper()
 
-	f, err := os.Open(path)
+	f, err := os.Open(path) //nolint:gosec // the path is the contract of this repository
 	require.NoError(t, err, "open the contract")
 
 	defer func() { require.NoError(t, f.Close()) }()
@@ -250,28 +250,33 @@ func contractCall(call *syntax.CallExpr, file string, code map[contractPair]bool
 	uses.add(contractPair{fn.Name, noKeyword}, file)
 
 	for i, arg := range call.Args {
-		switch a := arg.(type) {
-		case *syntax.BinaryExpr:
-			if a.Op == syntax.EQ {
-				uses.add(contractPair{fn.Name, a.X.(*syntax.Ident).Name}, file) //nolint:forcetypeassert,errcheck // a keyword argument names an identifier
-			}
-		case *syntax.UnaryExpr:
-			if a.Op != syntax.STARSTAR {
-				continue
-			}
-
-			for _, key := range splats[contractName(a.X)] {
-				if code[contractPair{fn.Name, key}] {
-					uses.add(contractPair{fn.Name, key}, file)
-				}
-			}
-		default:
-			// A positional argument binds the keyword at its place in the signature.
-			if i < len(order[fn.Name]) {
-				uses.add(contractPair{fn.Name, order[fn.Name][i]}, file)
+		for _, keyword := range contractKeywords(arg, i, order[fn.Name], splats) {
+			if code[contractPair{fn.Name, keyword}] {
+				uses.add(contractPair{fn.Name, keyword}, file)
 			}
 		}
 	}
+}
+
+// contractKeywords is the keywords that the argument at position i binds: the keyword it names, the keyword at its position in the signature,
+// or the keys of the dict that a splat reads.
+func contractKeywords(arg syntax.Expr, i int, order []string, splats map[string][]string) []string {
+	switch a := arg.(type) {
+	case *syntax.BinaryExpr:
+		if a.Op == syntax.EQ {
+			return []string{a.X.(*syntax.Ident).Name} //nolint:forcetypeassert,errcheck // a keyword argument names an identifier
+		}
+	case *syntax.UnaryExpr:
+		if a.Op == syntax.STARSTAR {
+			return splats[contractName(a.X)]
+		}
+	default:
+		if i < len(order) {
+			return []string{order[i]}
+		}
+	}
+
+	return nil
 }
 
 func TestExamples_EveryBuiltinAndKeywordHasAUse(t *testing.T) {
