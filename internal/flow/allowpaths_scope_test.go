@@ -110,6 +110,27 @@ func TestAgentStep_AllowPathsRefusesAnEmptyListAndSaysToLeaveTheKeywordOut(t *te
 	require.ErrorContains(t, err, "leave the keyword out")
 }
 
+func TestAgentStep_AllowPathsRefusesAListThatCannotMatchAPathOfTheItemFolderAndNamesThePattern(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct{ list, want string }{
+		"an empty entry":    {`["src/**", ""]`, `allow_paths has the empty pattern ""`},
+		"a dot slash alone": {`["./"]`, `allow_paths has the empty pattern "./"`},
+		"an absolute path":  {`["/docs/**"]`, `allow_paths has the absolute pattern "/docs/**"`},
+		"a leading .. part": {`["../docs/**"]`, `allow_paths has the pattern "../docs/**", which leaves the item folder`},
+		"a bare double dot": {`[".."]`, `allow_paths has the pattern "..", which leaves the item folder`},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := newAgentRig(t).run(t, agentFlow(`allow_paths = `+c.list+`, `), "x")
+
+			require.ErrorContains(t, err, c.want)
+		})
+	}
+}
+
 func TestScope_AnIgnoredNewFileOutsideTheGlobsIsNamed(t *testing.T) {
 	t.Parallel()
 
