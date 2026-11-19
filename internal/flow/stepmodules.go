@@ -196,11 +196,18 @@ func kindOfStep(name string) (string, bool) {
 	return kind, known
 }
 
-// modulesUsed returns the modules that recorded one of the steps, in the order of the table.
+// receiveStepName is the name that DBOS gives to the recorded receive of an answer of the owner. The waits of the engine record it, and the core module owns them.
+const receiveStepName = "DBOS.recv"
+
+// modulesUsed returns the modules that recorded one of the steps, in the order of the table. A recorded receive of an answer counts as a step of the core module.
 func modulesUsed(names []string) []string {
 	used := map[string]bool{}
 
 	for _, name := range names {
+		if name == receiveStepName {
+			used[moduleCore] = true
+		}
+
 		if kind, known := kindOfStep(name); known {
 			module, _ := moduleOfKind(kind)
 			used[module] = true
