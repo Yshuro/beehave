@@ -239,7 +239,7 @@ def before_review(check, base, allow = None, name = "before-review"):
     """Judges the head of a gate result before review. Returns struct(ok, findings): ok is true when there is no finding.
     It reads the new tests, the revert run and the secret scan from check, the result of gate(base = ...). A gate with no base gives a cut log, which is a finding.
     With git it checks that the head holds the base, that the changed paths are inside allow (None, every path), and that no commit closes an issue.
-    allow is a list of globs in the dialect of the allow_paths of an agent. An empty list, an empty entry, an absolute path, a path that starts with .. and a pattern that does not parse stop the item before any step.
+    allow is a list of globs in the dialect of the allow_paths of an agent. An empty list, an empty entry, an absolute path, a path with a .. part and a pattern that does not parse stop the item before any step.
     base is a git ref. The steps are named name-ancestor, name-paths and name-keywords."""
     project = facts()
     if project.source == "" and project.forge == "":

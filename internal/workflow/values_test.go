@@ -125,13 +125,15 @@ func TestValues_AllowListRefusesTheListsThatCannotMatchAPathOfTheItemFolderAndNa
 		value   starlark.Value
 		message string
 	}{
-		"an empty entry":     {list("src/**", ""), `allow has the empty pattern ""`},
-		"a dot slash only":   {list("./"), `allow has the empty pattern "./"`},
-		"an absolute path":   {list("/docs/**"), `allow has the absolute pattern "/docs/**"`},
-		"a path that leaves": {list("../docs"), `allow has the pattern "../docs", which leaves the item folder`},
-		"a double dot":       {list(".."), `allow has the pattern "..", which leaves the item folder`},
-		"a bad bracket":      {list("docs/["), `allow has the pattern "docs/[", which does not parse`},
-		"an empty list":      {list(), "allow is an empty list, which would allow every path"},
+		"an empty entry":        {list("src/**", ""), `allow has the empty pattern ""`},
+		"a dot slash only":      {list("./"), `allow has the empty pattern "./"`},
+		"an absolute path":      {list("/docs/**"), `allow has the absolute pattern "/docs/**"`},
+		"a path that leaves":    {list("../docs"), `allow has the pattern "../docs", which leaves the item folder`},
+		"a double dot":          {list(".."), `allow has the pattern "..", which leaves the item folder`},
+		"an inner double dot":   {list("docs/../x"), `allow has the pattern "docs/../x", which leaves the item folder`},
+		"a trailing double dot": {list("docs/.."), `allow has the pattern "docs/..", which leaves the item folder`},
+		"a bad bracket":         {list("docs/["), `allow has the pattern "docs/[", which does not parse`},
+		"an empty list":         {list(), "allow is an empty list, which would allow every path"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -150,5 +152,8 @@ func TestValues_AllowListRefusesTheListsThatCannotMatchAPathOfTheItemFolderAndNa
 	assert.True(t, workflow.AllowsPath(globs, "docs/a.md"))
 	assert.True(t, workflow.AllowsPath(globs, "src/a/b.go"), "a double star crosses the slash")
 	assert.False(t, workflow.AllowsPath(globs, "docs/a/b.md"), "a single star stops at the slash")
+
+	_, _, err = workflow.AllowList("allow", list("docs/a..b/**", "CHANGELOG..md", "..hidden/**"))
+	require.NoError(t, err, "two dots inside one part are a plain name")
 	assert.False(t, workflow.AllowsPath(globs, "other.go"))
 }

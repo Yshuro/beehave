@@ -186,7 +186,7 @@ func SlotClass(v starlark.Value, host string) (string, error) {
 // AllowList reads the list of globs in the doublestar dialect that the keyword of the given name holds. A leading `./` is dropped from each glob,
 // because the paths that git lists have none. It returns the patterns as written and the clean globs. A missing argument gives none.
 // The agent scope and the path check of before_review read their lists with it, so one dialect holds in both: an empty list, an empty entry,
-// an absolute path, a path that starts with `..` and a pattern that does not parse are refused, and each message names the pattern.
+// an absolute path, a path with a `..` part and a pattern that does not parse are refused, and each message names the pattern.
 func AllowList(keyword string, v starlark.Value) (patterns, globs []string, err error) {
 	patterns, err = Words(keyword, v)
 	if err != nil {
@@ -218,7 +218,7 @@ func cleanGlobs(keyword string, patterns []string) ([]string, error) {
 			return nil, fmt.Errorf("%s has the empty pattern %q. Write a glob such as src/**", keyword, pattern)
 		case strings.HasPrefix(clean, "/"):
 			return nil, fmt.Errorf("%s has the absolute pattern %q. A path is relative to the item folder", keyword, pattern)
-		case clean == ".." || strings.HasPrefix(clean, "../"):
+		case slices.Contains(strings.Split(clean, "/"), ".."):
 			return nil, fmt.Errorf("%s has the pattern %q, which leaves the item folder", keyword, pattern)
 		case !doublestar.ValidatePattern(clean):
 			return nil, fmt.Errorf("%s has the pattern %q, which does not parse: %w", keyword, pattern, doublestar.ErrBadPattern)

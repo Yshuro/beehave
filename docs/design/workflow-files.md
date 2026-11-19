@@ -353,7 +353,7 @@ At the start of a run, the engine lists the other orchestrators that hold items 
 
 The function reads `facts()` first. If the project has no repository (no `source` and no `forge` in the project file), it stops the item before any step, with a message that names the keys to set. It is a refusal of the call, not a finding.
 
-`allow` is a list of globs in the dialect of `allow_paths` of `agent`. With no `allow`, every path is allowed. An empty list, an empty entry, an absolute path, a path that starts with `..` and a pattern that does not parse stop the item before any step, with a message that names the pattern.
+`allow` is a list of globs in the dialect of `allow_paths` of `agent`. With no `allow`, every path is allowed. An empty list, an empty entry, an absolute path, a path with a `..` part and a pattern that does not parse stop the item before any step, with a message that names the pattern.
 
 The function runs git in the item folder with three `command` steps: `<name>-ancestor`, `<name>-paths` (only when `allow` is set) and `<name>-keywords`. The step `<name>-paths` lists the changed paths, and the builtin `paths_outside` matches them. The step `<name>-keywords` lists the commit messages, and the builtin `closing_references` reads them. A git command that fails with an exit code other than the ones that it documents stops the item with an error. It is never a finding.
 
