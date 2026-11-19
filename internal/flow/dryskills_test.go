@@ -28,14 +28,15 @@ func TestDryRun_TheFakeAgentReportsTheSkillOfEachSpellingOfTheCheck(t *testing.T
 	const helper = "def need(r):\n    if \"x\" not in r.skills:\n        " + skillRefusal + "\n"
 
 	cases := map[string]struct{ defs, check string }{
-		"in":              {"", "if \"x\" in r.skills:\n    pass\nelse:\n    " + skillRefusal},
-		"not in":          {"", "if \"x\" not in r.skills:\n    " + skillRefusal},
-		"not around in":   {"", "if not (\"x\" in r.skills):\n    " + skillRefusal},
-		"single quotes":   {"", "if 'x' not in r.skills:\n    " + skillRefusal},
-		"a bound name":    {"", "called = r.skills\nif \"x\" not in called:\n    " + skillRefusal},
-		"in a helper":     {helper, "need(r)\n"},
-		"parenthesized":   {"", "if (\"x\") not in (r.skills):\n    " + skillRefusal},
-		"after a comment": {"", "# \"y\" not in r.skills\nif \"x\" not in r.skills:\n    " + skillRefusal},
+		"in":                {"", "if \"x\" in r.skills:\n    pass\nelse:\n    " + skillRefusal},
+		"not in":            {"", "if \"x\" not in r.skills:\n    " + skillRefusal},
+		"not around in":     {"", "if not (\"x\" in r.skills):\n    " + skillRefusal},
+		"not not around in": {"", "if not not (\"x\" in r.skills):\n    pass\nelse:\n    " + skillRefusal},
+		"single quotes":     {"", "if 'x' not in r.skills:\n    " + skillRefusal},
+		"a bound name":      {"", "called = r.skills\nif \"x\" not in called:\n    " + skillRefusal},
+		"in a helper":       {helper, "need(r)\n"},
+		"parenthesized":     {"", "if (\"x\") not in (r.skills):\n    " + skillRefusal},
+		"after a comment":   {"", "# \"y\" not in r.skills\nif \"x\" not in r.skills:\n    " + skillRefusal},
 	}
 
 	for name, c := range cases {
@@ -45,6 +46,29 @@ func TestDryRun_TheFakeAgentReportsTheSkillOfEachSpellingOfTheCheck(t *testing.T
 			var out bytes.Buffer
 
 			require.NoError(t, DryRun(t.Context(), dryAgentFlow(t, c.defs, c.check), "12", map[string]string{}, &out), out.String())
+			assert.NotContains(t, out.String(), "REFUSE")
+		})
+	}
+}
+
+func TestDryRun_AForbidCheckOfASkillPassesTheDryRun(t *testing.T) {
+	t.Parallel()
+
+	forbids := map[string]string{
+		"in":                   "if \"x\" in r.skills:\n    " + skillRefusal,
+		"not in with the else": "if \"x\" not in r.skills:\n    pass\nelse:\n    " + skillRefusal,
+		"not not around in":    "if not not (\"x\" in r.skills):\n    " + skillRefusal,
+		"not around not in":    "if not (\"x\" not in r.skills):\n    " + skillRefusal,
+		"a bound name with in": "called = r.skills\nif \"x\" in called:\n    " + skillRefusal,
+	}
+
+	for name, check := range forbids {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			var out bytes.Buffer
+
+			require.NoError(t, DryRun(t.Context(), dryAgentFlow(t, "", check), "12", map[string]string{}, &out), out.String())
 			assert.NotContains(t, out.String(), "REFUSE")
 		})
 	}

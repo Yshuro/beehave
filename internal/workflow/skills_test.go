@@ -32,16 +32,23 @@ func TestRequiredSkills_FindsEachSpellingOfTheCheck(t *testing.T) {
 		source string
 		want   []string
 	}{
-		"in":                     {"def main(item):\n    if \"x\" in r.skills:\n        pass\n", []string{"x"}},
-		"not in":                 {"def main(item):\n    if \"x\" not in r.skills:\n        fail('m')\n", []string{"x"}},
-		"not around in":          {"def main(item):\n    if not (\"x\" in r.skills):\n        fail('m')\n", []string{"x"}},
-		"single quotes":          {"def main(item):\n    if 'x' in r.skills:\n        pass\n", []string{"x"}},
-		"parentheses":            {"def main(item):\n    if (\"x\") in (r.skills):\n        pass\n", []string{"x"}},
-		"a bound name":           {"def main(item):\n    called = r.skills\n    if \"x\" not in called:\n        fail('m')\n", []string{"x"}},
-		"a bound name in parens": {"def main(item):\n    called = (r.skills)\n    if \"x\" not in called:\n        fail('m')\n", []string{"x"}},
-		"a helper body":          {"def need(r):\n    if \"x\" not in r.skills:\n        fail('m')\n\ndef main(item):\n    need(r)\n", []string{"x"}},
-		"two checks in order":    {"def main(item):\n    if \"b\" not in r.skills or \"a\" not in r.skills:\n        fail('m')\n", []string{"b", "a"}},
-		"another step":           {"def main(item):\n    if \"x\" not in plan.skills:\n        fail('m')\n", []string{"x"}},
+		"in with the refusal in the else":      {"def main(item):\n    if \"x\" in r.skills:\n        pass\n    else:\n        fail('m')\n", []string{"x"}},
+		"not in":                               {"def main(item):\n    if \"x\" not in r.skills:\n        fail('m')\n", []string{"x"}},
+		"not around in":                        {"def main(item):\n    if not (\"x\" in r.skills):\n        fail('m')\n", []string{"x"}},
+		"not not around in":                    {"def main(item):\n    if not not (\"x\" in r.skills):\n        pass\n    else:\n        fail('m')\n", []string{"x"}},
+		"not around not in":                    {"def main(item):\n    if not (\"x\" not in r.skills):\n        pass\n    else:\n        fail('m')\n", []string{"x"}},
+		"single quotes":                        {"def main(item):\n    if 'x' not in r.skills:\n        fail('m')\n", []string{"x"}},
+		"parentheses":                          {"def main(item):\n    if ((\"x\") not in (r.skills)):\n        fail('m')\n", []string{"x"}},
+		"a bound name":                         {"def main(item):\n    called = r.skills\n    if \"x\" not in called:\n        fail('m')\n", []string{"x"}},
+		"a bound name in parens":               {"def main(item):\n    called = (r.skills)\n    if \"x\" not in called:\n        fail('m')\n", []string{"x"}},
+		"a name bound twice from skills":       {"def main(item):\n    called = r.skills\n    called = plan.skills\n    if \"x\" not in called:\n        fail('m')\n", []string{"x"}},
+		"a helper body":                        {"def need(r):\n    if \"x\" not in r.skills:\n        fail('m')\n\ndef main(item):\n    need(r)\n", []string{"x"}},
+		"two checks in order":                  {"def main(item):\n    if \"b\" not in r.skills:\n        fail('m')\n    if \"a\" not in r.skills:\n        fail('m')\n", []string{"b", "a"}},
+		"another step":                         {"def main(item):\n    if \"x\" not in plan.skills:\n        fail('m')\n", []string{"x"}},
+		"a fail with other statements":         {"def main(item):\n    if \"x\" not in r.skills:\n        t = 1\n        fail('m')\n", []string{"x"}},
+		"a check under if False":               {"def main(item):\n    if False:\n        if \"x\" not in r.skills:\n            fail('m')\n", []string{"x"}},
+		"a nested function with its own check": {"def main(item):\n    def inner():\n        if \"x\" not in r.skills:\n            fail('m')\n    inner()\n", []string{"x"}},
+		"a name bound in the same function":    {"def a(r):\n    c = r.skills\n    if \"x\" not in c:\n        fail('m')\n", []string{"x"}},
 	}
 
 	for name, c := range cases {
@@ -53,20 +60,38 @@ func TestRequiredSkills_FindsEachSpellingOfTheCheck(t *testing.T) {
 	}
 }
 
-func TestRequiredSkills_FindsNothingThatIsNotATestOfTheSkillsOfAStep(t *testing.T) {
+func TestRequiredSkills_FindsNothingThatIsNotARequirementOnTheSkillsOfAStep(t *testing.T) {
 	t.Parallel()
 
 	cases := map[string]string{
-		"a comment":                     "# \"x\" not in r.skills\ndef main(item):\n    pass\n",
-		"a string":                      "def main(item):\n    t = '\"x\" not in r.skills'\n",
-		"a name from another field":     "def main(item):\n    called = r.output\n    if \"x\" in called:\n        pass\n",
-		"another field":                 "def main(item):\n    if \"x\" in r.outputs:\n        pass\n",
-		"a name as the helper argument": "def need(r, name):\n    if name not in r.skills:\n        fail('m')\n\ndef main(item):\n    need(r, \"x\")\n",
-		"a name that is not a list":     "def main(item):\n    if \"x\" in skills:\n        pass\n",
-		"the skills on the left":        "def main(item):\n    if r.skills in \"x\":\n        pass\n",
-		"a call on the list":            "def main(item):\n    if r.skills.index(\"x\"):\n        pass\n",
-		"an assignment of the check":    "def main(item):\n    ok = \"x\" == r.skills\n",
-		"a file that does not parse":    "def main(item:\n    if \"x\" in r.skills:\n",
+		"a comment":                           "# \"x\" not in r.skills\ndef main(item):\n    pass\n",
+		"a string":                            "def main(item):\n    t = '\"x\" not in r.skills'\n",
+		"a forbid check":                      "def main(item):\n    if \"x\" in r.skills:\n        fail('m')\n",
+		"a forbid check with not in":          "def main(item):\n    if \"x\" not in r.skills:\n        pass\n    else:\n        fail('m')\n",
+		"a forbid check under not not":        "def main(item):\n    if not not (\"x\" in r.skills):\n        fail('m')\n",
+		"a forbid check under not around not": "def main(item):\n    if not (\"x\" not in r.skills):\n        fail('m')\n",
+		"a test with no fail":                 "def main(item):\n    if \"x\" not in r.skills:\n        pass\n",
+		"a fail inside a deeper test":         "def main(item):\n    if \"x\" not in r.skills:\n        if item:\n            fail('m')\n",
+		"a fail in the other branch only":     "def main(item):\n    if \"x\" not in r.skills:\n        pass\n    elif item:\n        fail('m')\n",
+		"a bool bound to the test":            "def main(item):\n    ok = \"x\" in r.skills\n    if not ok:\n        fail('m')\n",
+		"a count":                             "def main(item):\n    if r.skills.count(\"x\") == 0:\n        fail('m')\n",
+		"a comprehension":                     "def main(item):\n    if not [s for s in r.skills if s == \"x\"]:\n        fail('m')\n",
+		"an index":                            "def main(item):\n    if \"x\" not in r[\"skills\"]:\n        fail('m')\n",
+		"a constant name":                     "def main(item):\n    n = \"x\"\n    if n not in r.skills:\n        fail('m')\n",
+		"a name as the helper argument":       "def need(r, name):\n    if name not in r.skills:\n        fail('m')\n\ndef main(item):\n    need(r, \"x\")\n",
+		"two tests joined by or":              "def main(item):\n    if \"x\" not in r.skills or \"y\" not in r.skills:\n        fail('m')\n",
+		"a name from another field":           "def main(item):\n    called = r.output\n    if \"x\" not in called:\n        fail('m')\n",
+		"another field":                       "def main(item):\n    if \"x\" not in r.outputs:\n        fail('m')\n",
+		"a name that is not a list":           "def main(item):\n    if \"x\" not in skills:\n        fail('m')\n",
+		"the skills on the left":              "def main(item):\n    if r.skills not in \"x\":\n        fail('m')\n",
+		"a call on the list":                  "def main(item):\n    if r.skills.index(\"x\"):\n        fail('m')\n",
+		"a name that is bound again":          "def main(item):\n    called = r.skills\n    called = []\n    if \"x\" not in called:\n        fail('m')\n",
+		"a name that is bound by a loop":      "def main(item):\n    called = r.skills\n    for called in item:\n        pass\n    if \"x\" not in called:\n        fail('m')\n",
+		"a name bound in another function":    "def a(r):\n    called = r.skills\n    return called\n\ndef b(called):\n    if \"x\" not in called:\n        fail('m')\n",
+		"a name that a nested function takes from the outer one": "def main(item):\n    called = r.skills\n    def inner():\n        if \"x\" not in called:\n            fail('m')\n    inner()\n",
+		"a name that a nested function also binds":               "def main(item):\n    called = r.skills\n    def called():\n        pass\n    if \"x\" not in called:\n        fail('m')\n",
+		"a parameter that has the name":                          "def main(item, called):\n    called = r.skills\n    if \"x\" not in called:\n        fail('m')\n",
+		"a file that does not parse":                             "def main(item:\n    if \"x\" not in r.skills:\n",
 	}
 
 	for name, source := range cases {
