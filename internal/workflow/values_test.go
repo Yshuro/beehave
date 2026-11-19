@@ -125,15 +125,22 @@ func TestValues_AllowListRefusesTheListsThatCannotMatchAPathOfTheItemFolderAndNa
 		value   starlark.Value
 		message string
 	}{
-		"an empty entry":        {list("src/**", ""), `allow has the empty pattern ""`},
-		"a dot slash only":      {list("./"), `allow has the empty pattern "./"`},
-		"an absolute path":      {list("/docs/**"), `allow has the absolute pattern "/docs/**"`},
-		"a path that leaves":    {list("../docs"), `allow has the pattern "../docs", which leaves the item folder`},
-		"a double dot":          {list(".."), `allow has the pattern "..", which leaves the item folder`},
-		"an inner double dot":   {list("docs/../x"), `allow has the pattern "docs/../x", which leaves the item folder`},
-		"a trailing double dot": {list("docs/.."), `allow has the pattern "docs/..", which leaves the item folder`},
-		"a bad bracket":         {list("docs/["), `allow has the pattern "docs/[", which does not parse`},
-		"an empty list":         {list(), "allow is an empty list, which would allow every path"},
+		"an empty entry":         {list("src/**", ""), `allow has the empty pattern ""`},
+		"a dot slash only":       {list("./"), `allow has the empty pattern "./"`},
+		"an absolute path":       {list("/docs/**"), `allow has the absolute pattern "/docs/**"`},
+		"a path that leaves":     {list("../docs"), `allow has the pattern "../docs", which leaves the item folder`},
+		"a double dot":           {list(".."), `allow has the pattern "..", which leaves the item folder`},
+		"an inner double dot":    {list("docs/../x"), `allow has the pattern "docs/../x", which leaves the item folder`},
+		"a trailing double dot":  {list("docs/.."), `allow has the pattern "docs/..", which leaves the item folder`},
+		"a brace choice of ..":   {list("{docs,..}/x"), `allow has the pattern "{docs,..}/x", which leaves the item folder`},
+		"a nested brace of ..":   {list("{a,{b,..}}/x"), `allow has the pattern "{a,{b,..}}/x", which leaves the item folder`},
+		"a brace that spells ..": {list("{docs,.}./x"), `allow has the pattern "{docs,.}./x", which leaves the item folder`},
+		"a brace after a class":  {list("[{]/{a,..}/x"), `allow has the pattern "[{]/{a,..}/x", which leaves the item folder`},
+		"a class with an escape": {list(`[\]]/{a,..}/x`), `allow has the pattern "[\\]]/{a,..}/x", which leaves the item folder`},
+		"an escaped brace":       {list(`\{a,..}/x`), `allow has the pattern "\\{a,..}/x", which does not parse`},
+		"a brace that is open":   {list("{docs,../x"), `allow has the pattern "{docs,../x", which does not parse`},
+		"a bad bracket":          {list("docs/["), `allow has the pattern "docs/[", which does not parse`},
+		"an empty list":          {list(), "allow is an empty list, which would allow every path"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -155,5 +162,8 @@ func TestValues_AllowListRefusesTheListsThatCannotMatchAPathOfTheItemFolderAndNa
 
 	_, _, err = workflow.AllowList("allow", list("docs/a..b/**", "CHANGELOG..md", "..hidden/**"))
 	require.NoError(t, err, "two dots inside one part are a plain name")
+
+	_, _, err = workflow.AllowList("allow", list("{a..b,c}/**", `{a\,..,b}/x`, "{a,{b,c}}/x"))
+	require.NoError(t, err, "a brace choice with no .. part, and a comma that a backslash escapes, are plain choices")
 	assert.False(t, workflow.AllowsPath(globs, "other.go"))
 }

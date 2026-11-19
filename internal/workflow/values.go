@@ -186,7 +186,7 @@ func SlotClass(v starlark.Value, host string) (string, error) {
 // AllowList reads the list of globs in the doublestar dialect that the keyword of the given name holds. A leading `./` is dropped from each glob,
 // because the paths that git lists have none. It returns the patterns as written and the clean globs. A missing argument gives none.
 // The agent scope and the path check of before_review read their lists with it, so one dialect holds in both: an empty list, an empty entry,
-// an absolute path, a path with a `..` part and a pattern that does not parse are refused, and each message names the pattern.
+// an absolute path, a path with a `..` part in any brace choice and a pattern that does not parse are refused, and each message names the pattern.
 func AllowList(keyword string, v starlark.Value) (patterns, globs []string, err error) {
 	patterns, err = Words(keyword, v)
 	if err != nil {
@@ -218,7 +218,7 @@ func cleanGlobs(keyword string, patterns []string) ([]string, error) {
 			return nil, fmt.Errorf("%s has the empty pattern %q. Write a glob such as src/**", keyword, pattern)
 		case strings.HasPrefix(clean, "/"):
 			return nil, fmt.Errorf("%s has the absolute pattern %q. A path is relative to the item folder", keyword, pattern)
-		case slices.Contains(strings.Split(clean, "/"), ".."):
+		case slices.ContainsFunc(braceChoices(clean), leavesFolder):
 			return nil, fmt.Errorf("%s has the pattern %q, which leaves the item folder", keyword, pattern)
 		case !doublestar.ValidatePattern(clean):
 			return nil, fmt.Errorf("%s has the pattern %q, which does not parse: %w", keyword, pattern, doublestar.ErrBadPattern)
@@ -228,6 +228,73 @@ func cleanGlobs(keyword string, patterns []string) ([]string, error) {
 	}
 
 	return globs, nil
+}
+
+// leavesFolder reports whether one slash-separated part of the pattern is `..`.
+func leavesFolder(pattern string) bool { return slices.Contains(strings.Split(pattern, "/"), "..") }
+
+// braceChoices returns each pattern that the brace choices of the pattern spell, read as the doublestar matcher reads them.
+// A pattern with no brace, or with a brace that does not close, is its own one choice.
+func braceChoices(pattern string) []string {
+	open := 0
+	for open < len(pattern) && pattern[open] != '{' {
+		open = tokenEnd(pattern, open) + 1
+	}
+
+	choices, closing := splitChoices(pattern, open+1)
+	if closing < 0 {
+		return []string{pattern}
+	}
+
+	var all []string
+	for _, choice := range choices {
+		all = append(all, braceChoices(pattern[:open]+choice+pattern[closing+1:])...)
+	}
+
+	return all
+}
+
+// splitChoices splits the brace choices that start at start at their top-level commas, and returns the index of the closing brace, or -1.
+func splitChoices(s string, start int) (choices []string, closing int) {
+	depth, from := 0, start
+	for i := start; i < len(s); i = tokenEnd(s, i) + 1 {
+		switch s[i] {
+		case '{':
+			depth++
+		case ',':
+			if depth == 0 {
+				choices, from = append(choices, s[from:i]), i+1
+			}
+		case '}':
+			if depth == 0 {
+				return append(choices, s[from:i]), i
+			}
+			depth--
+		}
+	}
+
+	return nil, -1
+}
+
+// tokenEnd returns the index of the last byte of the token at i: the byte that a backslash escapes, the end of a bracket class, or i itself.
+func tokenEnd(s string, i int) int {
+	switch s[i] {
+	case '\\':
+		return min(i+1, len(s)-1)
+	case '[':
+		for j := i + 1; j < len(s); j++ {
+			switch s[j] {
+			case '\\':
+				j++
+			case ']':
+				return j
+			}
+		}
+
+		return len(s) - 1
+	}
+
+	return i
 }
 
 // AllowsPath reports whether one of the clean globs of AllowList matches the path. It judges nothing else: the agent scope and before_review both ask it.

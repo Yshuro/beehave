@@ -537,6 +537,7 @@ func TestReviewFixBeforeReview_ABadAllowListStopsTheItemBeforeAnyStepAndNamesThe
 		"a bare double dot":        {`[".."]`, `has the pattern "..", which leaves the item folder`},
 		"an inner double dot":      {`["docs/../x"]`, `has the pattern "docs/../x", which leaves the item folder`},
 		"a trailing double dot":    {`["docs/.."]`, `has the pattern "docs/..", which leaves the item folder`},
+		"a brace choice of ..":     {`["{docs,..}/x"]`, `has the pattern "{docs,..}/x", which leaves the item folder`},
 		"a bracket that opens":     {`["docs/["]`, `has the pattern "docs/[", which does not parse`},
 		"a list with no entry":     {`[]`, "is an empty list, which would allow every path"},
 		"an entry that is no text": {`[3]`, "must hold strings only"},

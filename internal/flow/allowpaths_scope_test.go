@@ -114,13 +114,14 @@ func TestAgentStep_AllowPathsRefusesAListThatCannotMatchAPathOfTheItemFolderAndN
 	t.Parallel()
 
 	cases := map[string]struct{ list, want string }{
-		"an empty entry":     {`["src/**", ""]`, `allow_paths has the empty pattern ""`},
-		"a dot slash alone":  {`["./"]`, `allow_paths has the empty pattern "./"`},
-		"an absolute path":   {`["/docs/**"]`, `allow_paths has the absolute pattern "/docs/**"`},
-		"a leading .. part":  {`["../docs/**"]`, `allow_paths has the pattern "../docs/**", which leaves the item folder`},
-		"a bare double dot":  {`[".."]`, `allow_paths has the pattern "..", which leaves the item folder`},
-		"an inner .. part":   {`["docs/../x/**"]`, `allow_paths has the pattern "docs/../x/**", which leaves the item folder`},
-		"a trailing .. part": {`["docs/.."]`, `allow_paths has the pattern "docs/..", which leaves the item folder`},
+		"an empty entry":       {`["src/**", ""]`, `allow_paths has the empty pattern ""`},
+		"a dot slash alone":    {`["./"]`, `allow_paths has the empty pattern "./"`},
+		"an absolute path":     {`["/docs/**"]`, `allow_paths has the absolute pattern "/docs/**"`},
+		"a leading .. part":    {`["../docs/**"]`, `allow_paths has the pattern "../docs/**", which leaves the item folder`},
+		"a bare double dot":    {`[".."]`, `allow_paths has the pattern "..", which leaves the item folder`},
+		"an inner .. part":     {`["docs/../x/**"]`, `allow_paths has the pattern "docs/../x/**", which leaves the item folder`},
+		"a trailing .. part":   {`["docs/.."]`, `allow_paths has the pattern "docs/..", which leaves the item folder`},
+		"a brace choice of ..": {`["{docs,..}/x"]`, `allow_paths has the pattern "{docs,..}/x", which leaves the item folder`},
 	}
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
