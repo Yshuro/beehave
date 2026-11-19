@@ -58,7 +58,8 @@ const agentVersion = 9
 // that has a proof in the item run (batch:<call>.gate#<n>/host-loss, and @2 for the rerun), and adds host_loss and host_losses to the result of merge.
 // Version 5 merges with one call: `merge` is the old `batch_merge`, and a merge of one pull request records the batch steps. The step kind merge is gone.
 // Version 6 records the scope check of each member (batch:<call>.scope#<item>) before its intent.
-const landVersion = 6
+// Version 7 adds the moved field to the result of merge, and the hand-off steps batch:<call>.ready#<item> and batch:<call>.watch#<item>@<round>.
+const landVersion = 7
 
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step.
 const forgeVersion = 2
@@ -120,7 +121,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land6.gate6.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land7.gate6.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

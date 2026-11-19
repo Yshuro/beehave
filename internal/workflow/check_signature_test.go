@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -269,7 +270,7 @@ func TestCheck_MergeTakesTheKeywordsOfABatchAndNoKeywordOfTheOldSingleMerge(t *t
 			got := checkText(t, "def main(item):\n    merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", "+keyword+")\n")
 
 			require.NotEmpty(t, got)
-			assert.Contains(t, got[0], "merge takes no argument "+name+". Use one of: prs, base, repo, hold, own, forbid_text, gate_run, integration, name.")
+			assert.Contains(t, got[0], "merge takes no argument "+name+". Use one of: prs, base, repo, hold, own, forbid_text, gate_run, integration, hand_off, name.")
 		})
 	}
 }
@@ -303,4 +304,49 @@ func TestCheck_TheResultOfMergeHasNoStateField(t *testing.T) {
 
 	require.NotEmpty(t, got)
 	assert.Contains(t, got[0], "state is not a field of the result of merge")
+}
+
+func TestCheck_MergeTakesHandOffAsABool(t *testing.T) {
+	t.Parallel()
+
+	const call = "def main(item):\n    merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", hand_off = %s)\n"
+
+	assert.Empty(t, checkText(t, fmt.Sprintf(call, "True")))
+
+	got := checkText(t, fmt.Sprintf(call, `"yes"`))
+
+	require.NotEmpty(t, got)
+	assert.Contains(t, got[0], "hand_off")
+}
+
+func TestCheck_MergeWithHandOffRefusesEachKeywordOfALanding(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"hold":        `hold = "hold"`,
+		"own":         `own = {"logins": ["me"]}`,
+		"forbid_text": `forbid_text = ["x"]`,
+		"gate_run":    `gate_run = ["check"]`,
+		"integration": `integration = 5`,
+	}
+
+	for name, extra := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			got := checkText(t, "def main(item):\n    merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", hand_off = True, "+extra+")\n")
+
+			require.Len(t, got, 1)
+			assert.Contains(t, got[0], "merge with `hand_off` lands nothing, so it takes no `"+name+"`")
+		})
+	}
+}
+
+func TestCheck_MergeWithHandOffFalseOrComputedTakesTheKeywordsOfALanding(t *testing.T) {
+	t.Parallel()
+
+	const call = "def main(item):\n    flag = item == \"x\"\n    merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", hand_off = %s, gate_run = [\"check\"])\n"
+
+	assert.Empty(t, checkText(t, fmt.Sprintf(call, "False")), "a landing that is not handed off takes gate_run")
+	assert.Empty(t, checkText(t, fmt.Sprintf(call, "flag")), "a flag that only the run knows is left to the run")
 }
