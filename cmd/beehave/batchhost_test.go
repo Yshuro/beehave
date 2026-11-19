@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +20,7 @@ import (
 	"github.com/tobocop2/beehave/internal/forge"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/proc"
+	"github.com/tobocop2/beehave/internal/review"
 )
 
 // hostTrees gives the one folder that the host tests use, or an error.
@@ -44,6 +47,27 @@ type hostForge struct {
 	listed   []model.PullRequest
 	listErr  error
 	viewHead string
+	// draft is the isDraft field of the view, nil when the forge sends none. closed is what the list of closed pull requests holds.
+	draft  *bool
+	closed []model.PullRequest
+	// drafted records each SetDraft call as the number and the flag. setDraftErr is the error of that call.
+	drafted     *[]string
+	setDraftErr error
+	// mergeable is the mergeable field of the view. changes and threads are the counts of change requests and unresolved threads, and changesErr and threadsErr fail those reads.
+	mergeable              string
+	changes, threads       int
+	changesErr, threadsErr error
+	// trees is the tree of each commit, and treeErr is the error of every tree read.
+	trees   map[string]string
+	treeErr error
+}
+
+func (f hostForge) SetDraft(_ context.Context, number int, draft bool) error {
+	if f.drafted != nil {
+		*f.drafted = append(*f.drafted, fmt.Sprintf("%d:%t", number, draft))
+	}
+
+	return f.setDraftErr
 }
 
 func (f hostForge) ClosingRefs(context.Context, int) (model.ClosingRefs, error) {
@@ -54,7 +78,11 @@ func (f hostForge) BranchRef(context.Context, string) (string, bool, error) {
 	return f.tip, f.found, f.tipErr
 }
 
-func (f hostForge) PRList(context.Context, int, ...string) ([]model.PullRequest, error) {
+func (f hostForge) PRList(_ context.Context, _ int, args ...string) ([]model.PullRequest, error) {
+	if slices.Contains(args, "closed") {
+		return f.closed, f.listErr
+	}
+
 	return f.listed, f.listErr
 }
 
@@ -64,7 +92,11 @@ func (f hostForge) PRView(_ context.Context, number int, _ ...string) (model.Pul
 	}
 
 	head, base := f.viewHead, "main"
-	view := model.PullRequest{Number: number, HeadRefOid: &head, BaseRefName: &base}
+	view := model.PullRequest{Number: number, HeadRefOid: &head, BaseRefName: &base, IsDraft: f.draft}
+
+	if f.mergeable != "" {
+		view.Mergeable = &f.mergeable
+	}
 
 	if f.state != "" { // a state that the forge did not send is nil, not an empty text
 		view.State = &f.state
@@ -310,3 +342,155 @@ func TestBatchHost_IntentFailsForAReadThatFailsAndForAPullRequestThatIsNotFound(
 	_, err = hostOver("", hostForge{state: "OPEN", listed: listed}, nil).Intent(t.Context(), "p", "item", "o/r", "main", "t", time.Time{})
 	require.ErrorContains(t, err, "cannot make an intent", "a read with no head proves nothing")
 }
+
+func TestBatchHost_PullReadsTheDraftFlagAndTheHeadOfTheOpenPullRequestThroughTheStandingReview(t *testing.T) {
+	t.Parallel()
+
+	draft := true
+	f := hostForge{state: " open ", draft: &draft, viewHead: gated, listed: []model.PullRequest{{Number: 9}}}
+
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, 9, got.Number)
+	assert.True(t, got.Draft)
+	assert.Equal(t, gated, got.Head)
+	assert.False(t, got.Merged || got.Closed)
+	assert.Empty(t, got.Unread)
+}
+
+func TestBatchHost_PullShowsAClosedPullRequestAsClosedAndRefusesAnItemWithNoPullRequest(t *testing.T) {
+	t.Parallel()
+
+	got, err := hostOver("", hostForge{closed: []model.PullRequest{{Number: 4}}}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+
+	require.NoError(t, err)
+	assert.Equal(t, review.Standing{Number: 4, Closed: true}, got)
+
+	_, err = hostOver("", hostForge{}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+	require.ErrorIs(t, err, forge.ErrNoPull, "no open, merged or closed pull request is an error, not a closed one")
+
+	_, err = hostOver("", hostForge{listErr: errFake}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+	require.ErrorIs(t, err, errFake)
+}
+
+func TestBatchHost_PullFailsForAProjectWithNoForgeAndPutsAViewThatFailsIntoUnread(t *testing.T) {
+	t.Parallel()
+
+	listed := []model.PullRequest{{Number: 9}}
+
+	got, err := hostOver("", hostForge{viewErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"pull request"}, got.Unread, "a read that fails is a reason in the standing, never an empty fact")
+
+	_, err = hostOver("", hostForge{}, nil).Pull(t.Context(), "p", "item", "other/repo", "")
+	require.ErrorContains(t, err, "other/repo")
+}
+
+func TestBatchHost_PullOfAProjectThatTheConfigLacksFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := hostOver("", hostForge{}, nil).Pull(t.Context(), "unknown", "item", "o/r", "")
+
+	require.Error(t, err)
+}
+
+func TestBatchHost_SetDraftMarksThePullRequestOfTheItem(t *testing.T) {
+	t.Parallel()
+
+	calls := []string{}
+	f := hostForge{listed: []model.PullRequest{{Number: 9}}, drafted: &calls}
+
+	require.NoError(t, hostOver("", f, nil).SetDraft(t.Context(), "p", "item", "o/r", true))
+	require.NoError(t, hostOver("", f, nil).SetDraft(t.Context(), "p", "item", "o/r", false))
+	assert.Equal(t, []string{"9:true", "9:false"}, calls)
+
+	f.setDraftErr = errFake
+	require.ErrorIs(t, hostOver("", f, nil).SetDraft(t.Context(), "p", "item", "o/r", true), errFake)
+
+	require.ErrorIs(t, hostOver("", hostForge{}, nil).SetDraft(t.Context(), "p", "item", "o/r", true), forge.ErrNoPull)
+}
+
+// OpenChangeRequests gives f.changes change requests, or the error of the read.
+func (f hostForge) OpenChangeRequests(context.Context, int) ([]model.ChangeRequest, error) {
+	return make([]model.ChangeRequest, f.changes), f.changesErr
+}
+
+// UnresolvedThreads gives f.threads threads, or the error of the read.
+func (f hostForge) UnresolvedThreads(context.Context, int) ([]model.ReviewThread, error) {
+	return make([]model.ReviewThread, f.threads), f.threadsErr
+}
+
+// CommitTree gives the tree of a commit from f.trees, or the error of the read.
+func (f hostForge) CommitTree(_ context.Context, commit string) (string, error) {
+	return f.trees[commit], f.treeErr
+}
+
+func TestBatchHost_PullReadsTheConflictTheChangeRequestsAndTheThreadsOfAnOpenPullRequest(t *testing.T) {
+	t.Parallel()
+
+	draft := false
+	f := hostForge{state: "OPEN", draft: &draft, viewHead: gated, mergeable: "CONFLICTING", changes: 2, threads: 3, listed: []model.PullRequest{{Number: 9}}}
+
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r", "")
+
+	require.NoError(t, err)
+	assert.True(t, got.Conflicting)
+	assert.Len(t, got.ChangeRequests, 2)
+	assert.Equal(t, 3, got.UnresolvedThreads)
+}
+
+func TestBatchHost_PullShowsAMergedPullRequestAsMerged(t *testing.T) {
+	t.Parallel()
+
+	draft := false
+	f := hostForge{state: "MERGED", draft: &draft, viewHead: gated, listed: []model.PullRequest{{Number: 9}}}
+
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r", "")
+
+	require.NoError(t, err)
+	assert.True(t, got.Merged)
+	assert.Equal(t, gated, got.Head)
+}
+
+func TestBatchHost_PullPutsTheChangeRequestsAndTheThreadsThatCannotBeReadIntoUnread(t *testing.T) {
+	t.Parallel()
+
+	draft := false
+	listed := []model.PullRequest{{Number: 9}}
+
+	got, err := hostOver("", hostForge{state: "OPEN", draft: &draft, changesErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"change requests"}, got.Unread)
+
+	got, err = hostOver("", hostForge{state: "OPEN", draft: &draft, threadsErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"review threads"}, got.Unread)
+}
+
+func TestBatchHost_PullComparesTheTreeOfAHeadThatIsNotTheReviewedCommit(t *testing.T) {
+	t.Parallel()
+
+	draft := false
+	listed := []model.PullRequest{{Number: 9}}
+	trees := map[string]string{"a": "t1", gated: "t1", "c": "t2"}
+
+	same, err := hostOver("", hostForge{state: "OPEN", draft: &draft, viewHead: gated, listed: listed, trees: trees}, nil).Pull(t.Context(), "p", "item", "o/r", "a")
+	require.NoError(t, err)
+	assert.Equal(t, "a", same.Rewritten, "the head holds the tree of the reviewed commit")
+
+	other, err := hostOver("", hostForge{state: "OPEN", draft: &draft, viewHead: gated, listed: listed, trees: trees}, nil).Pull(t.Context(), "p", "item", "o/r", "c")
+	require.NoError(t, err)
+	assert.Empty(t, other.Rewritten)
+
+	itself, err := hostOver("", hostForge{state: "OPEN", draft: &draft, viewHead: gated, listed: listed, treeErr: errFake}, nil).Pull(t.Context(), "p", "item", "o/r", gated)
+	require.NoError(t, err)
+	assert.Empty(t, itself.Unread, "a head that is the reviewed commit needs no tree read")
+
+	failed, err := hostOver("", hostForge{state: "OPEN", draft: &draft, viewHead: gated, listed: listed, treeErr: errFake}, nil).Pull(t.Context(), "p", "item", "o/r", "a")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tree of the reviewed commit", "tree of the head"}, failed.Unread)
+}
+
+// TreeBlobs is the other half of the tree reads of a forge. A tree comparison reads no files, so it gives none.
+func (f hostForge) TreeBlobs(context.Context, string) (map[string]string, error) { return nil, nil } //nolint:nilnil // a fake that serves no file

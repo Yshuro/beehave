@@ -48,6 +48,19 @@ func (g *headGate) Run(ctx context.Context, _, _, _ string, _ GateJob) (GateResu
 	return GateResult{Passed: true, Head: head, Tree: "tree-" + head, Steps: commandStep(true)}, nil
 }
 
+// fullReviews counts the full reviews of the candidates in the step names of a run: each agent step records a render sub-step under its own name.
+func fullReviews(names []string) int {
+	count := 0
+
+	for _, name := range names {
+		if strings.HasPrefix(name, "agent:candidate-review#") && strings.HasSuffix(name, "/render") {
+			count++
+		}
+	}
+
+	return count
+}
+
 // refusalFlow runs the review loop of the library on the base main with two rounds, and one prompt file for each kind of agent step.
 // The text %s is the extra arguments of review_fix.
 const refusalFlow = "load(\"@beehave//review_fix.star\", \"review_fix\")\n\n" +
@@ -211,6 +224,7 @@ func TestReviewFixBeforeReview_ARefusalSendsTheLoopToAFixRoundAndTheFixedHeadGet
 	assert.Equal(t, []string{refused, fixed, fixed}, run.reviews, "the scoped reviews read the refused head and the fixed head, and the one full review reads the fixed head: no full review reads the refused head")
 	assert.EqualValues(t, 2, run.gate.runs.Load(), "the gate runs once for the refused head and once for the fixed head")
 	assert.Equal(t, 2, stepsNamed(run.names, "command:candidate-before-review-ancestor"), "the checks run once for each candidate")
+	assert.Equal(t, 1, fullReviews(run.names), "the one full review is counted by the helper that the keyword test uses")
 }
 
 // TestReviewFixBeforeReview_TheLoopPassesItsAllowToTheChecksBeforeReview drives the loop with allow = ["src/**"] over a head that changes docs/stray.md.
@@ -231,4 +245,43 @@ func TestReviewFixBeforeReview_TheLoopPassesItsAllowToTheChecksBeforeReview(t *t
 	assert.Contains(t, run.fixes[0], "the head changed 1 path(s) outside allow [src/**]: docs/stray.md")
 	assert.True(t, run.value.Exhausted, "no fix agent can remove a path outside allow, so the rounds end")
 	assert.False(t, run.value.Approved, "no full review approves a head that holds the path")
+}
+
+// TestReviewFixBeforeReview_AClosingKeywordStopsTheLoopBeforeAnyFixAgentWithTheCommitAndTheRepair drives the loop over a head whose history holds "Fixes #12".
+// The fix agent adds a commit each round, but a commit never removes the keyword from the history, so the loop stops at the first refusal and runs no fix agent and no review.
+func TestReviewFixBeforeReview_AClosingKeywordStopsTheLoopBeforeAnyFixAgentWithTheCommitAndTheRepair(t *testing.T) {
+	t.Parallel()
+
+	rig := workRig(t, "src/a.go")
+	gitIn(t, rig.dir, "commit", "-q", "--allow-empty", "-m", "add a\n\nFixes #12")
+
+	keyword := gitIn(t, rig.dir, "rev-parse", "HEAD")
+
+	run, err := tryLoop(t, rig, "", func() { gitIn(t, rig.dir, "commit", "-q", "--allow-empty", "-m", "try to fix it") })
+
+	require.ErrorContains(t, err, "REFUSE: the checks before review refused the head of")
+	require.ErrorContains(t, err, "no new commit repairs the closing keyword")
+	require.ErrorContains(t, err, "the commit "+keyword[:7]+" (add a) closes #12 with a closing keyword")
+	require.ErrorContains(t, err, "Rebuild the branch without the keyword")
+	assert.Equal(t, 1, strings.Count(err.Error(), "Rebuild the branch"), "the stop text says the repair once")
+	require.ErrorContains(t, err, "A plain beehave resume replays this stop")
+	assert.Empty(t, run.fixes, "no fix round is spent on a refusal that a new commit cannot repair")
+	assert.Len(t, run.reviews, 1, "the one scoped review of the implementer runs before the candidate")
+	assert.Zero(t, fullReviews(run.names), "the full review does not read a head with the keyword")
+	assert.EqualValues(t, 1, run.gate.runs.Load(), "the gate runs once, for the first candidate")
+}
+
+// TestReviewFixBeforeReview_AMixedRefusalStopsTheLoopAndTheTextListsEveryFinding drives the loop over a head with a closing keyword and a path outside allow.
+// The keyword stops the loop at once, and the stop text lists the path finding too, so one rebuild of the branch repairs both.
+func TestReviewFixBeforeReview_AMixedRefusalStopsTheLoopAndTheTextListsEveryFinding(t *testing.T) {
+	t.Parallel()
+
+	rig := workRig(t, "src/a.go", "docs/stray.md")
+	gitIn(t, rig.dir, "commit", "-q", "--allow-empty", "-m", "add a\n\nFixes #12")
+
+	run, err := tryLoop(t, rig, `, allow = ["src/**"]`, func() {})
+
+	require.ErrorContains(t, err, "closes #12 with a closing keyword")
+	require.ErrorContains(t, err, "the head changed 1 path(s) outside allow [src/**]: docs/stray.md")
+	assert.Empty(t, run.fixes, "no fix round is spent")
 }

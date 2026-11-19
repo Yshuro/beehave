@@ -53,7 +53,7 @@ var goldenShapes = map[string][]string{
 		"item_create: created,id",
 		"item_read: comments,fields,found,id,parent",
 		"item_status: id,status",
-		"merge: deferred,findings,gates,host_loss,host_losses,merged,note,rejected,tip,tree,unproven",
+		"merge: deferred,findings,gates,host_loss,host_losses,merged,moved,note,rejected,tip,tree,unproven",
 		"pr_comment: number",
 		"pr_open: created,number,stack",
 		"pr_state: state",

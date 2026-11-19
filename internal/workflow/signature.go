@@ -377,7 +377,7 @@ func swarmSignatures() map[string][]Param {
 		mergeName: {
 			{Name: "prs", Kind: KindList, Required: true, Rule: prsRule, Members: true},
 			filled("base"), filled("repo"), opt("hold", KindText), ruled("own", KindDict, ownRule),
-			forbidText(), words("gate_run"), opt("integration", KindInt),
+			forbidText(), words("gate_run"), opt("integration", KindInt), opt("hand_off", KindBool),
 			{Name: nameKeyword, Kind: KindText, Required: true, Why: "The name makes the step names of the call unique, so use one for each call of the run."},
 		},
 		gatherName: {req("runs", KindAny), one(failKeyword, FailModes()), one(untilKeyword, UntilModes()), label},
@@ -559,6 +559,24 @@ func (g *graph) pairs(call *syntax.CallExpr, builtin string, params []Param) {
 		g.hostWithSlots(call, params)
 	case waitName:
 		g.asking(call, params)
+	case mergeName:
+		g.handingOff(call, params)
+	}
+}
+
+// handingOff refuses a keyword of a landing on a merge call whose hand_off is the literal True, as the run does. A flag that only the run knows is left to the run.
+func (g *graph) handingOff(call *syntax.CallExpr, params []Param) {
+	flag, isName := paramArg(call, params, "hand_off").(*syntax.Ident)
+	if !isName || flag.Name != trueName {
+		return
+	}
+
+	for _, keyword := range HandOffLanding() {
+		if paramArg(call, params, keyword) != nil {
+			g.reportRule(call, HandOffTakes(keyword))
+
+			return
+		}
 	}
 }
 

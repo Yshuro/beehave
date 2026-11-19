@@ -21,15 +21,20 @@ const (
 // A notify that fails, cannot start or hangs is logged and never fails the wait. The step error is a cancel or a refused record, and the receive that follows reports it.
 func (e *Engine) announce(ctx dbos.Context, project, item, question string) {
 	_, _ = runStep(e, ctx, notifyStep, func(c context.Context) (struct{}, error) { //nolint:errcheck // the receive of the wait reports a cancel or a refused record
-		notify := e.facts(project).Notify
-		if len(notify) == 0 {
-			return struct{}{}, nil
-		}
-
-		e.warnNotify(c, item, CommandRequest{Project: project, Item: item, Run: append(slices.Clone(notify), item, e.redact(question)), Timeout: notifyTimeout})
+		e.tell(c, project, item, question)
 
 		return struct{}{}, nil
 	})
+}
+
+// tell runs the notify command of the project once, with no step. It serves a notice that a cancel cannot stop, so it takes a context that the cancel does not reach.
+func (e *Engine) tell(ctx context.Context, project, item, text string) {
+	notify := e.facts(project).Notify
+	if len(notify) == 0 {
+		return
+	}
+
+	e.warnNotify(ctx, item, CommandRequest{Project: project, Item: item, Run: append(slices.Clone(notify), item, e.redact(text)), Timeout: notifyTimeout})
 }
 
 // warnNotify runs the notify request and logs a command that did not run or exited non-zero.

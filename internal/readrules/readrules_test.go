@@ -153,6 +153,7 @@ var rules = map[string]rule{
 	"internal/flow.batchHost.Checkout":            {NotHeld: inAdapter},
 	"internal/flow.batchHost.Tip":                 {NotHeld: inAdapter},
 	"internal/flow.batchHost.Intent":              {NotHeld: inAdapter},
+	"internal/flow.batchHost.Pull":                {Proof: "TestHandOff_AReadThatFailsEndsTheCallAndNamesTheItem", Needle: "pullErr"},
 	"internal/flow.gate.Submit":                   {NotHeld: inAdapter},
 	"internal/flow.gate.Run":                      {NotHeld: inAdapter},
 	"internal/flow.gate.Key":                      {NotHeld: inAdapter},
