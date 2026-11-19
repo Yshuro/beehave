@@ -225,7 +225,7 @@ func TestExampleUses_ThePlanWithAnAttributionLineIsRefusedInTheApprovalComment(t
 
 	_, err := runPipeline(rig.h.engine(t), file)
 
-	require.Error(t, err)
+	require.ErrorContains(t, err, "a line of the text matches the forbidden pattern", "the forbid_text of the comment refuses the attribution line")
 	assert.Empty(t, rig.h.forge.notes, "the comment with the attribution is not posted")
 }
 
