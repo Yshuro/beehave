@@ -24,7 +24,7 @@ trap 'rm -rf "$work"' EXIT
 # fetch <url> <sha256> <binary name>: download one archive, check it, and install the binary of that name.
 fetch() {
 	archive=$work/$(basename "$1")
-	curl -fsSL --retry 3 -o "$archive" "$1"
+	curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 -o "$archive" "$1"
 
 	if command -v sha256sum >/dev/null 2>&1; then
 		got=$(sha256sum "$archive" | awk '{ print $1 }')
