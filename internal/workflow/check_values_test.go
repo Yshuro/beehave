@@ -68,8 +68,7 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 		{"gate run element", `gate(run = [1])`, "gate: run must hold strings only"},
 		{"merge forbid_text element", `merge(prs = x, base = "b", repo = "r", name = "n", forbid_text = [1])`, "merge: forbid_text must hold strings only"},
 		{"merge gate_run element", `merge(prs = x, base = "b", repo = "r", name = "n", gate_run = [1])`, "merge: gate_run must hold strings only"},
-		{"merge forbid_text element", `merge(head = "h", forbid_text = [1])`, "merge: forbid_text must hold strings only"},
-		{"merge forbid_text pattern", `merge(head = "h", forbid_text = ["("])`, `merge: the forbid_text pattern "(" is not valid`},
+		{"merge forbid_text pattern", `merge(prs = x, base = "b", repo = "r", name = "n", forbid_text = ["("])`, `merge: the forbid_text pattern "(" is not valid`},
 		{"item_create forbid_text element", `item_create(title = "t", key = "k", forbid_text = [1])`, "item_create: forbid_text must hold strings only"},
 		{"item_create forbid_text pattern", `item_create(title = "t", key = "k", forbid_text = ["("])`, `item_create: the forbid_text pattern "(" is not valid`},
 		{"item_comment forbid_text element", `item_comment(id = "1", text = "t", key = "k", forbid_text = [1])`, "item_comment: forbid_text must hold strings only"},
@@ -81,24 +80,17 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 		{"spawn items element", `spawn(items = [1])`, "spawn: items must hold strings only"},
 		{"command host none", `command(run = ["x"], host = None)`, `command: for parameter "host": got NoneType, want string`},
 		{"gate host none", `gate(run = ["x"], host = None)`, `gate: for parameter "host": got NoneType, want string`},
-		{"merge hold none", `merge(head = "h", hold = None)`, `merge: for parameter "hold": got NoneType, want string`},
+		{"merge hold none", `merge(prs = x, base = "b", repo = "r", name = "n", hold = None)`, `merge: for parameter "hold": got NoneType, want string`},
 		{"agent edits none", `agent("p", "m", edits = None)`, `agent: for parameter "edits": got NoneType, want bool`},
 		{"output_tries beyond 64 bits", `agent("p", "m", output_tries = 1180591620717411303424)`, `agent: for parameter "output_tries": 1180591620717411303424 out of range`},
 		{"output_tries negative beyond 64 bits", `agent("p", "m", output_tries = -1180591620717411303424)`, `agent: for parameter "output_tries": -1180591620717411303424 out of range`},
 		{"integration beyond 64 bits", `merge(prs = x, base = "b", repo = "r", name = "n", integration = 1180591620717411303424)`, `merge: for parameter "integration": 1180591620717411303424 out of range`},
-		{"merge steps element", `merge(head = "h", merge = True, steps = [1])`, "merge: `steps` must be the steps of a gate"},
-		{"merge steps no status", `merge(head = "h", merge = True, steps = [{"name": "a"}])`, "merge: `steps` must be the steps of a gate"},
-		{"merge steps none", `merge(head = "h", merge = True, steps = None)`, "merge: `steps` is empty"},
-		{"merge steps failed", `merge(head = "h", merge = True, steps = [{"name": "a", "status": "fail"}])`, `merge: the gate step "a" is fail`},
-		{"merge steps unknown", `merge(head = "h", merge = True, steps = [{"name": "a", "status": "pass"}, {"name": "b", "status": "unknown"}])`, `merge: the gate step "b" is unknown`},
-		{"merge tree empty", `merge(head = "h", merge = True, steps = x, tree = "")`, "merge: `tree` is empty"},
-		{"merge tree none", `merge(head = "h", merge = True, steps = x, tree = None)`, "merge: `tree` must be text, not NoneType"},
 		{"merge prs empty", `merge(prs = [], base = "b", repo = "r", name = "n")`, "merge: `prs` is empty"},
 		{"merge prs none", `merge(prs = None, base = "b", repo = "r", name = "n")`, "merge: `prs` is empty"},
 		{"merge prs element", `merge(prs = [1], base = "b", repo = "r", name = "n")`, "merge: prs[0]: the member has the type int, not struct"},
 		{"merge prs dict element", `merge(prs = [{"item": "a", "head": "h"}], base = "b", repo = "r", name = "n")`, "merge: prs[0]: the member has the type dict, not struct"},
-		{"merge own logins element", `merge(head = "h", own = {"logins": [1]})`, "merge: own.logins must hold strings only"},
-		{"merge own emails text", `merge(head = "h", own = {"emails": "a@b"})`, "merge: own.emails must be a list of strings"},
+		{"merge own logins element", `merge(prs = x, base = "b", repo = "r", name = "n", own = {"logins": [1]})`, "merge: own.logins must hold strings only"},
+		{"merge own emails text", `merge(prs = x, base = "b", repo = "r", name = "n", own = {"emails": "a@b"})`, "merge: own.emails must be a list of strings"},
 		{"merge own element", `merge(prs = x, base = "b", repo = "r", name = "n", own = {"emails": [None]})`, "merge: own.emails must hold strings only"},
 		{"preflight own element", `preflight(own = {"logins": [True]})`, "preflight: own.logins must hold strings only"},
 	}
@@ -135,9 +127,6 @@ func TestCheck_AcceptsTheLiteralValuesThatTheRunAccepts(t *testing.T) {
 		"    command(run = [\"x\"], max_new_processes = 5, host = \"\")\n"+
 		"    command(run = [\"x\"], host = \"h\", slots = \"mutation\")\n"+
 		"    command(run = [\"x\"], host = who[0], slots = D)\n"+
-		"    merge(head = \"h\", merge = True, steps = [{\"name\": \"a\", \"status\": \"pass\"}], tree = \"abc\", own = {\"logins\": [\"me\"], \"emails\": [\"a@b\"]})\n"+
-		"    merge(head = \"h\", merge = False, steps = [1], tree = \"\", own = None)\n"+
-		"    merge(head = \"h\", hold = \"h\")\n"+
 		"    merge(prs = [struct(item = \"a\", head = \"h\")], base = \"b\", repo = \"r\", name = \"n\", integration = 7, own = {})\n"+
 		"    preflight(own = {\"logins\": [\"me\"]})\n")
 

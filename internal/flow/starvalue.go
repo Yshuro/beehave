@@ -63,10 +63,7 @@ type script struct {
 	// kinds is the table of step kinds that name accepts. It is nil, and so the table of the registry of the engine, unless a test sets it.
 	kinds []string
 
-	// merge and sentBack are what a merge builtin reported. They go into the result of the item.
-	mergeState, sentBack, closed string
-
-	// batches holds the names of the batch_merge calls of this run, so that a name is never used twice.
+	// batches holds the names of the merge calls of this run, so that a name is never used twice.
 	batches map[string]bool
 
 	// undos are the finished writes of this run that name an undo, in the order of the writes. A failed run runs them in reverse.

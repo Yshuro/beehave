@@ -256,10 +256,9 @@ const goldenFlow = `def main(item):
     facts()
     board_sync(name = "b", board = 3, owner = "acme", status = "Done", issue = 5)
     command(name = "c", run = ["c"])
-    checked = gate(name = "g")
+    gate(name = "g")
     agent(name = "a", prompt = "prompts/work.md", model = "m")
     wait(name = "w", question = "go?")
-    merge(name = "m", head = checked.head)
 `
 
 // goldenSteps are the step names that goldenFlow records at the module versions of this build (before the modules, under stepsVersion star30).
@@ -268,7 +267,7 @@ const goldenFlow = `def main(item):
 var goldenSteps = []string{
 	"env:HOME#1", "now#1", "facts#1", "board_sync:b#1", "command:c#1", "scope:g#1", "gate:g#1",
 	"login#1", "agent:a#1/render", "agent:a#1/clear1", "agent:a#1/read1",
-	"wait:w#1", "merge:m#1",
+	"wait:w#1",
 }
 
 // goldenGateSteps are the steps of the exclusive run that the gate of goldenFlow queues. They are in the child run, so goldenSteps does not list them.
@@ -577,14 +576,6 @@ func TestSignature_ClosedSetsAreTheValuesThatTheRunAccepts(t *testing.T) {
 	}
 
 	_, err := trackerstore.ParseStatus("nope")
-	require.Error(t, err)
-
-	for _, children := range workflow.ChildrenValues() {
-		_, err := retarget(children)
-		require.NoError(t, err, children)
-	}
-
-	_, err = retarget("nope")
 	require.Error(t, err)
 
 	for _, mode := range workflow.FailModes() {

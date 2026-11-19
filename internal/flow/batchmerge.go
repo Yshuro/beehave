@@ -27,14 +27,14 @@ const unknownReads = 3
 const settleEvery = 10 * time.Second
 
 var (
-	errNoBatch = &absentError{message: "this build cannot run batch_merge. Use a build that sets a batch host", step: "merge a batch of pull requests"}
-	errNoScope = errors.New("batch_merge runs only inside a workflow run. Call it from main() of a workflow file")
+	errNoBatch = &absentError{message: "this build cannot run merge. Use a build that sets a batch host", step: "merge a batch of pull requests"}
+	errNoScope = errors.New("merge runs only inside a workflow run. Call it from main() of a workflow file")
 
 	// ErrMemberNotOpen is what the batch host returns from Intent for a pull request that is not OPEN. The batch rejects that member and goes on.
 	ErrMemberNotOpen = errors.New("not OPEN")
 )
 
-// batchHost is what batch_merge needs from the build besides the gate and the merge.
+// batchHost is what merge needs from the build besides the gate and the merge.
 // Git returns the git calls on the repository of the worktree of the item. Checkout puts a commit in that worktree and returns its tree id.
 // Tip reads the tip commit of the base on the forge and its tree id. Intent reads the pull request of an item once, requires it OPEN,
 // and returns the record that merge.Run needs; it writes nothing to the forge.
@@ -50,7 +50,7 @@ type batchHost interface {
 	Intent(ctx context.Context, project, item, repo, base, tipTree string, now time.Time) (merge.Intent, error)
 }
 
-// batchCall are the arguments of a batch_merge call after the checks.
+// batchCall are the arguments of a merge call after the checks.
 type batchCall struct {
 	name     string
 	members  []batch.Member
@@ -77,7 +77,7 @@ func (s *script) batchMerge(b *starlark.Builtin, args starlark.Tuple, kwargs []s
 
 	done, err := batch.Run(s.ctx, deps, call.members)
 	if err != nil {
-		return nil, fmt.Errorf("batch_merge %q: %w", call.name, err)
+		return nil, fmt.Errorf("merge %q: %w", call.name, err)
 	}
 
 	return s.batchOutcome(call, done, losses.records)
@@ -90,7 +90,7 @@ func (s *script) batchRefusal(call batchCall) error {
 		return struct{}{}, s.e.refuseGate(s.in.Project, len(call.gateRun) > 0)
 	})
 	if err != nil {
-		return fmt.Errorf("batch_merge %q: %w", call.name, err)
+		return fmt.Errorf("merge %q: %w", call.name, err)
 	}
 
 	return nil
@@ -102,12 +102,12 @@ func (s *script) batchRefusal(call batchCall) error {
 func (s *script) batchOutcome(call batchCall, done batch.Result, losses []hostLoss) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	unproven, err := s.batchProof(call, done)
 	if err != nil {
-		return nil, fmt.Errorf("batch_merge %q: %w", call.name, err)
+		return nil, fmt.Errorf("merge %q: %w", call.name, err)
 	}
 
 	report, err := s.batchIssues(call, done)
 	if err != nil {
-		return nil, fmt.Errorf("batch_merge %q: %w", call.name, err)
+		return nil, fmt.Errorf("merge %q: %w", call.name, err)
 	}
 
 	return batchResult(done, report, unproven, losses)
@@ -168,7 +168,7 @@ func (s *script) batchGit(call batchCall) (batch.Git, error) { //nolint:ireturn 
 	}
 
 	if dir == "" {
-		return nil, fmt.Errorf("item %s of project %s has no folder for the union of batch_merge", s.in.Item, s.in.Project)
+		return nil, fmt.Errorf("item %s of project %s has no folder for the union of merge", s.in.Item, s.in.Project)
 	}
 
 	return s.e.deps.Batch.Git(s.ctx, s.in.Project, s.in.Item)
@@ -213,7 +213,7 @@ func (c *batchCall) fill(prs, gateRun, forbid, own starlark.Value) (err error) {
 		return err
 	}
 
-	return set.read("refuse", forbid, own)
+	return set.read(forbid, own)
 }
 
 // batchScope refuses a call outside a workflow run, a call with no name, a name that an earlier call of the run used, and a build with no batch host or merger.
@@ -222,9 +222,9 @@ func (s *script) batchScope(name string) error {
 	case workflowID(s.ctx) == "":
 		return errNoScope
 	case name == "":
-		return errors.New("batch_merge needs a `name` that is not empty. The name makes the step names of the call unique")
+		return errors.New("merge needs a `name` that is not empty. The name makes the step names of the call unique")
 	case s.batches[name]:
-		return fmt.Errorf("batch_merge name %q is used twice in this run. Give each call its own `name`", name)
+		return fmt.Errorf("merge name %q is used twice in this run. Give each call its own `name`", name)
 	case s.e.deps.Batch == nil:
 		return errNoBatch
 	case s.e.deps.Merge == nil:
@@ -289,7 +289,7 @@ func lossFields(losses []hostLoss) (starlark.Value, starlark.Value, error) { //n
 
 	recorded, err := toStarlark(records)
 	if err != nil {
-		return nil, nil, fmt.Errorf("the host loss records of batch_merge: %w", err)
+		return nil, nil, fmt.Errorf("the host loss records of merge: %w", err)
 	}
 
 	return recorded, starlark.MakeInt(count), nil
@@ -344,7 +344,7 @@ type batchGate struct {
 	losses *callLosses
 }
 
-// callLosses holds each lost gate job of one batch_merge call that has a proof, in order, and its record for the result of batch_merge.
+// callLosses holds each lost gate job of one merge call that has a proof, in order, and its record for the result of merge.
 // The runner gates one union at a time, and a replay calls the gates again in the same order and reads each recorded <call>/host-loss step,
 // so a restart rebuilds the same list and keeps the count of the call.
 type callLosses struct {
@@ -375,7 +375,7 @@ func (g batchGate) Run(ctx context.Context, in batch.GateInput) (batch.GateOutco
 	}
 }
 
-// lostJobsOfACall is the number of proven losses of one batch_merge call that end the call: the first loss runs its gate again, and the second ends the call.
+// lostJobsOfACall is the number of proven losses of one merge call that end the call: the first loss runs its gate again, and the second ends the call.
 const lostJobsOfACall = 2
 
 // gateRunName names the records of run number n of the batch gate of the step: the step itself for the first run, and step@n for a rerun.
@@ -401,7 +401,7 @@ func (g batchGate) loss(in ExclusiveInput, call string, lost LostJob) error {
 	return nil
 }
 
-// twoLosses is the reason of a batch_merge call whose gates lost two jobs with a proof. It names the host and the proof of each job.
+// twoLosses is the reason of a merge call whose gates lost two jobs with a proof. It names the host and the proof of each job.
 func twoLosses(first, second LostJob) string {
 	return fmt.Sprintf("the host lost two gate jobs of this batch: the gate job %s was lost on %s and the proof is %s; the gate job %s was lost on %s and the proof is %s",
 		first.Job, first.Host, first.Proof.Kind, second.Job, second.Host, second.Proof.Kind)

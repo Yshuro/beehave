@@ -376,7 +376,7 @@ func TestBatchMerge_AnOwnMemberWithNoApprovalIsRefusedAsOwnWork(t *testing.T) {
 	require.Len(t, rig.h.commands.ran(), 1)
 	assert.Contains(t, rig.h.commands.ran()[0], "1:", "member 1 is rejected")
 	assert.Contains(t, rig.h.commands.ran()[0], "The owner merges it in the forge")
-	assert.Contains(t, rig.h.commands.ran()[0], "the field of the member of merge", "the refusal names the fix for a batch member")
+	assert.Contains(t, rig.h.commands.ran()[0], "the field of a member of `prs`", "the refusal names the fix for a batch member")
 	assert.Equal(t, 1, merger.askedCount(), "the merge guard saw the member once")
 	assert.Empty(t, world.writes, "a refused member has had no write on the forge")
 	assert.Equal(t, "README", rig.mainFiles(t), "nothing landed")

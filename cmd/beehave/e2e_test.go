@@ -92,7 +92,7 @@ func e2eFlow(dir, path string) cli.Flow {
 
 			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
 				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg, newAdapters(nil, nil, nil)),
-				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
+				Lifecycle: files, Forge: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
 			}, dir, cfg))
 			if err != nil {
 				return nil, err
@@ -181,16 +181,6 @@ func (f e2eFiles) Pull(ctx context.Context, _, _ string) (review.Standing, error
 
 	return review.Standing{Number: 1, Head: head}, err
 }
-
-func (f e2eFiles) Reviewed(ctx context.Context, project, item, _ string) (review.Standing, error) {
-	return f.Pull(ctx, project, item)
-}
-
-func (e2eFiles) Watch(context.Context, string, int) (review.Outcome, error) {
-	return review.Outcome{Kind: review.Merged}, nil
-}
-
-func (e2eFiles) SetDraft(context.Context, string, int, bool) error { return nil }
 
 func (e2eFiles) WithTree(_ context.Context, _, _ string, fn func(string)) error {
 	fn("")

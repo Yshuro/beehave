@@ -220,8 +220,6 @@ func TestScript_AStepOutsideARunReportsItsError(t *testing.T) {
 	_, err := s.env(starlark.NewBuiltin("env", nil), starlark.Tuple{starlark.String("HOME")}, nil)
 	require.Error(t, err)
 
-	_, err = s.watchOwner("", true)
-	require.ErrorContains(t, err, "cannot show that it waits for the owner to merge")
 }
 
 func TestRunStar_AnErrorInANestedFunctionNamesTheCallInThatFunction(t *testing.T) {

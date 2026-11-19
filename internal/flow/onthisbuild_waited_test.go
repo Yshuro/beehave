@@ -1,15 +1,10 @@
 package flow
 
 import (
-	"slices"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tobocop2/beehave/internal/merge"
-	"github.com/tobocop2/beehave/internal/review"
 )
 
 // waitThenFail is a workflow file that waits and then fails, so the run ends failed after it received the answer.
@@ -140,39 +135,6 @@ func TestClient_ResumeOnThisBuildMovesAWaitedRunWhenTheCoreModuleDidNotChange(t 
 	row, rowErr := other.row(testRun)
 	require.NoError(t, rowErr)
 	assert.Equal(t, other.version, row.ApplicationVersion)
-}
-
-func TestClient_ResumeOnThisBuildRefusesARunInTheOwnerMergeWaitWhenTheCoreModuleChanged(t *testing.T) {
-	t.Parallel()
-
-	h := mergeHarness(t, merge.Result{Stop: merge.Done})
-	h.watch.outcomes = []review.Outcome{{Kind: review.Waiting}}
-	h.sleep = time.Hour
-
-	engine := h.engine(t)
-	runInBackground2(engine, writeFlow(t, shipFlow("")))
-
-	waitOn(t, conditionOf(runOfEngine(t, engine), func() bool {
-		names := stepNamesOf(t, engine, testRun)
-
-		return slices.Contains(names, notifyStep) && slices.Contains(names, sleepStep)
-	}))
-
-	forgetSteps(t, h, notifyStep)
-	expireLease(h)
-
-	other := buildWithModule(h.client(t, otherBuild), moduleCore, coreVersion+1)
-
-	names := namesOf(t, other)
-	require.Contains(t, names, watchStep, "the run waits for the owner to merge")
-	require.NotContains(t, names, "DBOS.recv", "the owner merge wait records no receive")
-
-	for _, step := range names {
-		_, named := kindOfStep(step)
-		require.False(t, named, "the run recorded no named step of any module, and %q is one: %v", step, names)
-	}
-
-	requireStranded(t, other, "core")
 }
 
 func TestClient_ResumeOnThisBuildMovesARunThatRecordedNothingOfCoreAndDidNotWaitWhenTheCoreModuleChanged(t *testing.T) {

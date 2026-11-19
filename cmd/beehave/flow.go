@@ -173,7 +173,7 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 	commands := newPrograms(cfg, trees, cloneLock{repos: trees.repos}, table)
 
 	return flow.Deps{
-		Agents: newAgents(cfg, opts, trees, table), Gate: projectGate{projects: cfg.Projects, programs: commands, forge: table.forge}, Logins: picks, Lifecycle: life, Forge: life, Watch: life, Merge: life, Preflight: life, Trees: trees, Beats: life, Others: life,
+		Agents: newAgents(cfg, opts, trees, table), Gate: projectGate{projects: cfg.Projects, programs: commands, forge: table.forge}, Logins: picks, Lifecycle: life, Forge: life, Merge: life, Preflight: life, Trees: trees, Beats: life, Others: life,
 		Commands: commands, Items: trackerItems{projects: cfg.Projects, tracker: table.tracker},
 		Writer: trackerWriter{projects: cfg.Projects, tracker: table.tracker},
 		Reader: trackerReader{projects: cfg.Projects, tracker: table.tracker},

@@ -177,7 +177,6 @@ func TestModulesUsed_TheStepsOfTheWaitsOfTheOwnerAreStepsOfTheCoreModule(t *test
 	t.Parallel()
 
 	assert.Equal(t, []string{"core"}, modulesUsed([]string{"claim", "DBOS.recv"}), "the receive of an answer")
-	assert.Equal(t, []string{"core"}, modulesUsed([]string{"claim", "watch", "DBOS.sleep", "watch"}), "the read of a ready pull request")
 	assert.Empty(t, modulesUsed([]string{"claim", "DBOS.sleep"}), "a sleep alone is the wait of a cap or a limit, not of the owner")
 }
 

@@ -34,7 +34,7 @@ func TestCheck_RefusesTheArgumentsOfTheRunThatAreText(t *testing.T) {
 		{"outputs beside a computed element", `agent("p", "m", outputs = [str(item), 1])`, "agent: outputs must hold strings only"},
 		{"stop_on_rc beside a computed element", `command(run = ["x"], stop_on_rc = [str(item), 0])`, "command: stop_on_rc must hold whole numbers from 1 to 255"},
 		{"prs beside a computed element", `merge(prs = [x, 1], base = "b", repo = "r", name = "n")`, "merge: prs[1]: the member has the type int, not struct"},
-		{"own logins beside a computed element", `merge(head = "h", own = {"logins": [str(item), 1]})`, "merge: own.logins must hold strings only"},
+		{"own logins beside a computed element", `merge(prs = x, base = "b", repo = "r", name = "n", own = {"logins": [str(item), 1]})`, "merge: own.logins must hold strings only"},
 	}
 
 	for _, tc := range cases {

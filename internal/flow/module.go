@@ -47,9 +47,9 @@ func StepModule() step.Module {
 	return module
 }
 
-// recordsCountedStep is false for the builtins that record no counted step. batch_merge names its steps batch:<name>.<kind>#<item>, and sandbox and struct record no step.
+// recordsCountedStep is false for the builtins that record no counted step. merge names its steps batch:<name>.<kind>#<item>, and sandbox and struct record no step.
 func recordsCountedStep(builtin string) bool {
-	return !slices.Contains([]string{"batch_merge", recordedSandbox, "struct"}, builtin)
+	return !slices.Contains([]string{"merge", recordedSandbox, "struct"}, builtin)
 }
 
 // stepDefs lists the builtins of this package. The names are the builtins of workflow.Builtins less json, which is the module of the Starlark library.
@@ -60,11 +60,10 @@ func stepDefs() []builtinDef {
 // repositoryDefs lists the builtins that read git or a forge. The engine refuses a call of one of them in a project with no repository.
 func repositoryDefs() []builtinDef {
 	return []builtinDef{
-		{name: "batch_merge", call: (*script).batchMerge, repository: true},
 		{name: "before_review", call: (*script).beforeReview, repository: true},
 		{name: "board_sync", call: (*script).boardSync, repository: true},
 		{name: "gate", call: (*script).gate, repository: true, exempt: "run"},
-		{name: "merge", call: (*script).merge, repository: true},
+		{name: "merge", call: (*script).batchMerge, repository: true},
 		{name: "pr_assign", call: (*script).prAssign, repository: true},
 		{name: "pr_comment", call: (*script).prComment, repository: true},
 		{name: "pr_open", call: (*script).prOpen, repository: true},

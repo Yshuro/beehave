@@ -60,10 +60,6 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"item_status missing status", `item_status(id = "1")`, "item_status needs the `status` keyword"},
 		{"item_status bad status", `item_status("1", "done")`, `status is "done". Use one of: open, closed, hold.`},
 		{"item_status number for status", `item_status("1", 3)`, "status is 3. Use one of: open, closed, hold."},
-		{"merge unknown keyword", `merge("h", force = True)`, "merge takes no argument force"},
-		{"merge missing head", `merge(repo = "r")`, "merge needs the `head` keyword"},
-		{"merge bad children", `merge("h", children = "drop")`, `children is "drop". Use one of: refuse, retarget.`},
-		{"merge text for a bool", `merge("h", merge = "yes", steps = item.id)`, "merge must be a bool, not a text."},
 		{"preflight unknown keyword", `preflight(state = "open")`, "preflight takes no argument state"},
 		{"preflight number for head", `preflight(head = 3)`, "head must be a text, not an int."},
 		{"preflight list for hold", `preflight(hold = ["hold"])`, "hold must be a text, not a list."},
@@ -103,7 +99,6 @@ func TestCheck_AcceptsACallThatKeepsItsSignature(t *testing.T) {
 		`item_comment("1", "t", "k")`,
 		`item_create("t", "k", body = "b")`,
 		`item_status("1", "hold")`,
-		`merge("h", children = "retarget", approved = True, own = {"logins": []})`,
 		`preflight(head = "h", base = "b", hold = "hold", name = "intake")`,
 		`queue(name = "n", hold = "hold", label = "beehave-round")`,
 		`spawn(["1"], name = "n")`,
@@ -170,45 +165,6 @@ func TestSignature_ListsEveryBuiltinThatTakesKeywords(t *testing.T) {
 
 	_, signed := workflow.Signature("nope")
 	assert.False(t, signed)
-}
-
-func TestCheck_AMergeCallThatMergesNeedsTheStepsOfTheGate(t *testing.T) {
-	t.Parallel()
-
-	want := "merge needs the gate steps when it merges. Add steps = <gate>.steps to the call"
-	cases := []struct{ name, call string }{
-		{"merge true without steps", `merge("h", merge = True)`},
-		{"merge computed without steps", `merge("h", merge = env("MERGE") == "true")`},
-		{"merge true with an empty list", `merge("h", merge = True, steps = [])`},
-		{"merge computed with an empty tuple", `merge("h", steps = (), merge = env("M") == "1")`},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := checkText(t, "def main(item):\n    "+tc.call+"\n")
-
-			require.NotEmpty(t, got)
-			assert.Contains(t, got[0], want)
-		})
-	}
-}
-
-func TestCheck_AMergeCallThatDoesNotMergeOrNamesStepsPasses(t *testing.T) {
-	t.Parallel()
-
-	calls := []string{
-		`merge("h")`,
-		`merge("h", merge = False)`,
-		`merge("h", merge = True, steps = item.id)`,
-		`merge("h", *item)`,
-		`merge("h", **item)`,
-	}
-
-	for _, call := range calls {
-		assert.Empty(t, checkText(t, "def main(item):\n    "+call+"\n"), call)
-	}
 }
 
 func TestUnpack_ReadsTheKeywordsOfTheSignature(t *testing.T) {

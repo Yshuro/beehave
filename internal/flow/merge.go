@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
@@ -34,71 +33,6 @@ type merger interface {
 	Poll(ctx context.Context, project, item, head string, settings MergeSettings, last bool) (merge.Result, error)
 	// Disarm turns off the queued merge of the pull request of an item, for a wait that ends with no verdict. It returns an error when the merge may still be armed.
 	Disarm(ctx context.Context, project, item, head string, settings MergeSettings) error
-}
-
-// mergeReady merges the ready pull request, pinned to the head that the gate and the review read.
-// A merge that was done, or that was refused as our own work, goes on to the watch, which ends when the owner merges. Any other refusal ends the item.
-// The caller makes sure that the build has a merger.
-func (e *Engine) mergeReady(ctx dbos.Context, project, item, head string, settings MergeSettings) error {
-	result, err := e.mergeQueued(ctx, project, item, head, settings)
-	if err != nil {
-		return fmt.Errorf("%s of item %s: %w", mergeStep, item, err)
-	}
-
-	switch result.Stop {
-	case merge.Done, merge.OwnWork:
-		return nil
-	case merge.Refused, merge.NoWorkflowScope:
-	}
-
-	return fmt.Errorf("%w: item %s: %s", errMergeRefused, item, strings.Join(result.Lines, "; "))
-}
-
-// mergeQueued writes the intent, runs the merge on the exclusive queue, and waits while the forge holds a queued merge.
-func (e *Engine) mergeQueued(ctx dbos.Context, project, item, head string, settings MergeSettings) (merge.Result, error) {
-	settings, err := e.withIntent(ctx, project, item, "merge:intent", settings)
-	if err != nil {
-		return merge.Result{}, err
-	}
-
-	ran, err := e.queueExclusive(ctx, ExclusiveInput{Kind: kindMerge, Project: project, Item: item, Head: head, Settings: settings})
-	if err != nil {
-		return merge.Result{}, err
-	}
-
-	return e.awaitQueued(ctx, "merge:poll", queuedRead{project: project, item: item, head: head, settings: settings}, ran.Merge)
-}
-
-// withIntent records the intent of a merge as a step of its own, before the merge call queues anything. The intent is the record that batch_merge writes:
-// a run that repeats after a crash finds the pull request MERGED at the gated head, and the intent shows the merge is ours. A build with no batch host
-// writes none, and a pull request that is not OPEN gets none: the merge refuses it as before.
-func (e *Engine) withIntent(ctx dbos.Context, project, item, name string, settings MergeSettings) (MergeSettings, error) {
-	if e.deps.Batch == nil {
-		return settings, nil
-	}
-
-	read, err := runStep(e, ctx, name, func(c context.Context) (intentRead, error) {
-		return e.plainIntent(c, project, item, settings)
-	}, dbos.WithStepMaxRetries(stepRetries))
-	if err != nil {
-		return settings, err
-	}
-
-	if read.Refused == "" {
-		settings.Intent = &read.Intent
-	}
-
-	return settings, nil
-}
-
-// plainIntent reads the intent of a merge. A pull request that is not OPEN is a result and not an error: DBOS keeps the text of a recorded error and not its type.
-func (e *Engine) plainIntent(ctx context.Context, project, item string, settings MergeSettings) (intentRead, error) {
-	intent, err := e.deps.Batch.Intent(ctx, project, item, settings.Repo, settings.Base, "", e.deps.Clock.now())
-	if errors.Is(err, ErrMemberNotOpen) {
-		return intentRead{Refused: err.Error()}, nil
-	}
-
-	return intentRead{Intent: intent}, err
 }
 
 // queuedRead names the pull request whose queued merge awaitQueued reads.

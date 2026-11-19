@@ -87,10 +87,10 @@ func TestResultFields_TheStructsOfTheSwarmBuiltinsAreTheFieldsOfTheTable(t *test
 	require.NoError(t, err)
 
 	got := map[string][]string{
-		"merge": batchStruct(t, landed).AttrNames(),
-		"gather":      gathered.AttrNames(),
-		"queue":       queuedValue(queued{}).AttrNames(),
-		"spawn":       runsValue([]spawnedRun{{}}).AttrNames(),
+		"merge":  batchStruct(t, landed).AttrNames(),
+		"gather": gathered.AttrNames(),
+		"queue":  queuedValue(queued{}).AttrNames(),
+		"spawn":  runsValue([]spawnedRun{{}}).AttrNames(),
 	}
 
 	for builtin, names := range got {

@@ -15,7 +15,7 @@ const DefaultSkew = 2 * time.Minute
 // State is the state of the pull request when the intent was written: only an OPEN read orders the intent before any merge.
 // Time is the local clock at that read. Skew is the margin between that clock and the forge clock; zero means DefaultSkew.
 // A zero Skew means DefaultSkew, so a caller cannot ask for no margin at all.
-// BaseTipTree is the tree of the base tip at that read. The batch merge reads it; merge.Run does not.
+// BaseTipTree is the tree of the base tip at that read. The merge call reads it; merge.Run does not.
 type Intent struct {
 	PR          int
 	Head        string

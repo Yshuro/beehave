@@ -26,7 +26,7 @@ const (
 const (
 	kindPreflight = "preflight"
 	kindQueue     = "queue"
-	// kindBatch starts the names of the steps of batch_merge, which has no counted step of its own.
+	// kindBatch starts the names of the steps of merge, which has no counted step of its own.
 	kindBatch = "batch"
 )
 
@@ -47,8 +47,9 @@ const agentVersion = 9
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
 // Version 4 records the host job of the project gate of a batch in its own step (batch_gate:job) before the gate waits, records a lost job
-// that has a proof in the item run (batch:<call>.gate#<n>/host-loss, and @2 for the rerun), and adds host_loss and host_losses to the result of batch_merge.
-const landVersion = 4
+// that has a proof in the item run (batch:<call>.gate#<n>/host-loss, and @2 for the rerun), and adds host_loss and host_losses to the result of merge.
+// Version 5 merges with one call: `merge` is the old `batch_merge`, and a merge of one pull request records the batch steps. The step kind merge is gone.
+const landVersion = 5
 
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step.
 const forgeVersion = 2
@@ -65,7 +66,7 @@ const gateVersion = 5
 const roundVersion = 2
 
 // stepModule is one module of the table: its version, the step kinds that it records, and the whole step names that it records with no kind in front.
-// The steps are the steps of its waits that no kind names: the receive of an answer and the read of a ready pull request.
+// The steps are the steps of its waits that no kind names: the receive of an answer.
 type stepModule struct {
 	name    string
 	version int
@@ -80,12 +81,12 @@ func moduleTable() []stepModule {
 			name:    moduleCore,
 			version: coreVersion,
 			kinds:   []string{"command", "earlier_calls", envKeyword, "facts", "gather", "now", "spawn", "wait", "write"},
-			steps:   []string{receiveStepName, watchStep},
+			steps:   []string{receiveStepName},
 		},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: 1, kinds: []string{"item_assign", "item_comment", "item_create", "item_read", "item_status"}},
 		{name: moduleForge, version: forgeVersion, kinds: []string{"board_sync", "pr_assign", "pr_comment", "pr_open", prStateKind}},
-		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, mergeKey, kindPreflight}},
+		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}},
 		{name: moduleGate, version: gateVersion, kinds: []string{"before_review", kindGate}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
 		{name: moduleRound, version: roundVersion, kinds: []string{kindQueue, scopeStep, scopeCheckStep}},

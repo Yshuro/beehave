@@ -11,10 +11,10 @@ import (
 
 const refusal = `no sandbox can enforce a gate here. Set sandbox = "off"`
 
-func TestCheckSandboxedGates_RefusesEachGateAndBatchMergeCallThatRunsAGateHere(t *testing.T) {
+func TestCheckSandboxedGates_RefusesEachGateAndMergeCallThatRunsAGateHere(t *testing.T) {
 	t.Parallel()
 
-	file := folder(t, map[string]string{"workflow.star": "def main(item):\n    gate(name = \"a\")\n    gate(run = [\"true\"], name = \"b\")\n    merge(prs = [], base = \"main\", repo = \"o/r\", name = \"c\")\n    agent(prompt = \"p\", name = \"d\")\n    merge(name = \"e\")\n"}, "workflow.star")
+	file := folder(t, map[string]string{"workflow.star": "def main(item):\n    gate(name = \"a\")\n    gate(run = [\"true\"], name = \"b\")\n    merge(prs = [], base = \"main\", repo = \"o/r\", name = \"c\")\n    agent(prompt = \"p\", name = \"d\")\n"}, "workflow.star")
 
 	found := workflow.CheckSandboxedGates(file, "near", refusal, true)
 

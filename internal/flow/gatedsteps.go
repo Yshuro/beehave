@@ -3,20 +3,12 @@ package flow
 import (
 	"context"
 	"encoding/json"
-	"errors"
 
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
-	"github.com/tobocop2/beehave/internal/workflow"
 )
-
-// errStepsNotFromGate refuses a merge call whose `steps` no gate call of the run gave at the head of the merge.
-// The text names the limit of a child run: the gates of its parent do not count, so the gate call and the merge call must be in the same run.
-var errStepsNotFromGate = errors.New("`steps` is not the steps of a gate call in this run at the head of this merge. " +
-	"Pass `steps = <gate>.steps` from a gate call with the same `head`, and do not write or edit the list. " +
-	"A run counts only its own gate calls: a child run cannot merge with steps that its parent gated, so call the gate in the run that merges")
 
 // gatedCall is one gate call of a run: the head it gated, the steps it gave and the names its gate list had, as the Starlark values of the record.
 type gatedCall struct {
@@ -25,21 +17,6 @@ type gatedCall struct {
 	required starlark.Value
 	// checks is what the log of the gate job gave. A gate with no checks holds the zero value, which is not Complete.
 	checks GateChecks
-}
-
-// holdMerge runs before a merge. The steps must be the steps of a gate of this run at the head of the merge, they must hold every name
-// that the gate list had when that gate ran, and the scope must hold.
-func (s *script) holdMerge(m mergeArgs) error {
-	gated, err := s.checkGateSteps(m.head, m.steps)
-	if err != nil {
-		return err
-	}
-
-	if err := workflow.RequiredSteps(m.steps, recordedNames(gated.required)); err != nil {
-		return err
-	}
-
-	return s.holdScope(m.label)
 }
 
 // recordedNames reads the required names of a gate record. A record without the field, or with anything else in it, asks for none.
@@ -101,16 +78,4 @@ func recordedChecks(raw any) GateChecks {
 	}
 
 	return checks
-}
-
-// checkGateSteps refuses a `steps` argument that is not the steps of a gate call of this run at the head of the merge, and returns that call.
-// The steps compare by value, the head by text.
-func (s *script) checkGateSteps(head string, steps starlark.Value) (gatedCall, error) {
-	for _, gated := range s.gated {
-		if equal, err := starlark.Equal(gated.steps, steps); err == nil && equal && gated.head == starlark.Value(starlark.String(head)) {
-			return gated, nil
-		}
-	}
-
-	return gatedCall{}, errStepsNotFromGate
 }

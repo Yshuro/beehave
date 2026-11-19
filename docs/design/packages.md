@@ -228,7 +228,7 @@ No step reads git there:
 - An agent call records no start commit, and `rewrote` is false.
 - `pin` and `allow_paths` are refused.
 - A cancel or a release with no engine running reads no git.
-- The builtins `merge`, `batch_merge` and `preflight`, and a `gate` call with no `run`, refuse the project with a plain message.
+- The builtins `merge` and `preflight`, and a `gate` call with no `run`, refuse the project with a plain message.
 - A `gate` call that names `run` runs its own program, reads no git, and records an empty `head` and an empty `tree`.
 
 `beehave run` and `beehave check workflow --project <name>` refuse each such call for a project with no repository. `beehave run` refuses it before any step runs.

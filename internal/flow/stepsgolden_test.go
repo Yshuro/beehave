@@ -42,7 +42,6 @@ func resultShape(t *testing.T) []string {
 var goldenShapes = map[string][]string{
 	"star30": {
 		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,skills,stop,text,transcript,violations",
-		"merge: deferred,findings,gates,host_loss,host_losses,merged,note,rejected,tip,tree,unproven",
 		"before_review: base,findings,keywords,new_tests,ok,revert",
 		"board_sync: number,status",
 		"command: rc,stderr,stdout",
@@ -57,6 +56,7 @@ var goldenShapes = map[string][]string{
 		"item_create: created,id",
 		"item_read: comments,fields,found,id,parent",
 		"item_status: id,status",
+		"merge: deferred,findings,gates,host_loss,host_losses,merged,note,rejected,tip,tree,unproven",
 		"pr_assign: issues,number",
 		"pr_comment: number",
 		"pr_open: created,number,stack",

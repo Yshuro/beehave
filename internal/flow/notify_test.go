@@ -12,9 +12,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
-	"github.com/tobocop2/beehave/internal/review"
 )
 
 var notifyProgram = []string{"notifier", "--title", "beehave"}
@@ -220,68 +218,6 @@ func TestNotify_TheQuestionPassesThroughTheRedactor(t *testing.T) {
 	got := notifyRequests(h)
 	require.Len(t, got, 1)
 	require.NotContains(t, strings.Join(got[0].Run, " "), "abcdefghijklmnop")
-}
-
-func TestNotify_TheOwnerMergeWatchRunsTheCommandOnceAndAResumeRunsItZeroMoreTimes(t *testing.T) {
-	t.Parallel()
-
-	h := mergeHarness(t, merge.Result{Stop: merge.Done})
-	h.facts = notifyFacts(notifyProgram)
-	h.watch.outcomes = []review.Outcome{{Kind: review.Waiting}, {Kind: review.Merged}}
-	h.sleep = time.Hour
-	file := writeFlow(t, shipFlow(""))
-
-	stopCtx, stop := context.WithCancel(t.Context())
-	first, err := NewEngine(stopCtx, h.opts, h.deps())
-	require.NoError(t, err)
-	require.NoError(t, first.Launch())
-
-	ended := make(chan error, 1)
-
-	go func() {
-		_, runErr := first.RunFile(testItem, testProject, file)
-		ended <- runErr
-	}()
-
-	waitOn(t, notified(t, h, first))
-	waitOn(t, inASleep(t, first))
-	stop()
-	require.NoError(t, first.Shutdown())
-	require.Error(t, receive(t, ended))
-
-	got := notifyRequests(h)
-	require.Len(t, got, 1, "the watch notified once")
-	require.Equal(t, append(append([]string{}, notifyProgram...), testItem, "The pull request of item "+testItem+" is ready. Merge it, or send it back."), got[0].Run)
-
-	encoded := base64.StdEncoding.EncodeToString([]byte(strconv.FormatInt(time.Now().Add(-time.Second).UnixMilli(), 10)))
-	_, err = sqlOf(t, h).ExecContext(t.Context(), "UPDATE operation_outputs SET output = ? WHERE workflow_uuid = ? AND function_name = 'DBOS.sleep'", encoded, testRun)
-	require.NoError(t, err)
-
-	next := h.engine(t)
-	resumed := make(chan runOutcome, 1)
-
-	go func() {
-		result, runErr := next.RunFile(testItem, testProject, file)
-		resumed <- runOutcome{result: result, err: runErr}
-	}()
-
-	outcome := receive(t, resumed)
-	require.NoError(t, outcome.err)
-	require.Equal(t, "merged", outcome.result.Merge)
-	require.Len(t, notifyRequests(h), 1, "the resumed run ran the command zero more times")
-}
-
-func TestNotify_AStepThatMergesItselfSendsNoNotice(t *testing.T) {
-	t.Parallel()
-
-	h := mergeHarness(t, merge.Result{Stop: merge.Done})
-	h.facts = notifyFacts(notifyProgram)
-
-	result, err := walkText(t, h, shipFlow("merge = True, "))
-
-	require.NoError(t, err)
-	require.Equal(t, "merged", result.Merge)
-	require.Empty(t, notifyRequests(h))
 }
 
 // resumedAfterTheConfigChanges opens a wait of an hour under the facts of the first process, stops the engine in the sleep of the wait, moves the recorded deadline into the past and resumes the run under the facts of the second process.

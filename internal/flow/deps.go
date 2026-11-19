@@ -190,7 +190,6 @@ type beats interface {
 // Reading replaces the time that the now builtin returns, and the time from which a wait counts its deadline and its reminders. The lease age keeps using Wall.
 // After replaces the timer that ends the trust in a claim: it starts f once d has passed, and the function it returns stops the timer.
 // Grace replaces the time that a phase waits for the first trust of a run that is not open.
-// Watch replaces the time of the durable sleep between two reads of a ready pull request.
 // Settle replaces the time of the durable sleep between two reads of a batch member whose mergeable state is UNKNOWN.
 // Queued replaces the time of the durable sleep between two reads of a pull request whose merge the forge holds.
 // CapWait replaces the least time of the durable sleep that waits for a usage cap to reset.
@@ -212,7 +211,6 @@ type clock struct {
 	Reading   func() time.Time
 	After     func(d time.Duration, f func()) (stop func())
 	Grace     time.Duration
-	Watch     time.Duration
 	Settle    time.Duration
 	Queued    time.Duration
 	// Gone is how long a joining run waits for an engine to come back before it reports that the engine stopped.
@@ -283,7 +281,7 @@ type CommandRequest struct {
 	// BuildHost is the build host that the run recorded in host_up. The gate and a call with Host run there. Empty means the default of the project.
 	BuildHost string
 	Timeout   time.Duration
-	// Gate is true for the program of a gate (a gate call with run, or the gate_run of batch_merge). A gate on this machine runs under the sandbox of its project.
+	// Gate is true for the program of a gate (a gate call with run, or the gate_run of merge). A gate on this machine runs under the sandbox of its project.
 	Gate bool
 	// MaxNewProcesses is the number of tasks that the tree of the command may hold besides the command (on Linux), or the process count of the user at the start plus this number (elsewhere). It is zero for a call that sets no cap.
 	MaxNewProcesses int
@@ -335,7 +333,6 @@ type Deps struct {
 	Logins    logins
 	Lifecycle lifecycle
 	Forge     forge
-	Watch     watcher
 	Trees     treeMaker
 	Beats     beats
 	Merge     merger
@@ -346,7 +343,7 @@ type Deps struct {
 	Writer    writer
 	// Reader serves item_read. A nil Reader means the tracker of the build cannot read comments or parents: an item_read call fails and says so.
 	Reader reader
-	// Batch serves batch_merge. A nil Batch means the build cannot run it.
+	// Batch serves merge. A nil Batch means the build cannot run it.
 	Batch batchHost
 	// Queue serves queue and the hold check at the start of a run that spawn started. A nil Queue means the build cannot read the open work: a queue call fails.
 	Queue queueReader
@@ -361,7 +358,7 @@ type Deps struct {
 	SandboxDefault func(project string) bool
 	// RefuseGate returns the error of a gate that must not run on this machine, or nil. program is true for a gate that names its own program.
 	// A nil RefuseGate means every gate runs. The engine asks inside a recorded step that comes before the gate key, an earlier pass, any git work or any program
-	// (for batch_merge, the first step of the call), so a replay of a recorded gate returns the record and is never refused.
+	// (for merge, the first step of the call), so a replay of a recorded gate returns the record and is never refused.
 	RefuseGate func(project string, program bool) error
 	// Repository says whether a project has a git repository. A nil Repository means every project has one.
 	// The item folder of a project with no repository is a plain folder: no step reads git there, and the git builtins refuse the project.

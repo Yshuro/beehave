@@ -25,69 +25,6 @@ func dictOf(t *testing.T, entries map[string]starlark.Value) *starlark.Dict {
 	return dict
 }
 
-func step(t *testing.T, name, status string) starlark.Value {
-	t.Helper()
-
-	return dictOf(t, map[string]starlark.Value{"name": starlark.String(name), "status": starlark.String(status)})
-}
-
-func TestGateSteps_RefusesWhatTheRunRefuses(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name  string
-		value starlark.Value
-		want  string
-	}{
-		{"absent", nil, "names no gate steps"},
-		{"a value the encoder refuses", starlark.NewBuiltin("f", nil), "must be the steps of a gate"},
-		{"empty", starlark.NewList(nil), "`steps` is empty"},
-		{"not a step", starlark.NewList([]starlark.Value{starlark.MakeInt(1)}), "must be the steps of a gate"},
-		{"failed step", starlark.NewList([]starlark.Value{step(t, "a", "fail")}), `the gate step "a" is fail`},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			require.ErrorContains(t, workflow.GateSteps(tc.value), tc.want)
-		})
-	}
-
-	require.NoError(t, workflow.GateSteps(starlark.NewList([]starlark.Value{step(t, "a", "pass")})))
-}
-
-func TestRequiredSteps_ARequiredNameWithNoResultRefusesAndAnEmptyRequirementAsksForNothing(t *testing.T) {
-	t.Parallel()
-
-	both := starlark.NewList([]starlark.Value{step(t, "a", "pass"), step(t, "b", "pass")})
-
-	require.NoError(t, workflow.RequiredSteps(nil, []string{"a"}))
-	require.NoError(t, workflow.RequiredSteps(both, nil))
-	require.NoError(t, workflow.RequiredSteps(both, []string{"a", "b"}))
-	require.ErrorContains(t, workflow.RequiredSteps(both, []string{"a", "c"}), `has the step "c"`)
-	require.ErrorContains(t, workflow.RequiredSteps(starlark.NewList([]starlark.Value{starlark.MakeInt(1)}), []string{"a"}), `has the step "a"`)
-	require.ErrorContains(t, workflow.RequiredSteps(starlark.NewBuiltin("f", nil), []string{"a"}), "must be the steps of a gate")
-}
-
-func TestGatedTree_ReadsTheTreeTheRunReads(t *testing.T) {
-	t.Parallel()
-
-	tree, err := workflow.GatedTree(nil)
-	require.NoError(t, err)
-	assert.Empty(t, tree)
-
-	tree, err = workflow.GatedTree(starlark.String("abc"))
-	require.NoError(t, err)
-	assert.Equal(t, "abc", tree)
-
-	_, err = workflow.GatedTree(starlark.String(""))
-	require.ErrorContains(t, err, "`tree` is empty")
-
-	_, err = workflow.GatedTree(starlark.MakeInt(1))
-	require.ErrorContains(t, err, "`tree` must be text, not int")
-}
-
 func pr(fields starlark.StringDict) starlark.Value {
 	return starlarkstruct.FromStringDict(starlarkstruct.Default, fields)
 }

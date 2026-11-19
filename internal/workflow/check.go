@@ -263,7 +263,7 @@ func sentence(text string) string { return strings.TrimRight(text, ".") + "." }
 
 // repositoryBuiltins are the builtins that read git or a forge. A project with no repository cannot call them.
 func repositoryBuiltins() []string {
-	return []string{gateName, mergeName, batchMergeName, preflightName, beforeReviewName}
+	return []string{gateName, mergeName, preflightName, beforeReviewName}
 }
 
 // repositoryCalls lists the calls of repositoryBuiltins in a parsed file. A name that the file defines is not the builtin.
@@ -329,7 +329,7 @@ func emptyLiteral(expr syntax.Expr) bool {
 	return false
 }
 
-// CheckNoRepository returns one diagnostic for each call of gate, merge, batch_merge or preflight in the workflow file and the files it loads.
+// CheckNoRepository returns one diagnostic for each call of gate, merge or preflight in the workflow file and the files it loads.
 // The project has no repository, and these builtins refuse it at run time. A gate call that names run is not one of them: it runs its own program.
 // It runs no workflow code.
 func CheckNoRepository(file, project string) []Diagnostic {
@@ -351,7 +351,7 @@ func Check(file string) (found []Diagnostic, unparsed bool) {
 	return g.found, g.unparsed
 }
 
-// CheckSandboxedGates returns one diagnostic for each gate or batch_merge call in the workflow file and the files it loads that runs a gate on this machine.
+// CheckSandboxedGates returns one diagnostic for each gate or merge call in the workflow file and the files it loads that runs a gate on this machine.
 // The project has its sandbox on and refusal says why such a gate does not run. A gate call that names run and a host runs there, so it is not listed.
 // A call that uses the project gate is listed only when projectGate is true, because a project that builds on a host runs its project gate there.
 // It runs no workflow code.
@@ -374,7 +374,7 @@ type hereGate struct {
 	program bool
 }
 
-// gateCalls lists the calls in a parsed file that run a gate on this machine: each batch_merge, each gate without a program and each gate with a program and no host.
+// gateCalls lists the calls in a parsed file that run a gate on this machine: each merge, each gate without a program and each gate with a program and no host.
 // A name that the file defines is not the builtin.
 func gateCalls(file string, parsed *syntax.File) []hereGate {
 	shadowed := definedNames(parsed)
@@ -400,10 +400,10 @@ func gateCalls(file string, parsed *syntax.File) []hereGate {
 }
 
 // runsHere reports whether the call runs a gate on this machine, and whether that gate is a program that the call names.
-// A batch_merge always does. A gate does unless it names both a program and a host.
+// A merge always does. A gate does unless it names both a program and a host.
 func runsHere(call *syntax.CallExpr) (program, here bool) {
 	switch callee(call) {
-	case batchMergeName:
+	case mergeName:
 		return namesKeyword(call, "gate_run"), true
 	case gateName:
 		program = namesKeyword(call, "run")

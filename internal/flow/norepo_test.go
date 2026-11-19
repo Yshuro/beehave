@@ -111,9 +111,9 @@ func TestBuiltins_AProjectWithNoRepositoryRefusesTheGitBuiltinsWithAPlainMessage
 	t.Parallel()
 
 	for name, call := range map[string]string{
-		"gate":        `gate(name = "check")`,
-		"merge": `merge(prs = [struct(item = "1", head = "abc")], base = "main", repo = "o/n", name = "batch")`,
-		"preflight":   `preflight(head = "abc", base = "main", name = "look")`,
+		"gate":      `gate(name = "check")`,
+		"merge":     `merge(prs = [struct(item = "1", head = "abc")], base = "main", repo = "o/n", name = "batch")`,
+		"preflight": `preflight(head = "abc", base = "main", name = "look")`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
