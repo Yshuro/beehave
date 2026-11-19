@@ -60,6 +60,9 @@ grep -count=1 'gh pr create --draft --head upkeep/api-2026-W44 --base main' gh.l
 grep -count=1 'gh pr create --draft --head upkeep/web-2026-W44 --base main' gh.log
 ! grep 'upkeep/tools' gh.log
 
+# On Linux the pull request step runs under the process limit of bump.star: the cap of 512 and the one process of the runner reach systemd-run.
+[linux] grep -count=2 'TasksMax=513 -- ' systemd-run.log
+
 # The report counts the rows and names the pull requests that wait for review.
 grep '3 repositories listed. 2 opened a pull request, 1 skipped,' home/.upkeep/reports/2026-W44.md
 grep '^- api: opened, https://github.example/acme/pull/1' home/.upkeep/reports/2026-W44.md
