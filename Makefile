@@ -76,7 +76,7 @@ REMEDY := bin/remedy
 
 DEADCODE_VERSION := golang.org/x/tools/cmd/deadcode@v0.51.0
 
-.PHONY: setup lint-version ai-rulez-version ai-rulez-install contract-tools-install deps deadcode build release-snapshot format format-check lint vet vuln test coverage smoke smoke-agent smoke-hook smoke-sandbox mutation mutation-pr \
+.PHONY: setup lint-version ai-rulez-version ai-rulez-install contract-tools-install deps deadcode build goreleaser-install release-snapshot format format-check lint lint-darwin vet vuln test coverage smoke smoke-agent smoke-hook smoke-sandbox mutation mutation-pr \
 	governance-generate governance-validate governance-verify clean check check-darwin
 
 setup:  ## Install the Go tools and generate the agent files
@@ -94,6 +94,9 @@ setup:  ## Install the Go tools and generate the agent files
 build:  ## Build bin/beehave and bin/remedy
 	go build -trimpath -o $(BIN) ./cmd/beehave
 	go build -trimpath -o $(REMEDY) ./examples/remediation/tools/cmd/remedy
+
+goreleaser-install:  ## Install goreleaser $(GORELEASER_VERSION) into the Go bin folder
+	go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
 release-snapshot:  ## Build release archives without publishing
 	goreleaser release --snapshot --clean --skip=publish
@@ -120,6 +123,11 @@ format-check: lint-version  ## Fail if the Go code is not formatted
 
 lint: lint-version  ## Lint the Go code
 	golangci-lint run ./...
+
+# GOOS=darwin makes golangci-lint and go vet load the files that build on macOS only, which a Linux run never reads.
+lint-darwin: lint-version  ## Lint and vet the Go code as GOOS=darwin
+	GOOS=darwin golangci-lint run ./...
+	GOOS=darwin go vet ./...
 
 vet:
 	go vet ./...
@@ -200,4 +208,4 @@ governance-verify: governance-validate  ## Validate the config and render it wit
 clean:
 	go clean -cache -testcache
 
-check: format-check lint vet deps deadcode vuln test coverage smoke governance-verify  ## The full gate (same as CI)
+check: format-check lint lint-darwin vet deps deadcode vuln test coverage smoke governance-verify  ## The full gate (same as CI)

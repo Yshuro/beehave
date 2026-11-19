@@ -25,8 +25,8 @@ archive=ai-rulez_${number}_${os}_${arch}.tar.gz
 base=https://github.com/Goldziher/ai-rulez/releases/download/$version
 work=$(mktemp -d)
 
-curl -fsSL --retry 3 -o "$work/$archive" "$base/$archive"
-curl -fsSL --retry 3 -o "$work/checksums.txt" "$base/checksums.txt"
+curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 -o "$work/$archive" "$base/$archive"
+curl -fsSL --retry 3 --retry-all-errors --retry-delay 2 -o "$work/checksums.txt" "$base/checksums.txt"
 
 want=$(awk -v name="$archive" '$2 == name { print $1 }' "$work/checksums.txt")
 if command -v sha256sum >/dev/null 2>&1; then

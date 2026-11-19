@@ -29,10 +29,30 @@ jobs:
           version: v2.15.0
           args: --timeout=5m
 
+      # With GOOS=darwin the linter and vet load the files that build on macOS only (make lint-darwin runs the same two commands).
+      - name: Lint the macOS files
+        uses: golangci/golangci-lint-action@v9
+        env:
+          GOOS: darwin
+        with:
+          version: v2.15.0
+          args: --timeout=5m
+
+      - name: Vet the macOS files
+        run: make vet GOOS=darwin
+
       - name: Install govulncheck
         run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
 
+      - name: Cache ai-rulez
+        id: ai-rulez-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/ai-rulez
+          key: ai-rulez-${{ runner.os }}-${{ hashFiles('Makefile', 'scripts/install-ai-rulez.sh') }}
+
       - name: Install ai-rulez
+        if: steps.ai-rulez-cache.outputs.cache-hit != 'true'
         run: make ai-rulez-install
 
       - name: Format, vet, dependencies, vulnerabilities
@@ -148,7 +168,16 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - uses: goreleaser/goreleaser-action@v7
+      - name: Cache goreleaser
+        id: goreleaser-cache
+        uses: actions/cache@v4
         with:
-          version: v2.20.2
-          args: release --snapshot --clean --skip=publish
+          path: ~/go/bin/goreleaser
+          key: goreleaser-${{ runner.os }}-${{ hashFiles('Makefile') }}
+
+      - name: Install goreleaser
+        if: steps.goreleaser-cache.outputs.cache-hit != 'true'
+        run: make goreleaser-install
+
+      - name: Build the release snapshot
+        run: make release-snapshot
