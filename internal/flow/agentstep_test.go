@@ -569,47 +569,28 @@ func TestAgentStep_ABadOutputTriesIsRefused(t *testing.T) {
 	}
 }
 
-func TestAgentStep_ARequiredSkillThatTheRunDidNotCallFailsTheStepAndNamesIt(t *testing.T) {
+func TestAgentStep_TheResultListsTheSkillsTheAgentCalledInTheOrderOfTheCalls(t *testing.T) {
 	t.Parallel()
 
-	rig := newAgentRig(t)
-	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd"}})
-
-	_, err := rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "Write to {{ .output_file }}\n")
-
-	require.ErrorContains(t, err, `the agent did not call the skill "review"`)
-	assert.NotContains(t, err.Error(), `"tdd"`)
-
-	rig = newAgentRig(t)
-	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd", "review"}})
-
-	_, err = rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "Write to {{ .output_file }}\n")
-	require.NoError(t, err)
-
-	rig = newAgentRig(t)
-	_, err = rig.run(t, agentFlow("require_skills = 3 + 0,"), "x")
-	require.ErrorContains(t, err, "list of strings")
-}
-
-func TestAgentStep_TheRequiredSkillsOfTheStepGoToTheAgentRequest(t *testing.T) {
-	t.Parallel()
+	flow := func(body string) string {
+		return bodyFlow("a = " + agentCallText("") + body)
+	}
 
 	rig := newAgentRig(t)
 	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd", "review"}})
 
-	_, err := rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "x")
+	_, err := rig.run(t, flow(`command(run = ["show", ",".join(a.skills), str(len(a.skills))])`+"\n"), "x")
 
 	require.NoError(t, err)
-	require.Len(t, rig.h.agents.seen(), 1)
-	assert.Equal(t, []string{"tdd", "review"}, rig.h.agents.seen()[0].RequireSkills, "the agent step must hand the skills to the request, or a CLI with no skill reports starts")
+	assert.Equal(t, []string{"show tdd,review 2"}, rig.h.commands.ran())
 
 	rig = newAgentRig(t)
 	rig.reply("", exited)
 
-	_, err = rig.run(t, agentFlow(""), "x")
+	_, err = rig.run(t, flow(`command(run = ["show", str(len(a.skills))])`+"\n"), "x")
 
 	require.NoError(t, err)
-	assert.Empty(t, rig.h.agents.seen()[0].RequireSkills)
+	assert.Equal(t, []string{"show 0"}, rig.h.commands.ran(), "a run that called no skill has an empty list")
 }
 
 func TestAgentStep_AnAgentThatDoesNotExitCleanlyFailsTheStep(t *testing.T) {

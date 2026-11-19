@@ -9,14 +9,7 @@ import (
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 
 	"github.com/tobocop2/beehave/internal/agent"
-	"github.com/tobocop2/beehave/internal/workflow"
 )
-
-// Rounds counts the rounds of a loop that a run used, against the cap that its agent calls named with the rounds keyword. Cap is 0 when no call named one.
-type Rounds struct {
-	Used int `json:"used"`
-	Cap  int `json:"cap"`
-}
 
 // GateSeen is the last gate result of a run and the head that the gate judged.
 type GateSeen struct {
@@ -45,13 +38,12 @@ type RunProgress struct {
 	Deadline time.Time `json:"deadline,omitzero"`
 	// Gate is the last gate result. It is nil for a run that ran no gate.
 	Gate *GateSeen `json:"gate,omitempty"`
-	// Fix counts the agent calls of the lane rework against the rounds cap that they named. Review does the same for the lane review.
-	Fix    Rounds `json:"fix_rounds"`
-	Review Rounds `json:"review_rounds"`
+	// Label is the label of the latest agent step that has one, as the workflow wrote it. It is empty for a run with no labelled agent step.
+	Label string `json:"label,omitempty"`
 }
 
 // Notes lists the facts of the progress as short texts, one for each fact the run has: the cost, the step that runs now, the deadline of a wait,
-// the last gate result and the rounds. A run with none has no notes.
+// the last gate result and the label. A run with none has no notes.
 func (p RunProgress) Notes() []string {
 	return p.NotesAt(time.Time{})
 }
@@ -72,9 +64,11 @@ func (p RunProgress) NotesAt(now time.Time) []string {
 		notes = append(notes, p.Gate.text())
 	}
 
-	notes = append(notes, p.Fix.notes("fix")...)
+	if p.Label != "" {
+		notes = append(notes, p.Label)
+	}
 
-	return append(notes, p.Review.notes("review")...)
+	return notes
 }
 
 // stopNotes are the notes of the cap and of the provider limit that hold a step back. A run that nothing holds has none.
@@ -172,18 +166,6 @@ func (g GateSeen) text() string {
 	return "gate " + result + " at " + g.Head
 }
 
-// notes is the note of one lane: its name, the rounds used and the cap. A lane with no round and no cap has none.
-func (r Rounds) notes(lane string) []string {
-	switch {
-	case r == Rounds{}:
-		return nil
-	case r.Cap == 0:
-		return []string{lane + " " + strconv.Itoa(r.Used)}
-	}
-
-	return []string{fmt.Sprintf("%s %d of %d", lane, r.Used, r.Cap)}
-}
-
 // progressOf reads the progress of a run from its step lines. open is true for a run that has not ended. The cost, the gate and the rounds come from the
 // lines, which the view of the steps decodes from the records; nothing is counted twice or stored.
 func progressOf(lines []StepLine, limit float64, open bool) RunProgress {
@@ -208,11 +190,8 @@ func (p *RunProgress) take(line StepLine, open bool) {
 		p.Gate = &GateSeen{Passed: *line.Passed, Head: line.Head}
 	}
 
-	switch line.Kind {
-	case workflow.LaneRework:
-		p.Fix.add(line)
-	case workflow.LaneReview:
-		p.Review.add(line)
+	if line.Label != "" {
+		p.Label = line.Label
 	}
 
 	if open && (line.State == stepRunning || line.State == string(runRunning)) {
@@ -229,12 +208,6 @@ func (p *RunProgress) takeHolds(line StepLine) {
 	if line.LimitWait != nil {
 		p.LimitWait = line.LimitWait
 	}
-}
-
-// add counts one agent call and keeps the highest cap that a call of the lane named.
-func (r *Rounds) add(line StepLine) {
-	r.Used++
-	r.Cap = max(r.Cap, line.Rounds)
 }
 
 // sleepStep is the name of the step in which the workflow library records the deadline of a receive, as epoch milliseconds, before the receive waits.

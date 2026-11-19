@@ -99,10 +99,23 @@ def void_names(check):
     names = [s["name"] for s in check.steps if s["status"] == "unknown"]
     return ", ".join(names) if names else "unknown"
 
+def verdict_of(loop, review):
+    """The verdict of a review. With follow_ups = "forbid", a review that leaves any finding open in its output `open` has the verdict changes, unless the agent wrote reject."""
+    if loop.follow_ups == "forbid" and review.verdict != "reject" and review.open != "":
+        return "changes"
+    return review.verdict
+
+def labelled(loop, kind, cap):
+    """The label of the next agent call of a kind: the kind and the number of the call against the cap, for example fix 2/6."""
+    loop.calls[kind] += 1
+    return "%s %d/%d" % (kind, loop.calls[kind], cap)
+
 def ended(loop, head, gate = None, review = None, stopped = False, exhausted = False, rejected = False, design = None, held = ""):
     """The result of the loop. head is the commit that the last step of the loop judged. gate is the last gate of a candidate, and it is None when the loop ended before the first one.
+    verdict is the verdict of the last full review, and it is empty when the loop ended before one.
     host_losses is the highest count that a gate of the loop read, and host_lost is true when HOST_LOSS_LIMIT stopped the reruns."""
-    return struct(head = head, stopped = stopped, exhausted = exhausted, rejected = rejected, design = design, held = held, gate = gate, review = review, host_losses = loop.host["losses"], host_lost = loop.host["lost"])
+    verdict = verdict_of(loop, review) if review != None else ""
+    return struct(head = head, stopped = stopped, exhausted = exhausted, rejected = rejected, design = design, held = held, gate = gate, review = review, verdict = verdict, host_losses = loop.host["losses"], host_lost = loop.host["lost"])
 
 def sent_back(findings, mechanism = "", gate = None, review = None, due = True):
     """The result of a step that sends the head back to a fix: the findings and the mechanism that they are about. due is false only for a head that needs no fix."""
@@ -173,16 +186,14 @@ def with_violations(findings, *violations):
 def review_args(loop, head, violations, scope, outputs):
     """The arguments of a fresh read-only review of the head, other than its name. scope tells the review what it judges."""
     return dict(
-        lane = "review",
-        rounds = loop.review_cap,
+        label = labelled(loop, "review", loop.review_cap),
         prompt = loop.review_prompt,
         model = loop.steps["review"]["model"],
         runner = loop.steps["review"]["runner"],
         pin = head,
-        outputs = (["verdict", "mechanism"] if loop.design_prompt != "" else ["verdict"]) + outputs,
+        outputs = (["verdict", "mechanism"] if loop.design_prompt != "" else ["verdict"]) + (["open"] if loop.follow_ups == "forbid" else []) + outputs,
         forbid_commands = REVIEW_FORBID + loop.extra,
         protect_paths = loop.protect,
-        follow_ups = loop.follow_ups,
         output_tries = 2,
         edits = False,
         inputs = {"item": loop.item, "violations": violations, "facts": loop.facts, "scope": scope},
@@ -211,7 +222,7 @@ def check_review(loop, check, inner, outer):
         return struct(end = ended(loop, check.head, held = held, gate = check, review = review))
 
     # A read-only step that changed the folder is a violation of this round, the last scoped review included: the approve of that review is not clean.
-    if review.verdict == "approve" and lane.violations == "" and review.violations == "" and inner.breach == "":
+    if verdict_of(loop, review) == "approve" and lane.violations == "" and review.violations == "" and inner.breach == "":
         return struct(end = ended(loop, check.head, gate = check, review = review))
 
     return sent_back(with_violations(review.text, inner.breach, review.violations, lane.violations), mechanism_of(loop, review), check, review)
@@ -251,7 +262,7 @@ def design_round(loop, pending, fixes, decided, outer, lane):
 
     design = agent(
         name = "design",
-        lane = "design",
+        label = "design",
         prompt = loop.design_prompt,
         model = loop.steps["design"]["model"],
         runner = loop.steps["design"]["runner"],
@@ -292,8 +303,7 @@ def scoped_fix(loop, pending, fixes, decided, outer, inner, lane):
     chosen = loop.steps["fix"] if early else loop.steps.get("fix_late", loop.steps["fix"])
     fix = agent(
         name = "fix-scoped-%d" % inner,
-        lane = "rework",
-        rounds = loop.fix_cap,
+        label = labelled(loop, "fix", loop.fix_cap),
         prompt = loop.fix_prompt,
         model = chosen["model"],
         runner = chosen["runner"],
@@ -333,7 +343,7 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
         if review.verdict == "reject":
             return struct(end = ended(loop, lane.head_sha, rejected = True, gate = pending.gate, review = review))
 
-        if review.verdict == "approve" and lane.violations == "" and review.violations == "":
+        if verdict_of(loop, review) == "approve" and lane.violations == "" and review.violations == "":
             return struct(end = None, lane = lane, open = "", breach = "")
 
         pending = sent_back(with_violations(review.text, review.violations, lane.violations), mechanism_of(loop, review), pending.gate, review)
@@ -342,7 +352,7 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     return struct(end = None, lane = lane, open = pending.findings, breach = review.violations)
 
 def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER):
-    """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
+    """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, verdict, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
 
     steps is a dict from a step name to {"model": text, "runner": text}. The entries implement, review and fix are required, design is required with a design_prompt, and fix_late is optional.
     The library holds no model. An empty runner means the pool pick. design_after, void_reruns, void_asks and escalate_after are the limits of the loop, and the constants of the same names are their defaults.
@@ -353,8 +363,13 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
     guard holds the settings of the preflight call before every agent of the loop: base, hold and own. A stop ends the loop with stopped set.
     protect lists the directories that no command of a review or a fix may write in. allow lists the globs that a fix may change.
     design_prompt turns on the design round: each review then writes the output `mechanism`. review_outputs lists more outputs of the full review.
-    facts is the value of the facts() builtin, passed to each agent. follow_ups is passed to each review.
+    facts is the value of the facts() builtin, passed to each agent.
+    follow_ups is "allow" or "forbid". With "forbid", each review writes the output `open`, one text with a line for each open finding and an empty text for none,
+    and a review with an open finding has the verdict changes unless its verdict is reject. The result field verdict holds the verdict of the last full review with that rule applied.
     """
+    if follow_ups not in ["allow", "forbid"]:
+        fail("REFUSE: review_fix got follow_ups %r. Use \"allow\" or \"forbid\"." % (follow_ups,))
+
     kept_history(impl, "implement", item)
 
     loop = struct(
@@ -380,6 +395,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
         review_check = review_check,
         checks = checks,
         host = {"losses": 0, "lost": False},
+        calls = {"fix": 0, "review": 0},
         review_cap = rounds * (MAX_INNER + 1),
         fix_cap = rounds * MAX_INNER,
     )

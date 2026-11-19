@@ -22,7 +22,7 @@ pool(
 
 # max_concurrent in agents() is the global limit on agent processes. A laptop wants 2, a
 # build host more. Each login runs one agent at a time on each queue, so a review step and an implement step of one login can run at once. The argument is optional; the default is 2.
-# max_review_concurrent is the same limit for the agent steps with kind = "review". The two
+# max_review_concurrent is the same limit for the agent steps with edits = False. The two
 # limits are separate: an idle review slot does not run implement work. The default is 2.
 # max_turns and max_budget_usd cap one agent run, in agentic turns and in dollars. 0 means no cap,
 # which is the default. A run that reaches a cap ends the step with the output stop. Both are optional.

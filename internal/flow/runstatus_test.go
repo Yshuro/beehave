@@ -47,20 +47,6 @@ func TestWaitDeadline_ADeadlineOneMinuteBelowTheReceiveWindowIsNoDeadlineAndOneM
 	assert.Equal(t, edge.Add(-time.Millisecond), waitDeadline(sleep(edge.Add(-time.Millisecond)), "q"), "just under the edge is a deadline")
 }
 
-func TestStatus_ARoundsCapThatTheRunComputesIsCheckedByTheRun(t *testing.T) {
-	t.Parallel()
-
-	for _, value := range []string{"0", `"5"`, "1 << 40", "1 << 70"} {
-		rig := newAgentRig(t)
-		rig.reply("", exited)
-
-		_, err := rig.run(t, "def main(item):\n    n = "+value+"\n    agent(model = \"m\", prompt = \"prompts/a.md\", rounds = n, name = \"a\")\n", "x")
-
-		require.ErrorContains(t, err, "rounds must be a whole number of 1 or more", value)
-		assert.Empty(t, rig.h.agents.seen(), value)
-	}
-}
-
 func TestTimeLeft_NamesTheLargestUnitsOfTheTimeToTheDeadline(t *testing.T) {
 	t.Parallel()
 
@@ -86,12 +72,12 @@ func TestRunProgress_NotesAtAddsTheTimeLeftToTheDeadlineAndNotesLeavesItOut(t *t
 	assert.Equal(t, []string{"answer by 2026-11-03T11:00:00Z"}, progress.Notes())
 }
 
-func TestRunProgress_NotesNameTheGateWithNoHeadAndRoundsWithNoCap(t *testing.T) {
+func TestRunProgress_NotesNameTheGateWithNoHeadAndTheLabel(t *testing.T) {
 	t.Parallel()
 
-	progress := RunProgress{Gate: &GateSeen{Passed: true}, Fix: Rounds{Used: 2}, Review: Rounds{Used: 1, Cap: 3}}
+	progress := RunProgress{Gate: &GateSeen{Passed: true}, Label: "review 1/3"}
 
-	assert.Equal(t, []string{"gate pass", "fix 2", "review 1 of 3"}, progress.Notes())
+	assert.Equal(t, []string{"gate pass", "review 1/3"}, progress.Notes())
 	assert.Equal(t, []string{"spent $1.5"}, RunProgress{Spent: agent.Spend{Cost: 1.5}}.Notes())
 	assert.Equal(t, []string{"gate fail at abc"}, RunProgress{Gate: &GateSeen{Head: "abc"}}.Notes())
 }
@@ -293,29 +279,27 @@ func TestStatus_ARunWithNoGateShowsNoGate(t *testing.T) {
 	assert.Nil(t, onlyRun(t, rig.h.client(t, testVersion)).Gate)
 }
 
-const roundsFlow = "def main(item):\n" +
-	"    agent(model = \"m\", prompt = \"prompts/a.md\", lane = \"review\", rounds = 6, name = \"review\")\n" +
-	"    agent(model = \"m\", prompt = \"prompts/a.md\", lane = \"rework\", rounds = 5, name = \"fix\")\n" +
-	"    agent(model = \"m\", prompt = \"prompts/a.md\", lane = \"review\", rounds = 6, name = \"review\")\n"
+const labelsFlow = "def main(item):\n" +
+	"    agent(model = \"m\", prompt = \"prompts/a.md\", label = \"review 1/6\", name = \"review\")\n" +
+	"    agent(model = \"m\", prompt = \"prompts/a.md\", label = \"fix 1/5\", name = \"fix\")\n" +
+	"    agent(model = \"m\", prompt = \"prompts/a.md\", name = \"plain\")\n"
 
-func TestStatus_ARunShowsTheFixAndReviewRoundsUsedAgainstTheirCaps(t *testing.T) {
+func TestStatus_ARunShowsTheLabelOfTheLatestLabelledAgentStep(t *testing.T) {
 	t.Parallel()
 
 	rig := newAgentRig(t)
 	rig.reply("", exited)
 
-	_, err := rig.run(t, roundsFlow, "x")
+	_, err := rig.run(t, labelsFlow, "x")
 	require.NoError(t, err)
 
 	info := onlyRun(t, rig.h.client(t, testVersion))
 
-	assert.Equal(t, Rounds{Used: 1, Cap: 5}, info.Fix)
-	assert.Equal(t, Rounds{Used: 2, Cap: 6}, info.Review)
-	assert.Contains(t, info.Notes(), "fix 1 of 5")
-	assert.Contains(t, info.Notes(), "review 2 of 6")
+	assert.Equal(t, "fix 1/5", info.Label, "the call with no label leaves the label of the step before it")
+	assert.Contains(t, info.Notes(), "fix 1/5")
 }
 
-func TestStatus_AnAgentCallWithNoRoundsCapShowsNoRounds(t *testing.T) {
+func TestStatus_AnAgentCallWithNoLabelShowsNoLabel(t *testing.T) {
 	t.Parallel()
 
 	rig := newAgentRig(t)
@@ -326,23 +310,19 @@ func TestStatus_AnAgentCallWithNoRoundsCapShowsNoRounds(t *testing.T) {
 
 	info := onlyRun(t, rig.h.client(t, testVersion))
 
-	assert.Equal(t, Rounds{}, info.Fix)
-	assert.Equal(t, Rounds{}, info.Review)
+	assert.Empty(t, info.Label)
 }
 
-func TestStatus_ARoundsCapBelowOneIsRefused(t *testing.T) {
+func TestStatus_ALabelThatIsNotTextIsRefused(t *testing.T) {
 	t.Parallel()
 
-	for _, extra := range []string{`rounds = 0, `, `rounds = -2, `, `rounds = "5", `} {
-		rig := newAgentRig(t)
-		rig.reply("", exited)
+	rig := newAgentRig(t)
+	rig.reply("", exited)
 
-		_, err := rig.run(t, agentFlow(extra), "x")
+	_, err := rig.run(t, agentFlow(`label = 5, `), "x")
 
-		require.Error(t, err, extra)
-		assert.Contains(t, err.Error(), "rounds", extra)
-		assert.Empty(t, rig.h.agents.seen(), extra)
-	}
+	require.ErrorContains(t, err, "label")
+	assert.Empty(t, rig.h.agents.seen())
 }
 
 func TestStatus_TheJSONViewOfARunCarriesTheSameFigures(t *testing.T) {

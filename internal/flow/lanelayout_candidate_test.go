@@ -13,7 +13,7 @@ import (
 // candidateFlow runs the review loop of the library on the base main, with two candidates at most.
 const candidateFlow = "load(\"@beehave//review_fix.star\", \"review_fix\")\n\n" +
 	"def main(item):\n" +
-	"    impl = agent(name = \"implement\", lane = \"fix\", prompt = \"p.md\", model = \"sonnet\")\n" +
+	"    impl = agent(name = \"implement\", prompt = \"p.md\", model = \"sonnet\")\n" +
 	"    loop = review_fix(item, impl, \"p.md\", \"p.md\", base = \"main\", rounds = 2, steps = " + loopSteps + ")\n" +
 	"    return {\"approved\": loop.review != None and loop.review.verdict == \"approve\"}\n"
 

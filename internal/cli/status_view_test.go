@@ -448,11 +448,7 @@ func TestStatus_TheListWithJSONKeepsFalseAndZeroApartFromAbsent(t *testing.T) {
 		assert.Equal(t, want, got[0][key], key)
 	}
 
-	for _, key := range []string{"fix_rounds", "review_rounds"} {
-		assert.Contains(t, got[0], key)
-	}
-
-	for _, key := range []string{"question", "asked", "stopped", "deadline", "time_left_seconds", "gate"} {
+	for _, key := range []string{"label", "question", "asked", "stopped", "deadline", "time_left_seconds", "gate"} {
 		assert.NotContains(t, got[0], key)
 	}
 }

@@ -32,32 +32,27 @@ const (
 
 // agentArgs are the arguments of an agent call, and the folder and output file of its step.
 type agentArgs struct {
-	prompt      string
-	data        map[string]any
-	runner      string
-	kind        string
-	lane        string
+	prompt string
+	data   map[string]any
+	runner string
+	// label is the label keyword: a free text that the ledger and the status line show. It picks no behaviour.
+	label       string
 	model       string
 	timeout     time.Duration
 	idleTimeout time.Duration
 	// maxBudget is the max_budget_usd of the step: the most dollars that the agent may spend. 0 means the step sets no cap.
 	maxBudget float64
-	// rounds is the rounds keyword: the cap of the loop that the call belongs to. 0 means the call names none.
-	rounds        int
-	pin           string
-	requireSkills []string
-	forbid        []model.FindingKind
-	protect       []string
-	scope         scope
-	start         startMark
+	pin       string
+	forbid    []model.FindingKind
+	protect   []string
+	scope     scope
+	start     startMark
 	// plain is true when the project has no repository: the item folder is a plain folder, and no step reads git there.
 	plain bool
 	// startHead is the commit of the item folder when the render step ran, which is before the agent starts. It is the baseline of the whole call, not of one try. It is empty for a record made before the render step kept it.
 	startHead string
 	declared  []string
 	resume    string
-	// followUps is the follow_ups mode that sets the verdict from the findings, or empty for the mode "allow".
-	followUps string
 	// edits is the edits argument: false starts the step so that Claude Code refuses each file edit.
 	edits bool
 	tries int
@@ -71,12 +66,12 @@ type agentArgs struct {
 // agentCall unpacks the arguments of the agent builtin. The second result is the label of the call.
 func agentCall(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (agentArgs, string, error) {
 	a := agentArgs{tries: 1, edits: true}
-	raw := agentRaw{followUps: workflow.FollowUpsAllow}
+	raw := agentRaw{}
 
 	err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{
 		"prompt": &a.prompt, "model": &a.model, "runner": &a.runner, "inputs": &raw.inputs, "outputs": &raw.outputs, "pin": &a.pin,
-		"resume": &a.resume, "require_skills": &raw.skills, "forbid_commands": &raw.kinds, "allow_paths": &raw.allow, "protect_paths": &raw.protect, "output_tries": &a.tries,
-		"edits": &a.edits, "follow_ups": &raw.followUps, "kind": &a.kind, "lane": &a.lane, timeoutKeyword: &raw.timeout, "idle_timeout": &raw.idle, "max_budget_usd": &raw.budget, "sandbox": &raw.sandbox, nameKeyword: &raw.label, workflow.RoundsKeyword: &raw.rounds,
+		"resume": &a.resume, "forbid_commands": &raw.kinds, "allow_paths": &raw.allow, "protect_paths": &raw.protect, "output_tries": &a.tries,
+		"edits": &a.edits, workflow.LabelKeyword: &a.label, timeoutKeyword: &raw.timeout, "idle_timeout": &raw.idle, "max_budget_usd": &raw.budget, "sandbox": &raw.sandbox, nameKeyword: &raw.name,
 	})
 	if err == nil && a.model == "" {
 		err = errors.New("an agent call needs a model. Add model = \"sonnet\" or the name of another model")
@@ -86,15 +81,14 @@ func agentCall(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple
 		return a, "", err
 	}
 
-	return a, raw.label, errors.Join(a.checkKind(), a.read(raw))
+	return a, raw.name, a.read(raw)
 }
 
-// agentRaw are the arguments of an agent call that need a check before they are used.
+// agentRaw are the arguments of an agent call that need a check before they are used. name is the name keyword, the suffix of the step name.
 type agentRaw struct {
-	label, timeout, idle, followUps string
-	inputs, outputs, skills, kinds  starlark.Value
+	name, timeout, idle             string
+	inputs, outputs, kinds          starlark.Value
 	allow, protect, sandbox, budget starlark.Value
-	rounds                          starlark.Value
 }
 
 // read checks the raw arguments of an agent call and keeps the result in a.
@@ -128,12 +122,6 @@ func (a *agentArgs) limits(raw agentRaw) (err error) {
 		return err
 	}
 
-	if raw.rounds != nil {
-		if a.rounds, err = workflow.Rounds(raw.rounds); err != nil {
-			return err
-		}
-	}
-
 	if raw.budget == nil { // the keyword is left out: the step sets no cap
 		return nil
 	}
@@ -143,30 +131,9 @@ func (a *agentArgs) limits(raw agentRaw) (err error) {
 	return err
 }
 
-// checkKind refuses a kind that is not one of the two kinds. An empty kind is the kind implement.
-func (a agentArgs) checkKind() error {
-	if a.lane != "" && !slices.Contains(workflow.Lanes(), a.lane) {
-		return fmt.Errorf("lane is %q. Use one of: %s", a.lane, strings.Join(workflow.Lanes(), ", "))
-	}
-
-	if a.kind == workflow.AgentKindReview && a.lane != "" && a.lane != workflow.LaneReview {
-		return fmt.Errorf("lane is %q and kind is %q. A call of kind review has the lane review", a.lane, a.kind)
-	}
-
-	if a.kind == "" || slices.Contains(workflow.AgentKinds(), a.kind) {
-		return nil
-	}
-
-	return fmt.Errorf("kind is %q. Use one of: %s", a.kind, strings.Join(workflow.AgentKinds(), ", "))
-}
-
-// lists reads the three list arguments of an agent call, then the follow_ups option, which needs the declared outputs.
+// lists reads the list arguments of an agent call.
 func (a *agentArgs) lists(raw agentRaw) (err error) {
 	if a.declared, err = workflow.Words("outputs", raw.outputs); err != nil {
-		return err
-	}
-
-	if a.requireSkills, err = workflow.Words("require_skills", raw.skills); err != nil {
 		return err
 	}
 
@@ -174,11 +141,7 @@ func (a *agentArgs) lists(raw agentRaw) (err error) {
 		return err
 	}
 
-	if a.scope, err = readScope(raw.allow); err != nil {
-		return err
-	}
-
-	a.followUps, err = followUps(raw.followUps, a.declared)
+	a.scope, err = readScope(raw.allow)
 
 	return err
 }
@@ -307,7 +270,11 @@ func (s *script) renderStep(a agentArgs, login string) func(context.Context) (st
 			return stepResult{Note: prompt}, err
 		}
 
-		outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head, recordedLogin: login, recordedKind: workflow.LaneKind(a.kind, a.lane)}
+		outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head, recordedLogin: login}
+		if a.label != "" {
+			outputs[recordedLabel] = a.label
+		}
+
 		if a.model != "" {
 			outputs[recordedModel] = a.model
 		}
@@ -361,9 +328,9 @@ func (a agentArgs) refusePlain(project string) error {
 // phase makes the input of the phase that runs the agent. treeStart is the commit of the worktree of a round item that the run made.
 func (a agentArgs) phase(in ItemInput, login, prompt, treeStart string) PhaseInput {
 	return PhaseInput{
-		Item: in.Item, Project: in.Project, Login: login, Kind: a.kind, Prompt: prompt,
-		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, RequireSkills: a.requireSkills, MaxBudget: a.maxBudget,
-		Rounds: a.rounds, NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart,
+		Item: in.Item, Project: in.Project, Login: login, Prompt: prompt,
+		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, MaxBudget: a.maxBudget,
+		NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart,
 	}
 }
 
@@ -550,20 +517,16 @@ func dollars(amount float64) string {
 	return strings.TrimSuffix(strings.TrimRight(strconv.FormatFloat(amount, 'f', 4, floatBits), "0"), ".")
 }
 
-// readAgent checks the skills of a finished run, records its violations and reads its declared outputs.
+// readAgent records the violations and the skills of a finished run and reads its declared outputs.
 // A violation does not fail the step: the workflow reads `violations` and decides. A problem with the output file is the Note of the result,
-// so the caller can run the agent again. A missing skill is an error.
+// so the caller can run the agent again.
 func readAgent(ctx context.Context, a agentArgs, ended PhaseOutput) (stepResult, error) {
-	if err := missingSkill(a.requireSkills, ended.Skills); err != nil {
-		return stepResult{}, err
-	}
-
 	head, rewrote, violations, err := a.endState(ctx, ended.Violations)
 	if err != nil {
 		return stepResult{}, err
 	}
 
-	outputs := agentOutputs(ended.Text, ended.Session, ended.Transcript, head, strings.Join(violations, "\n"), capOf(ended.Outcome), ended.Spend, rewrote)
+	outputs := agentOutputs(ended.Text, ended.Session, ended.Transcript, head, strings.Join(violations, "\n"), capOf(ended.Outcome), ended.Spend, rewrote, ended.Skills)
 
 	// A run that left a bad output file still cost money, so its outputs stay in the result and the run cap counts them.
 	if problem := a.readOutputs(outputs); problem != "" {
@@ -586,8 +549,7 @@ func capOf(outcome agent.Outcome) string {
 	return ""
 }
 
-// readOutputs reads the output file when the call declares outputs, adds them to outputs, then applies the follow_ups option.
-// A call that forbids follow-ups declares the output verdict, so it always has an output file. It returns what is wrong with the file, or an empty text.
+// readOutputs reads the output file when the call declares outputs and adds them to outputs. It returns what is wrong with the file, or an empty text.
 func (a agentArgs) readOutputs(outputs map[string]any) string {
 	// A run that a cap stopped returns its stop with no declared outputs: the workflow guard names the cap, and a missing output file would hide it.
 	if len(a.declared) == 0 || outputs["stop"] != "" {
@@ -599,26 +561,7 @@ func (a agentArgs) readOutputs(outputs map[string]any) string {
 		return problem
 	}
 
-	if problem := addDeclared(outputs, a.declared, written); problem != "" {
-		return problem
-	}
-
-	if a.followUps != "" {
-		return applyFollowUps(a.followUps, outputs, written)
-	}
-
-	return ""
-}
-
-// missingSkill returns an error that names the first required skill that the run did not call.
-func missingSkill(required, called []string) error {
-	for _, skill := range required {
-		if !slices.Contains(called, skill) {
-			return fmt.Errorf("the agent did not call the skill %q. Check that the runner has the skill", skill)
-		}
-	}
-
-	return nil
+	return addDeclared(outputs, a.declared, written)
 }
 
 // addDeclared adds the named outputs from the JSON object the agent wrote to outputs. It returns what is wrong with the object, or an empty text.

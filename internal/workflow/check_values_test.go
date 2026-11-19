@@ -11,10 +11,6 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct{ name, call, want string }{
-		{"agent rounds zero", `agent("p", "m", rounds = 0)`, "agent: rounds must be a whole number of 1 or more"},
-		{"agent rounds text", `agent("p", "m", rounds = "5")`, "agent: rounds must be a whole number of 1 or more"},
-		{"agent rounds beyond 32 bits", `agent("p", "m", rounds = 1099511627776)`, "agent: rounds must be a whole number of 1 or more"},
-		{"agent rounds beyond 64 bits", `agent("p", "m", rounds = 1180591620717411303424)`, "agent: rounds must be a whole number of 1 or more"},
 		{"output_tries zero", `agent("p", "m", output_tries = 0)`, "agent: output_tries must be a whole number of 1 or more"},
 		{"output_tries negative", `agent("p", "m", output_tries = -2)`, "agent: output_tries must be a whole number of 1 or more"},
 		{"agent timeout", `agent("p", "m", timeout = "soon")`, `agent: timeout is "soon", which is not a duration`},
@@ -56,7 +52,6 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 		{"allow_paths number", `agent("p", "m", allow_paths = [1])`, "agent: allow_paths must hold strings only"},
 		{"allow_paths glob", `agent("p", "m", allow_paths = ["[a"])`, `agent: allow_paths has the pattern "[a", which does not parse`},
 		{"outputs element", `agent("p", "m", outputs = [1])`, "agent: outputs must hold strings only"},
-		{"require_skills element", `agent("p", "m", require_skills = [True])`, "agent: require_skills must hold strings only"},
 		{"protect_paths element", `agent("p", "m", protect_paths = [1])`, "agent: protect_paths must hold strings only"},
 		{"inputs key", `agent("p", "m", inputs = {1: "a"})`, "agent: a value cannot go into a prompt or a request"},
 		{"max_new_processes with host", `command(run = ["x"], host = "h", max_new_processes = 5)`, "command: max_new_processes cannot be used together with host"},
@@ -124,11 +119,11 @@ func TestCheck_AcceptsTheLiteralValuesThatTheRunAccepts(t *testing.T) {
 	t.Parallel()
 
 	got := checkText(t, "D = \"5s\"\nwho = [\"a\"]\n\ndef main(item):\n"+
-		"    agent(\"p\", \"m\", output_tries = 3, timeout = \"90s\", idle_timeout = \"10m\", allow_paths = [\"a/**\", \"./b\"], outputs = [\"o\"], require_skills = [\"s\"], inputs = {\"k\": [1, 2.5, None]})\n"+
+		"    agent(\"p\", \"m\", output_tries = 3, timeout = \"90s\", idle_timeout = \"10m\", allow_paths = [\"a/**\", \"./b\"], outputs = [\"o\"], inputs = {\"k\": [1, 2.5, None]})\n"+
 		"    agent(\"p\", \"m\", output_tries = 1, timeout = D, allow_paths = [D])\n"+
 		"    agent(\"p\", \"m\", max_budget_usd = 2.5)\n"+
 		"    agent(\"p\", \"m\", max_budget_usd = 0)\n"+
-		"    agent(\"p\", \"m\", rounds = 5)\n"+
+		"    agent(\"p\", \"m\", label = \"fix 1/5\")\n"+
 		"    command(run = [\"x\"], stop_on_rc = [1, 255], max_new_processes = 5, timeout = \"\")\n"+
 		"    wait(question = \"q\", timeout = \"48h\")\n"+
 		"    wait(question = \"q\", to = [\"a\", \"b\"], quorum = 2, choices = [\"yes\", \"no\"], timeout = \"1h\")\n"+

@@ -73,7 +73,6 @@ func TestCheck_ReadsEveryKindOfLiteralBeforeApplyingTheRulesOfTheRun(t *testing.
 		{"negative big", `agent("p", "m", output_tries = -100000000000000000000)`, "output_tries\": -100000000000000000000 out of range"},
 		{"tuple of False", `agent("p", "m", outputs = (False,))`, "outputs must hold strings only"},
 		{"parenthesis and None", `agent("p", "m", outputs = ([None]))`, "outputs must hold strings only"},
-		{"negative in a keyword with a closed set", `agent("p", "m", follow_ups = -1)`, "follow_ups is -1"},
 	}
 
 	for _, tc := range cases {
@@ -102,7 +101,7 @@ func TestCheck_LeavesAValueThatIsNotAWholeLiteralToTheRun(t *testing.T) {
 
 	got := checkText(t, "N = 0\n\ndef main(item):\n"+
 		"    agent(\"p\", \"m\", output_tries = N, outputs = [\"a\", N], allow_paths = [\"a\"] + [\"[\"], inputs = {N: 1}, timeout = N)\n"+
-		"    agent(\"p\", \"m\", outputs = [-N],inputs = {\"a\": N}, require_skills = [not True])\n"+
+		"    agent(\"p\", \"m\", outputs = [-N],inputs = {\"a\": N})\n"+
 		"    agent(\"p\", \"m\", output_tries = 5, protect_paths = [\"a\"], forbid_commands = [\"protected-path\"])\n"+
 		"    command(run = [\"x\"], host = N, max_new_processes = 5)\n"+
 		"    command(run = [\"x\"], max_new_processes = 5)\n")

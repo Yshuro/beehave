@@ -37,7 +37,7 @@ func TestExample_TheThirdRoundOnOneMechanismRunsTheDesignStepAndAReplaceEndsTheL
 	assert.False(t, childOf(t, result).Approved)
 }
 
-func TestExample_TheLanesOfTheItemAreFixReviewReworkAndDesignInTheLedgerOfTheMethod(t *testing.T) {
+func TestExample_TheLanesOfTheItemCarryTheLabelsOfTheLoop(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRigWithDesign(t, alwaysChanges, noFindings, sameMechanism, `{"decision":"replace","reason":"the framework already retries"}`)
@@ -51,11 +51,11 @@ func TestExample_TheLanesOfTheItemAreFixReviewReworkAndDesignInTheLedgerOfTheMet
 
 	var kinds []string
 	for _, lane := range lanes.Lanes {
-		kinds = append(kinds, lane.Kind)
+		kinds = append(kinds, lane.Label)
 	}
 
-	assert.Equal(t, []string{"fix", "fix", "review", "rework", "review", "rework", "review", "review", "design"}, kinds,
-		"the plan and the implement step are fix lanes, each scoped and full review is a review lane, each fix after a review is a rework lane, and the design step is a design lane")
+	assert.Equal(t, []string{"", "implement", "review 1/24", "fix 1/18", "review 2/24", "fix 2/18", "review 3/24", "review 4/24", "design"}, kinds,
+		"the plan has no label, the other agent steps carry the label of the loop, and the design step is labelled design")
 }
 
 func TestExample_ADeleteDecisionAlsoEndsTheLoop(t *testing.T) {

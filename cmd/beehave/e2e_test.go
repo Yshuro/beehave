@@ -28,7 +28,6 @@ import (
 	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/sandbox/landlock"
-	"github.com/tobocop2/beehave/internal/workflow/workflowtest"
 )
 
 // These tests run the beehave commands as separate processes, as testscript does for any command line tool.
@@ -474,32 +473,8 @@ func oneItemCopy(example string) (string, error) {
 	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
 }
 
-// exampleSkill returns the one skill that an agent of examples/remediation/workflow.star requires.
-func exampleSkill() (string, error) {
-	text, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	if err != nil {
-		return "", err
-	}
-
-	calls, err := workflowtest.Calls("workflow.star", text)
-	if err != nil {
-		return "", err
-	}
-
-	var skills []string
-
-	for _, call := range calls {
-		if call.Builtin == "agent" {
-			skills = append(skills, workflowtest.Literals(call.Args["require_skills"])...)
-		}
-	}
-
-	if len(skills) != 1 {
-		return "", fmt.Errorf("the example requires %d skills, want 1", len(skills))
-	}
-
-	return skills[0], nil
-}
+// exampleSkill is the skill that the implement step of examples/remediation/workflow.star must call.
+const exampleSkill = "blast-radius-review"
 
 // e2eFile is a file of the work folder of a script; a program is a file that the script starts.
 type e2eFile struct {
@@ -534,10 +509,7 @@ func writeE2EFile(path string, file e2eFile) error {
 // e2eSetup writes the config folder and the fake claude into the work folder of a script.
 func e2eSetup(env *testscript.Env) error {
 	work := env.WorkDir
-	skill, err := exampleSkill()
-	if err != nil {
-		return err
-	}
+	skill := exampleSkill
 
 	// The fake claude keeps a transcript where the adapter looks for it: the agent of the scripts runs in the work folder with the work folder as its login folder.
 	transcripts := filepath.Dir(newAdapters(nil, nil, nil).agent(claude.Name).TranscriptPath(work, work, "session"))

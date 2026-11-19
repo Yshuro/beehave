@@ -60,8 +60,6 @@ type Profile struct {
 	GuardBefore string
 	// GuardPosixOnly is true when the hook of Guard needs a POSIX shell, so a run with a guard does not start on Windows.
 	GuardPosixOnly bool
-	// NoSkillCalls is true when the CLI reports no skill calls on its output, so a step that requires skills cannot be proved and does not start.
-	NoSkillCalls bool
 	// DefaultTimeout is the total limit of a run whose spec sets no Timeout. Zero means no limit. StallNote is added to the Note of a run that a total or idle
 	// limit ended, for a CLI that prints nothing and retries when it cannot work (for example a model over its quota). It names the likely cause.
 	DefaultTimeout time.Duration

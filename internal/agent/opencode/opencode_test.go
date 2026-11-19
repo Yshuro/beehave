@@ -357,6 +357,5 @@ func TestProfile_PinsTheRecordedVersionAndRefusesWhatItCannotProve(t *testing.T)
 	assert.Equal(t, "3.0.0", p.SupportedBefore)
 	assert.Equal(t, "2.0.0", p.GuardBefore)
 	assert.True(t, p.GuardPosixOnly)
-	assert.True(t, p.NoSkillCalls)
 	assert.Equal(t, time.Hour, p.DefaultTimeout)
 }

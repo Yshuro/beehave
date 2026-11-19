@@ -608,7 +608,7 @@ def take_over(item, pr, author, project, round_settings):
         model = _model(round_settings, "take_review"),
         runner = _runner(round_settings, "take_review"),
         edits = False,
-        kind = "review",
+        label = "take review",
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
         inputs = {"item": item, "pr": pr, "facts": project},
     )
@@ -752,7 +752,7 @@ def sync_land(item, project, round_settings, line, n):
         prompt = "prompts/sync_review.md",
         model = _model(round_settings, "sync_review"),
         runner = _runner(round_settings, "sync_review"),
-        kind = "review",
+        label = "sync review",
         edits = False,
         pin = head,
         outputs = ["verdict"],
@@ -866,7 +866,7 @@ def queue_audit(item, project, round_settings, n):
         model = _model(round_settings, "queue_audit"),
         runner = _runner(round_settings, "queue_audit"),
         edits = False,
-        kind = "review",
+        label = "queue audit",
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
         inputs = {"item": item, "pass": n, "base": round_settings["base"], "facts": project},
     )
@@ -1035,7 +1035,7 @@ def pipeline(item):
         prompt = "prompts/implement.md",
         model = _model(round_settings, "implement"),
         runner = _runner(round_settings, "implement"),
-        require_skills = ["blast-radius-review"],
+        label = "implement",
         forbid_commands = FORBID,
         protect_paths = protected(round_settings),
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
@@ -1046,6 +1046,10 @@ def pipeline(item):
     # A cap ended the run (the output `stop` is "turns" or "budget"), so the work may be half done. The item stops here, before the gate and the review.
     if implement.stop != "":
         fail("REFUSE: the implement step stopped at the %s cap before it finished. Raise the cap or split the item, then run beehave resume %s." % (implement.stop, item.id))
+
+    # The implementer must run the skill blast-radius-review. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
+    if "blast-radius-review" not in implement.skills:
+        fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls, then run beehave resume %s." % item.id)
 
     # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the agent pushed.
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
@@ -1152,4 +1156,4 @@ def pipeline(item):
     if missing != "":
         fail(missing)
 
-    return item_value(item, loop.gate.head, loop.review.verdict == "approve", "" if loop.review.verdict == "approve" else loop.review.verdict, loop.host_losses)
+    return item_value(item, loop.gate.head, loop.verdict == "approve", "" if loop.verdict == "approve" else loop.verdict, loop.host_losses)

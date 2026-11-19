@@ -690,6 +690,9 @@ No undo runs:
 - An `agent` call must name a `model`. A call without it fails at its line.
 - `resume` of an `agent` call is the session of an earlier agent, such as `impl.session`.
 - The call takes a `pin`, a commit id such as `check.head`, and starts only when the head of the worktree equals it.
+- The call takes one free `label`, a text that shows in `beehave status`. A label never changes what the step does. `edits = False` makes the step read-only and puts it on the review queue.
+- The call takes no `kind`, `lane`, `rounds`, `follow_ups` or `require_skills`. `beehave check workflow` refuses each one by name, for example "agent takes no argument kind".
+- The result of the call has the field `skills`: the list of the skills that the agent called, in the order of the calls. A workflow that needs a skill tests it, for example `"blast-radius-review" not in implement.skills`, and stops the item itself.
 
 ### `beehave check workflow`
 
@@ -784,7 +787,7 @@ The steps:
 2. One `research` agent for each sub-question writes `notes/<n>.md` in the work folder. Every line of a notes file is a claim, except a blank line and a heading. Each claim ends with one or more `[source: <URL>]` tags.
 3. The `command` step `check` runs `tools/check.sh`.
 4. A `summary` agent writes a short summary of the notes.
-5. A fresh `review` agent, with `follow_ups = "forbid"` and `output_tries = 2`, tries to refute the notes, and checks that the summary states only what the notes state.
+5. A fresh `review` agent, with the outputs `verdict` and `open` and `output_tries = 2`, tries to refute the notes, and checks that the summary states only what the notes state. Any text in `open` keeps the loop going.
 6. The `report` step runs `tools/report.sh`.
 
 `tools/check.sh` exit codes:
