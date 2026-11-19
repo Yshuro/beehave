@@ -134,6 +134,26 @@ func TestInstall_APartialThreadSyncStopsTheInstallation(t *testing.T) {
 	assert.ErrorContains(t, err, "4242")
 }
 
+func TestInstall_AnErrorNumberWinsOverAThreadId(t *testing.T) {
+	t.Parallel()
+
+	failure := errors.New("refused")
+	both := filterKernel{
+		assemble: bpf.Assemble,
+		call: func(number, _, _ uintptr, _ unsafe.Pointer) (uintptr, error) {
+			if number == unix.SYS_SECCOMP {
+				return 4242, failure
+			}
+
+			return 0, nil
+		},
+	}
+
+	err := both.install()
+	require.ErrorIs(t, err, failure)
+	assert.NotContains(t, err.Error(), "4242")
+}
+
 // TestKernel_TheFilterRefusesAUnixSocketInAChildThatLoadedIt runs a child of the test binary that loads the real filter and then asks for a unix socket and
 // a TCP socket. The test process itself stays unfiltered.
 func TestKernel_TheFilterRefusesAUnixSocketInAChildThatLoadedIt(t *testing.T) {
