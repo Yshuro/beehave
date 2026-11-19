@@ -40,7 +40,8 @@ const coreVersion = 5
 // Version 5 writes the cost of a failed run to the stream of failed runs in place of its spent step.
 // Version 6 adds the agent/caps step to the phase, the call field of the phase input and the cap_stop field of the phase output.
 // Version 8 added the note field to the limit record, the limited field to the phase input and the resume_of field to the phase output, so the rerun after a provider limit resumes the limited session.
-const agentVersion = 8
+// Version 9 adds the skills field to the result of an agent call, and records the label of the call in place of its kind.
+const agentVersion = 9
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
@@ -94,7 +95,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core4.agent8.tracker1.forge2.land4.gate5.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core4.agent9.tracker1.forge2.land4.gate5.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

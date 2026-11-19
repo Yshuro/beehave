@@ -55,7 +55,7 @@ func TestExample_TheLanesOfTheItemCarryTheLabelsOfTheLoop(t *testing.T) {
 	}
 
 	assert.Equal(t, []string{"", "implement", "review 1/24", "fix 1/18", "review 2/24", "fix 2/18", "review 3/24", "review 4/24", "design"}, kinds,
-		"the plan has no label, the other agent steps carry the label of the loop, and the design step is labelled design")
+		"the plan has no label, the other agent steps carry the label of the loop, and the design step is labeled design")
 }
 
 func TestExample_ADeleteDecisionAlsoEndsTheLoop(t *testing.T) {

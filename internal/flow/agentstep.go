@@ -35,7 +35,7 @@ type agentArgs struct {
 	prompt string
 	data   map[string]any
 	runner string
-	// label is the label keyword: a free text that the ledger and the status line show. It picks no behaviour.
+	// label is the label keyword: a free text that the ledger and the status line show. It picks no behavior.
 	label       string
 	model       string
 	timeout     time.Duration
@@ -270,19 +270,24 @@ func (s *script) renderStep(a agentArgs, login string) func(context.Context) (st
 			return stepResult{Note: prompt}, err
 		}
 
-		outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head, recordedLogin: login}
-		if a.label != "" {
-			outputs[recordedLabel] = a.label
-		}
-
-		if a.model != "" {
-			outputs[recordedModel] = a.model
-		}
-
-		maps.Copy(outputs, recordSandbox(a.sandbox.effective(s.sandboxDefault())))
-
-		return stepResult{Note: prompt, Outputs: outputs}, nil
+		return stepResult{Note: prompt, Outputs: a.recordOutputs(head, login, s.sandboxDefault())}, nil
 	}
+}
+
+// recordOutputs is the record of the render step: the output file, the start commit, the login, the label and model when set, and the sandbox.
+func (a agentArgs) recordOutputs(head, login string, sandboxDefault bool) map[string]any {
+	outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head, recordedLogin: login}
+	if a.label != "" {
+		outputs[recordedLabel] = a.label
+	}
+
+	if a.model != "" {
+		outputs[recordedModel] = a.model
+	}
+
+	maps.Copy(outputs, recordSandbox(a.sandbox.effective(sandboxDefault)))
+
+	return outputs
 }
 
 // prepare finds the folder and the output file of an agent call.

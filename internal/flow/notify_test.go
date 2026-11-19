@@ -380,5 +380,5 @@ func TestNotify_AReminderOfAnOpenWaitSendsNoNotice(t *testing.T) {
 func TestNotify_TheDryRunFactsOfAProjectHoldNoNotifyCommand(t *testing.T) {
 	t.Parallel()
 
-	require.Empty(t, dryDeps(t.TempDir(), "head", "12", nil, dryChoice{}).Facts(testProject).Notify, "a dry run notifies nobody")
+	require.Empty(t, dryDeps(t.TempDir(), "head", "12", dryChoice{}).Facts(testProject).Notify, "a dry run notifies nobody")
 }

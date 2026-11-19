@@ -297,7 +297,7 @@ func agentParams() []Param {
 	}
 }
 
-// LabelKeyword is the keyword of the agent builtin that names the call in the ledger and the status line. It is free text and never picks behaviour.
+// LabelKeyword is the keyword of the agent builtin that names the call in the ledger and the status line. It is free text and never picks behavior.
 const LabelKeyword = "label"
 
 // writeParams holds the keywords of the write builtin: the keywords of command that make sense for a program on this machine, and its read-back and undo.

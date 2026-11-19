@@ -692,7 +692,7 @@ No undo runs:
 - The call takes a `pin`, a commit id such as `check.head`, and starts only when the head of the worktree equals it.
 - The call takes one free `label`, a text that shows in `beehave status`. A label never changes what the step does. `edits = False` makes the step read-only and puts it on the review queue.
 - The call takes no `kind`, `lane`, `rounds`, `follow_ups` or `require_skills`. `beehave check workflow` refuses each one by name, for example "agent takes no argument kind".
-- The result of the call has the field `skills`: the list of the skills that the agent called, in the order of the calls. A workflow that needs a skill tests it, for example `"blast-radius-review" not in implement.skills`, and stops the item itself.
+- The result of the call has the field `skills`: the list of the skills that the agent called, in the order of the calls. A workflow that needs a skill tests it, for example `"lint-pass" not in implement.skills`, and stops the item itself.
 
 ### `beehave check workflow`
 

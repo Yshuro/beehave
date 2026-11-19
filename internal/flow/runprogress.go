@@ -38,7 +38,7 @@ type RunProgress struct {
 	Deadline time.Time `json:"deadline,omitzero"`
 	// Gate is the last gate result. It is nil for a run that ran no gate.
 	Gate *GateSeen `json:"gate,omitempty"`
-	// Label is the label of the latest agent step that has one, as the workflow wrote it. It is empty for a run with no labelled agent step.
+	// Label is the label of the latest agent step that has one, as the workflow wrote it. It is empty for a run with no labeled agent step.
 	Label string `json:"label,omitempty"`
 }
 

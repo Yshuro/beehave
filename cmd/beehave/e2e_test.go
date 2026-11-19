@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -382,7 +384,7 @@ if [ -e hang ] && [ "$step" = "$(cat hang)" ] && [ ! -e started ]; then
 fi
 if [ "$step" = review ]; then
   n=$(grep -c '^review ' calls.log)
-  printf '{"verdict":"%s","mechanism":"","regressions":"0","findings":[]}\n' "$(sed -n "${n}p" verdicts)" > "$(field write)"
+  printf '{"verdict":"%s","mechanism":"","regressions":"0","open":"","findings":[]}\n' "$(sed -n "${n}p" verdicts)" > "$(field write)"
 fi
 if [ "$step" = plan ]; then
   printf '{"regressions":"0"}\n' > "$(field write)"
@@ -473,8 +475,18 @@ func oneItemCopy(example string) (string, error) {
 	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
 }
 
-// exampleSkill is the skill that the implement step of examples/remediation/workflow.star must call.
-const exampleSkill = "blast-radius-review"
+// exampleSkillCheck matches the check of the example that the implement step called a skill: "name" not in implement.skills.
+var exampleSkillCheck = regexp.MustCompile(`"([^"]+)" not in implement\.skills`)
+
+// exampleSkill is the skill that the implement step of the example text must call. The example is the one place that names it.
+func exampleSkill(example string) (string, error) {
+	match := exampleSkillCheck.FindStringSubmatch(example)
+	if match == nil {
+		return "", errors.New("the example holds no check of the skills of the implement step")
+	}
+
+	return match[1], nil
+}
 
 // e2eFile is a file of the work folder of a script; a program is a file that the script starts.
 type e2eFile struct {
@@ -509,7 +521,16 @@ func writeE2EFile(path string, file e2eFile) error {
 // e2eSetup writes the config folder and the fake claude into the work folder of a script.
 func e2eSetup(env *testscript.Env) error {
 	work := env.WorkDir
-	skill := exampleSkill
+
+	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	if err != nil {
+		return err
+	}
+
+	skill, err := exampleSkill(string(example))
+	if err != nil {
+		return err
+	}
 
 	// The fake claude keeps a transcript where the adapter looks for it: the agent of the scripts runs in the work folder with the work folder as its login folder.
 	transcripts := filepath.Dir(newAdapters(nil, nil, nil).agent(claude.Name).TranscriptPath(work, work, "session"))
@@ -519,11 +540,6 @@ func e2eSetup(env *testscript.Env) error {
 		"bin/claude":                {fake, true},
 		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), false},
 		"config/projects/shop.star": {e2eProject, false},
-	}
-
-	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	if err != nil {
-		return err
 	}
 
 	copied, err := oneItemCopy(string(example))

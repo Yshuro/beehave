@@ -127,11 +127,6 @@ func chooseDry(options []DryOption) dryChoice {
 func DryRun(ctx context.Context, file, item string, env map[string]string, out io.Writer, options ...DryOption) (err error) {
 	chosen := chooseDry(options)
 
-	chosen.skills, err = dryRequiredSkills(file)
-	if err != nil {
-		return err
-	}
-
 	root, err := os.MkdirTemp("", "beehave-dry-run-")
 	if err != nil {
 		return fmt.Errorf("make the dry-run folder: %w", err)
@@ -141,7 +136,7 @@ func DryRun(ctx context.Context, file, item string, env map[string]string, out i
 
 	opts := Options{StateDir: filepath.Join(root, "state"), Version: "dry-run", MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: env, Modules: []step.Module{StepModule()}}
 
-	deps, err := dryPrepare(ctx, root, item, chosen)
+	deps, err := dryPrepare(ctx, root, item, file, chosen)
 	if err != nil {
 		return err
 	}
@@ -152,12 +147,16 @@ func DryRun(ctx context.Context, file, item string, env map[string]string, out i
 	return errors.Join(printErr, dryFailure(out, last, runErr))
 }
 
-// dryPrepare makes the worktree of the item in the folder of the run and returns the fakes that serve it.
-func dryPrepare(ctx context.Context, root, item string, chosen dryChoice) (Deps, error) {
+// dryPrepare makes the worktree of the item in the folder of the run and returns the fakes that serve it, with the skills that the file checks for.
+func dryPrepare(ctx context.Context, root, item, file string, chosen dryChoice) (Deps, error) {
 	tree := filepath.Join(root, "tree")
 
 	head, err := dryRepo(ctx, tree, filepath.Join(root, "origin.git"))
 	if err != nil {
+		return Deps{}, err
+	}
+
+	if chosen.skills, err = dryRequiredSkills(file); err != nil {
 		return Deps{}, err
 	}
 

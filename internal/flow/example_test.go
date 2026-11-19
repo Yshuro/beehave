@@ -153,7 +153,7 @@ func exampleRigLimited(t *testing.T, verdicts, findings, mechanisms func(review 
 	folder := t.TempDir()
 	require.NoError(t, os.CopyFS(folder, os.DirFS(filepath.Join("..", "..", "examples", "remediation"))))
 
-	skill := exampleSkill
+	skill := exampleSkill(t)
 
 	rig := newAgentRig(t)
 	rig.h.mutation = exampleMutationCommand
@@ -233,8 +233,16 @@ func putNoParked(rig *agentRig, request AgentRequest) {
 	}
 }
 
-// exampleSkill is the one skill that the implement step of the example must call.
-const exampleSkill = "blast-radius-review"
+// exampleSkill is the one skill that the implement step of the example must call. The test reads it from the workflow file, which is the one place that names it.
+func exampleSkill(t *testing.T) string {
+	t.Helper()
+
+	skills, err := dryRequiredSkills(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	require.NoError(t, err)
+	require.Len(t, skills, 1, "the example checks for one skill")
+
+	return skills[0]
+}
 
 // openOf is the output open that a review writes for a list of findings: empty for none, else a line.
 func openOf(findings string) string {
