@@ -109,17 +109,12 @@ The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `before_rev
 
 | Field | Kind |
 | --- | --- |
-| `repo`, `source`, `forge`, `tracker`, `base_branch`, `gate`, `build_host` | The project value of that name. |
-| `people`, `epics` | Dict. |
-| `gate_files`, `conventions`, `brief_rules`, `stacked_rules`, `limits`, `traps`, `token_rules` | List. |
-| `changelog` | Text. |
-| `vars` | Dict. The `vars` of the project file, as written, and frozen. |
-| `board_number` | The board number, 0 when the project has none. |
-| `board_owner`, `board_started`, `board_merged` | The other values of the board. |
+| `repo`, `source`, `forge`, `tracker`, `base_branch`, `gate`, `gate_steps`, `build_host` | The project value of that name. |
+| `vars` | Dict. The `vars` of the project file, as written, and frozen. Every setting of a workflow is a key of it. |
 
-- A fact that the project file leaves out is empty text, an empty dict or an empty list, never a missing field.
+- A fact that the project file leaves out is empty text, an empty list or an empty dict, never a missing field. A key that `vars` leaves out is missing: read it with `facts().vars.get("key", default)`.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.
-- A workflow passes the struct in the `inputs` of an agent call, and the prompt reads it as `{{ .facts.<field> }}`. The agent reads no file for it.
+- A workflow passes the struct in the `inputs` of an agent call, and the prompt reads a field as `{{ .facts.<field> }}` and a setting of `vars` as `{{ index .facts.vars "<key>" }}`. The `index` form gives nothing, and no error, for a key that `vars` leaves out. The agent reads no file for it.
 - In a dry run the facts are empty, except `vars`. `beehave check workflow --project <name> --dry-run` gives `vars` the value of that project. Without `--project`, `vars` is an empty dict.
 - `beehave check workflow` refuses a field that `facts()` does not return.
 

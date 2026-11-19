@@ -50,6 +50,8 @@ func refuseAt(at syntax.Position, format string, args ...any) error {
 	return refuse("%s: "+format, append([]any{at}, args...)...)
 }
 
+func blank(text string) bool { return strings.TrimSpace(text) == "" }
+
 func requireText(at syntax.Position, key, value string) error {
 	if strings.TrimSpace(value) == "" {
 		return refuseAt(at, "`%s` must be a non-empty string. Set it.", key)

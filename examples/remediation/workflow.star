@@ -467,7 +467,7 @@ def land(approved, project, round_settings, n):
             continue
 
         # A project that declares a changelog lands no item without an entry, as the merge of one item does.
-        missing = changelog_missing(project.changelog, base, head, id, fetch = True)
+        missing = changelog_missing(project.vars.get("changelog", ""), base, head, id, fetch = True)
         if missing != "":
             stopped.append(struct(item = id, reason = missing))
             continue
@@ -891,16 +891,21 @@ def finish(item):
         print("the build host stays up: " + stop.reason)
 
 def _move_card(project, stage, issue = 0):
-    """Moves the card to the column that the board block of the project names for `stage` ("started" or "merged"), and reads it back.
-    `issue` names the issue card of a landed item, and 0 means the pull request of the item of the run. A project with no board makes no call."""
-    if project.board_number == 0:
+    """Moves the card to the column that `vars.board` of the project names for `stage` ("started" or "merged"), and reads it back.
+    `issue` names the issue card of a landed item, and 0 means the pull request of the item of the run. A project with no `vars.board` makes no call."""
+    board = project.vars.get("board")
+    if board == None:
         return
+
+    for key in ["number", "started", "merged"]:
+        if key not in board:
+            fail("REFUSE: vars.board has no %s. Write vars = {\"board\": {\"number\": 3, \"started\": \"In Progress\", \"merged\": \"Done\"}}; \"owner\" is optional." % key)
 
     board_sync(
         name = "board-" + stage + ("-" + str(issue) if issue != 0 else ""),
-        board = project.board_number,
-        owner = project.board_owner,
-        status = project.board_started if stage == "started" else project.board_merged,
+        board = board["number"],
+        owner = board.get("owner", ""),
+        status = board[stage],
         issue = issue,
     )
 
@@ -912,7 +917,7 @@ def item_value(item, head, approved, reason, host_losses):
 def pipeline(item):
     """The child entry: the pipeline of one item. The round starts one child for each item with spawn(entry = "pipeline"). It calls no host builtin.
     It returns item_value to the round, which lands the approved heads in one batch. The child never merges."""
-    # The facts of the project file (people, rules, limits, traps and the vars that hold the round settings). The step records them, so a resume keeps the facts the run started with.
+    # The facts of the project file (the plumbing fields and the vars that hold the people, rules, limits, traps and the round settings). The step records them, so a resume keeps the facts the run started with.
     # Each agent of the example gets them as the input `facts`; no agent reads a path for them.
     project = facts()
     round_settings = settings(project)
@@ -984,7 +989,7 @@ def pipeline(item):
         forbid_text = ATTRIBUTION,
     )
 
-    # The board is a project choice: the `board` block of the project file. With none, the facts hold board_number 0 and the run makes no board call.
+    # The board is a project choice: the key `board` of the project vars. With none, the run makes no board call.
     # With one, the card of the item moves to the started column now and to the merged column after the merge, and each call reads the card back.
     _move_card(project, "started")
 
@@ -1072,7 +1077,7 @@ def pipeline(item):
 
     # The child never merges. It returns the head that the gate ran on and the verdict of the review, and the round lands every approved head of a pass in one batch (land).
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.
-    missing = changelog_missing(project.changelog, base, loop.gate.head, item.id)
+    missing = changelog_missing(project.vars.get("changelog", ""), base, loop.gate.head, item.id)
     if missing != "":
         fail(missing)
 

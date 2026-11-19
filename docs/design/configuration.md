@@ -42,28 +42,21 @@ The project also takes the config block of the adapter that it chooses. The adap
 
 The `host` call takes the block of the host adapter in the same way. The `skypilot`, `ssh` and `slurm` adapters each declare their own block, for example `host = host(provider = "ssh", disk_floor_gb = 50, ssh = ssh(user = "ci"))`. The `host` call also takes `lost_job_wait`, a duration from `"1m"` to `"24h"` with the default `"60m"`; see `docs/design/hosts.md`. It takes `lost_after` and `stop_limit` too, two durations above zero with the default `"5m"`; see `docs/design/hosts.md`. The config refuses the block of a host adapter that `provider` does not name, and the refusal names the block and the provider. The adapter reads and checks its keys when it builds the host.
 
-The project also takes facts. All facts are optional and are empty when left out.
+The project also takes `vars`, a dict of the settings of one workflow. It is optional and is empty when left out. The engine reads no key and no value. The remediation example reads its people, epics, rules, limits, traps, changelog and board from `vars`.
 
-| Fact | Type |
-| --- | --- |
-| `people`, `epics` | A dict of strings. |
-| `gate_files`, `conventions`, `brief_rules`, `stacked_rules`, `limits`, `traps`, `token_rules` | A list of strings. |
-| `changelog` | One relative path inside the work tree. The example workflow checks it before a merge. |
-| `vars` | A dict of the settings of one workflow. The engine reads no key and no value. |
-
-The loader refuses a blank item, and a blank dict key or value.
+If a project file writes `people`, `epics`, `gate_files`, `conventions`, `brief_rules`, `stacked_rules`, `limits`, `traps`, `token_rules`, `changelog` or `board` at the top of `project()`, the loader refuses the file. The message names the key and says to move it into `vars`.
 
 The `vars` keys must be strings. The values must be `None`, a bool, a string, a number, a list, a tuple or a dict, nested to any depth. The loader refuses a function, a non-finite number and a key that is not a string, because a run records the facts as JSON. A workflow reads `vars` with `facts().vars`.
 
-#### `board`
+#### The board
 
-The optional `board = board(number, started, merged, owner)` value is the GitHub Project board of the project. With no `board` value, the project has no board.
+The remediation example reads the GitHub Project board of the project from the key `board` of `vars`: `vars = {"board": {"number": 3, "started": "In Progress", "merged": "Done"}}`. With no `board` key, the example makes no board call.
 
-| Argument | Meaning |
+| Key | Meaning |
 | --- | --- |
 | `number` | A whole number above 0. |
-| `started`, `merged` | The Status columns that a workflow sets. |
-| `owner` | The login that owns the board. It defaults to the owner of the repository. |
+| `started`, `merged` | The Status columns that the example sets. |
+| `owner` | Optional. The login that owns the board. It defaults to the owner of the repository. |
 
 #### The round settings
 

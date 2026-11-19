@@ -169,29 +169,29 @@ The run read these facts from the project file at its start. A fact that is empt
 - Repository identity and fork topology: repo `{{ .facts.repo }}`, source `{{ .facts.source }}`, forge `{{ .facts.forge }}`.
 - Build host: `{{ .facts.build_host }}`.
 - Base branch: `{{ .facts.base_branch }}`.
-- The gate is `{{ .facts.gate }}`. The gate list comes from these workflow files:{{ range .facts.gate_files }} `{{ . }}`{{ end }}
-- Tracker: `{{ .facts.tracker }}`. Queue to epic:{{ range $queue, $epic := .facts.epics }} `{{ $queue }}` is `{{ $epic }}`;{{ end }}
-- People and the idle threshold for a third-party pull request:{{ range $role, $who := .facts.people }} `{{ $role }}` is `{{ $who }}`;{{ end }}
-- Review against these convention files:{{ range .facts.conventions }} `{{ . }}`{{ end }}
+- The gate is `{{ .facts.gate }}`. The gate list comes from these workflow files:{{ range index .facts.vars "gate_files" }} `{{ . }}`{{ end }}
+- Tracker: `{{ .facts.tracker }}`. Queue to epic:{{ range $queue, $epic := index .facts.vars "epics" }} `{{ $queue }}` is `{{ $epic }}`;{{ end }}
+- People and the idle threshold for a third-party pull request:{{ range $role, $who := index .facts.vars "people" }} `{{ $role }}` is `{{ $who }}`;{{ end }}
+- Review against these convention files:{{ range index .facts.vars "conventions" }} `{{ . }}`{{ end }}
 
 Brief rules of the project:
-{{ range .facts.brief_rules }}
+{{ range index .facts.vars "brief_rules" }}
 - {{ . }}
 {{ end }}
 Rules for a pull request that stacks on another:
-{{ range .facts.stacked_rules }}
+{{ range index .facts.vars "stacked_rules" }}
 - {{ . }}
 {{ end }}
 Token rules, cross-repository steps and release steps:
-{{ range .facts.token_rules }}
+{{ range index .facts.vars "token_rules" }}
 - {{ . }}
 {{ end }}
 Hard limits, commands never run and real user data:
-{{ range .facts.limits }}
+{{ range index .facts.vars "limits" }}
 - {{ . }}
 {{ end }}
 Measured traps and ownership rules:
-{{ range .facts.traps }}
+{{ range index .facts.vars "traps" }}
 - {{ . }}
 {{ end }}
 

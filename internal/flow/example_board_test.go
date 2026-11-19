@@ -58,6 +58,20 @@ func TestExampleBoard_AProjectWithABoardThatLosesTheWriteStopsTheRunAtTheLaneSta
 	assert.Len(t, rig.h.agents.requests, 2, "only the plan and the implement agents ran: the run stops before the review loop")
 }
 
+func TestExampleBoard_ABoardInTheVarsThatLacksAColumnStopsTheRunAtTheLaneStartAndNamesTheKey(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	board := boardVars("")
+	delete(board, "merged")
+	rig.project.Vars["board"] = board
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.ErrorContains(t, err, "vars.board has no merged")
+	assert.Empty(t, rig.h.forge.placed)
+}
+
 func TestExampleBoard_ALandRunWithABoardMovesOneCardForEachMergedItem(t *testing.T) {
 	t.Parallel()
 
