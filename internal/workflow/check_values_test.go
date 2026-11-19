@@ -51,6 +51,8 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 		{"allow_paths empty", `agent("p", "m", allow_paths = [])`, "agent: allow_paths is an empty list"},
 		{"allow_paths number", `agent("p", "m", allow_paths = [1])`, "agent: allow_paths must hold strings only"},
 		{"allow_paths glob", `agent("p", "m", allow_paths = ["[a"])`, `agent: allow_paths has the pattern "[a", which does not parse`},
+		{"paths_outside allow absolute", `paths_outside(allow = ["/x"], paths = [])`, `paths_outside: allow has the absolute pattern "/x"`},
+		{"paths_outside allow empty", `paths_outside(allow = [], paths = [])`, "paths_outside: allow is an empty list"},
 		{"outputs element", `agent("p", "m", outputs = [1])`, "agent: outputs must hold strings only"},
 		{"protect_paths element", `agent("p", "m", protect_paths = [1])`, "agent: protect_paths must hold strings only"},
 		{"inputs key", `agent("p", "m", inputs = {1: "a"})`, "agent: a value cannot go into a prompt or a request"},

@@ -260,17 +260,13 @@ func inputsRule(v starlark.Value) error {
 	return err
 }
 
-func allowRule(v starlark.Value) error {
-	_, _, err := AllowPaths(v)
+// allowRule is the rule of a keyword that holds a list of globs of the agent scope: allow_paths of agent and allow of paths_outside.
+func allowRule(keyword string) func(starlark.Value) error {
+	return func(v starlark.Value) error {
+		_, _, err := AllowList(keyword, v)
 
-	return err
-}
-
-// allowListRule is the rule of the allow keyword of paths_outside: the list of globs of the agent scope, read by the same function.
-func allowListRule(v starlark.Value) error {
-	_, _, err := AllowList(allowWord, v)
-
-	return err
+		return err
+	}
 }
 
 // The builtins that match text and record no step.
@@ -302,7 +298,7 @@ func agentParams() []Param {
 		req("prompt", KindText), req("model", KindText), opt("runner", KindText), ruled("inputs", KindDict, inputsRule), words("outputs"),
 		opt("pin", KindText), opt("resume", KindText),
 		{Name: "forbid_commands", Kind: KindList, Each: ForbidKinds()},
-		ruled("allow_paths", KindList, allowRule), words("protect_paths"), ruled("output_tries", KindInt, triesRule),
+		ruled("allow_paths", KindList, allowRule("allow_paths")), words("protect_paths"), ruled("output_tries", KindInt, triesRule),
 		opt("edits", KindBool), opt(LabelKeyword, KindText), ruled("timeout", KindText, durationRule("timeout")),
 		ruled("idle_timeout", KindText, durationRule("idle_timeout")), ruled(budgetKeyword, KindAny, budgetRule(budgetKeyword)), opt(sandboxKeyword, KindAny), opt(nameKeyword, KindText),
 	}
@@ -343,7 +339,7 @@ func valueSignatures() map[string][]Param {
 		"now":     {},
 		factsName: {},
 		// The two matchers judge text and run no step. They read the dialect of the agent scope and the grammar of the merge guard.
-		pathsOutsideName:      {{Name: "allow", Kind: KindList, Required: true, Rule: allowListRule}, {Name: "paths", Kind: KindList, Required: true, Rule: wordsRule("paths")}},
+		pathsOutsideName:      {{Name: "allow", Kind: KindList, Required: true, Rule: allowRule(allowWord)}, {Name: "paths", Kind: KindList, Required: true, Rule: wordsRule("paths")}},
 		closingReferencesName: {req("text", KindText)},
 	}
 }

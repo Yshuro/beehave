@@ -183,14 +183,10 @@ func SlotClass(v starlark.Value, host string) (string, error) {
 	return class, nil
 }
 
-// AllowPaths reads the allow_paths argument: a list of globs in the doublestar dialect. A leading `./` is dropped from each glob, because the
-// paths that git lists have none. It returns the patterns as written and the clean globs. A missing argument gives none. An empty list is refused.
-func AllowPaths(v starlark.Value) (patterns, globs []string, err error) {
-	return AllowList("allow_paths", v)
-}
-
-// AllowList is AllowPaths for the keyword that has the given name. The agent scope and the path check of before_review read their lists with it,
-// so one dialect holds in both: an empty entry, an absolute path, a path that starts with `..` and a pattern that does not parse are refused, and each message names the pattern.
+// AllowList reads the list of globs in the doublestar dialect that the keyword of the given name holds. A leading `./` is dropped from each glob,
+// because the paths that git lists have none. It returns the patterns as written and the clean globs. A missing argument gives none.
+// The agent scope and the path check of before_review read their lists with it, so one dialect holds in both: an empty list, an empty entry,
+// an absolute path, a path that starts with `..` and a pattern that does not parse are refused, and each message names the pattern.
 func AllowList(keyword string, v starlark.Value) (patterns, globs []string, err error) {
 	patterns, err = Words(keyword, v)
 	if err != nil {

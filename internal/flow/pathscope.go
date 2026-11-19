@@ -24,7 +24,7 @@ type scope struct {
 // readScope reads the allow_paths argument: a list of globs in the doublestar dialect. A `*` stops at a slash and a `**` crosses it.
 // A missing argument gives no scope.
 func readScope(v starlark.Value) (scope, error) {
-	patterns, globs, err := workflow.AllowPaths(v)
+	patterns, globs, err := workflow.AllowList("allow_paths", v)
 
 	return scope{patterns: patterns, globs: globs}, err
 }

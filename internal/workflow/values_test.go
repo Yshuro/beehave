@@ -37,7 +37,7 @@ func TestValues_NoneAndAnAbsentArgumentAreEmpty(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, class, "a call with no slots keyword has no class, with or without a host")
 
-	_, globs, err := workflow.AllowPaths(starlark.None)
+	_, globs, err := workflow.AllowList("allow_paths", starlark.None)
 	require.NoError(t, err)
 	assert.Empty(t, globs)
 
