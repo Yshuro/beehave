@@ -94,15 +94,22 @@ func (r *agentRig) reply(body string, result agent.Result) {
 	}
 }
 
-// run writes the flow and the prompt file beside it and walks the flow.
-func (r *agentRig) run(t *testing.T, flow, prompt string) (ItemResult, error) {
+// flowFile writes the flow and the prompt file beside it and returns the path of the flow.
+func flowFile(t *testing.T, flow, prompt string) string {
 	t.Helper()
 
 	file := writeFlow(t, flow)
 	require.NoError(t, os.MkdirAll(filepath.Join(filepath.Dir(file), "prompts"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(file), "prompts", "a.md"), []byte(prompt), 0o600))
 
-	result, err := r.h.engine(t).RunFile(testItem, testProject, file)
+	return file
+}
+
+// run writes the flow and the prompt file beside it and walks the flow.
+func (r *agentRig) run(t *testing.T, flow, prompt string) (ItemResult, error) {
+	t.Helper()
+
+	result, err := r.h.engine(t).RunFile(testItem, testProject, flowFile(t, flow, prompt))
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -562,47 +569,28 @@ func TestAgentStep_ABadOutputTriesIsRefused(t *testing.T) {
 	}
 }
 
-func TestAgentStep_ARequiredSkillThatTheRunDidNotCallFailsTheStepAndNamesIt(t *testing.T) {
+func TestAgentStep_TheResultListsTheSkillsTheAgentCalledInTheOrderOfTheCalls(t *testing.T) {
 	t.Parallel()
 
-	rig := newAgentRig(t)
-	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd"}})
-
-	_, err := rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "Write to {{ .output_file }}\n")
-
-	require.ErrorContains(t, err, `the agent did not call the skill "review"`)
-	assert.NotContains(t, err.Error(), `"tdd"`)
-
-	rig = newAgentRig(t)
-	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd", "review"}})
-
-	_, err = rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "Write to {{ .output_file }}\n")
-	require.NoError(t, err)
-
-	rig = newAgentRig(t)
-	_, err = rig.run(t, agentFlow("require_skills = 3 + 0,"), "x")
-	require.ErrorContains(t, err, "list of strings")
-}
-
-func TestAgentStep_TheRequiredSkillsOfTheStepGoToTheAgentRequest(t *testing.T) {
-	t.Parallel()
+	flow := func(body string) string {
+		return bodyFlow("a = " + agentCallText("") + body)
+	}
 
 	rig := newAgentRig(t)
 	rig.reply("", agent.Result{Outcome: agent.OutcomeExited, Skills: []string{"tdd", "review"}})
 
-	_, err := rig.run(t, agentFlow("require_skills = [\"tdd\", \"review\"], "), "x")
+	_, err := rig.run(t, flow(`command(run = ["show", ",".join(a.skills), str(len(a.skills))])`+"\n"), "x")
 
 	require.NoError(t, err)
-	require.Len(t, rig.h.agents.seen(), 1)
-	assert.Equal(t, []string{"tdd", "review"}, rig.h.agents.seen()[0].RequireSkills, "the agent step must hand the skills to the request, or a CLI with no skill reports starts")
+	assert.Equal(t, []string{"show tdd,review 2"}, rig.h.commands.ran())
 
 	rig = newAgentRig(t)
 	rig.reply("", exited)
 
-	_, err = rig.run(t, agentFlow(""), "x")
+	_, err = rig.run(t, flow(`command(run = ["show", str(len(a.skills))])`+"\n"), "x")
 
 	require.NoError(t, err)
-	assert.Empty(t, rig.h.agents.seen()[0].RequireSkills)
+	assert.Equal(t, []string{"show 0"}, rig.h.commands.ran(), "a run that called no skill has an empty list")
 }
 
 func TestAgentStep_AnAgentThatDoesNotExitCleanlyFailsTheStep(t *testing.T) {

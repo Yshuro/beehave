@@ -99,24 +99,8 @@ func NetworkDomains(v starlark.Value) ([]string, error) {
 	return domains, model.CheckNetwork(domains)
 }
 
-// WritablePaths reads the allow_write list of a sandbox call: paths that the sandbox opens for writing.
-func WritablePaths(v starlark.Value) ([]string, error) {
-	paths, err := Words("allow_write", v)
-	if err != nil {
-		return nil, err
-	}
-
-	return paths, model.CheckAllowWrite(paths)
-}
-
 func networkRule(v starlark.Value) error {
 	_, err := NetworkDomains(v)
-
-	return err
-}
-
-func writableRule(v starlark.Value) error {
-	_, err := WritablePaths(v)
 
 	return err
 }

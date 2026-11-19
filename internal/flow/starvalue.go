@@ -63,17 +63,11 @@ type script struct {
 	// kinds is the table of step kinds that name accepts. It is nil, and so the table of the registry of the engine, unless a test sets it.
 	kinds []string
 
-	// merge and sentBack are what a merge builtin reported. They go into the result of the item.
-	mergeState, sentBack, closed string
-
-	// batches holds the names of the batch_merge calls of this run, so that a name is never used twice.
+	// batches holds the names of the merge calls of this run, so that a name is never used twice.
 	batches map[string]bool
 
 	// undos are the finished writes of this run that name an undo, in the order of the writes. A failed run runs them in reverse.
 	undos []undoStep
-
-	// gated holds the head and the steps of each gate call of this run. A merge call that merges takes only the steps of a gate call at the head of the merge.
-	gated []gatedCall
 
 	// stopped is the command that ended the item on a code of its stop_on_rc.
 	stopped *Stopped
@@ -88,10 +82,10 @@ type script struct {
 	hostChosen string
 
 	// fixed is true once the first gate has recorded scope, the closing issues of the pull request at the first review.
-	// owned holds the issues that the owner kept by an answer.
+	// owned holds the issues that the owner kept by an answer, for each item.
 	fixed bool
 	scope []int
-	owned []int
+	owned map[string][]int
 }
 
 // name returns the name of the DBOS step of one call: `<builtin>:<label>#<n>`, or `<builtin>#<n>` for a call with no label.

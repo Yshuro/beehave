@@ -31,8 +31,6 @@ type AgentRequest struct {
 	IdleTimeout time.Duration
 	Forbid      []model.FindingKind
 	Protect     []string
-	// RequireSkills lists the skills that the run must call. A CLI that reports no skill calls refuses the request before the run starts.
-	RequireSkills []string
 	// MaxBudget is the most dollars that the run may spend, passed to the budget option of the agent CLI. 0 means the step sets no cap.
 	MaxBudget float64
 	// NoEdits starts the agent so that it cannot edit files. Shell commands stay allowed.
@@ -186,15 +184,16 @@ type beats interface {
 // Poll replaces the interval at which the agents queue looks for work, at which a run looks for the result of a phase,
 // at which a phase looks again for the first trust of its run, and at which a run tries again the first renewal of a claim it did not take.
 // Release replaces the time that the git calls of one worktree release share.
-// Beat replaces the time that one claim renewal may take. Draft replaces the time that the return of a pull request to draft may take. OwnerWait replaces the time of one wait for the owner before the wait starts again.
+// Beat replaces the time that one claim renewal may take. OwnerWait replaces the time of one wait for the owner before the wait starts again.
 // Retain replaces the age at which Launch deletes a finished run. Now replaces the monotonic reading of the clock that measures the time since the last good claim renewal.
 // Wall replaces the wall reading of that clock: when it is nil, the wall reading is the one that Now returns.
 // Reading replaces the time that the now builtin returns, and the time from which a wait counts its deadline and its reminders. The lease age keeps using Wall.
 // After replaces the timer that ends the trust in a claim: it starts f once d has passed, and the function it returns stops the timer.
 // Grace replaces the time that a phase waits for the first trust of a run that is not open.
-// Watch replaces the time of the durable sleep between two reads of a ready pull request.
 // Settle replaces the time of the durable sleep between two reads of a batch member whose mergeable state is UNKNOWN.
 // Queued replaces the time of the durable sleep between two reads of a pull request whose merge the forge holds.
+// Watch replaces the time of the durable sleep between two reads of a pull request that a hand-off of merge watches.
+// Draft replaces the limit of each member, and of the notice, when a hand-off that ends puts its pull requests back to draft.
 // CapWait replaces the least time of the durable sleep that waits for a usage cap to reset.
 // Overload replaces the first wait of the backoff after an overload of the provider.
 // LostPoll replaces the time of the durable sleep between two looks for the proof that a lost gate job can no longer run.
@@ -206,7 +205,6 @@ type clock struct {
 	Poll      time.Duration
 	Release   time.Duration
 	Beat      time.Duration
-	Draft     time.Duration
 	OwnerWait time.Duration
 	Retain    time.Duration
 	Now       func() time.Time
@@ -214,9 +212,10 @@ type clock struct {
 	Reading   func() time.Time
 	After     func(d time.Duration, f func()) (stop func())
 	Grace     time.Duration
-	Watch     time.Duration
 	Settle    time.Duration
 	Queued    time.Duration
+	Watch     time.Duration
+	Draft     time.Duration
 	// Gone is how long a joining run waits for an engine to come back before it reports that the engine stopped.
 	Gone time.Duration
 }
@@ -285,7 +284,7 @@ type CommandRequest struct {
 	// BuildHost is the build host that the run recorded in host_up. The gate and a call with Host run there. Empty means the default of the project.
 	BuildHost string
 	Timeout   time.Duration
-	// Gate is true for the program of a gate (a gate call with run, or the gate_run of batch_merge). A gate on this machine runs under the sandbox of its project.
+	// Gate is true for the program of a gate (a gate call with run, or the gate_run of merge). A gate on this machine runs under the sandbox of its project.
 	Gate bool
 	// MaxNewProcesses is the number of tasks that the tree of the command may hold besides the command (on Linux), or the process count of the user at the start plus this number (elsewhere). It is zero for a call that sets no cap.
 	MaxNewProcesses int
@@ -337,7 +336,6 @@ type Deps struct {
 	Logins    logins
 	Lifecycle lifecycle
 	Forge     forge
-	Watch     watcher
 	Trees     treeMaker
 	Beats     beats
 	Merge     merger
@@ -348,7 +346,7 @@ type Deps struct {
 	Writer    writer
 	// Reader serves item_read. A nil Reader means the tracker of the build cannot read comments or parents: an item_read call fails and says so.
 	Reader reader
-	// Batch serves batch_merge. A nil Batch means the build cannot run it.
+	// Batch serves merge. A nil Batch means the build cannot run it.
 	Batch batchHost
 	// Queue serves queue and the hold check at the start of a run that spawn started. A nil Queue means the build cannot read the open work: a queue call fails.
 	Queue queueReader
@@ -363,7 +361,7 @@ type Deps struct {
 	SandboxDefault func(project string) bool
 	// RefuseGate returns the error of a gate that must not run on this machine, or nil. program is true for a gate that names its own program.
 	// A nil RefuseGate means every gate runs. The engine asks inside a recorded step that comes before the gate key, an earlier pass, any git work or any program
-	// (for batch_merge, the first step of the call), so a replay of a recorded gate returns the record and is never refused.
+	// (for merge, the first step of the call), so a replay of a recorded gate returns the record and is never refused.
 	RefuseGate func(project string, program bool) error
 	// Repository says whether a project has a git repository. A nil Repository means every project has one.
 	// The item folder of a project with no repository is a plain folder: no step reads git there, and the git builtins refuse the project.

@@ -24,7 +24,7 @@ import (
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/step"
 	trackerstore "github.com/tobocop2/beehave/internal/store"
-	"github.com/tobocop2/beehave/internal/workflow/workflowtest"
+	"github.com/tobocop2/beehave/internal/workflow"
 )
 
 const (
@@ -70,6 +70,7 @@ type dryChoice struct {
 	redGate, sendBack bool
 	vars              map[string]any
 	entry             string
+	skills            []string
 }
 
 // DryOption is a choice for a dry run.
@@ -116,7 +117,7 @@ func DryRun(ctx context.Context, file, item string, env map[string]string, out i
 
 	opts := Options{StateDir: filepath.Join(root, "state"), Version: "dry-run", MaxConcurrent: minMaxConcurrent, MaxReviewConcurrent: minMaxConcurrent, Env: env, Modules: []step.Module{StepModule()}}
 
-	deps, err := dryPrepare(ctx, root, file, item, chosen)
+	deps, err := dryPrepare(ctx, root, item, file, chosen)
 	if err != nil {
 		return err
 	}
@@ -127,8 +128,8 @@ func DryRun(ctx context.Context, file, item string, env map[string]string, out i
 	return errors.Join(printErr, dryFailure(out, last, runErr))
 }
 
-// dryPrepare makes the worktree of the item in the folder of the run and returns the fakes that serve it.
-func dryPrepare(ctx context.Context, root, file, item string, chosen dryChoice) (Deps, error) {
+// dryPrepare makes the worktree of the item in the folder of the run and returns the fakes that serve it, with the skills that the file checks for.
+func dryPrepare(ctx context.Context, root, item, file string, chosen dryChoice) (Deps, error) {
 	tree := filepath.Join(root, "tree")
 
 	head, err := dryRepo(ctx, tree, filepath.Join(root, "origin.git"))
@@ -136,12 +137,9 @@ func dryPrepare(ctx context.Context, root, file, item string, chosen dryChoice) 
 		return Deps{}, err
 	}
 
-	skills, err := dryRequiredSkills(file)
-	if err != nil {
-		return Deps{}, err
-	}
+	chosen.skills = workflow.RequiredSkills(file)
 
-	return dryDeps(tree, head, item, skills, chosen), nil
+	return dryDeps(tree, head, item, chosen), nil
 }
 
 // dryWalk opens an engine over the deps, takes the item through the file and stops the engine.
@@ -198,8 +196,8 @@ func onlyAbsent(err error) bool {
 }
 
 // dryDeps holds the only collaborators of a dry run. Each one answers from a fixed value and touches nothing outside the folder of the run.
-func dryDeps(tree, head, item string, skills []string, chosen dryChoice) Deps {
-	agents := dryAgents{skills: skills}
+func dryDeps(tree, head, item string, chosen dryChoice) Deps {
+	agents := dryAgents{skills: chosen.skills}
 	if chosen.sendBack {
 		agents.sendBack = new(atomic.Bool)
 		agents.sendBack.Store(true)
@@ -207,10 +205,10 @@ func dryDeps(tree, head, item string, skills []string, chosen dryChoice) Deps {
 
 	return Deps{
 		Agents: agents, Gate: newDryGate(tree, head, chosen.redGate), Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
-		Forge: dryForge{head: head}, Watch: dryWatch{}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
+		Forge: dryForge{head: head}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
 		Writer: dryWriter{}, Reader: dryReader{}, Preflight: dryPreflight{}, Slots: drySlots,
-		Facts: func(string) model.Project { return model.Project{Vars: chosen.vars} },
-		Clock: clock{Poll: dryPoll, Watch: dryWait, Settle: dryWait, Reading: dryReading()},
+		Facts: func(string) model.Project { return model.Project{Source: tree, Vars: chosen.vars} },
+		Clock: clock{Poll: dryPoll, Settle: dryWait, Reading: dryReading()},
 	}
 }
 
@@ -269,29 +267,6 @@ func dryGit(ctx context.Context, dir string, args []string) (string, error) {
 	return strings.TrimSpace(result.Stdout), nil
 }
 
-// dryRequiredSkills lists the skills that the agent steps of the file require, so that the fake agent reports them as used.
-func dryRequiredSkills(file string) ([]string, error) {
-	text, err := os.ReadFile(file) //nolint:gosec // the owner names the workflow file
-	if err != nil {
-		return nil, fmt.Errorf("read the workflow file: %w", err)
-	}
-
-	calls, err := workflowtest.Calls(file, text)
-	if err != nil {
-		return nil, fmt.Errorf("read the workflow file: %w", err)
-	}
-
-	var skills []string
-
-	for _, call := range calls {
-		if call.Builtin == "agent" {
-			skills = append(skills, workflowtest.Literals(call.Args["require_skills"])...)
-		}
-	}
-
-	return skills, nil
-}
-
 // printDrySteps prints the steps of the run in order and returns the name of the last one. A step that failed shows its error.
 func printDrySteps(ctx context.Context, opts Options, out io.Writer) (string, error) {
 	client, err := OpenClient(ctx, opts, ReleaseDeps{Lifecycle: dryLifecycle{}, Trees: dryTrees{}})
@@ -341,12 +316,20 @@ func dryLine(n int, step dbos.StepInfo) string {
 	return fmt.Sprintf("step %d %s: %s", n, step.StepName, model.Clip(text, dryOutLimit, "..."))
 }
 
-// dryAgents ends every agent as done. It writes the output file of the request with one fixed value for each declared output (the verdict approve, any other output 0), and reports the required skills as used.
+// dryAgents ends every agent as done. It writes the output file of the request with one fixed value for each declared output (the verdict approve, the output open empty, any other output 0).
 // With sendBack set, the first agent that declares a verdict writes changes instead; the flag then clears.
 type dryAgents struct {
-	skills   []string
 	sendBack *atomic.Bool
+	skills   []string
 }
+
+// outputVerdict is the output of a review call that holds its verdict. verdictChanges is the verdict of a head that needs a commit.
+// outputOpen is the output that holds the open findings of a review as text, empty when none is open.
+const (
+	outputVerdict  = "verdict"
+	verdictChanges = "changes"
+	outputOpen     = "open"
+)
 
 func (a dryAgents) Run(_ context.Context, request AgentRequest) (agent.Result, error) {
 	if len(request.Outputs) > 0 {
@@ -360,10 +343,10 @@ func (a dryAgents) Run(_ context.Context, request AgentRequest) (agent.Result, e
 	return agent.Result{Outcome: agent.OutcomeExited, Session: "dry-session", Transcript: "/dry.jsonl", Text: "dry run: no agent ran", Skills: a.skills}, nil
 }
 
-// outputs is the content of the output file: one string for each declared output, and an empty findings list for a call that forbids follow-ups.
+// outputs is the content of the output file: one string for each declared output.
 func (a dryAgents) outputs(declared []string) []byte {
 	sendBack := a.sendBack != nil && slices.Contains(declared, outputVerdict) && a.sendBack.Swap(false)
-	fields := []string{`"findings":[]`}
+	fields := make([]string, 0, len(declared))
 
 	for _, name := range declared {
 		value := dryOutput(name)
@@ -377,11 +360,14 @@ func (a dryAgents) outputs(declared []string) []byte {
 	return []byte("{" + strings.Join(fields, ",") + "}")
 }
 
-// dryOutput is the fixed value of a declared output in a dry run: a review approves, and any other output holds the text 0.
+// dryOutput is the fixed value of a declared output in a dry run: a review approves with no open finding, and any other output holds the text 0.
 // The text 0 reads as a count of none, so a workflow that reads a count from an output walks the path of an approved item.
 func dryOutput(name string) string {
-	if name == outputVerdict {
+	switch name {
+	case outputVerdict:
 		return "approve"
+	case outputOpen:
+		return ""
 	}
 
 	return "0"
@@ -457,12 +443,6 @@ func (f dryForge) Pull(context.Context, string, string) (review.Standing, error)
 	return review.Standing{Number: dryPull, Head: f.head}, nil
 }
 
-func (f dryForge) Reviewed(ctx context.Context, project, item, _ string) (review.Standing, error) {
-	return f.Pull(ctx, project, item)
-}
-
-func (dryForge) Ready(context.Context, string, string) error { return nil }
-
 func (dryForge) ClosingIssues(context.Context, string, string) ([]int, bool, error) {
 	return nil, true, nil
 }
@@ -476,30 +456,6 @@ func (dryForge) Comment(context.Context, string, string, string, string) (int, e
 func (dryForge) Open(context.Context, string, string, OpenRequest) (OpenResult, error) {
 	return OpenResult{Number: dryPull}, nil
 }
-
-// PlaceCard shows the dry-run pull request as placed and writes no board.
-func (dryForge) PlaceCard(context.Context, string, string, CardRequest) (int, error) {
-	return dryPull, nil
-}
-
-// ReadCard shows the card on the column that the call asked for, because a dry run writes no board to read back.
-func (dryForge) ReadCard(_ context.Context, _, _ string, req CardRequest) (string, error) {
-	return req.Status, nil
-}
-
-// Assign shows the dry-run pull request as assigned, with no linked issue.
-func (dryForge) Assign(context.Context, string, string, string, bool) (int, []int, error) {
-	return dryPull, nil, nil
-}
-
-// dryWatch shows the pull request as merged.
-type dryWatch struct{}
-
-func (dryWatch) Watch(context.Context, string, int) (review.Outcome, error) {
-	return review.Outcome{Kind: review.Merged}, nil
-}
-
-func (dryWatch) SetDraft(context.Context, string, int, bool) error { return nil }
 
 type dryTrees struct{ dir string }
 
@@ -546,8 +502,6 @@ func (dryWriter) Create(context.Context, string, string, trackerstore.NewItem) (
 func (dryWriter) SetStatus(context.Context, string, string, trackerstore.Status) error { return nil }
 
 func (dryWriter) Comment(context.Context, string, string, string, string) error { return nil }
-
-func (dryWriter) Assign(context.Context, string, string, string) error { return nil }
 
 // dryPreflight finds the pull request as the owner left it.
 type dryPreflight struct{}

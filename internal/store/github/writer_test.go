@@ -316,48 +316,6 @@ func TestCreate_FilesTheOperatorFlagAsTheOperatorLabelBesideTheSeverity(t *testi
 	assert.NotContains(t, fake.calls[len(fake.calls)-1], "operator")
 }
 
-func TestAssign_ReadsTheAssigneesAndAddsTheLoginWithOneEdit(t *testing.T) {
-	t.Parallel()
-
-	run := &proctest.Scripted{}
-	run.Plan(`{"assignees":[{"login":"bob"}]}`, "issue", "view")
-	run.Plan("", "issue", "edit")
-
-	s, err := github.New(ghRepo, run)
-	require.NoError(t, err)
-	require.NoError(t, s.Assign(t.Context(), "7", "alice"))
-	assert.Equal(t, [][]string{
-		{"issue", "view", "7", "--repo", ghRepo, "--json", "assignees"},
-		{"issue", "edit", "7", "--repo", ghRepo, "--add-assignee", "alice"},
-	}, run.Calls)
-
-	down, err := github.New(ghRepo, proctest.Always(model.CommandResult{ExitCode: 1}))
-	require.NoError(t, err)
-	require.Error(t, down.Assign(t.Context(), "7", "alice"))
-}
-
-func TestAssign_ARepeatedCallSendsNoSecondEdit(t *testing.T) {
-	t.Parallel()
-
-	fake := newFakeGh()
-	fake.issues[7] = &fakeIssue{}
-	s := writerOver(t, fake)
-
-	require.NoError(t, s.Assign(t.Context(), "7", "alice"))
-	require.NoError(t, s.Assign(t.Context(), "7", "Alice"))
-
-	edits := 0
-
-	for _, call := range fake.calls {
-		if call[1] == "edit" {
-			edits++
-		}
-	}
-
-	assert.Equal(t, 1, edits, "the second call finds the login and sends no edit")
-	assert.Equal(t, []string{"alice"}, fake.issues[7].assignees)
-}
-
 func TestCreate_FindsTheKeyInTheListWhenTheSearchIndexLags(t *testing.T) {
 	t.Parallel()
 

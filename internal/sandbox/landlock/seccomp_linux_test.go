@@ -23,8 +23,12 @@ const childMarker = "beehave-filter-child"
 func TestRawCall_ReturnsTheErrorNumberOfTheKernel(t *testing.T) {
 	t.Parallel()
 
-	require.NoError(t, rawCall(unix.SYS_GETPID, 0, 0, nil))
-	require.ErrorIs(t, rawCall(unix.SYS_CLOSE, ^uintptr(0), 0, nil), unix.EBADF)
+	pid, err := rawCall(unix.SYS_GETPID, 0, 0, nil)
+	require.NoError(t, err)
+	assert.Equal(t, uintptr(os.Getpid()), pid)
+
+	_, err = rawCall(unix.SYS_CLOSE, ^uintptr(0), 0, nil)
+	require.ErrorIs(t, err, unix.EBADF)
 }
 
 func TestSocketProgram_AssemblesAndHasTheJumpsOfTheFilter(t *testing.T) {
@@ -81,13 +85,13 @@ func TestInstall_EachStepThatFailsStopsTheInstallation(t *testing.T) {
 	recording := func(by uintptr) filterKernel {
 		return filterKernel{
 			assemble: bpf.Assemble,
-			call: func(number, _, _ uintptr, _ unsafe.Pointer) error {
+			call: func(number, _, _ uintptr, _ unsafe.Pointer) (uintptr, error) {
 				calls = append(calls, number)
 				if number == by {
-					return failure
+					return 0, failure
 				}
 
-				return nil
+				return 0, nil
 			},
 		}
 	}
@@ -107,6 +111,47 @@ func TestInstall_EachStepThatFailsStopsTheInstallation(t *testing.T) {
 	err = broken.install()
 	require.ErrorIs(t, err, failure)
 	assert.ErrorContains(t, err, "assemble the socket filter")
+}
+
+func TestInstall_APartialThreadSyncStopsTheInstallation(t *testing.T) {
+	t.Parallel()
+
+	const failedThread = 4242
+
+	partial := filterKernel{
+		assemble: bpf.Assemble,
+		call: func(number, _, _ uintptr, _ unsafe.Pointer) (uintptr, error) {
+			if number == unix.SYS_SECCOMP {
+				return failedThread, nil
+			}
+
+			return 0, nil
+		},
+	}
+
+	err := partial.install()
+	require.Error(t, err)
+	assert.ErrorContains(t, err, "4242")
+}
+
+func TestInstall_AnErrorNumberWinsOverAThreadId(t *testing.T) {
+	t.Parallel()
+
+	failure := errors.New("refused")
+	both := filterKernel{
+		assemble: bpf.Assemble,
+		call: func(number, _, _ uintptr, _ unsafe.Pointer) (uintptr, error) {
+			if number == unix.SYS_SECCOMP {
+				return 4242, failure
+			}
+
+			return 0, nil
+		},
+	}
+
+	err := both.install()
+	require.ErrorIs(t, err, failure)
+	assert.NotContains(t, err.Error(), "4242")
 }
 
 // TestKernel_TheFilterRefusesAUnixSocketInAChildThatLoadedIt runs a child of the test binary that loads the real filter and then asks for a unix socket and

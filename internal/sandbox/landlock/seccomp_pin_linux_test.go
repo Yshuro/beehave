@@ -49,7 +49,7 @@ func TestInstall_BothCallsRunOnOneThread(t *testing.T) {
 
 	kernel := filterKernel{
 		assemble: bpf.Assemble,
-		call: func(number, _, _ uintptr, _ unsafe.Pointer) error {
+		call: func(number, _, _ uintptr, _ unsafe.Pointer) (uintptr, error) {
 			first := unix.Gettid()
 			threads[number] = first
 
@@ -63,7 +63,7 @@ func TestInstall_BothCallsRunOnOneThread(t *testing.T) {
 				}
 			}
 
-			return nil
+			return 0, nil
 		},
 	}
 

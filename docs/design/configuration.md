@@ -20,7 +20,7 @@ Each file is Starlark with the step limit of the workflow files. The limits and 
 | Key | Meaning | Default and limits | Override |
 | --- | --- | --- | --- |
 | `max_concurrent` | The global limit on agent processes. | | |
-| `max_review_concurrent` | The same limit for the agent steps of the kind review. | | |
+| `max_review_concurrent` | The same limit for the agent steps with edits = False. | | |
 | `per_login` | The most agent steps that one login runs at once, in each of the two agent queues. The gate and merge queues keep one run for each repository. | Default 1. The least is 1. The most is the lower of `max_concurrent` and `max_review_concurrent`. | `BEEHAVE_AGENTS_PER_LOGIN` |
 | `max_turns` | The cap of turns for one agent run. | 0 means no cap. | |
 | `max_budget_usd` | The cap of dollars for one agent run. | 0 means no cap. | |
@@ -30,38 +30,53 @@ Each file is Starlark with the step limit of the workflow files. The limits and 
 | `review_lookback_days` | The days that the review poll looks back for replies. | Default 3. The least is 1. The most is 365. | `BEEHAVE_REVIEW_LOOKBACK_DAYS` |
 | `retention_days` | The age in days at which `beehave run` deletes a finished run. | Default 7. 0 keeps every finished run. The most is 36500. | `BEEHAVE_AGENTS_RETENTION_DAYS` |
 
+### `pool(...)`
+
+`pool(...)` sets the usage caps of the Claude runners, in percent. Call it once. Both keys are optional. `beehave run` picks the runner that is under both caps.
+
+| Key | Meaning | Default and limits | Override |
+| --- | --- | --- | --- |
+| `five_hour_max` | The cap for the five-hour usage of a runner. | Default 90. Above 0 and up to 100. | `BEEHAVE_POOL_FIVE_HOUR_MAX` |
+| `seven_day_max` | The cap for the seven-day usage of a runner. | Default 95. Above 0 and up to 100. | `BEEHAVE_POOL_SEVEN_DAY_MAX` |
+
+### `runner(...)`
+
+`runner(...)` declares one agent login. Call it once for each login. Each name is used once.
+
+| Key | Meaning |
+| --- | --- |
+| `name` | Required. The label of the runner. |
+| `agent` | Required. The agent CLI: `claude` or `opencode`. |
+| `config_dir` | Optional. The config folder of the login. beehave sets `CLAUDE_CONFIG_DIR` to it for a Claude run. `~/` is the home folder. |
+| `keychain` | Optional. The name of the macOS Keychain entry that holds the login token, for a machine with no logged-in profile. |
+
 ### `project(...)`
 
-The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `test_paths`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
+The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `test_paths`, `notify`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
 
-`test_paths` is a list of globs for the test files, for example `["**/*_test.go", "**/testdata/**"]` or `["tests/**"]`. The revert run copies the added and changed test files of a candidate onto the base code, so a new test that needs a changed helper in a test file still builds there. A project with new tests and no `test_paths` gets a refusal from `before_review`.
+`test_paths` is a list of globs for the test files, for example `["**/*_test.go", "**/testdata/**"]` or `["tests/**"]`. The revert run copies the added and changed test files of a candidate onto the base code, so a new test that needs a changed helper in a test file still builds there. A project with new tests and no `test_paths` gets a refusal from the `before_review` function of `review_fix.star`.
+
+`notify` is a list of strings: a program and its arguments, for example `["ntfy", "publish", "beehave"]`. A wait for the owner is a `wait`, the wait for the owner after a gate job is lost, or the wait of a `merge` that asks the owner to decide a scope, or the wait of a `merge` with `hand_off` for the owner to merge. When one opens, the engine runs the list once and adds two arguments, the item id and the question. The engine runs the program with no shell, so each argument stays one word, and it stops the program after 30 seconds. A program that fails, does not start or hangs gets a line in the log and never fails the wait. A reminder, a timeout and a dry run send no notice. A lost-job wait that opens again sends one notice for each opening. A `merge` with `hand_off` that is canceled and cannot return a ready pull request to draft sends a notice that names the item. A project with no `notify` sends no notice. A run that waits for the owner resumes cleanly if you add or remove `notify` meanwhile: it sends no late notice and it does not repeat one. The config refuses a `notify` that is not a list of strings, an empty list and a list whose first item is empty.
 
 The project also takes the config block of the adapter that it chooses. The adapter declares the keys of its block, and the config passes the block to the adapter unread. The beads adapter declares the `beads` block with one key: `beads = beads(prefix = "proj")`. A project that chooses the beads tracker or the beads claim store must give the block. The config refuses a block of an adapter that the project does not choose, and the refusal names the adapters that the project does choose.
 
 The `host` call takes the block of the host adapter in the same way. The `skypilot`, `ssh` and `slurm` adapters each declare their own block, for example `host = host(provider = "ssh", disk_floor_gb = 50, ssh = ssh(user = "ci"))`. The `host` call also takes `lost_job_wait`, a duration from `"1m"` to `"24h"` with the default `"60m"`; see `docs/design/hosts.md`. It takes `lost_after` and `stop_limit` too, two durations above zero with the default `"5m"`; see `docs/design/hosts.md`. The config refuses the block of a host adapter that `provider` does not name, and the refusal names the block and the provider. The adapter reads and checks its keys when it builds the host.
 
-The project also takes facts. All facts are optional and are empty when left out.
+The project also takes `vars`, a dict of the settings of one workflow. It is optional and is empty when left out. The engine reads no key and no value. The remediation example reads its people, epics, rules, limits, traps, changelog and board from `vars`. The example checks each of these keys once, at the start of a run and before any step: a list or dict of the wrong type or with a blank entry, a `changelog` that is not a relative path to a file (no leading `/` or `./`, no `..`, no trailing `/`), and a `board` with a missing or wrong key. Each refusal names the key.
 
-| Fact | Type |
-| --- | --- |
-| `people`, `epics` | A dict of strings. |
-| `gate_files`, `conventions`, `brief_rules`, `stacked_rules`, `limits`, `traps`, `token_rules` | A list of strings. |
-| `changelog` | One relative path inside the work tree. The example workflow checks it before a merge. |
-| `vars` | A dict of the settings of one workflow. The engine reads no key and no value. |
-
-The loader refuses a blank item, and a blank dict key or value.
+If a project file writes `people`, `epics`, `gate_files`, `conventions`, `brief_rules`, `stacked_rules`, `limits`, `traps`, `token_rules`, `changelog` or `board` at the top of `project()`, the loader refuses the file. The message names the key and says to move it into `vars`.
 
 The `vars` keys must be strings. The values must be `None`, a bool, a string, a number, a list, a tuple or a dict, nested to any depth. The loader refuses a function, a non-finite number and a key that is not a string, because a run records the facts as JSON. A workflow reads `vars` with `facts().vars`.
 
-#### `board`
+#### The board
 
-The optional `board = board(number, started, merged, owner)` value is the GitHub Project board of the project. With no `board` value, the project has no board.
+The remediation example reads the GitHub Project board of the project from the key `board` of `vars`: `vars = {"board": {"number": 3, "started": "In Progress", "merged": "Done"}}`. With no `board` key, the example makes no board call.
 
-| Argument | Meaning |
+| Key | Meaning |
 | --- | --- |
 | `number` | A whole number above 0. |
-| `started`, `merged` | The Status columns that a workflow sets. |
-| `owner` | The login that owns the board. It defaults to the owner of the repository. |
+| `started`, `merged` | The Status columns that the example sets. |
+| `owner` | Optional. The login that owns the board. It defaults to the owner of the repository. |
 
 #### The round settings
 
@@ -73,11 +88,14 @@ The engine has no round settings. The remediation example keeps its own under th
 | `owner` | Required. The login of the owner. |
 | `lane_cap`, `fix_rounds` | Required. A whole number of 1 or more. |
 | `label`, `items` | Required: set exactly one. `label` is the tracker label that marks the items of the round. `items` is a list of item ids. The example refuses neither, both, a blank label and an id that is not an item. |
-| `next_base`, `owner_email`, `source_checkout`, `acceptance`, `base_result` | Optional text. Empty when left out. |
+| `next_base`, `owner_email`, `source_checkout`, `base_result` | Optional text. Empty when left out. |
+| `acceptance` | Optional text. The path of a script. After each batch that lands an item, the round runs `sh <acceptance>` on the build host with a limit of 30 minutes. A script that fails stops the round. Empty means none. |
+| `union_gate` | Optional list of words. The program that gates the union of a batch, in place of the gate of the project. Empty means the gate of the project. |
 | `integration_pr` | Optional. A whole number of 0 or more. 0 means the round finds the pull request. |
 | `wait_hours` | Optional. A whole number of 1 or more. The default is 24. |
 | `merge` | Optional bool. The default is false. |
-| `base_reds`, `allow_paths` | Optional lists. |
+| `hand_off` | Optional bool. The default is false. Set it when the owner merges the approved pull requests: the round calls `merge` with `hand_off`, which marks them ready and waits for the owner, and lands none itself. An item whose pull request is closed, whose head moves after the ready mark, or that gets a change request, a conflict or an unresolved thread holds with the reason. It takes effect only when `merge` is true. |
+| `base_reds`, `allow_paths` | Optional lists. The globs of `allow_paths` follow [the setting `allow_paths`](agent-runs.md#the-setting-allow_paths) of an `agent` step, which lists the patterns that it refuses. |
 | `base_reds_file` | Optional. The default is `base-reds.md`. |
 | `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
 | `steps` | Optional dict from a step name to `{"model": text, "runner": text}`. The steps are `plan`, `implement`, `review`, `fix`, `fix_late`, `design`, `take_review`, `sync_review`, `sync_resolve`, `queue_audit` and `settle`. A step that the dict leaves out keeps its default model and the pool pick. A review on the model of the implementer is refused when two or more models are in use. See "The steps and the limits" in `durable-loop.md`. |
@@ -85,21 +103,6 @@ The engine has no round settings. The remediation example keeps its own under th
 | `void_reruns`, `void_asks`, `escalate_after` | Optional. A whole number from 0 to 100. The defaults are 2, 3 and 3. |
 
 The example refuses any other key under `round`.
-
-#### `schedules`
-
-The optional project key `schedules` is a list of `schedule(name, cron, workflow, item, timezone, catch_up)`. This key declares and validates the schedules only: no engine fires them yet.
-
-| Argument | Rule |
-| --- | --- |
-| `name` | Lower case letters, digits and hyphens. Unique in the project. |
-| `cron` | Read by the parser that DBOS uses (robfig cron with a leading seconds field). A 5-field text is refused, and `@weekly` is accepted. |
-| `workflow` | A file. A relative path starts in the folder of the project file, and `~/` is the home folder. |
-| `item` | The prefix of the item id. |
-| `timezone` | An IANA zone. Defaults to `UTC`. |
-| `catch_up` | A bool. Defaults to `False`. |
-
-The loader parses `CRON_TZ=<timezone> <cron>`, as DBOS does. It refuses a `cron` text that starts with `TZ=` or `CRON_TZ=`, because the `timezone` key sets the zone. It refuses a bad schedule with the file and the line.
 
 ### What the loader refuses
 

@@ -139,7 +139,7 @@ func TestSuperseded_ABuildJobThatStartsDuringTheCancelOfTheOldGateIsCanceledWith
 
 	old := queueHostGate(engine, testProject, testItem, "A", "box")
 
-	waitOn(t, waiting[struct{}]{what: "the gate of head A to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, startedCount(gated, 1)(), nil }})
+	waitOn(t, startsOfRun(t, engine, gated, 1))
 	setHead(h, "B")
 
 	gates, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(exclusiveName), dbos.WithFilterStatus(dbos.WorkflowStatusPending))

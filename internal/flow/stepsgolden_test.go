@@ -41,28 +41,23 @@ func resultShape(t *testing.T) []string {
 // (stepmodules.go) and update the shape. A later change re-keys these goldens for each module; until then the key stays star30.
 var goldenShapes = map[string][]string{
 	"star30": {
-		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,stop,text,transcript,violations",
-		"batch_merge: deferred,findings,gates,host_loss,host_losses,merged,note,rejected,tip,tree,unproven",
-		"before_review: base,findings,keywords,new_tests,ok,revert",
-		"board_sync: number,status",
+		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,skills,stop,text,transcript,violations",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
-		"facts: base_branch,board_merged,board_number,board_owner,board_started,brief_rules,build_host,changelog,conventions,epics,forge,gate,gate_files,gate_steps,limits,people,repo,source,stacked_rules,token_rules,tracker,traps,vars",
+		"facts: base_branch,build_host,forge,gate,gate_steps,repo,runners,source,tracker,vars",
 		"gate: checks,head,host_loss,host_losses,new_tests,passed,report,required,revert,steps,tree",
 		"gather: results",
 		"host_teardown: down,reason",
 		"host_up: host,started",
-		"item_assign: id",
 		"item_comment: id",
 		"item_create: created,id",
 		"item_read: comments,fields,found,id,parent",
 		"item_status: id,status",
-		"merge: reason,state",
-		"pr_assign: issues,number",
+		"merge: deferred,findings,gates,host_loss,host_losses,merged,moved,note,rejected,tip,tree,unproven",
 		"pr_comment: number",
 		"pr_open: created,number,stack",
 		"pr_state: state",
-		"preflight: author,code,foreign,head,ok,pr,reason,stop",
+		"preflight: code,ok,reason,stop",
 		"queue: free,rows",
 		"spawn: runs",
 		"wait: answer,answers,timed_out",
@@ -83,9 +78,9 @@ func TestStepsVersion_TheShapeOfTheRecordedResultsIsTheGoldenShapeOfTheVersion(t
 // the table is the one the engine checks every step name against. A builtin with no result fields is in it too.
 var goldenKinds = map[string][]string{
 	"star30": {
-		"agent", "before_review", "board_sync", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
-		"item_assign", "item_comment", "item_create", "item_read", "item_status", "login", "merge", "now",
-		"pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "scope-check", "spawn", "wait", "write",
+		"agent", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
+		"item_comment", "item_create", "item_read", "item_status", "login", "now",
+		"pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "spawn", "wait", "write",
 	},
 }
 
@@ -102,7 +97,7 @@ func TestStepsVersion_EveryBuiltinWithResultFieldsRecordsUnderAKindOfTheTable(t 
 	t.Parallel()
 
 	for _, name := range workflow.Results() {
-		if name == "batch_merge" {
+		if name == "merge" {
 			continue // its steps are named batch:<name>.<kind> and the golden list of its steps holds them
 		}
 
@@ -144,10 +139,10 @@ func TestStepsVersion_EveryPathThatRecordsAStepRefusesAKindOutsideTheTable(t *te
 	assert.Empty(t, s.counts, "a refused kind counts no call")
 }
 
-// goldenBatchSteps are the step names of one batch_merge of items 1 and 3 under the steps version.
+// goldenBatchSteps are the step names of one merge of items 1 and 3 under the steps version.
 var goldenBatchSteps = []string{
-	"batch:b.refuse", "batch:b.heads#1", "batch:b.tip#1", "batch:b.union#1", "batch:b.tip#2", "batch:b.intent#1",
-	"batch:b.tip#3", "batch:b.intent#3", "batch:b.tip#4", "batch:b.prove", "batch:b.issues",
+	"batch:b.refuse", "batch:b.heads#1", "batch:b.tip#1", "batch:b.union#1", "batch:b.tip#2", "batch:b.scope#1", "batch:b.intent#1",
+	"batch:b.tip#3", "batch:b.scope#3", "batch:b.intent#3", "batch:b.tip#4", "batch:b.prove", "batch:b.issues",
 }
 
 func TestStepsVersion_TheStepNamesOfABatchMergeMatchTheGoldenListOfTheStepsVersion(t *testing.T) {
@@ -167,7 +162,7 @@ func TestStepsVersion_TheStepNamesOfABatchMergeMatchTheGoldenListOfTheStepsVersi
 		}
 	}
 
-	assert.Equal(t, goldenBatchSteps, batch, "the steps of batch_merge changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
+	assert.Equal(t, goldenBatchSteps, batch, "the steps of merge changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
 	assert.Equal(t, goldenBatchGateSteps, batchGateSteps(t, engine), "the steps of the batch gate changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
 }
 
@@ -175,11 +170,11 @@ func TestStepsVersion_TheStepNamesOfABatchMergeMatchTheGoldenListOfTheStepsVersi
 // and a replay that finds it waits on that job.
 var goldenBatchGateSteps = []string{"batch_gate:job", "batch_gate"}
 
-// goldenLostBatchSteps are the steps of batch_merge in the item run when the first gate of the union loses its job and the rerun passes:
+// goldenLostBatchSteps are the steps of merge in the item run when the first gate of the union loses its job and the rerun passes:
 // the record of the loss comes after the first gate and before the members merge.
 var goldenLostBatchSteps = []string{
-	"batch:b.refuse", "batch:b.heads#1", "batch:b.tip#1", "batch:b.union#1", "batch:b.gate#1/host-loss", "batch:b.tip#2", "batch:b.intent#1",
-	"batch:b.tip#3", "batch:b.intent#3", "batch:b.tip#4", "batch:b.prove", "batch:b.issues",
+	"batch:b.refuse", "batch:b.heads#1", "batch:b.tip#1", "batch:b.union#1", "batch:b.gate#1/host-loss", "batch:b.tip#2", "batch:b.scope#1", "batch:b.intent#1",
+	"batch:b.tip#3", "batch:b.scope#3", "batch:b.intent#3", "batch:b.tip#4", "batch:b.prove", "batch:b.issues",
 }
 
 func TestStepsVersion_TheStepNamesOfABatchMergeWhoseGateLostItsJobMatchTheGoldenList(t *testing.T) {
@@ -199,5 +194,5 @@ func TestStepsVersion_TheStepNamesOfABatchMergeWhoseGateLostItsJobMatchTheGolden
 		}
 	}
 
-	assert.Equal(t, goldenLostBatchSteps, batch, "the steps of batch_merge changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
+	assert.Equal(t, goldenLostBatchSteps, batch, "the steps of merge changed: bump the version of the land module in moduleTable (stepmodules.go) and update the list")
 }

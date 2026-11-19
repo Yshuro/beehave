@@ -69,14 +69,14 @@ AI_RULEZ_VERSION := v5.9.2
 GITLEAKS_VERSION := v8.30.1
 # make mutation and make mutation-pr run gremlins. scripts/mutation-pr.sh reads the JSON report of this version.
 GREMLINS_VERSION := v0.6.0
-# make setup installs this goreleaser, and the tag workflow in .github/workflows/release.yaml pins the same version.
+# make goreleaser-install installs this goreleaser. make setup, the CI snapshot job and the tag workflow in .github/workflows/release.yaml all run it.
 GORELEASER_VERSION := v2.20.2
 BIN := bin/beehave
 REMEDY := bin/remedy
 
 DEADCODE_VERSION := golang.org/x/tools/cmd/deadcode@v0.51.0
 
-.PHONY: setup lint-version ai-rulez-version ai-rulez-install contract-tools-install deps deadcode build release-snapshot format format-check lint vet vuln test coverage smoke smoke-agent smoke-hook smoke-sandbox mutation mutation-pr \
+.PHONY: setup lint-version ai-rulez-version ai-rulez-install contract-tools-install deps deadcode build goreleaser-install release-snapshot format format-check lint lint-darwin vet vuln test coverage smoke smoke-agent smoke-hook smoke-sandbox mutation mutation-pr \
 	governance-generate governance-validate governance-verify clean check check-darwin
 
 setup:  ## Install the Go tools and generate the agent files
@@ -88,12 +88,15 @@ setup:  ## Install the Go tools and generate the agent files
 	$(call GO_TOOL_AT,deadcode,golang.org/x/tools,$(word 2,$(subst @, ,$(DEADCODE_VERSION)))) || go install $(DEADCODE_VERSION)
 	$(call GO_TOOL_AT,gitleaks,github.com/zricethezav/gitleaks/v8,$(GITLEAKS_VERSION)) || go install github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION)
 	go install github.com/go-gremlins/gremlins/cmd/gremlins@$(GREMLINS_VERSION)
-	goreleaser --version 2>/dev/null | grep -Eq '^GitVersion:[[:space:]]+v?$(subst .,\.,$(patsubst v%,%,$(GORELEASER_VERSION)))[[:space:]]*$$' || go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
+	$(MAKE) goreleaser-install
 	$(MAKE) governance-generate
 
 build:  ## Build bin/beehave and bin/remedy
 	go build -trimpath -o $(BIN) ./cmd/beehave
 	go build -trimpath -o $(REMEDY) ./examples/remediation/tools/cmd/remedy
+
+goreleaser-install:  ## Install goreleaser $(GORELEASER_VERSION) into the Go bin folder
+	goreleaser --version 2>/dev/null | grep -Eq '^GitVersion:[[:space:]]+v?$(subst .,\.,$(patsubst v%,%,$(GORELEASER_VERSION)))[[:space:]]*$$' || go install github.com/goreleaser/goreleaser/v2@$(GORELEASER_VERSION)
 
 release-snapshot:  ## Build release archives without publishing
 	goreleaser release --snapshot --clean --skip=publish
@@ -120,6 +123,11 @@ format-check: lint-version  ## Fail if the Go code is not formatted
 
 lint: lint-version  ## Lint the Go code
 	golangci-lint run ./...
+
+# GOOS=darwin makes golangci-lint and go vet load the files that build on macOS only, which a Linux run never reads.
+lint-darwin: lint-version  ## Lint and vet the Go code as GOOS=darwin
+	GOOS=darwin golangci-lint run ./...
+	GOOS=darwin go vet ./...
 
 vet:
 	go vet ./...
@@ -200,4 +208,4 @@ governance-verify: governance-validate  ## Validate the config and render it wit
 clean:
 	go clean -cache -testcache
 
-check: format-check lint vet deps deadcode vuln test coverage smoke governance-verify  ## The full gate (same as CI)
+check: format-check lint lint-darwin vet deps deadcode vuln test coverage smoke governance-verify  ## The full gate (same as CI)

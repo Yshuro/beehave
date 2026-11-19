@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -20,17 +19,10 @@ func TestSandboxPlan_AnAllowWriteLinkToAMissingTargetInsideAClosedPathIsRefused(
 	require.NoError(t, os.Symlink(filepath.Join(r.work, ".git", "hooks", "pre-commit"), filepath.Join(r.work, "abs")))
 	require.NoError(t, os.Symlink(filepath.Join(".husky", "pre-push"), filepath.Join(r.work, "rel")))
 
-	req := request()
-
 	for _, bad := range []string{"abs", "rel", "rel/more"} {
-		r.f.spec.Sandbox = nil
-		req.Sandbox = &model.Sandbox{AllowWrite: []string{bad}}
+		_, note := r.writeNote(t, bad)
 
-		got, err := r.f.agents.Run(t.Context(), req)
-
-		require.NoError(t, err)
-		assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, bad)
-		assert.Nil(t, r.f.spec.Sandbox, bad)
+		assert.Contains(t, note, "overlaps the protected path", bad)
 	}
 }
 

@@ -22,25 +22,27 @@ project(
     # gate_network = ["proxy.golang.org"],  # optional; domains that the gate command can reach when the project has `sandbox = "on"` and the gate runs on this machine. The default is no network.
     # gate_allow_write = ["~/go/pkg"],      # optional; extra paths that the gate command can write. Relative paths start at the work folder.
     # sandbox_enforcer = "auto",            # optional; "auto" (the default) picks the best enforcer that can run here. "landlock" names one (Linux 6.7 or later).
-    # The facts below are optional. The `facts()` value of a workflow file holds them with the keys above (repo, source, forge, tracker, base_branch, gate, build_host), and the remediation example puts them into the prompt of each agent. An argument that the file leaves out is empty.
-    # people = {"owner": "your-login", "third_party_idle_hours": "24"},  # a role to a login. The entry third_party_idle_hours is text, not a number: the idle hours after which a pull request of a third party counts as stale
-    # epics = {"bugs": "proj-1"},                  # a queue name to its epic
-    # gate_files = [".github/workflows/ci.yml"],   # the workflow files that the list of gate commands comes from
-    # conventions = ["AGENTS.md"],                 # the files to review against
-    # brief_rules = ["Name the tempting wrong fix"],     # rules for the brief of an agent
-    # stacked_rules = ["Merge the base pull request first"],  # rules for a pull request that stacks on another
-    # limits = ["Never run rm on a glob"],         # hard limits, commands never run and real user data
-    # traps = ["The build cache hides a stale tree"],    # measured traps and ownership rules
-    # token_rules = ["Read a log by its summary lines"],  # token discipline, the dashboard, cross-repository steps and release steps
-    # changelog = "CHANGELOG.md",                  # the changelog file; the example workflow refuses a merge that leaves it untouched
-    # vars = {"mutation_command": ["sh", "scripts/mutation-pr.sh"], "labels": ["bug"]},  # free settings of your workflow; any string keys, with None, bool, string, number, list and dict values. `facts().vars` returns them as written
-    # The remediation example needs `mutation_command`: the command of your mutation tool, a list of words. It runs on the build host in the slot class "mutation" (see the host block below), with the base ref as its last word.
-    # board = board(
-    #     number = 3,                  # the number of the GitHub Project (v2) board; required
-    #     started = "In Progress",     # the Status column that the remediation example sets when the draft pull request opens; required
-    #     merged = "Done",             # the Status column that it sets after the merge; required
-    #     owner = "your-org",          # the login that owns the board; the default is the owner of `repo`
-    # ),                               # optional. With no board block the example makes no board call. The token needs the `project` scope
+    # vars holds the free settings of your workflow: any string keys, with None, bool, string, number, list and dict values. `facts().vars` returns them as written. The engine reads no key.
+    # The remediation example reads these keys from it, and puts them into the prompt of each agent. A key that vars leaves out is empty.
+    # vars = {
+    #     "people": {"owner": "your-login", "third_party_idle_hours": "24"},  # a role to a login. The entry third_party_idle_hours is text, not a number: the idle hours after which a pull request of a third party counts as stale
+    #     "epics": {"bugs": "proj-1"},                  # a queue name to its epic
+    #     "gate_files": [".github/workflows/ci.yml"],   # the workflow files that the list of gate commands comes from
+    #     "conventions": ["AGENTS.md"],                 # the files to review against
+    #     "brief_rules": ["Name the tempting wrong fix"],     # rules for the brief of an agent
+    #     "stacked_rules": ["Merge the base pull request first"],  # rules for a pull request that stacks on another
+    #     "limits": ["Never run rm on a glob"],         # hard limits, commands never run and real user data
+    #     "traps": ["The build cache hides a stale tree"],    # measured traps and ownership rules
+    #     "token_rules": ["Read a log by its summary lines"],  # token discipline, the dashboard, cross-repository steps and release steps
+    #     "changelog": "CHANGELOG.md",                  # the changelog file; the example workflow refuses a merge that leaves it untouched
+    #     "mutation_command": ["sh", "scripts/mutation-pr.sh"],  # required by the example: the command of your mutation tool, a list of words. It runs on the build host in the slot class "mutation" (see the host block below), with the base ref as its last word
+    #     "board": {
+    #         "number": 3,                  # the number of the GitHub Project (v2) board; required
+    #         "started": "In Progress",     # the Status column that the remediation example sets when the draft pull request opens; required
+    #         "merged": "Done",             # the Status column that it sets after the merge; required
+    #         "owner": "your-org",          # the login that owns the board; the default is the owner of `repo`
+    #     },                                # optional. With no board key the example makes no board call. The token needs the `project` scope
+    # },
     # The remediation example reads the settings of a round from the key `round` of `vars`. The engine reads none of them, and the example refuses a missing or wrong one. A project has one `vars`, so put the key `round` in the same dict as your other keys:
     # vars = {"round": {
     #     "base": "integration/r2",         # the branch of the round; the round id is round/<base>; required
@@ -51,6 +53,7 @@ project(
     #     # "items": ["12", "15"],          # the explicit list of item ids, in place of "label"
     #     "next_base": "integration/r3",    # the branch of the next round; empty means the round does not cut
     #     "merge": False,                   # True lets the round land approved items; the default is False
+    #     "hand_off": False,                # True: the owner merges; the round marks the approved pull requests ready and waits, with merge True
     #     "integration_pr": 0,              # a number pins the integration pull request; 0 lets the round find it
     #     "wait_hours": 24,                 # the hours that the round waits for the owner, 1 or more; the default is 24
     #     "lane_kind": "impl",              # impl, papers or design; papers and design need "allow_paths"
@@ -59,16 +62,6 @@ project(
     #     "void_reruns": 2, "void_asks": 3, # the reruns and the owner questions for a void gate, 0 to 100
     #     "escalate_after": 3,              # the last fix round on the step "fix"; later rounds start fresh on "fix_late", 0 to 100
     # }},                                 # optional. Also: owner_email, source_checkout, acceptance, base_result, base_reds, base_reds_file, allow_paths
-    # schedules = [
-    #     schedule(
-    #         name = "weekly-bump",          # lower case letters, digits and hyphens; unique in the project; required
-    #         cron = "0 0 9 * * 1",          # six fields with the seconds first, or a descriptor such as "@weekly"; required
-    #         workflow = "bump.star",        # a workflow file; a relative path starts in the folder of this file; required
-    #         item = "bump",                 # the prefix of the item id; required
-    #         timezone = "Europe/Berlin",    # an IANA zone; the default is "UTC"
-    #         catch_up = False,              # True asks for the ticks that no engine ran; the default is False
-    #     ),
-    # ],                               # optional. This key only declares the schedules and `beehave check config` validates them
     build_host = "local",   # "local", or the name of a build host (a SkyPilot cluster, or the ssh alias of a machine or of the head node of a Slurm cluster; a letter, then letters, digits, dots and hyphens), or a list of names such as ["gpu", "gpu-b"]
     # The first name of a list is the default. A run chooses another with the host argument of host_up. All the clusters share the host block below.
     # The host argument is required when build_host is a cluster name, and refused when build_host is "local".

@@ -8,7 +8,7 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-// revertField is the result field of gate and before_review that holds the verdict of the revert run.
+// revertField is the result field of gate that holds the verdict of the revert run.
 const revertField = "revert"
 
 // The outputs of each builtin that records a step, one function each. The fields of a function are the fields in workflow.ResultFields,
@@ -64,10 +64,6 @@ func answerOutputs(answer string, answers map[string]string, timedOut bool) map[
 	return map[string]any{"answer": answer, "answers": answers, "timed_out": timedOut}
 }
 
-func mergeOutputs(state, reason string) map[string]any {
-	return map[string]any{stateField: state, reasonKey: reason}
-}
-
 func createOutputs(id string, created bool) map[string]any {
 	return map[string]any{"id": id, "created": created}
 }
@@ -89,30 +85,18 @@ func openOutputs(r OpenResult) map[string]any {
 // prStateOutputs are the fields of pr_state: the state of the pull request, OPEN, CLOSED or MERGED.
 func prStateOutputs(state string) map[string]any { return map[string]any{stateField: state} }
 
-// boardOutputs are the fields of board_sync: the number of the pull request or issue, and the status that the read-back showed.
-func boardOutputs(number int, status string) map[string]any {
-	return map[string]any{numberField: number, statusKeyword: status}
-}
-
-// prOutputs are the fields of pr_assign: the number of the pull request, and the issues that the call assigned besides it. issues is an empty list, never null.
-func prOutputs(number int, issues []int) map[string]any {
-	if issues == nil {
-		issues = []int{}
-	}
-
-	return map[string]any{numberField: number, "issues": issues}
-}
-
 // agentOutputs are the fields that every agent call returns. The outputs that the call declares come in addition.
 // stop is "turns" or "budget" when a cap ended the run, and empty otherwise.
 // cost_usd is the total cost in dollars that the agent CLI reported for the run, or 0 when it reported none.
 // cost_estimated is true when cost_usd is an estimate that beehave made from the tokens of the run, and false when the agent CLI reported the cost.
 // cost_unknown is true when the run used tokens of a model that has no price, so cost_usd holds no dollars for it.
 // rewrote is true when the commit the run started on is not in the history of the commit it ended on.
-func agentOutputs(text, session, transcript, head, violations, stop string, spend agent.Spend, rewrote bool) map[string]any {
+// skills lists the skills that the agent called, in the order of the calls. It is an empty list, never null, for a run that called none.
+func agentOutputs(text, session, transcript, head, violations, stop string, spend agent.Spend, rewrote bool, skills []string) map[string]any {
 	out := spendOutputs(spend)
 	out[textKeyword], out["session"], out["transcript"], out["head_sha"], out["violations"], out["stop"] = text, session, transcript, head, violations, stop
 	out["rewrote"] = rewrote
+	out["skills"] = append([]string{}, skills...)
 
 	return out
 }

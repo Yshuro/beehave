@@ -13,7 +13,9 @@
 //
 // Check runs a command that does nothing under the whole confinement in a throw-away child: the child loads the filter (below ABI 9) and applies the
 // Landlock configuration of the kernel, exactly as the helper does for a gate. A kernel or a container that refuses either makes Check fail, so the
-// gate is refused and never fails at run time with exit code 125.
+// gate is refused. At run time the helper gives these exit codes before the command runs: 127 for a program that is not found, and 125 for a plan that it cannot
+// read, a plan with no command, a confinement that fails, and an exec that fails (for example EAGAIN or ENOMEM under a process or memory limit). After the exec
+// the exit code is the one of the command, or 128 plus the signal number when a signal ended it.
 //
 // ABI 9 is not verified on a real kernel. The build host runs Linux 7.0.0-1014-gcp, and its kernel reports ABI 8 (the raw answer of the
 // landlock_create_ruleset call, logged by the contract test), so the contract suite passes there on the path below ABI 9: the seccomp filter and the
@@ -182,8 +184,8 @@ func codeOf(exited *exec.ExitError) int {
 
 // RunHelper is called first in main of beehave, and in TestMain of a package that runs the contract suite. When the program was started as the helper,
 // it applies the plan and replaces itself with the command: on success it never returns. When it cannot start the command, it writes the reason to stderr
-// and returns the exit code to use (127 for a program that is not found, helperFailed for a plan that does not apply) and true. When the program was not
-// started as the helper, it returns 0 and false at once.
+// and returns the exit code to use and true: 127 for a program that is not found, and 125 (helperFailed) for a plan that it cannot read, a plan with no command,
+// a confinement that fails, and an exec that fails. When the program was not started as the helper, it returns 0 and false at once.
 func RunHelper(args []string, stderr io.Writer) (int, bool) {
 	if len(args) != 3 || args[1] != helperArg {
 		return 0, false

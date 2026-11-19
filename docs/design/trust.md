@@ -112,7 +112,7 @@ It protects `integration/**`. It requires a pull request, resolved review thread
 - A status belongs to one commit. A new push makes a head with no `beehave/review`, so a stale verdict cannot pass.
 - `required_approving_review_count` is 0 because the owner is the author and cannot approve.
 - `bypass_actors` is empty, so the admin role of the owner does not bypass the ruleset. The owner can still edit it. No agent can.
-- `strict_required_status_checks_policy` is false. `batch_merge` merges members one after another into a moving base. A strict policy would make each later member out of date. The union gate of the batch holds the up-to-date property instead.
+- `strict_required_status_checks_policy` is false. `merge` merges members one after another into a moving base. A strict policy would make each later member out of date. The union gate of the batch holds the up-to-date property instead.
 
 ### The optional mode
 
@@ -154,7 +154,7 @@ The default mode on GitLab needs external status checks, which is an Ultimate fe
 
 `tobocop2/beehave` is a public repository of a user account on the free plan. GitHub offers a merge queue for public repositories of an organization, or for private repositories on Enterprise Cloud. So this repository cannot use one.
 
-`batch_merge` is the landing path. It gates the union of the members once and merges each member pinned with `--match-head-commit`. Under the ruleset the forge also checks each member merge: the required statuses, the checks and the resolved threads.
+`merge` is the landing path. It gates the union of the members once and merges each member pinned with `--match-head-commit`. Under the ruleset the forge also checks each member merge: the required statuses, the checks and the resolved threads.
 
 A project of an organization can use a merge queue instead. That variant is not built. To get one, the owner moves the repository to an organization. That changes the URLs and the repository access of the token, so it is a decision of the owner.
 
@@ -236,7 +236,7 @@ No pass waits for the owner. When no item can move, the pass sets `status = wait
 A fencing token works only when the resource checks it. Neither `bd` nor GitHub checks a token of ours. GitHub does check the expected old value of a ref, atomically. So the fence is the branch head.
 
 - `push` runs with `--force-with-lease=refs/heads/<branch>:<expect>`. `expect` is the head in `round_items`, or empty for a new branch, which the forge reads as "the branch must not exist".
-- `merge` and `batch_merge` pin with `--match-head-commit`.
+- `merge` pins with `--match-head-commit`.
 - A stale worker that lost its claim fails at its next push or merge, at the forge.
 - Inside one state folder, the DBOS workflow id `item-<n>-r<k>` dedupes a second start.
 - Across engines, preflight reads the assignee and the linked pull requests. An own open pull request that `round_items` does not hold stops the item as `HELD`.

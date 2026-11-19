@@ -191,29 +191,29 @@ The run read these facts from the project file at its start. A fact that is empt
 - Repository identity and fork topology: repo `{{ .facts.repo }}`, source `{{ .facts.source }}`, forge `{{ .facts.forge }}`.
 - Build host: `{{ .facts.build_host }}`.
 - Base branch: `{{ .facts.base_branch }}`.
-- The gate is `{{ .facts.gate }}`. The gate list comes from these workflow files:{{ range .facts.gate_files }} `{{ . }}`{{ end }}
-- Tracker: `{{ .facts.tracker }}`. Queue to epic:{{ range $queue, $epic := .facts.epics }} `{{ $queue }}` is `{{ $epic }}`;{{ end }}
-- People and the idle threshold for a third-party pull request:{{ range $role, $who := .facts.people }} `{{ $role }}` is `{{ $who }}`;{{ end }}
-- Review against these convention files:{{ range .facts.conventions }} `{{ . }}`{{ end }}
+- The gate is `{{ .facts.gate }}`. The gate list comes from these workflow files:{{ range index .facts.vars "gate_files" }} `{{ . }}`{{ end }}
+- Tracker: `{{ .facts.tracker }}`. Queue to epic:{{ range $queue, $epic := index .facts.vars "epics" }} `{{ $queue }}` is `{{ $epic }}`;{{ end }}
+- People and the idle threshold for a third-party pull request:{{ range $role, $who := index .facts.vars "people" }} `{{ $role }}` is `{{ $who }}`;{{ end }}
+- Review against these convention files:{{ range index .facts.vars "conventions" }} `{{ . }}`{{ end }}
 
 Brief rules of the project:
-{{ range .facts.brief_rules }}
+{{ range index .facts.vars "brief_rules" }}
 - {{ . }}
 {{ end }}
 Rules for a pull request that stacks on another:
-{{ range .facts.stacked_rules }}
+{{ range index .facts.vars "stacked_rules" }}
 - {{ . }}
 {{ end }}
 Token rules, cross-repository steps and release steps:
-{{ range .facts.token_rules }}
+{{ range index .facts.vars "token_rules" }}
 - {{ . }}
 {{ end }}
 Hard limits, commands never run and real user data:
-{{ range .facts.limits }}
+{{ range index .facts.vars "limits" }}
 - {{ . }}
 {{ end }}
 Measured traps and ownership rules:
-{{ range .facts.traps }}
+{{ range index .facts.vars "traps" }}
 - {{ . }}
 {{ end }}
 
@@ -268,6 +268,7 @@ The verdict is `approve` when you have no open finding, and `changes` when you h
 Write it to {{ .output_file }} as JSON with the list of your open findings, for example `{"verdict":"approve","findings":[]}`.
 Give each open finding as an object with a `class` and a `text`: `{"class":"blocking","text":"what is wrong and where"}`.
 Write the output `regressions` beside them, as a text that holds one whole number. For example: `{"verdict":"approve","regressions":"0","findings":[]}`.
+Write the output `open` beside them: one text with each open finding on its own line. Write an empty text when you have no open finding. A text that is not empty turns an approve into a verdict of changes. For example: `{"verdict":"changes","open":"the retry never stops","findings":[{"class":"blocking","text":"the retry never stops"}]}`.
 Write the output `mechanism` beside them: the one file that your open findings are about, as the file path. You may add `:function` after the path. The loop counts the fix rounds on the part before the first colon. When you have no open finding, or the findings do not share one mechanism, write an empty text. For example: `{"verdict":"changes","mechanism":"internal/store/retry.go:Do","findings":[{"class":"blocking","text":"the retry never stops"}]}`.
 The class is one of `blocking`, `deferred`, `pre-existing` or `minor`.
 Name the head you reviewed. Put each finding under Blocking, Should-fix or Non-blocking.

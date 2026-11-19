@@ -171,7 +171,7 @@ func (s *script) undoAll() (undone []string, err error) {
 
 // undoOne runs one undo as a recorded step. An undo that exits with a code other than zero fails the step, and a replay reads the same failure.
 func (s *script) undoOne(undo undoStep) error {
-	_, err := runStep(s.e, s.ctx, "undo:"+undo.write, func(ctx context.Context) (map[string]any, error) {
+	_, err := runStep(s.e, s.ctx, kindUndo+":"+undo.write, func(ctx context.Context) (map[string]any, error) {
 		out, err := s.e.deps.Commands.Run(ctx, undo.request)
 		if err != nil {
 			return nil, err

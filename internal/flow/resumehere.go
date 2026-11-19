@@ -92,14 +92,19 @@ func (c *Client) requireSameSteps(item string, last run) error {
 }
 
 // requireUsedModulesSame refuses a run that recorded a step of a module whose version differs between the stored list and this build.
+// It first refuses a run that recorded a step that this build does not record, even when the lists are equal: the replay cannot reach that step.
 func (c *Client) requireUsedModulesSame(item string, last run, was, current map[string]int) error {
-	if maps.Equal(was, current) {
-		return nil
-	}
-
 	names, err := c.stepNames(last.Status.ID)
 	if err != nil {
 		return err
+	}
+
+	if err := requireReplayableSteps(item, last, names); err != nil {
+		return err
+	}
+
+	if maps.Equal(was, current) {
+		return nil
 	}
 
 	if module, changed := changedModule(modulesUsed(names), was, current); changed {
@@ -108,6 +113,22 @@ func (c *Client) requireUsedModulesSame(item string, last run, was, current map[
 	}
 
 	return requireSameRoundModule(item, last, was, current)
+}
+
+// requireReplayableSteps refuses a run that recorded a step that this build does not record, and names the step and the module of the older build.
+func requireReplayableSteps(item string, last run, names []string) error {
+	step, module, found := unreplayableStep(names)
+	if !found {
+		return nil
+	}
+
+	owner := "no module of this build records that step"
+	if module != "" {
+		owner = fmt.Sprintf("an older build recorded it for the %s module, and this build does not record it", module)
+	}
+
+	return fmt.Errorf("%w: %s recorded the step %q, and %s. A run cannot replay under another step list. Start the item again: beehave run %s",
+		errStranded, last.Status.ID, step, owner, item)
 }
 
 // requireSameRoundModule refuses a run of a round item when the round module changed. Every round run uses the module, because its version covers the step

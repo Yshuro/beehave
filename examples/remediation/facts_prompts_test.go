@@ -73,10 +73,13 @@ func TestPrompts_HoldTheFactsBlock(t *testing.T) {
 func facts() map[string]any {
 	return map[string]any{
 		"repo": "owner/name", "source": "/srv/clone", "forge": "github", "tracker": "beads", "base_branch": "integration", "gate": "make check", "build_host": "rig",
-		"people": map[string]any{"owner": "ann", "third_party_idle_hours": "24"}, "epics": map[string]any{"bugs": "E-1"},
-		"gate_files": []any{".github/workflows/ci.yml"}, "conventions": []any{"AGENTS.md"}, "brief_rules": []any{"name the tempting wrong fix"},
-		"stacked_rules": []any{"merge the base first"}, "limits": []any{"never run rm on a glob"}, "traps": []any{"the cache hides a stale build"},
-		"token_rules": []any{"read a log by its summary lines"}, "changelog": "CHANGELOG.md",
+		"gate_steps": []any{},
+		"vars": map[string]any{
+			"people": map[string]any{"owner": "ann", "third_party_idle_hours": "24"}, "epics": map[string]any{"bugs": "E-1"},
+			"gate_files": []any{".github/workflows/ci.yml"}, "conventions": []any{"AGENTS.md"}, "brief_rules": []any{"name the tempting wrong fix"},
+			"stacked_rules": []any{"merge the base first"}, "limits": []any{"never run rm on a glob"}, "traps": []any{"the cache hides a stale build"},
+			"token_rules": []any{"read a log by its summary lines"}, "changelog": "CHANGELOG.md",
+		},
 	}
 }
 
@@ -138,8 +141,7 @@ func TestPrompts_AnEmptyFactRendersAsEmptyNotMissing(t *testing.T) {
 	t.Parallel()
 
 	empty := map[string]any{
-		"repo": "", "source": "", "forge": "", "tracker": "", "base_branch": "", "gate": "", "build_host": "", "people": map[string]any{}, "epics": map[string]any{},
-		"gate_files": []any{}, "conventions": []any{}, "brief_rules": []any{}, "stacked_rules": []any{}, "limits": []any{}, "traps": []any{}, "token_rules": []any{}, "changelog": "",
+		"repo": "", "source": "", "forge": "", "tracker": "", "base_branch": "", "gate": "", "build_host": "", "gate_steps": []any{}, "vars": map[string]any{},
 	}
 
 	for _, name := range factsLanes() {

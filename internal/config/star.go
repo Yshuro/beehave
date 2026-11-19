@@ -94,13 +94,9 @@ func (l *loader) constructor(s spec, once bool, fn func(at syntax.Position, kwar
 	})
 }
 
-// record makes the entry of a block. A block is held by the argument of its own name, or by the list argument of its name with an "s", such as schedules.
+// record makes the entry of a block. A block is held by the argument of its own name.
 func (l *loader) record(at syntax.Position, name string) *made {
-	if owner := l.ownerOf(name); owner != "" {
-		return &made{at: at, name: name, owner: owner, usage: name + " = " + name + "(...)"}
-	}
-
-	return &made{at: at, name: name, owner: l.ownerOf(name + "s"), usage: name + "s = [" + name + "(...)]"}
+	return &made{at: at, name: name, owner: l.ownerOf(name), usage: name + " = " + name + "(...)"}
 }
 
 // blocks makes the builtin of a block that another block holds as an argument. The call gives the block.
@@ -300,28 +296,19 @@ func (p *paths) collect(seq starlark.Sequence) error {
 	return nil
 }
 
-// table is an argument that takes a dict of strings to strings.
-type table map[string]string
+// command is an argument that takes a program and its arguments as a list of strings. It records whether the file gave the list, so an empty list differs from none.
+type command struct {
+	Words paths
+	Set   bool
+}
 
-// Unpack stores a dict of strings. It refuses any other value.
-func (t *table) Unpack(v starlark.Value) error {
-	dict, ok := v.(*starlark.Dict)
-	if !ok {
-		return fmt.Errorf("got %s, want a dict of strings", v.Type())
+// Unpack stores a list or a tuple of strings. It refuses any other value.
+func (c *command) Unpack(v starlark.Value) error {
+	if err := c.Words.Unpack(v); err != nil {
+		return err
 	}
 
-	*t = table{}
-
-	for _, item := range dict.Items() {
-		key, keyOK := starlark.AsString(item[0])
-		value, valueOK := starlark.AsString(item[1])
-
-		if !keyOK || !valueOK {
-			return fmt.Errorf("the entry %s holds a %s and a %s, want a dict of strings", item[0].String(), item[0].Type(), item[1].Type())
-		}
-
-		(*t)[key] = value
-	}
+	c.Set = true
 
 	return nil
 }

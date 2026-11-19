@@ -50,8 +50,8 @@ func TestDryRun_ThePipelineOfTheExamplePrintsEachStepInOrderAndEndsClean(t *test
 
 	text := out.String()
 	assert.Contains(t, text, "step 1 ")
-	// The listing clips each line at dryOutLimit, so the test reads the head of each phase record: the outcome, the login and the model come first.
-	assert.Equal(t, 4, strings.Count(text, `DBOS.getResult: {"outcome":"exited","exit_code":0,"login":"dry-run","model":`), "each of the four agent phases ends with the fake agent, on the fake login and its model")
+	// The listing clips each line at dryOutLimit, so the test reads the head of each render record: the kind, the login and the model come first.
+	assert.Equal(t, 4, strings.Count(text, `"login":"dry-run","model":`), "each of the four agent calls records the fake login and its model before the agent runs")
 	assert.Contains(t, text, `"model":"opus"`)
 	assert.Contains(t, text, `"model":"sonnet"`)
 	assert.Positive(t, strings.Index(text, " agent:plan#1"), text)
@@ -88,21 +88,6 @@ func TestDryRun_ACommandWithASlotClassRunsItsFakeProgram(t *testing.T) {
 	assert.NotContains(t, out.String(), "FAILED")
 }
 
-// The pipeline of the example holds no merge, so this file walks one: the dry forge reads the reviewed head and the dry watch shows the pull request as merged.
-func TestDryRun_AMergeMarksThePullRequestReadyAndTheWatchShowsItMerged(t *testing.T) {
-	t.Parallel()
-
-	var out bytes.Buffer
-
-	file := dryFile(t, bodyFlow("c = gate(name = \"check\")\nm = merge(head = c.head, tree = c.tree, steps = c.steps, name = \"ship\")\nif m.state != \"merged\":\n    fail(\"the merge state is \" + m.state)"))
-
-	require.NoError(t, DryRun(t.Context(), file, "12", map[string]string{}, &out), out.String())
-	assert.Contains(t, out.String(), " ready")
-	assert.Contains(t, out.String(), " watch")
-	assert.Contains(t, out.String(), "merge:ship#1")
-	assert.NotContains(t, out.String(), "FAILED")
-}
-
 func TestDryRun_AFailedRunNamesTheErrorWithItsLineAndTheLastStepOnItsOwnLine(t *testing.T) {
 	t.Parallel()
 
@@ -122,15 +107,12 @@ func TestDryRun_TheWritesToAPullRequestAndAnItemAreShownAndChangeNothing(t *test
 
 	var out bytes.Buffer
 
-	body := "def main(item):\n    pr_comment(text = \"x\", key = \"k\", name = \"c\")\n    pr_assign(assignee = \"alice\", linked = True, name = \"a\")\n    pr_open(title = \"t\", base = \"b\", name = \"o\")\n    item_assign(id = \"1\", assignee = \"alice\", name = \"i\")\n    board_sync(board = 3, status = \"Done\", name = \"b\")\n"
+	body := "def main(item):\n    pr_comment(text = \"x\", key = \"k\", name = \"c\")\n    pr_open(title = \"t\", base = \"b\", name = \"o\")\n    item_create(title = \"t\", key = \"k\", assignee = \"alice\", name = \"i\")\n"
 	require.NoError(t, DryRun(t.Context(), dryFile(t, body), "12", map[string]string{}, &out), out.String())
 
-	assert.Contains(t, out.String(), "board_sync:b#1")
-
 	assert.Contains(t, out.String(), "pr_comment:c#1")
-	assert.Contains(t, out.String(), "pr_assign:a#1")
 	assert.Contains(t, out.String(), "pr_open:o#1")
-	assert.Contains(t, out.String(), "item_assign:i#1")
+	assert.Contains(t, out.String(), "item_create:i#1")
 }
 
 func TestDryRun_AStepThatTheDryRunDoesNotFakeIsNotRunAndIsNotAnError(t *testing.T) {
@@ -140,8 +122,7 @@ func TestDryRun_AStepThatTheDryRunDoesNotFakeIsNotRunAndIsNotAnError(t *testing.
 		"host":  {body: "host_teardown(name = \"stop\")", want: "not run in a dry run: stop the build host"},
 		"queue": {body: "queue(name = \"q\")", want: "not run in a dry run: read the open work of the project"},
 		"state": {body: "pr_state(pr = 41, name = \"s\")", want: "not run in a dry run: read the state of a pull request"},
-		"merge": {body: shipCall("merge = True, "), want: "not run in a dry run: merge the pull request"},
-		"batch": {body: "batch_merge(prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", name = \"b\")", want: "not run in a dry run: merge a batch of pull requests"},
+		"batch": {body: "merge(prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", name = \"b\")", want: "not run in a dry run: merge a batch of pull requests"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -310,9 +291,9 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
 		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "before_review:candidate-before-review#1",
-		"host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-1#3",
-		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "phase", "DBOS.getResult", "agent:candidate-review#4/read1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "facts#2", "command:candidate-before-review-ancestor#1", "command:candidate-before-review-keywords#2",
+		"host_job", "DBOS.getResult", "command:mutation#3", "preflight:before-review-1#3",
+		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "phase", "DBOS.getResult", "agent:candidate-review#4/read1", "pr_comment:approved#1",
 		"worktree", "release",
 	}, remediationStepNames(t))
 }
@@ -330,9 +311,9 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound
 		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1",
 		"preflight:before-scoped-review-2#4",
 		"agent:scoped-review-1#5/render", "agent:scoped-review-1#5/clear1", "phase", "DBOS.getResult", "agent:scoped-review-1#5/read1",
-		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:candidate-gate#2", "before_review:candidate-before-review#1",
-		"host_job", "DBOS.getResult", "command:mutation#1", "preflight:before-review-2#5",
-		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "phase", "DBOS.getResult", "agent:candidate-review#6/read1",
+		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:candidate-gate#2", "facts#2", "command:candidate-before-review-ancestor#1", "command:candidate-before-review-keywords#2",
+		"host_job", "DBOS.getResult", "command:mutation#3", "preflight:before-review-2#5",
+		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "phase", "DBOS.getResult", "agent:candidate-review#6/read1", "pr_comment:approved#1",
 		"worktree", "release",
 	}, remediationStepNames(t, WithRedGate()))
 }
@@ -466,7 +447,7 @@ func TestDryRun_TheTemplateDirOfTheEnvironmentCopiesNothingIntoTheDryRepository(
 func TestDryDeps_NowIsTheFixedClockOfADryRun(t *testing.T) {
 	t.Parallel()
 
-	deps := dryDeps("/t", "h", "12", nil, dryChoice{})
+	deps := dryDeps("/t", "h", "12", dryChoice{})
 
 	assert.Equal(t, dryNow(), deps.Clock.reading())
 	assert.Equal(t, "2030-01-02T03:04:05Z", dryNow().Format(time.RFC3339))
@@ -488,10 +469,10 @@ func TestDryRun_NowPrintsTheSameTextInTwoRuns(t *testing.T) {
 func TestDryDeps_EveryCollaboratorIsADryOne(t *testing.T) {
 	t.Parallel()
 
-	deps := dryDeps("/t", "h", "12", nil, dryChoice{})
+	deps := dryDeps("/t", "h", "12", dryChoice{})
 
 	for name, held := range map[string]any{
-		"Agents": deps.Agents, "Gate": deps.Gate, "Logins": deps.Logins, "Lifecycle": deps.Lifecycle, "Forge": deps.Forge, "Watch": deps.Watch,
+		"Agents": deps.Agents, "Gate": deps.Gate, "Logins": deps.Logins, "Lifecycle": deps.Lifecycle, "Forge": deps.Forge,
 		"Trees": deps.Trees, "Beats": deps.Beats, "Commands": deps.Commands, "Items": deps.Items, "Writer": deps.Writer, "Reader": deps.Reader, "Preflight": deps.Preflight,
 	} {
 		assert.Contains(t, fmt.Sprintf("%T", held), "flow.dry", name)
@@ -586,12 +567,12 @@ func TestDryAgents_WriteTheDeclaredOutputsOfTheRequestWhateverThePromptSays(t *t
 	dir := t.TempDir()
 	file := filepath.Join(dir, "outputs", "out.json")
 
-	_, err := dryAgents{}.Run(t.Context(), AgentRequest{Prompt: "Judge the change.", OutputFile: file, Outputs: []string{"verdict", "summary"}})
+	_, err := dryAgents{}.Run(t.Context(), AgentRequest{Prompt: "Judge the change.", OutputFile: file, Outputs: []string{"verdict", "summary", "open"}})
 	require.NoError(t, err)
 
 	raw, err := os.ReadFile(file) //nolint:gosec // the test names its own output file
 	require.NoError(t, err)
-	assert.JSONEq(t, `{"verdict":"approve","summary":"0","findings":[]}`, string(raw))
+	assert.JSONEq(t, `{"verdict":"approve","summary":"0","open":""}`, string(raw), "a review approves with no open finding, and any other output is 0")
 }
 
 func TestDryAgents_WriteNoFileForACallWithNoDeclaredOutputs(t *testing.T) {
@@ -652,10 +633,10 @@ func TestDryRun_ARoundRunsWithNoEnvironmentVariables(t *testing.T) {
 	assert.NotContains(t, out.String(), "env:")
 }
 
-func TestDryRun_TheSwarmExampleFilesItsBacklogAndChecksTheBudgetThenEndsEarlyAtTheReadOfTheOpenWork(t *testing.T) {
+func TestDryRun_TheSwarmExampleFilesItsBacklogAndChecksTheStopFileThenEndsEarlyAtTheReadOfTheOpenWork(t *testing.T) {
 	t.Parallel()
 
-	env := map[string]string{"SWARM_DIR": "/swarm", "SWARM": "s1", "REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com", "CAP_USD": "100"}
+	env := map[string]string{"SWARM": "s1", "REPO": "o/r", "BASE": "integration", "OWNER_LOGIN": "owner", "OWNER_EMAIL": "owner@example.com"}
 
 	var out bytes.Buffer
 
@@ -663,7 +644,7 @@ func TestDryRun_TheSwarmExampleFilesItsBacklogAndChecksTheBudgetThenEndsEarlyAtT
 	require.ErrorIs(t, err, ErrDryRunEndedEarly, out.String())
 
 	assert.Contains(t, out.String(), "item_create:create-1")
-	assert.Contains(t, out.String(), "command:budget-0")
+	assert.Contains(t, out.String(), "command:stop-0")
 	assert.Contains(t, out.String(), "not run in a dry run: read the open work of the project")
 }
 
@@ -690,8 +671,6 @@ func TestDryFakes_AnswerWithoutTouchingAnything(t *testing.T) {
 	assert.True(t, renewed.IsZero())
 
 	require.NoError(t, dryLifecycle{}.Release(ctx, "p", "1", "o"))
-	require.NoError(t, dryForge{}.Ready(ctx, "p", "1"))
-	require.NoError(t, dryWatch{}.SetDraft(ctx, "p", 1, true))
 	require.NoError(t, dryWriter{}.SetStatus(ctx, "p", "1", ""))
 	require.NoError(t, dryWriter{}.Comment(ctx, "p", "1", "k", "t"))
 

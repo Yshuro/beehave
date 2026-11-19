@@ -12,7 +12,6 @@ import (
 
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
-	"github.com/tobocop2/beehave/internal/workflow"
 )
 
 // PhaseInput describes one agent phase of an item. Run is the id of the run that queued the phase.
@@ -25,10 +24,6 @@ type PhaseInput struct {
 	Item    string `json:"item"`
 	Project string `json:"project"`
 	Login   string `json:"login"`
-	// Kind is the agent kind of the step: review or implement. It is empty, and so left out of a recorded phase, for the kind implement.
-	Kind string `json:"kind,omitempty"`
-	// Lane is the lane argument of the step: fix, rework, relay or design. It is empty, and so left out of a recorded phase, for a call that sets none.
-	Lane string `json:"lane,omitempty"`
 	// Severity is the severity of the item, which sets the place of the phase in its queue. It is left out for an item with none.
 	Severity string `json:"severity,omitempty"`
 
@@ -41,16 +36,11 @@ type PhaseInput struct {
 	Forbid []model.FindingKind `json:"forbid,omitempty"`
 	// Protect lists the directories of the kind protected-path. It is empty, and so left out of a recorded phase, for a step that does not use the kind.
 	Protect []string `json:"protect,omitempty"`
-	// RequireSkills is the require_skills of the step. It is left out of a recorded phase for a step that names none, so a stored phase keeps its form.
-	RequireSkills []string `json:"require_skills,omitempty"`
 
 	// MaxBudget is the max_budget_usd of the step. It is left out of a recorded phase for a step that sets none.
 	MaxBudget float64 `json:"max_budget_usd,omitempty"`
 
-	// Rounds is the rounds keyword of the step: the cap of the loop that the step belongs to. It is left out of a recorded phase for a step that names none.
-	Rounds int `json:"rounds,omitempty"`
-
-	// NoEdits is true for a step with edits = False. It is left out of a recorded phase for a step that may edit, so a stored phase keeps its form.
+	// NoEdits is true for a step with edits = False. Such a step runs on the review queue. It is left out of a recorded phase for a step that may edit, so a stored phase keeps its form.
 	NoEdits bool `json:"no_edits,omitempty"`
 
 	// Sandbox is the sandbox of the step. It is left out of a recorded phase for a step with no sandbox, and a phase without it runs with no sandbox,
@@ -80,24 +70,16 @@ type PhaseInput struct {
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
 // The phase is a recorded step, so a replay reads Violations from the record and scans no transcript again.
 type PhaseOutput struct {
-	Outcome  agent.Outcome `json:"outcome"`
-	ExitCode int           `json:"exit_code"`
-	// Login is the runner that the agent ran on: the pool pick, or the runner that the call named. It is empty in a record that an older version wrote.
-	Login string `json:"login,omitempty"`
-	// Model is the model that the step set. It is left out of a recorded phase for a step that sets none.
-	Model string `json:"model,omitempty"`
-	// Kind is the kind of the lane in the ledger of the method: fix, rework, relay, review or design. It is empty in a record that an older version wrote.
-	Kind       string   `json:"kind,omitempty"`
-	Note       string   `json:"note"`
-	Session    string   `json:"session,omitempty"`
-	Transcript string   `json:"transcript,omitempty"`
-	Text       string   `json:"text,omitempty"`
-	Skills     []string `json:"skills,omitempty"`
-	Violations []string `json:"violations,omitempty"`
+	Outcome    agent.Outcome `json:"outcome"`
+	ExitCode   int           `json:"exit_code"`
+	Note       string        `json:"note"`
+	Session    string        `json:"session,omitempty"`
+	Transcript string        `json:"transcript,omitempty"`
+	Text       string        `json:"text,omitempty"`
+	Skills     []string      `json:"skills,omitempty"`
+	Violations []string      `json:"violations,omitempty"`
 	// Spend is the cost of the run: the dollars that the agent CLI reported, or an estimate that beehave made from the tokens, or the mark that the cost is unknown.
 	agent.Spend
-	// Rounds is the loop cap that the step named. The status view shows the rounds used against it.
-	Rounds int `json:"rounds,omitempty"`
 	// Limit is the provider limit that stopped a run that ended as limited. It is left out of a recorded phase for any other run, so a stored phase keeps its form.
 	Limit *agent.Limit `json:"limit,omitempty"`
 	// Resumed is true for a run that resumed the session of a lost start or of a run that a provider limit stopped. It is left out of a recorded phase for any other run.
@@ -173,8 +155,6 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 // and that no cap and no provider limit with an end to its wait stopped, is a failed step that beehave resume reruns.
 func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Result, runErr error) (PhaseOutput, error) {
 	out := phaseOutput(result)
-	out.Kind, out.Rounds = workflow.LaneKind(in.Kind, in.Lane), in.Rounds
-	out.Login, out.Model = in.Login, in.Model
 
 	if runErr != nil {
 		return out, runErr
@@ -192,7 +172,7 @@ func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, lost *LostRun,
 	return AgentRequest{
 		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: named, Lost: lost,
 		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
-		Forbid: in.Forbid, Protect: in.Protect, RequireSkills: in.RequireSkills, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
+		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
 	}
 }
 
@@ -318,25 +298,25 @@ func (e *Engine) endGroups(run string) {
 	}
 }
 
-// agentQueueName is the queue of an agent kind: a review runs on the reviews queue, every other kind on the agents queue.
-func agentQueueName(kind string) string {
-	if kind == workflow.AgentKindReview {
+// agentQueueName is the queue of an agent step: a read-only step (edits = False) runs on the reviews queue, a step that edits on the agents queue.
+func agentQueueName(noEdits bool) string {
+	if noEdits {
 		return reviewsQueueName
 	}
 
 	return queueName
 }
 
-// agentQueue is the registered queue that agentQueueName names for a kind.
-func (e *Engine) agentQueue(kind string) dbos.Queue { //nolint:ireturn // the queue type of the workflow library
-	if agentQueueName(kind) == reviewsQueueName {
+// agentQueue is the registered queue that agentQueueName names for a step.
+func (e *Engine) agentQueue(noEdits bool) dbos.Queue { //nolint:ireturn // the queue type of the workflow library
+	if agentQueueName(noEdits) == reviewsQueueName {
 		return e.reviewQueue
 	}
 
 	return e.queue
 }
 
-// queuePhase runs a phase as a child workflow on the queue of its kind, keyed by the login, and waits for it. It returns how the agent ended.
+// queuePhase runs a phase as a child workflow on the queue of its step, keyed by the login, and waits for it. It returns how the agent ended.
 func (e *Engine) queuePhase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 	in.Run = workflowID(ctx)
 
@@ -344,7 +324,7 @@ func (e *Engine) queuePhase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error
 		return PhaseOutput{}, err
 	}
 
-	handle, err := dbos.RunWorkflow(ctx, e.phase, in, dbos.WithQueue(e.agentQueue(in.Kind)), dbos.WithQueuePartitionKey(in.Login), dbos.WithPriority(placeOf(model.Severity(in.Severity), false)))
+	handle, err := dbos.RunWorkflow(ctx, e.phase, in, dbos.WithQueue(e.agentQueue(in.NoEdits)), dbos.WithQueuePartitionKey(in.Login), dbos.WithPriority(placeOf(model.Severity(in.Severity), false)))
 	if err != nil {
 		return PhaseOutput{}, fmt.Errorf("queue the agent step of item %s: %w", in.Item, err)
 	}

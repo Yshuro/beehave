@@ -37,9 +37,9 @@ type Project struct {
 	TestCommand string
 	// TestPaths are the globs of the test files. The revert run copies the added and changed ones of the head onto the base commit.
 	TestPaths []string
+	// Notify is the program and its arguments that the engine runs when a wait for the owner opens. Empty means no notice.
+	Notify    []string
 	PinFile   string
-	// Changelog is the path of the changelog file of the repository, or empty when the project declares none. It is a fact for the workflow, which refuses a merge that leaves it unchanged.
-	Changelog string
 	BuildHost string
 	// BuildHosts is every build host that a project with more than one declares, and BuildHost is the first: the default of a run.
 	// It is empty when BuildHost is the only one. Every cluster shares the Host block.
@@ -57,50 +57,15 @@ type Project struct {
 	// SandboxEnforcer is "auto" or the name of the enforcer that runs the gate under the sandbox. Empty means "auto".
 	SandboxEnforcer string
 
-	// The facts of the repository for the agents of a workflow. Each one is empty when the project file leaves it out, and the `facts` builtin hands them to the workflow.
-	// People maps a role to a login, for example owner, and the hours of idle time after which a pull request of a third party counts as stale. Epics maps a queue to its epic.
-	People map[string]string
-	Epics  map[string]string
-	// GateFiles are the workflow files that the list of gate commands comes from, and Conventions the files to review against.
-	GateFiles   []string
-	Conventions []string
-	// BriefRules, StackedRules, Limits, Traps and TokenRules are the rules for the brief, for a pull request that stacks on another, the hard limits with the commands never run
-	// and the real user data, the measured traps with the ownership rules, and the token discipline with the cross-repository and release steps.
-	BriefRules   []string
-	StackedRules []string
-	Limits       []string
-	Traps        []string
-	TokenRules   []string
 	// Vars are the free settings of the workflow of the project, as the file wrote them. The engine reads no key and no value. The values are JSON values:
 	// nil, bool, string, json.Number, []any and map[string]any. A project that sets none has nil.
 	Vars map[string]any
-	// Board is the GitHub Project that a workflow keeps in step with the item. The zero value means the project has no board.
-	Board Board
-	// Schedules are the cron schedules that start an item run. The file order is kept.
-	Schedules []Schedule
-}
-
-// Schedule starts a run of Workflow on a new item each time Cron fires. Cron has seconds, or is a descriptor such as @weekly.
-// Workflow is an absolute path. Timezone names an IANA zone. Item is the prefix of the item id. CatchUp asks for the ticks that an engine missed.
-type Schedule struct {
-	Name     string
-	Cron     string
-	Workflow string
-	Item     string
-	Timezone string
-	CatchUp  bool
-}
-
-// Board names a GitHub Project board and the two status columns that a workflow sets. Owner is empty when the owner of the repository owns the board.
-type Board struct {
-	Owner   string
-	Number  int
-	Started string
-	Merged  string
+	// RunnerSkills maps the name of each runner of the config to whether its agent CLI reports skill calls. The engine fills it from the runner profiles; a project file does not set it.
+	RunnerSkills map[string]bool
 }
 
 // HasRepository reports whether the project has a git repository: it sets a source or a forge, and the forge gives the clone URL.
-// A project with no repository runs its items in plain folders, and it cannot call gate, merge, batch_merge or preflight.
+// A project with no repository runs its items in plain folders, and it cannot call gate, merge or preflight.
 func (p Project) HasRepository() bool { return p.Source != "" || p.Forge != "" }
 
 // ToolGit is the program that every project needs on the path. The tools of an adapter arrive with its registration.

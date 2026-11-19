@@ -13,18 +13,16 @@ func TestCheck_ReportsAFieldThatTheResultOfABuiltinDoesNotHave(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct{ name, call, want string }{
-		{"agent", `agent("p", "m")`, "3:11 haed is not a field of the result of agent. It has: text, session, transcript, head_sha, violations, stop, cost_usd, cost_estimated, cost_unknown, rewrote."},
-		{"batch_merge", `batch_merge(item.id, "b", "r", name = "n")`, "3:11 haed is not a field of the result of batch_merge. It has: merged, rejected, deferred, tip, tree, gates, findings, note, unproven, host_loss, host_losses."},
+		{"agent", `agent("p", "m")`, "3:11 haed is not a field of the result of agent. It has: text, session, transcript, head_sha, violations, stop, cost_usd, cost_estimated, cost_unknown, rewrote, skills."},
+		{"merge", `merge(name = "n", prs = [struct(item = "1", head = "h")], base = "b", repo = "r")`, "3:11 haed is not a field of the result of merge. It has: merged, rejected, deferred, tip, tree, gates, findings, note, unproven, moved, host_loss, host_losses."},
 		{"command", `command(["a"])`, "3:11 haed is not a field of the result of command. It has: stdout, stderr, rc."},
 		{"gate", `gate()`, "3:11 haed is not a field of the result of gate. It has: passed, head, tree, report, steps, required, checks, new_tests, revert, host_loss, host_losses."},
 		{"gather", `gather([])`, "3:11 haed is not a field of the result of gather. It has: results."},
 		{"item_comment", `item_comment("1", "t", "k")`, "3:11 haed is not a field of the result of item_comment. It has: id."},
 		{"item_create", `item_create("t", "k")`, "3:11 haed is not a field of the result of item_create. It has: id, created."},
 		{"item_status", `item_status("1", "open")`, "3:11 haed is not a field of the result of item_status. It has: id, status."},
-		{"merge", `merge("h")`, "3:11 haed is not a field of the result of merge. It has: state, reason."},
-		{"board_sync", `board_sync(board = 3, status = "Done")`, "3:11 haed is not a field of the result of board_sync. It has: number, status."},
 		{"pr_open", `pr_open(title = "t", base = "b")`, "3:11 haed is not a field of the result of pr_open. It has: number, created, stack."},
-		{"preflight", `preflight()`, "3:11 haed is not a field of the result of preflight. It has: ok, stop, code, reason, foreign, pr, head, author."},
+		{"preflight", `preflight()`, "3:11 haed is not a field of the result of preflight. It has: ok, stop, code, reason."},
 		{"queue", `queue()`, "3:11 haed is not a field of the result of queue. It has: rows, free."},
 		{"spawn", `spawn(["1"])`, "3:11 haed is not a field of the result of spawn. It has: runs."},
 		{"wait", `wait()`, "3:11 haed is not a field of the result of wait. It has: answer, answers, timed_out."},
@@ -47,16 +45,15 @@ func TestCheck_AcceptsEachFieldThatABuiltinReturns(t *testing.T) {
 
 	got := checkText(t, `def main(item):
     a = agent("p", "m", outputs = ["verdict", "findings"])
-    b = batch_merge(item.id, "b", "r", name = "n")
+    b = merge(name = "n", prs = [struct(item = "1", head = "h")], base = "b", repo = "r")
     c = command(["a"])
     g = gate()
     h = gather([])
     i = item_create("t", "k")
-    m = merge("h")
     s = spawn(["1"])
     w = wait()
     command(["x", a.text, a.verdict, a.findings, a.session, a.transcript, a.head_sha, a.violations, a.stop, a.cost_usd, a.rewrote, b.merged, b.tip, b.tree, b.gates, c.stdout, c.rc])
-    command(["x", g.passed, g.head, g.tree, g.report, h.results, i.id, i.created, m.state, m.reason, s.runs, w.answer, b.rejected, b.deferred])
+    command(["x", g.passed, g.head, g.tree, g.report, h.results, i.id, i.created, s.runs, w.answer, b.rejected, b.deferred])
 `)
 
 	assert.Empty(t, got)
@@ -68,7 +65,7 @@ func TestCheck_AnAgentWithLiteralOutputsHasThemAsFields(t *testing.T) {
 	got := checkText(t, "def main(item):\n    out = agent(\"p\", \"m\", outputs = [\"verdict\"])\n    command([out.verdikt])\n    command([out.verdict])\n")
 
 	require.Len(t, got, 1)
-	assert.Contains(t, got[0], "3:18 verdikt is not a field of the result of agent. It has: text, session, transcript, head_sha, violations, stop, cost_usd, cost_estimated, cost_unknown, rewrote, verdict.")
+	assert.Contains(t, got[0], "3:18 verdikt is not a field of the result of agent. It has: text, session, transcript, head_sha, violations, stop, cost_usd, cost_estimated, cost_unknown, rewrote, skills, verdict.")
 }
 
 func TestCheck_AnAgentWhoseOutputsAreNotLiteralHasItsOwnFieldsLeftToTheRun(t *testing.T) {
@@ -111,7 +108,6 @@ func TestCheck_ANameThatTheCheckCannotKnowIsLeftToTheRun(t *testing.T) {
 		"env is text":           "def main(item):\n    x = env(\"HOME\")\n    command([x.haed])\n",
 		"from a function":       "def make():\n    return command([\"a\"])\n\ndef main(item):\n    x = make()\n    command([x.haed])\n",
 		"a method result":       "def main(item):\n    x = \"a\".upper()\n    command([x.haed])\n",
-		"a call result":         "def main(item):\n    command([command([\"a\"]).haed])\n",
 		"tuple target":          "def main(item):\n    x, y = command([\"a\"]), 1\n    command([x.haed])\n",
 		"shadowed builtin":      "def command(a):\n    return struct(haed = 1)\n\ndef main(item):\n    x = command([\"a\"])\n    gate(run = [x.haed])\n",
 		"local shadow":          "def main(item):\n    gate = lambda run: struct(haed = 1)\n    x = gate(run = [\"a\"])\n    command([x.haed])\n",
@@ -149,16 +145,48 @@ func TestCheck_ATopLevelStatementThatIsNotAFunctionIsSkipped(t *testing.T) {
 func TestCheck_AFieldThatFactsDoesNotReturnIsRefused(t *testing.T) {
 	t.Parallel()
 
-	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.limits[0], f.limit])\n")
+	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.vars[\"limits\"][0], f.limit])\n")
 
 	require.Len(t, got, 1)
 	assert.Contains(t, got[0], "limit is not a field of the result of facts")
 }
 
+func TestCheck_AMethodSettingIsNoFieldOfFactsAndTheVarsHoldIt(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    f = facts()\n    command([f.traps[0], f.board_number, f.vars[\"traps\"][0]])\n")
+
+	require.Len(t, got, 2)
+	assert.Contains(t, got[0], "traps is not a field of the result of facts")
+	assert.Contains(t, got[1], "board_number is not a field of the result of facts")
+}
+
+func TestCheck_AFieldOfTheCallOfABuiltinIsRefusedWithoutAName(t *testing.T) {
+	t.Parallel()
+
+	got := checkText(t, "def main(item):\n    command([facts().traps, facts().repo])\n")
+
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], "traps is not a field of the result of facts")
+}
+
+func TestCheck_AFieldOfACallThatIsNotTheBuiltinIsLeftToTheRun(t *testing.T) {
+	t.Parallel()
+
+	for name, text := range map[string]string{
+		"a function of the file":  "def facts():\n    return struct(a = 1)\n\ndef main(item):\n    command([facts().traps])\n",
+		"a name of the function":  "def main(item):\n    facts = lambda: struct(a = 1)\n    command([facts().traps])\n",
+		"a call of a function":    "def main(item):\n    command([len(\"a\").traps])\n",
+		"a call of an expression": "def main(item):\n    command([(facts)().traps])\n",
+	} {
+		assert.Empty(t, checkText(t, text), name)
+	}
+}
+
 func TestResults_ListsTheBuiltinsWithFixedFields(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, []string{"agent", "batch_merge", "before_review", "board_sync", "command", "earlier_calls", "facts", "gate", "gather", "host_teardown", "host_up", "item_assign", "item_comment", "item_create", "item_read", "item_status", "merge", "pr_assign", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "spawn", "wait", "write"}, workflow.Results())
+	assert.Equal(t, []string{"agent", "command", "earlier_calls", "facts", "gate", "gather", "host_teardown", "host_up", "item_comment", "item_create", "item_read", "item_status", "merge", "pr_comment", "pr_open", "pr_state", "preflight", "queue", "spawn", "wait", "write"}, workflow.Results())
 }
 
 func TestResultFields_ReturnACopyAndNoFieldsForAnotherName(t *testing.T) {

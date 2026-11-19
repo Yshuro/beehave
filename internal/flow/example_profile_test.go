@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"maps"
 	"strings"
 	"testing"
 
@@ -16,7 +17,10 @@ func implementPrompt(t *testing.T, project model.Project, round map[string]any) 
 	rig, file := exampleRig(t, func(int) string { return "approve" })
 
 	base := exampleProject()
-	project.Name, project.Repo, project.BaseBranch, project.Vars = base.Name, base.Repo, base.BaseBranch, base.Vars
+	settings := base.Vars
+	maps.Copy(settings, project.Vars)
+
+	project.Name, project.Repo, project.BaseBranch, project.Vars = base.Name, base.Repo, base.BaseBranch, settings
 	rig.project = project
 
 	for key, value := range round {
@@ -41,7 +45,7 @@ func TestExampleProfile_TheBriefRulesAndTheGateAndTheLimitsOfTheProfileReachTheI
 	t.Parallel()
 
 	text := implementPrompt(t, model.Project{
-		BriefRules: []string{"name the tempting wrong fix"}, Gate: "make check-profile", Limits: []string{"never run the reset command"},
+		Gate: "make check-profile", Vars: map[string]any{"brief_rules": []any{"name the tempting wrong fix"}, "limits": []any{"never run the reset command"}},
 	}, nil)
 
 	require.Contains(t, text, "name the tempting wrong fix")

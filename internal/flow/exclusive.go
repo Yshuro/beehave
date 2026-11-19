@@ -262,8 +262,8 @@ func (e *Engine) gateHost(in ExclusiveInput) string {
 		return ""
 	}
 
-	if host == "" && e.deps.Facts != nil {
-		host = e.deps.Facts(in.Project).BuildHost
+	if host == "" {
+		host = e.facts(in.Project).BuildHost
 	}
 
 	if host == config.LocalHost {
@@ -448,12 +448,14 @@ func (e *Engine) stopOlderGates(run dbos.Context, in ExclusiveInput) error {
 // The cancel reaches the build job of each old gate, a job that starts during the cancel included, so the host frees its slot too.
 // A cancel that fails is logged, and the gate of a later head cancels again (see docs/design/gate.md).
 func (e *Engine) stopSuperseded(ctx context.Context, in ExclusiveInput) []string {
+	// The list comes before the head read: a gate is queued after its head moves, so every listed gate was queued before the read and none belongs to a newer head.
+	old, err := e.olderGates(in)
+
 	standing, read := e.gateStanding(ctx, in)
 	if !read || standing.Head != in.Tip {
 		return nil
 	}
 
-	old, err := e.olderGates(in)
 	if err == nil && len(old) > 0 {
 		err = dbos.CancelWorkflows(dbos.WithoutCancel(e.ctx), old, dbos.WithCancelChildren())
 	}

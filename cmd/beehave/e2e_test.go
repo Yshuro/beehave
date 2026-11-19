@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -28,7 +30,6 @@ import (
 	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/sandbox/landlock"
-	"github.com/tobocop2/beehave/internal/workflow/workflowtest"
 )
 
 // These tests run the beehave commands as separate processes, as testscript does for any command line tool.
@@ -37,10 +38,12 @@ import (
 const (
 	e2eVersion     = "e2e"
 	e2eDirVariable = "E2E_DIR"
-	e2eWait        = 120 * time.Second
-	e2ePoll        = 100 * time.Millisecond
-	e2eFileMode    = 0o600
-	e2eFolderMode  = 0o700
+	// e2eBuildVariable names the version of the build that beehave reports, so a script can run one state folder under two builds.
+	e2eBuildVariable = "E2E_BUILD"
+	e2eWait          = 120 * time.Second
+	e2ePoll          = 100 * time.Millisecond
+	e2eFileMode      = 0o600
+	e2eFolderMode    = 0o700
 )
 
 func TestMain(m *testing.M) {
@@ -61,7 +64,12 @@ func e2eBeehave() {
 
 	e2eRecordRun(os.Args[1:])
 
-	code := cli.Execute(ctx, os.Args[1:], cli.BuildInfo{Version: e2eVersion, Registry: newAdapters(nil, nil, nil).registry(), Flow: e2eFlow(env[e2eDirVariable], env["PATH"])}, env, os.Stdout, os.Stderr)
+	version := e2eVersion
+	if other := env[e2eBuildVariable]; other != "" {
+		version = other
+	}
+
+	code := cli.Execute(ctx, os.Args[1:], cli.BuildInfo{Version: version, Registry: newAdapters(nil, nil, nil).registry(), Flow: e2eFlow(env[e2eDirVariable], env["PATH"])}, env, os.Stdout, os.Stderr)
 	stop()
 	os.Exit(code)
 }
@@ -83,8 +91,8 @@ func e2eFlow(dir, path string) cli.Flow {
 			files := e2eFiles{dir: dir}
 
 			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
-				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg.Projects),
-				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
+				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg, newAdapters(nil, nil, nil)),
+				Lifecycle: files, Forge: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
 			}, dir, cfg))
 			if err != nil {
 				return nil, err
@@ -152,18 +160,6 @@ func (e2eFiles) Open(context.Context, string, string, flow.OpenRequest) (flow.Op
 	return flow.OpenResult{}, nil
 }
 
-func (e2eFiles) PlaceCard(context.Context, string, string, flow.CardRequest) (int, error) {
-	return 0, nil
-}
-
-func (e2eFiles) ReadCard(context.Context, string, string, flow.CardRequest) (string, error) {
-	return "", nil
-}
-
-func (e2eFiles) Assign(context.Context, string, string, string, bool) (int, []int, error) {
-	return 0, nil, nil
-}
-
 func (f e2eFiles) Release(_ context.Context, _, item, _ string) error {
 	return f.event("release", item)
 }
@@ -173,16 +169,6 @@ func (f e2eFiles) Pull(ctx context.Context, _, _ string) (review.Standing, error
 
 	return review.Standing{Number: 1, Head: head}, err
 }
-
-func (f e2eFiles) Reviewed(ctx context.Context, project, item, _ string) (review.Standing, error) {
-	return f.Pull(ctx, project, item)
-}
-
-func (e2eFiles) Watch(context.Context, string, int) (review.Outcome, error) {
-	return review.Outcome{Kind: review.Merged}, nil
-}
-
-func (e2eFiles) SetDraft(context.Context, string, int, bool) error { return nil }
 
 func (e2eFiles) WithTree(_ context.Context, _, _ string, fn func(string)) error {
 	fn("")
@@ -242,8 +228,10 @@ func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, err
 	return flow.GateKey{}, nil
 }
 
-// e2eCommands answers the command calls of the example: the mutation job on the host of the project.
-// Each call adds its command line to mutation.log. The Nth call takes the Nth line of the file mutations: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, any other text or no line is a clean run.
+// e2eCommands answers the command calls of the example: the git steps of the checks before review and the mutation job on the host of the project.
+// Each call adds its command line to mutation.log. A line of the file mutations is "<command> => <answer>", where the command is the words of the step.
+// The Nth call of a command, on any host and slot class, takes the Nth line that names it: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, "clean" is a clean run.
+// A call with no line for its command is a clean run, so a new step in the workflow moves no answer. A line with no " => " or an unknown answer fails the call.
 type e2eCommands struct{ dir string }
 
 func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.CommandOutput, error) {
@@ -252,7 +240,9 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 		return flow.CommandOutput{}, err
 	}
 
-	if _, err := log.WriteString(request.Host + " " + request.SlotClass + " " + strings.Join(request.Run, " ") + "\n"); err != nil {
+	words := strings.Join(request.Run, " ")
+
+	if _, err := log.WriteString(request.Host + " " + request.SlotClass + " " + words + "\n"); err != nil {
 		return flow.CommandOutput{}, errJoin(err, log.Close())
 	}
 
@@ -266,14 +256,12 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 		return flow.CommandOutput{}, err
 	}
 
-	lines := strings.Split(string(answers), "\n")
-
-	n := strings.Count(string(text), "\n")
-	if n > len(lines) {
-		return flow.CommandOutput{}, nil
+	answer, err := keyedAnswer(string(answers), words, callsOf(string(text), words))
+	if err != nil {
+		return flow.CommandOutput{}, err
 	}
 
-	switch lines[n-1] {
+	switch answer {
 	case "lived":
 		return flow.CommandOutput{Stdout: "      KILLED CONDITIONALS_NEGATION at internal/a.go:30:4\nfinding: internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION\n", RC: 1}, nil
 	case "silent":
@@ -281,6 +269,53 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 	}
 
 	return flow.CommandOutput{}, nil
+}
+
+// callsOf is the number of lines of the log whose command words equal words, on any host and slot class. A log line is "<host> <slot class> <words>".
+func callsOf(log, words string) int {
+	n := 0
+
+	for _, line := range strings.Split(log, "\n") {
+		if fields := strings.SplitN(line, " ", 3); len(fields) == 3 && fields[2] == words {
+			n++
+		}
+	}
+
+	return n
+}
+
+// e2eAnswers are the answers that a line of the file mutations may give.
+var e2eAnswers = []string{"clean", "lived", "silent"}
+
+// keyedAnswer returns the answer of the nth call of a command: the nth line of the answers whose key is exactly the words. It is empty when no such line exists.
+// A non-blank line with no " => ", or with an answer that is not in e2eAnswers, is an error that names the line.
+func keyedAnswer(answers, words string, nth int) (string, error) {
+	var keyed []string
+
+	for number, line := range strings.Split(answers, "\n") {
+		if line == "" {
+			continue
+		}
+
+		key, answer, found := strings.Cut(line, " => ")
+		if !found {
+			return "", fmt.Errorf("mutations line %d %q has no \" => \"", number+1, line)
+		}
+
+		if !slices.Contains(e2eAnswers, answer) {
+			return "", fmt.Errorf("mutations line %d %q gives the unknown answer %q, want one of %v", number+1, line, answer, e2eAnswers)
+		}
+
+		if key == words {
+			keyed = append(keyed, answer)
+		}
+	}
+
+	if nth < 1 || nth > len(keyed) {
+		return "", nil
+	}
+
+	return keyed[nth-1], nil
 }
 
 // e2eAgents starts the claude program of the script PATH through the real agent runner.
@@ -383,7 +418,7 @@ if [ -e hang ] && [ "$step" = "$(cat hang)" ] && [ ! -e started ]; then
 fi
 if [ "$step" = review ]; then
   n=$(grep -c '^review ' calls.log)
-  printf '{"verdict":"%s","mechanism":"","regressions":"0","findings":[]}\n' "$(sed -n "${n}p" verdicts)" > "$(field write)"
+  printf '{"verdict":"%s","mechanism":"","regressions":"0","open":"","findings":[]}\n' "$(sed -n "${n}p" verdicts)" > "$(field write)"
 fi
 if [ "$step" = plan ]; then
   printf '{"regressions":"0"}\n' > "$(field write)"
@@ -393,7 +428,10 @@ if [ "$step" = settle ]; then
 fi
 # The tool calls arrive as assistant lines of the stream, as with the real claude.
 # The fake claude calls the skill that the example requires, so the session reports it.
-echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"%SKILL%"}}]}}'
+# When the file no-skill exists, the fake reports no skill call, as a CLI that does not report them.
+if [ ! -e no-skill ]; then
+  echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"%SKILL%"}}]}}'
+fi
 # The implementer stages everything, the command that the example forbids.
 if [ "$step" = implement ]; then
   if [ -e edit-file ]; then write_call toolu_edit edited.txt; fi
@@ -474,31 +512,17 @@ func oneItemCopy(example string) (string, error) {
 	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
 }
 
-// exampleSkill returns the one skill that an agent of examples/remediation/workflow.star requires.
-func exampleSkill() (string, error) {
-	text, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	if err != nil {
-		return "", err
+// exampleSkillCheck matches the check of the example that the implement step called a skill: "name" not in implement.skills.
+var exampleSkillCheck = regexp.MustCompile(`"([^"]+)" not in implement\.skills`)
+
+// exampleSkill is the skill that the implement step of the example text must call. The example is the one place that names it.
+func exampleSkill(example string) (string, error) {
+	match := exampleSkillCheck.FindStringSubmatch(example)
+	if match == nil {
+		return "", errors.New("the example holds no check of the skills of the implement step")
 	}
 
-	calls, err := workflowtest.Calls("workflow.star", text)
-	if err != nil {
-		return "", err
-	}
-
-	var skills []string
-
-	for _, call := range calls {
-		if call.Builtin == "agent" {
-			skills = append(skills, workflowtest.Literals(call.Args["require_skills"])...)
-		}
-	}
-
-	if len(skills) != 1 {
-		return "", fmt.Errorf("the example requires %d skills, want 1", len(skills))
-	}
-
-	return skills[0], nil
+	return match[1], nil
 }
 
 // e2eFile is a file of the work folder of a script; a program is a file that the script starts.
@@ -534,7 +558,13 @@ func writeE2EFile(path string, file e2eFile) error {
 // e2eSetup writes the config folder and the fake claude into the work folder of a script.
 func e2eSetup(env *testscript.Env) error {
 	work := env.WorkDir
-	skill, err := exampleSkill()
+
+	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	if err != nil {
+		return err
+	}
+
+	skill, err := exampleSkill(string(example))
 	if err != nil {
 		return err
 	}
@@ -547,11 +577,6 @@ func e2eSetup(env *testscript.Env) error {
 		"bin/claude":                {fake, true},
 		"config/runners.star":       {strings.ReplaceAll(e2eRunners, "%DIR%", work), false},
 		"config/projects/shop.star": {e2eProject, false},
-	}
-
-	example, err := os.ReadFile(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	if err != nil {
-		return err
 	}
 
 	copied, err := oneItemCopy(string(example))
@@ -648,6 +673,66 @@ func TestE2E_TheOneItemCopyHasOneMain(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(copied, exampleMain))
 	assert.Contains(t, copied, "def round_main(item):")
 	assert.True(t, strings.HasSuffix(copied, exampleMain+"\n    return pipeline(item)\n"))
+}
+
+// e2eCommandCall runs the command words once on the host and slot class, with the mutations file text, and returns the exit code.
+func e2eCommandCall(t *testing.T, dir, host, slots string, run ...string) (int, error) {
+	t.Helper()
+
+	out, err := e2eCommands{dir: dir}.Run(t.Context(), flow.CommandRequest{Run: run, Host: host, SlotClass: slots})
+
+	return out.RC, err
+}
+
+func TestE2ECommands_CountsTheCallsOfTheSameWordsAcrossHosts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mutations"), []byte("sh m.sh => silent\nsh m.sh => clean\n"), e2eFileMode))
+
+	first, err := e2eCommandCall(t, dir, "build", "mutation", "sh", "m.sh")
+	require.NoError(t, err)
+	second, err := e2eCommandCall(t, dir, "other", "", "sh", "m.sh")
+	require.NoError(t, err)
+
+	require.Equal(t, 1, first, "the first call takes the first line")
+	require.Equal(t, 0, second, "the same words on another host take the second line")
+}
+
+func TestE2ECommands_AKeyThatIsAPrefixMatchesNothing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mutations"), []byte("sh m.sh => silent\ngit => silent\n"), e2eFileMode))
+
+	longer, err := e2eCommandCall(t, dir, "", "", "sh", "m.sh", "origin/integration")
+	require.NoError(t, err)
+	git, err := e2eCommandCall(t, dir, "", "", "git", "status")
+	require.NoError(t, err)
+
+	require.Equal(t, 0, longer, "a key that is a prefix of the words gives no answer")
+	require.Equal(t, 0, git, "a key that is a prefix of one word gives no answer")
+}
+
+func TestE2ECommands_RefusesAMutationsLineThatIsNotAnAnswer(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct{ text, want string }{
+		"line_without_the_arrow": {"clean\n", `mutations line 1 "clean" has no " => "`},
+		"arrow_without_spaces":   {"sh m.sh => clean\nsh m.sh=>lived\n", `mutations line 2 "sh m.sh=>lived" has no " => "`},
+		"unknown_answer":         {"sh m.sh => lvied\n", `mutations line 1 "sh m.sh => lvied" gives the unknown answer "lvied"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "mutations"), []byte(test.text), e2eFileMode))
+
+			_, err := e2eCommandCall(t, dir, "", "", "git", "status")
+
+			require.ErrorContains(t, err, test.want)
+		})
+	}
 }
 
 func TestE2E_TheOneItemCopyRefusesAnExampleWithTwoMains(t *testing.T) {

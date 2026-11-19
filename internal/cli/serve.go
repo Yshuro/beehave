@@ -20,7 +20,7 @@ const exitSecondSignal = 130
 var errServeBusy = errors.New("another beehave engine owns this state folder; see beehave status")
 
 const serveLong = "Keep an engine up on the state folder, in the foreground.\n\n" +
-	"beehave serve resumes the open runs of this build, applies the schedules (the review poll and the project schedules) and waits. " +
+	"beehave serve resumes the open runs of this build, applies the review poll and waits. " +
 	"A beehave run on the same state folder gives its item to this engine and prints the result. The agents.max_concurrent limit applies to all of them. " +
 	"The review poll is off while agents.review_poll_minutes is 0: under beehave serve, set 60.\n\n" +
 	"SIGINT and SIGTERM stop the engine. The open runs stay open, and the next engine resumes them. A second signal during the stop exits at once with code 130. " +

@@ -14,8 +14,9 @@ import (
 
 const noKindFlow = "def main(item):\n    agent(name = \"work\", prompt = \"prompts/work.md\", model = \"m\")\n"
 
+// kindFlow is one agent call that edits ("implement") or does not edit ("review").
 func kindFlow(kind string) string {
-	return fmt.Sprintf("def main(item):\n    agent(name = \"work\", prompt = \"prompts/work.md\", model = \"m\", kind = %q)\n", kind)
+	return fmt.Sprintf("def main(item):\n    agent(name = \"work\", prompt = \"prompts/work.md\", model = \"m\", edits = %s)\n", map[bool]string{true: "True", false: "False"}[kind != "review"])
 }
 
 func enqueuedOn(t *testing.T, engine *Engine, queue string) int {
@@ -171,26 +172,13 @@ func TestAgentKind_TheCapsOfTheTwoQueuesAreIndependent(t *testing.T) {
 	require.NoError(t, second.err)
 }
 
-func TestAgentKind_AKindThatTheCheckCannotSeeIsRefusedWhenTheCallRuns(t *testing.T) {
+func TestAgentKind_AReopenedReadOnlyStepGoesBackToTheReviewQueue(t *testing.T) {
 	t.Parallel()
 
-	rig := newAgentRig(t)
-	flow := bodyFlow("kind = \"triage\"\na = " + agentCallText(`kind = kind, `))
+	assert.Equal(t, reviewsQueueName, agentQueueName(true))
+	assert.Equal(t, queueName, agentQueueName(false))
 
-	_, err := rig.run(t, flow, "x")
-
-	require.ErrorContains(t, err, `kind is "triage". Use one of: implement, review`)
-	assert.Empty(t, rig.h.agents.seen())
-}
-
-func TestAgentKind_AReopenedReviewGoesBackToTheReviewQueue(t *testing.T) {
-	t.Parallel()
-
-	assert.Equal(t, reviewsQueueName, agentQueueName("review"))
-	assert.Equal(t, queueName, agentQueueName("implement"))
-	assert.Equal(t, queueName, agentQueueName(""))
-
-	queue, partition, err := phaseRewindTarget(dbos.WorkflowStatus{Name: phaseName, Input: `{"login":"a","kind":"review"}`})
+	queue, partition, err := phaseRewindTarget(dbos.WorkflowStatus{Name: phaseName, Input: `{"login":"a","no_edits":true}`})
 	require.NoError(t, err)
 	assert.Equal(t, reviewsQueueName, queue)
 	assert.Equal(t, "a", partition)
@@ -200,7 +188,7 @@ func TestAgentKind_AReopenedReviewGoesBackToTheReviewQueue(t *testing.T) {
 	assert.Equal(t, queueName, queue)
 	assert.Equal(t, "b", partition)
 
-	options, err := rewindQueue(dbos.WorkflowStatus{Name: phaseName, Input: `{"login":"a","kind":"review"}`})
+	options, err := rewindQueue(dbos.WorkflowStatus{Name: phaseName, Input: `{"login":"a","no_edits":true}`})
 	require.NoError(t, err)
 	assert.Len(t, options, 2)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/store"
@@ -31,15 +30,6 @@ type ghKeyed struct {
 type ghState struct {
 	State  string    `json:"state"`
 	Labels []ghLabel `json:"labels"`
-}
-
-// ghAssigned is the assignees of `gh issue view --json assignees`.
-type ghAssigned struct {
-	Assignees []ghAssignee `json:"assignees"`
-}
-
-type ghAssignee struct {
-	Login string `json:"login"`
 }
 
 // ghComment is one comment of `gh api repos/<repo>/issues/<n>/comments`.
@@ -231,18 +221,6 @@ func (s *Store) step(ctx context.Context, run bool, command, id string, extra ..
 	}
 
 	return nil
-}
-
-// Assign adds the assignee to the issue. It reads the assignees first and runs the edit only when the login is not among them, so a repeated call sends no write.
-func (s *Store) Assign(ctx context.Context, id, assignee string) error {
-	now, err := read[ghAssigned](ctx, s, id, "assignees")
-	if err != nil {
-		return err
-	}
-
-	held := slices.ContainsFunc(now.Assignees, func(a ghAssignee) bool { return strings.EqualFold(a.Login, assignee) })
-
-	return s.step(ctx, !held, argEdit, id, "--add-assignee", assignee)
 }
 
 // Comment adds a comment with the marker line of the key at its end, once for each key: it reads the comments of the issue first and returns when one holds the marker.

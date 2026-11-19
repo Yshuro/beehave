@@ -60,14 +60,22 @@ def budget_spent(request, backfill, label):
         fail("REFUSE: budget-left failed with code %d: %s" % (left.rc, left.stdout.strip()))
     return left.rc == BUDGET_LEFT_RC.SPENT
 
-def run_chunk(item, request, days, label):
-    made = item_create(
+# The project var chunk_assignee names the person who owns the chunks of this pipeline. A tracker that keeps assignees files each chunk with that person.
+# The local tracker of the shipped project keeps none and refuses the keyword, so a project that sets no var files the chunks with no assignee.
+def chunk_item(item, request, days, label):
+    owner = facts().vars.get("chunk_assignee", "")
+    assigned = {"assignee": owner} if owner else {}
+    return item_create(
         name = "chunk-" + label,
         title = "ticket chunk %s to %s" % (days[0], days[-1]),
         key = "chunk-%s-%s-v%s-%s" % (days[0], days[-1], VERSION, label),
         body = json.encode({"days": days, "backfill": item.id, "budget_cents": request.budget}),
         parent = item.id,
+        **assigned
     )
+
+def run_chunk(item, request, days, label):
+    made = chunk_item(item, request, days, label)
     spawned = spawn([made.id], entry = "chunk", name = "spawn-" + label)
     return gather(spawned.runs, fail = "return", name = "gather-" + label).results[0]
 

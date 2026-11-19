@@ -9,8 +9,6 @@ import (
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/tobocop2/beehave/internal/agent"
 )
 
 // blockedHandle is a phase handle whose result never comes.
@@ -87,34 +85,10 @@ func TestPhaseInput_AStoredStepWithoutTheEditsKeyKeepsEditsAndANoEditsStepStaysW
 	require.NoError(t, json.Unmarshal([]byte(`{"run":"r1","item":"i1"}`), &old))
 	assert.False(t, old.NoEdits, "a step recorded before the key existed keeps the edit mode")
 
-	raw, err := json.Marshal(PhaseInput{Run: "r1", Kind: "review", NoEdits: true})
+	raw, err := json.Marshal(PhaseInput{Run: "r1", NoEdits: true})
 	require.NoError(t, err)
 
 	var replayed PhaseInput
 	require.NoError(t, json.Unmarshal(raw, &replayed))
 	assert.True(t, replayed.NoEdits, "a replayed edits = False step does not gain the edit mode")
-}
-
-func TestPhase_TheOutputCarriesTheLoginAndTheModel(t *testing.T) {
-	t.Parallel()
-
-	engine := &Engine{}
-	exited := agent.Result{Outcome: agent.OutcomeExited}
-
-	out, err := engine.judgePhase(t.Context(), PhaseInput{Login: "oc", Model: "m-seen"}, exited, nil)
-	require.NoError(t, err)
-	assert.Equal(t, "oc", out.Login)
-	assert.Equal(t, "m-seen", out.Model)
-
-	failed, err := engine.judgePhase(t.Context(), PhaseInput{Login: "oc", Model: "m-seen"}, exited, errors.New("the agent did not start"))
-	require.Error(t, err)
-	assert.Equal(t, "oc", failed.Login, "a run that failed still names the login it ran on")
-
-	unset, err := engine.judgePhase(t.Context(), PhaseInput{Login: "oc"}, exited, nil)
-	require.NoError(t, err)
-
-	data, err := json.Marshal(unset)
-	require.NoError(t, err)
-	assert.Contains(t, string(data), `"login":"oc"`)
-	assert.NotContains(t, string(data), `"model"`, "a step that sets no model records none")
 }

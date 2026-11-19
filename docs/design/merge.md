@@ -67,7 +67,7 @@ Case does not count. A third party's pull request with one commit of ours is ref
 
 Only `Approved` lifts this rule, and it lifts only this rule. `AllowOrphans`, `AllowNoChecks` and `AllowReady` do not reach it. `auto_merge` covers only the pull request of a contributor.
 
-The `merge` builtin sets `Approved` from its `approved` keyword. `batch_merge` sets it for each member from the `approved` field of that member, and a member that leaves it out is not approved. The call has no `approved`, so one approved member never approves another.
+The `merge` builtin of `flow` sets `Approved` for each member from the `approved` field of that member, and a member that leaves it out is not approved. The call has no `approved`, so one approved member never approves another.
 
 A missing or empty owner login or address is a refusal, because the rule cannot tell whose work it is.
 
@@ -118,7 +118,7 @@ The guard reads the issues that GitHub lists as closed by the pull request. It r
 The guard skips in these cases:
 
 - GitHub lists no issues for a pull request into a branch other than the default branch. The guard skips there and prints a line that names the base.
-- A member of a batch always skips, because its base is the integration branch. The read after `batch_merge` covers it.
+- A member of a batch always skips, because its base is the integration branch. The read after `merge` covers it.
 
 The audit does not see a closing keyword that is only in a commit message, because the field may not list it. It does not report a close of an issue in another repository.
 
@@ -141,7 +141,7 @@ A pull request in a native stack merges through the queued merge of the forge. T
 
 The run then:
 
-1. writes the intent (the record of `batch_merge`) as a step of its own,
+1. writes the intent (the record of `merge`) as a step of its own,
 2. queues the merge pinned to the gated head,
 3. returns Queued.
 
@@ -218,20 +218,9 @@ A merge with an integration pull request records its row through `EditBody`. For
 
 The step never edits a title. Ready, draft and base changes are not covered by this rule, because beehave merges third-party work that is reviewed.
 
-### Merge step of the item
-
-A merge step with `merge = true` evaluates its settings and merges through the forge of the project. It runs after the ready step, pinned to the head that the gate and the review read. The runners of the config count as own identities.
-
-| Merge result | Next |
-|---|---|
-| Done, or refused as own work | The ready watch, which ends when the owner merges |
-| Any other refusal | The item ends with the lines of the merge |
-
-A project with no forge never reaches the merge: the check refuses the step first. A call that gets there fails with the typed no-forge error.
-
 ## Batch
 
-`batch` lands a set of reviewed pull requests with one gate run for the whole set. It is a layer 2 package. The `batch_merge` builtin of `flow` wires it.
+`batch` lands a set of reviewed pull requests with one gate run for the whole set. It is a layer 2 package. The `merge` builtin of `flow` wires it.
 
 ### Interfaces and result
 
@@ -246,7 +235,7 @@ The gate, the git calls, the forge and the step recorder are the interfaces `Gat
 
 ### Git version
 
-`batch` needs git 2.38 or newer on the gate host, for `git merge-tree --write-tree`. `CheckGit` reads `git --version` once, before any step, and fails with "git 2.38 or newer is needed for batch_merge".
+`batch` needs git 2.38 or newer on the gate host, for `git merge-tree --write-tree`. `CheckGit` reads `git --version` once, before any step, and fails with "git 2.38 or newer is needed for merge".
 
 `GitCLI` implements `Git` over any runner with the `Exec` method of `proc.Runner`. No maintained Go library does this fold: go-git has no three-way tree merge, and libgit2 bindings need cgo.
 
@@ -265,6 +254,12 @@ The union records the tree after each member.
 
 - A member that conflicts with the base tip alone is rejected with the reason `conflict`, before any gate runs.
 - A member that conflicts only with an earlier member is held out.
+
+### Scope check
+
+Before the merge of each member, the recorded step `batch:<name>.scope#<item>` reads the issues that the pull request of the member closes. It compares them with the issues of the first review of that item. For the item of the run, the first review is the first `gate` call. For another item, it is the newest earlier run of that item.
+
+A new issue with no owner line makes the run ask the owner. The question lists the new issues and, in the form `(then: #12 #14)`, the issues of the first review. The question and the refusal name the run, so `beehave answer` with the item of the run answers the wait, and the item of the member does not. The accepted answer is `keep #N[, #N ...]`. Any other answer rejects that member with the reason, as the batch rule rejects any member. The other members regate and land. A batch of one lands nothing. A member with no recorded first review has nothing to compare.
 
 ### Splitting a red union
 
@@ -318,7 +313,7 @@ Every input that picks a path is a recorded step: `batch:<name>.heads#k`, `.tip#
 - A later read of one member adds `@<read>` to the step name. An item id has no `@`.
 - A step records its input with its output, and a replay with other input fails.
 
-The batch needs the worktree of the item that runs the workflow. `batch_merge` makes it before the first git call, and the batch host refuses an item with no worktree.
+The batch needs the worktree of the item that runs the workflow. `merge` makes it before the first git call, and the batch host refuses an item with no worktree.
 
 ### Green gate and tree checks
 

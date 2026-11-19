@@ -277,14 +277,14 @@ func gateRewindTarget(row dbos.WorkflowStatus) (queue, partition string, err err
 	return exclusiveQueueName, in.Project, nil
 }
 
-// phaseRewindTarget returns the queue and the partition key that a rewound phase goes back to: the queue of its kind and the partition of its login.
+// phaseRewindTarget returns the queue and the partition key that a rewound phase goes back to: the queue of its step and the partition of its login.
 func phaseRewindTarget(row dbos.WorkflowStatus) (queue, partition string, err error) {
 	var in PhaseInput
 	if err := json.Unmarshal([]byte(fmt.Sprint(row.Input)), &in); err != nil {
 		return "", "", fmt.Errorf("read the input of %s: %w", row.ID, err)
 	}
 
-	return agentQueueName(in.Kind), in.Login, nil
+	return agentQueueName(in.NoEdits), in.Login, nil
 }
 
 // errNoRow is returned when a workflow the store listed is gone.

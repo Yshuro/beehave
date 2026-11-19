@@ -14,6 +14,15 @@ An `agent` step starts one AI coding CLI through an adapter, feeds it the prompt
 - `cmd/beehave` holds the table that maps an agent name to the constructor of its adapter. It puts the adapter in the `Spec` of each run. A run with no adapter does not start.
 - `agent/agenttest` is the conformance suite. It starts a fake CLI and checks the profile, the arguments and the call reader of an adapter. Every new adapter calls it from its tests.
 
+### Time limits of a step
+
+The keys `timeout` and `idle_timeout` of the `agent` call take a duration text, such as `"90s"` or `"10m"`. `beehave check workflow` refuses any other text.
+
+- `timeout` limits the whole run.
+- `idle_timeout` limits the time with no output. Each write of the CLI to its standard output or its standard error starts the time again.
+- A key that is left out, an empty text, or a duration of 0 or less sets no limit of that kind. OpenCode is the one exception: with no `timeout`, its total limit is one hour.
+- A run that a limit ends has the outcome `timed-out` or `idle`. The step fails with an error that names the outcome and the item, and the item stops.
+
 ### The OpenCode adapter and its limits
 
 The adapter starts `opencode run --format json` and reads its event stream. The prompt goes on stdin; no message argument follows `run`. The adapter never passes `--auto`, so a file tool that reaches outside the work folder stays refused.
@@ -24,7 +33,7 @@ A step author must know these limits:
 - **OpenCode 2.x runs with a private server.** From 2.0.0 the runner adds `--standalone`. Without it, OpenCode 2.x sends the run to a shared background service, and a service that another process holds on its port makes the run fail. The 2.x line names the shell tool `shell`.
 - **No `forbid_commands` on OpenCode 2.x.** In a real step on 2.2.5 the guard plugin did not refuse a command that the check forbids: the command ran and wrote its file. A step with `forbid_commands` does not start on 2.0.0 or later, and the note says so. Remove `forbid_commands` from the step, or use OpenCode 1.x.
 - **No sandbox.** A step with a sandbox does not start. Set `sandbox = None` on the step.
-- **No skill proof.** OpenCode reports no skill calls, so a step with `require_skills` does not start.
+- **No skill proof.** OpenCode reports no skill calls, so the result field `skills` of its steps is an empty list. A workflow that needs a skill stops the item itself when the list lacks it. The fact `runners.<name>.reports_skills` of `facts()` is false for such a runner, so a workflow refuses a step on it before any agent starts.
 - **A lost run starts again.** OpenCode keeps all sessions in one database and has no file for one session. The transcript path in the step output names a path that no file holds. The check before a resume finds no file, so a lost OpenCode step starts again from its note and never resumes.
 - **Subagent sessions are not counted.** The calls and the cost of a subagent session of OpenCode do not reach the output stream of the parent run, so the turn cap and the cost cap do not count them. This is from a read of the source of OpenCode 1.19.5.
 - **The turn cap is one call late.** OpenCode shows a tool call on its output when the call ends, so the runner counts a shell call after it ran.
@@ -32,7 +41,7 @@ A step author must know these limits:
 - **The guard needs a POSIX shell.** A step with `forbid_commands` does not start on Windows. If the plugin does not load, OpenCode runs every shell command with no check. The plugin writes a marker file when it loads, and a run that ends with no marker gets a violation line.
 - **A run with no timeout ends after one hour.** A model over its usage quota prints nothing and retries. The note of the timed-out run names that cause.
 - **The pool never picks OpenCode.** OpenCode has no usage report, so the pool reads an unknown usage for it and skips it, and the doctor makes no login check for it. A step runs on OpenCode only when it names the runner with `runner = "<name>"`.
-- **The record names the runner and the model.** The recorded phase of an agent step holds `login` (the named runner, or the login that the pool picked) and `model` (the model that the step set). `beehave status <run id>` and `beehave status <run id> --json` show both on the step line, and the dry run prints them in the phase record. A record that an older version wrote has neither field and replays as before, because the engine reads both fields for display only.
+- **The record names the runner and the model.** The render record of an agent step holds `label` (the free label of the call, left out when empty), `login` (the named runner, or the login that the pool picked) and `model` (the model that the step sets). The engine writes it before the agent starts, so `beehave status <run id>` and `beehave status <run id> --json` show all three on the step line while the step runs and after it fails, and `beehave status --item <item>` lists a running or failed lane with them. The dry run prints them in the render record. The engine reads both fields for display only, so a record without them replays as before.
 
 ### The process of the CLI
 
@@ -270,7 +279,7 @@ For `laptop-copy`, the scan does not see a copy that a script file, a variable o
 
 ### The setting allow_paths
 
-The setting `allow_paths` of an `agent` step is a list of globs, for a lane that may change only some files, such as papers or design files.
+The setting `allow_paths` of an `agent` step is a list of globs, for a lane that may change only some files, such as papers or design files. An empty list, an empty entry, an absolute path, a path with a `..` part and a pattern that does not parse are refused, and the message names the pattern. The `..` check reads each brace choice, so `{docs,..}/x` is refused like `../x`. The function `before_review` of the library reads its `allow` list with the same code.
 
 At the start, the step records in the recorded `/start` step:
 

@@ -14,7 +14,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/exectest"
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 const privateMode = os.FileMode(0o600)
@@ -74,6 +76,22 @@ func TestOptions_RefuseUnusableSettingsForTheEngineAndTheClient(t *testing.T) {
 			require.ErrorContains(t, err, test.want)
 		})
 	}
+}
+
+func TestNewEngine_AnEngineWithNoFactsReadsNoFactsForEveryProject(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	deps := h.deps()
+	deps.Facts = nil
+
+	engine, err := NewEngine(t.Context(), h.opts, deps)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	assert.Empty(t, engine.requiredSteps(testProject), "a gate records no required steps")
+	assert.Equal(t, config.DefaultLostJobWait, engine.lostJobWait(testProject), "a lost job waits for the default")
+	assert.Equal(t, model.Project{}, (&script{e: engine, in: ItemInput{Project: testProject}}).Project(), "the facts builtin reads an empty project")
 }
 
 func TestOpenStore_RefusesAFolderOthersCanUse(t *testing.T) {
@@ -329,7 +347,7 @@ func TestEngine_PinsTheApplicationVersionToTheBuildVersion(t *testing.T) {
 	_, err := engine.Run(testItem, testProject)
 	require.NoError(t, err)
 
-	assert.Equal(t, "v1.2.3-pinned+core3.agent8.tracker1.forge2.land4.gate5.host1.round2", dbos.GetApplicationVersion(engine.ctx), "the build version and one version for each step module")
+	assert.Equal(t, "v1.2.3-pinned+core6.agent10.tracker2.forge4.land8.gate6.host1.round2", dbos.GetApplicationVersion(engine.ctx), "the build version and one version for each step module")
 
 	infos, err := harness.client(t, "v1.2.3-pinned").Status()
 	require.NoError(t, err)

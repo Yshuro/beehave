@@ -147,17 +147,6 @@ func (f *Forge) SetBase(ctx context.Context, pr int, base string) error {
 	return nil
 }
 
-// AddAssignee assigns a pull request or an issue to a login. The call adds and never replaces: "Users already assigned to an issue are not replaced."
-// https://docs.github.com/en/rest/issues/assignees#add-assignees-to-an-issue
-func (f *Forge) AddAssignee(ctx context.Context, number int, login string) error {
-	done := f.run.Run(ctx, []string{argAPI, "-X", argPost, "repos/" + f.repo + "/issues/" + strconv.Itoa(number) + "/assignees", "-f", "assignees[]=" + login})
-	if done.ExitCode != 0 {
-		return refused(done, "cannot assign #%d to %s", number, login)
-	}
-
-	return nil
-}
-
 // notAuthor returns the refusal of a body write because the pull request is not the work of the owner.
 func notAuthor(format string, args ...any) *model.NotAuthorError {
 	return &model.NotAuthorError{Reason: fmt.Sprintf(format, args...)}

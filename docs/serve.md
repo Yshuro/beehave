@@ -4,7 +4,7 @@
 
 ## What the command does
 
-The command opens the engine and resumes the open runs of this build. It applies the review poll and the project schedules, then waits.
+The command opens the engine and resumes the open runs of this build. It applies the review poll, then waits. The engine fires no other schedule.
 
 `beehave run <item>` on the same state folder gives its item to this engine and prints the result. The `agents.max_concurrent` limit applies to the runs of both commands. The `beehave run` command exits when its item ends, and `beehave serve` stays up.
 

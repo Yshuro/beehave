@@ -9,14 +9,13 @@ import (
 )
 
 const (
-	agentName      = "agent"
-	spawnName      = "spawn"
-	gatherName     = "gather"
-	batchMergeName = "batch_merge"
-	entryKeyword   = "entry"
-	failKeyword    = "fail"
-	untilKeyword   = "until"
-	nameKeyword    = "name"
+	agentName    = "agent"
+	spawnName    = "spawn"
+	gatherName   = "gather"
+	entryKeyword = "entry"
+	failKeyword  = "fail"
+	untilKeyword = "until"
+	nameKeyword  = "name"
 	// secondArgument is the position of entry in a spawn call and of fail in a gather call.
 	secondArgument = 1
 )
@@ -60,10 +59,6 @@ func (g *graph) builtinCall(call *syntax.CallExpr, shadowed []string) {
 	}
 
 	g.signature(call, fn.Name, params)
-
-	if fn.Name == mergeName {
-		g.mergeNeedsSteps(call, params)
-	}
 
 	if fn.Name == spawnName {
 		g.entry(call)

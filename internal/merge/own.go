@@ -32,7 +32,7 @@ func (a *attempt) ownWork() *refusal {
 
 	return ownRefusal(
 		fmt.Sprintf("REFUSE: #%d holds work of %s (%s). beehave does not merge its own work without a verdict from another step.", a.req.PR, who, role),
-		"        The owner merges it in the forge, or the step sets `approved` from a review: the keyword of merge, or the field of the member of batch_merge.",
+		"        The owner merges it in the forge, or the step sets `approved` from a review: the field of a member of `prs`.",
 	)
 }
 

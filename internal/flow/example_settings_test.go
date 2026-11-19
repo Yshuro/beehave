@@ -113,7 +113,7 @@ func TestRound_TheSettingsGiveEveryKeyAndTheDefaultsOfTheKeysTheFileLeavesOut(t 
 	require.NoError(t, err)
 	for _, want := range []string{
 		`"base": "integration/s1"`, `"owner": "tobocop2"`, `"lane_cap": 4`, `"fix_rounds": 5`, `"label": "beehave-round"`,
-		`"lane_kind": "impl"`, `"base_reds_file": "base-reds.md"`, `"wait_hours": 24`, `"integration_pr": 0`, `"merge": False`, `"items": []`,
+		`"lane_kind": "impl"`, `"base_reds_file": "base-reds.md"`, `"wait_hours": 24`, `"integration_pr": 0`, `"merge": False`, `"hand_off": False`, `"items": []`,
 	} {
 		assert.Contains(t, shown, want)
 	}

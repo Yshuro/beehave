@@ -31,27 +31,17 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 
 	closed := closedPaths(ctx, dir, home)
 
-	write, note := checkedPaths(request.Sandbox.AllowWrite, read, home, dir, deny, closed)
-	if note != "" {
+	if note := readNote(read, home, deny); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
 	return agent.SandboxPlan{
 		Work: dir, GitDirs: sharedGitDirs(dir), Read: read, Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed), DenyWritePatterns: hookPatterns(dir),
-		Network: request.Sandbox.Network, AllowWrite: write,
+		Network: request.Sandbox.Network,
 	}, ""
 }
 
-// checkedPaths returns the allow_write paths of the step, resolved, or the reason why the step cannot start with its write or read paths.
-func checkedPaths(allowWrite, read []string, home, dir string, deny, closed []string) ([]string, string) {
-	if note := readNote(read, home, deny); note != "" {
-		return nil, note
-	}
-
-	return writablePaths(allowWrite, home, dir, slices.Concat(deny, closed))
-}
-
-// writeDenies returns the closed paths that the adapter denies for write: the list that allow_write is checked against, less the settings folder of
+// writeDenies returns the closed paths that the adapter denies for write: the closed paths, less the settings folder of
 // the agent CLI, which the CLI writes itself, and less a .git that is a file (a linked work tree), which holds only a pointer.
 // A .git that does not exist yet stays in the list, so a step that runs git init finds it closed.
 func writeDenies(dir string, closed []string) []string {
@@ -194,7 +184,7 @@ func matching(pattern string) []string {
 	return matches
 }
 
-// writablePaths resolves the allow_write paths of a step: a relative path starts at the work folder, and ~/ is the home folder.
+// writablePaths resolves the gate_allow_write paths of a project: a relative path starts at the work folder, and ~/ is the home folder.
 // A path that is a closed path, a credential path, inside one, or holds one is refused, because it would open a path that the engine keeps closed.
 // The check of the names (.git, .claude, .husky, .githooks, .env*) is the one that beehave check runs, so a step and its check agree.
 func writablePaths(paths []string, home, dir string, closed []string) ([]string, string) {
@@ -208,7 +198,7 @@ func writablePaths(paths []string, home, dir string, closed []string) ([]string,
 		full := filepath.Clean(absolute(expand(path, home), dir))
 
 		if secret := overlap(full, closed); secret != "" {
-			return nil, fmt.Sprintf("The step lists the allow_write path %s, which overlaps the protected path %s. The step did not start. Remove the path.", path, secret)
+			return nil, fmt.Sprintf("The project lists the gate_allow_write path %s, which overlaps the protected path %s. The step did not start. Remove the path.", path, secret)
 		}
 
 		out = append(out, full)

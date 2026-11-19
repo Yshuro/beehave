@@ -17,6 +17,7 @@ import (
 	"github.com/tobocop2/beehave/internal/forge"
 	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/workflow"
 	"github.com/tobocop2/beehave/internal/workflow/workflowtest"
 )
 
@@ -187,7 +188,7 @@ func shipping(t *testing.T, over map[string]any) (pulls, *shipForge, flow.MergeS
 	}
 }
 
-// exampleForbidText reads the `forbid_text` patterns of the merge step of the remediation example.
+// exampleForbidText reads the `forbid_text` patterns of the landing merge call of the remediation example. The hand-off call lands nothing and has none.
 func exampleForbidText(t *testing.T) []string {
 	t.Helper()
 
@@ -200,7 +201,9 @@ func exampleForbidText(t *testing.T) []string {
 	require.NotEmpty(t, patterns, "the example holds its attribution patterns in ATTRIBUTION")
 
 	walkExampleMerge(t, func(ship map[string]syntax.Expr) {
-		patterns = append(patterns, workflowtest.Literals(ship["forbid_text"])...)
+		if !handsOff(ship) {
+			patterns = append(patterns, workflowtest.Literals(ship["forbid_text"])...)
+		}
 	})
 
 	return patterns
@@ -216,11 +219,19 @@ func walkExampleMerge(t *testing.T, visit func(map[string]syntax.Expr)) {
 	require.NoError(t, err)
 
 	// The round of the example lands its approved items with one batch merge, which runs the guards of the merge for each item.
+	// With vars.round.hand_off, a second merge call hands them to the owner instead.
 	for _, call := range calls {
-		if call.Builtin == "batch_merge" {
+		if call.Builtin == "merge" {
 			visit(call.Args)
 		}
 	}
+}
+
+// handsOff reports whether a merge call of the example hands the pull requests to the owner: its hand_off is the literal True.
+func handsOff(ship map[string]syntax.Expr) bool {
+	flag, isName := ship["hand_off"].(*syntax.Ident)
+
+	return isName && flag.Name == "True"
 }
 
 func TestMerge_AGatedTreeReachesTheMergeAndATipWithAnotherTreeStopsTheRunWithTheDifferingPaths(t *testing.T) {
@@ -584,23 +595,38 @@ func TestNewLife_TheRunnersOfTheConfigAreTheOwnRunnersOfTheMerger(t *testing.T) 
 func TestMerge_TheValuesRowTheExampleHoldsEverySettingAndNoIdentity(t *testing.T) {
 	t.Parallel()
 
-	var seen bool
+	var landings, handOffs int
 
 	walkExampleMerge(t, func(ship map[string]syntax.Expr) {
-		seen = true
-
-		for _, name := range []string{"repo", "base", "hold", "own", "forbid_text", "integration"} {
-			assert.NotNil(t, ship[name], "%s is set in the example", name)
-		}
-
 		// The base, the repository, the logins and the address come from the project file, so the example names none of them.
+		assert.NotNil(t, ship["base"], "base is set in the example")
+		assert.NotNil(t, ship["repo"], "repo is set in the example")
 		assert.Empty(t, workflowtest.Literals(ship["base"]), "base is the round base, read from vars.round.base")
 		assert.Empty(t, workflowtest.Literals(ship["repo"]), "repo is the repository of the project")
+
+		if handsOff(ship) {
+			handOffs++
+
+			// A hand-off lands nothing, and the check refuses a landing keyword beside hand_off.
+			for _, name := range workflow.HandOffLanding() {
+				assert.Nil(t, ship[name], "the hand-off call takes no %s", name)
+			}
+
+			return
+		}
+
+		landings++
+
+		for _, name := range []string{"hold", "own", "forbid_text", "integration"} {
+			assert.NotNil(t, ship[name], "%s is set on the landing call", name)
+		}
+
 		assert.Equal(t, []string{"hold"}, workflowtest.Literals(ship["hold"]))
 
 		for _, text := range workflowtest.Literals(ship["own"]) {
 			assert.NotContains(t, text, "@", "the file holds no address")
 		}
 	})
-	assert.True(t, seen)
+	assert.Equal(t, 1, landings, "the example has one landing merge call")
+	assert.Equal(t, 1, handOffs, "the example has one hand-off merge call")
 }

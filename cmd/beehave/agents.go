@@ -164,17 +164,6 @@ func noGuardNote(adapter agent.Adapter, guard string, forbid []model.FindingKind
 	return ""
 }
 
-// noSkillsNote returns the reason why a step that requires skills cannot start, or "" when the step can start.
-// A CLI that reports no skill calls cannot prove that the run called them, so the step would fail after the whole run was paid for.
-func noSkillsNote(adapter agent.Adapter, required []string) string {
-	if len(required) == 0 || adapter == nil || !adapter.Profile().NoSkillCalls {
-		return ""
-	}
-
-	return fmt.Sprintf("The step has require_skills, but %s does not report skill calls, so beehave cannot check them. The step did not start. Remove require_skills from the step.",
-		adapter.Profile().Binary)
-}
-
 // Run starts the agent of the login in the worktree of the item and returns what it left: its session, its last message and the skills it called.
 func (a agents) Run(ctx context.Context, request flow.AgentRequest) (agent.Result, error) {
 	runner, dir, err := a.target(ctx, request)
@@ -259,7 +248,7 @@ func (a agents) protection(request flow.AgentRequest, dir string) shell.Protecti
 
 // boxOf returns the sandbox plan of a step, or nil when the step has no sandbox. A step that cannot start, for want of its guard, its sandbox or a price to check its cost cap, returns the reason.
 func (a agents) boxOf(ctx context.Context, request flow.AgentRequest, runner model.Runner, dir string, adapter agent.Adapter, guard string) (*agent.SandboxPlan, string) {
-	note := cmp.Or(noSkillsNote(adapter, request.RequireSkills), a.unpricedCapNote(adapter, request), noGuardNote(adapter, guard, request.Forbid))
+	note := cmp.Or(a.unpricedCapNote(adapter, request), noGuardNote(adapter, guard, request.Forbid))
 	if note != "" {
 		return nil, note
 	}

@@ -104,91 +104,21 @@ func mergeHarness(t *testing.T, result merge.Result) *harness {
 	return harness
 }
 
-func TestRun_AMergeThatCannotBeAskedEndsTheItemAndNamesTheStep(t *testing.T) {
-	t.Parallel()
+// queuedMember is the item of the pull request that queuedHarness merges.
+const queuedMember = "1"
 
-	harness := mergeHarness(t, merge.Result{})
-	harness.merge.err = errFake
-	harness.flowIs(t, shipFlow("merge = True, "))
-	engine := harness.engine(t)
-
-	_, err := engine.Run(testItem, testProject)
-
-	require.ErrorIs(t, err, errFake)
-	require.ErrorContains(t, err, "merge of item 12")
-	assert.Empty(t, harness.watch.reads, "the watch never starts")
-}
-
+// queuedHarness is a harness over a real repository that runs one merge call of the pull request of item 1. The merger answers the call with a queued merge,
+// and then answers each read of the queue with the next of polls.
 func queuedHarness(t *testing.T, polls ...merge.Result) (*harness, *repoHost) {
 	t.Helper()
 
-	harness := mergeHarness(t, merge.Result{Stop: merge.Refused, Reason: merge.Queued, Lines: []string{"queued"}})
-	harness.merge.polls = polls
-	host := &repoHost{}
-	harness.batch = host
-	harness.flowIs(t, shipFlow("merge = True, "))
+	rig := newBatchRig(t)
+	rig.h.merge = &fakeMerge{result: merge.Result{Stop: merge.Refused, Reason: merge.Queued, Lines: []string{"queued"}}, polls: polls}
+	rig.h.batch = rig.host
+	rig.h.gate.via = rig.gate
+	rig.h.flowIs(t, bodyFlow(rig.call("1", "")))
 
-	return harness, host
-}
-
-func TestRun_AQueuedMergeIsReadAfterDurableSleepsWithoutQueueingAgain(t *testing.T) {
-	t.Parallel()
-
-	queued := merge.Result{Stop: merge.Refused, Reason: merge.Queued}
-	harness, host := queuedHarness(t, queued, queued, merge.Result{Stop: merge.Done})
-	engine := harness.engine(t)
-
-	_, err := engine.Run(testItem, testProject)
-
-	require.NoError(t, err)
-	assert.Len(t, harness.merge.asked, 1, "the merge is queued once; the reads are polls")
-	assert.Equal(t, []bool{false, false, false}, harness.merge.lasts)
-	assert.Equal(t, []string{testItem}, host.intents, "the intent is written before the merge call")
-	require.NotNil(t, harness.merge.given[0].Intent)
-}
-
-func TestRun_AQueuedMergeThatNeverMergesGetsALastReadThenEndsTheItem(t *testing.T) {
-	t.Parallel()
-
-	harness, _ := queuedHarness(t, merge.Result{Stop: merge.Refused, Reason: merge.Queued})
-	engine := harness.engine(t)
-
-	_, err := engine.Run(testItem, testProject)
-
-	require.ErrorIs(t, err, errMergeRefused)
-	assert.Len(t, harness.merge.lasts, queuedReads)
-	assert.True(t, harness.merge.lasts[queuedReads-1], "the last read says it is the last")
-	assert.NotContains(t, harness.merge.lasts[:queuedReads-1], true)
-}
-
-func TestRun_AQueuedReadThatFailsEndsTheItem(t *testing.T) {
-	t.Parallel()
-
-	harness, _ := queuedHarness(t)
-	engine := harness.engine(t)
-
-	_, err := engine.Run(testItem, testProject)
-
-	require.ErrorIs(t, err, errFake)
-	require.ErrorContains(t, err, "merge of item 12")
-}
-
-func TestRun_ACancelDuringTheWaitForAQueuedMergeEndsTheRun(t *testing.T) {
-	t.Parallel()
-
-	harness, _ := queuedHarness(t, merge.Result{Stop: merge.Refused, Reason: merge.Queued})
-	harness.sleep = 2 * time.Second
-
-	engine := harness.engine(t)
-	client := harness.client(t, testVersion)
-	run := runInBackground(engine, testItem)
-
-	waitOn(t, inASleep(t, engine))
-	require.NoError(t, client.Cancel(testItem))
-	harness.tick(t)
-
-	require.Error(t, receive(t, run).err)
-	assert.Less(t, len(harness.merge.lasts), queuedReads)
+	return rig.h, rig.host
 }
 
 func TestAwaitQueued_ACancelDuringTheWaitTurnsOffTheQueuedMerge(t *testing.T) {
@@ -206,7 +136,20 @@ func TestAwaitQueued_ACancelDuringTheWaitTurnsOffTheQueuedMerge(t *testing.T) {
 	harness.tick(t)
 
 	require.Error(t, receive(t, run).err)
-	assert.Equal(t, []string{testItem}, harness.merge.disarms, "the queued merge is turned off once, after the cancel")
+	assert.Equal(t, []string{queuedMember}, harness.merge.disarms, "the queued merge is turned off once, after the cancel")
+}
+
+func TestAwaitQueued_AMergeStillQueuedAfterTheLastReadIsRefused(t *testing.T) {
+	t.Parallel()
+
+	harness, _ := queuedHarness(t, merge.Result{Stop: merge.Refused, Reason: merge.Queued})
+	engine := harness.engine(t)
+
+	_, err := engine.Run(testItem, testProject)
+
+	require.ErrorIs(t, err, errMergeRefused)
+	require.ErrorContains(t, err, "the queued merge was still open after the last read")
+	assert.Len(t, harness.merge.lasts, queuedReads, "the wait reads the queue once for each of its rounds")
 }
 
 func TestAwaitQueued_AStepErrorTurnsOffTheQueuedMerge(t *testing.T) {
@@ -218,7 +161,7 @@ func TestAwaitQueued_AStepErrorTurnsOffTheQueuedMerge(t *testing.T) {
 	_, err := engine.Run(testItem, testProject)
 
 	require.ErrorIs(t, err, errFake)
-	assert.Equal(t, []string{testItem}, harness.merge.disarms)
+	assert.Equal(t, []string{queuedMember}, harness.merge.disarms)
 }
 
 func TestAwaitQueued_ADisarmThatFailsSaysTheMergeMayStillBeArmed(t *testing.T) {
@@ -231,7 +174,7 @@ func TestAwaitQueued_ADisarmThatFailsSaysTheMergeMayStillBeArmed(t *testing.T) {
 	_, err := engine.Run(testItem, testProject)
 
 	require.ErrorIs(t, err, errFake, "the error of the wait stays the cause")
-	require.ErrorContains(t, err, "item "+testItem+" may still be armed")
+	require.ErrorContains(t, err, "item "+queuedMember+" may still be armed")
 	require.ErrorContains(t, err, "cannot turn off #5")
 }
 
@@ -255,7 +198,7 @@ func TestAwaitQueued_AReadThatRefusesCallsNoSecondDisarm(t *testing.T) {
 
 	_, err := engine.Run(testItem, testProject)
 
-	require.ErrorIs(t, err, errMergeRefused)
+	require.NoError(t, err, "a refused read rejects the member and the run goes on")
 	assert.Empty(t, harness.merge.disarms, "the read that refused has already turned the merge off")
 }
 
@@ -306,61 +249,4 @@ func TestAbandoned_TheDisarmOfAnOwnerCancelRunsOnAContextThatTheCancelDoesNotRea
 	require.ErrorIs(t, err, errFake)
 	assert.NotContains(t, err.Error(), "may still be armed", "the disarm got a live context")
 	assert.Equal(t, []string{testItem}, fake.disarms)
-}
-
-func TestRun_AnIntentThatCannotBeReadEndsTheItemBeforeTheMerge(t *testing.T) {
-	t.Parallel()
-
-	harness, host := queuedHarness(t)
-	host.intentErr = errFake
-	engine := harness.engine(t)
-
-	_, err := engine.Run(testItem, testProject)
-
-	require.ErrorIs(t, err, errFake)
-	assert.Empty(t, harness.merge.asked, "nothing was queued")
-}
-
-func TestRun_APullRequestThatIsNotOpenGetsNoIntentAndTheMergeRefusesIt(t *testing.T) {
-	t.Parallel()
-
-	harness, host := queuedHarness(t)
-	host.notOpen = map[string]bool{testItem: true}
-	harness.merge.result = merge.Result{Stop: merge.Refused, Lines: []string{"REFUSE: state is MERGED"}}
-	engine := harness.engine(t)
-
-	_, err := engine.Run(testItem, testProject)
-
-	require.ErrorIs(t, err, errMergeRefused)
-	assert.Nil(t, harness.merge.given[0].Intent)
-}
-
-func TestRun_ARefusedQueuedReadEndsTheItemWithItsLines(t *testing.T) {
-	t.Parallel()
-
-	harness, _ := queuedHarness(t, merge.Result{Stop: merge.Refused, Lines: []string{"REFUSE: head moved"}})
-	engine := harness.engine(t)
-
-	_, err := engine.Run(testItem, testProject)
-
-	require.ErrorIs(t, err, errMergeRefused)
-	require.ErrorContains(t, err, "REFUSE: head moved")
-	assert.Len(t, harness.merge.lasts, 1)
-}
-
-func TestRun_AnyOtherRefusalEndsTheItemWithTheLines(t *testing.T) {
-	t.Parallel()
-
-	for _, stop := range []merge.Stop{merge.Refused, merge.NoWorkflowScope} {
-		harness := mergeHarness(t, merge.Result{Stop: stop, Lines: []string{"REFUSE: checks are not green: ci=fail", "(above refers to #7)"}})
-		harness.flowIs(t, shipFlow("merge = True, "))
-		engine := harness.engine(t)
-
-		_, err := engine.Run(testItem, testProject)
-
-		require.ErrorIs(t, err, errMergeRefused)
-		require.ErrorContains(t, err, "item 12: REFUSE: checks are not green: ci=fail; (above refers to #7)")
-		assert.Empty(t, harness.watch.reads, "the watch never starts")
-		assert.Equal(t, []string{"claim:12", "ready:12", "release:12"}, harness.life.seen(), "the claim is released")
-	}
 }

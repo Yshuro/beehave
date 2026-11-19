@@ -4,7 +4,7 @@ exec beehave run 7 --workflow flow/workflow.star
 stdout 'item 7 finished'
 
 exec beehave status
-stdout '^item-7-r1\tdone\tgate pass at [0-9a-f]+\tfix 2 of 18\treview 3 of 24'
+stdout '^item-7-r1\tdone\tgate pass at [0-9a-f]+\treview 3/24\t'
 
 # Both fixes belong to candidate 1, so both are round 1. Two scoped reviews and the full review.
 grep -count=1 '^plan ' calls.log

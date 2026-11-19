@@ -140,7 +140,6 @@ func TestEveryWriteKeepsTheMessageOfTheForgeInItsRefusal(t *testing.T) {
 		"MergePR":       func(ctx context.Context, f forge.Activity) error { return f.MergePR(ctx, 4, tip) },
 		"CreateBranch":  func(ctx context.Context, f forge.Activity) error { return f.CreateBranch(ctx, "b", tip) },
 		"SetBase":       func(ctx context.Context, f forge.Activity) error { return f.SetBase(ctx, 4, "b") },
-		"AddAssignee":   func(ctx context.Context, f forge.Activity) error { return f.AddAssignee(ctx, 4, "alice") },
 		"PostComment":   func(ctx context.Context, f forge.Activity) error { return f.PostComment(ctx, 4, "x") },
 		"SetDraftTrue":  func(ctx context.Context, f forge.Activity) error { return f.SetDraft(ctx, 4, true) },
 		"SetDraftFalse": func(ctx context.Context, f forge.Activity) error { return f.SetDraft(ctx, 4, false) },

@@ -16,14 +16,14 @@ import (
 )
 
 // lostTreeFlow is a parent with three children, one after the other. The gate of items 21 and 22 runs on the host gpu-b, and item 23 lands
-// the pull requests that replace PRS with one batch_merge there.
+// the pull requests that replace PRS with one merge there.
 const lostTreeFlow = `def worker(item):
     host_up(name = "start", host = "gpu-b")
     gate(name = "check")
 
 def lander(item):
     host_up(name = "start", host = "gpu-b")
-    batch_merge(prs = [PRS], base = "main", repo = "o/r", name = "b")
+    merge(prs = [PRS], base = "main", repo = "o/r", name = "b")
 
 def main(item):
     gather(spawn(items = ["21"], entry = "worker"), fail = "raise")

@@ -1,0 +1,31 @@
+# The implement step reports no skill call. The item stops, and the text names how to start it again.
+! exec beehave run 7 --workflow flow/workflow.star
+stderr 'did not call the skill'
+stderr 'beehave resume 7, then beehave cancel 7, then beehave run 7'
+grep -count=1 '^implement ' calls.log
+
+exec beehave status
+stdout '^item-7-r1\tfailed'
+
+# The resume replays the recorded implement step, so the stop comes again and the agent does not run a second time.
+exec beehave resume 7
+! exec beehave run 7 --workflow flow/workflow.star
+stderr 'did not call the skill'
+grep -count=1 '^implement ' calls.log
+
+! exec beehave cancel 7
+stderr 'item-7-r1 is failed and has nothing to cancel$'
+rm no-skill
+exec beehave resume 7
+exec beehave cancel 7
+exec beehave run 7 --workflow flow/workflow.star
+exec beehave status
+stdout 'item-7-r2'
+grep -count=2 '^implement ' calls.log
+
+-- no-skill --
+-- verdicts --
+approve
+approve
+approve
+-- expected-events.log --

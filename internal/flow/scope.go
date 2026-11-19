@@ -12,13 +12,12 @@ import (
 	"strings"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
+
+	"github.com/tobocop2/beehave/internal/batch"
 )
 
-// The recorded steps that keep the scope of a pull request. The first gate of an item fixes the scope. A merge that merges checks it.
-const (
-	scopeStep      = "scope"
-	scopeCheckStep = "scope-check"
-)
+// scopeStep is the recorded step that keeps the scope of a pull request. The first gate of an item fixes the scope. A merge checks it for each member.
+const scopeStep = "scope"
 
 // errScopeRefused ends an item whose pull request closes an issue that is new since the first review and has no owner line.
 var errScopeRefused = errors.New("the pull request closes an issue that is new since its first review")
@@ -57,17 +56,17 @@ func (s *script) fixScope(label string) error {
 // firstRead is the body of the scope step. A new run of the item (a restart after a cancel, a send-back round) takes the scope of the newest earlier run that fixed one,
 // so the issues of the first review stay the baseline. The forge is read only when no earlier run fixed a scope.
 func (s *script) firstRead(ctx context.Context) (scopeRead, error) {
-	earlier, err := s.earlierScope()
+	earlier, err := s.earlierScope(s.in.Item)
 	if err != nil || earlier.Found {
 		return earlier, err
 	}
 
-	return s.readClosing(ctx)
+	return s.readClosing(ctx, s.in.Item)
 }
 
 // earlierScope returns the scope of the newest earlier run of the item that recorded one, or a read with Found false.
-func (s *script) earlierScope() (scopeRead, error) {
-	ids, err := s.earlierRuns()
+func (s *script) earlierScope(item string) (scopeRead, error) {
+	ids, err := s.earlierRuns(item)
 	if err != nil {
 		return scopeRead{}, err
 	}
@@ -83,12 +82,12 @@ func (s *script) earlierScope() (scopeRead, error) {
 
 // earlierRuns lists the ids of the other runs of the item, the newest attempt first. It filters on no state and no attempt number, so a canceled, failed, live or newer run is in the list.
 // A caller that counts work over these runs counts a concurrent run as spent: that errs on the safe side for a cap.
-func (s *script) earlierRuns() ([]string, error) {
-	prefix := runPrefix + s.in.Item + attemptMarker
+func (s *script) earlierRuns(item string) ([]string, error) {
+	prefix := runPrefix + item + attemptMarker
 
 	rows, err := dbos.ListWorkflows(s.e.ctx, dbos.WithFilterWorkflowIDPrefix(prefix), dbos.WithFilterName(itemName))
 	if err != nil {
-		return nil, fmt.Errorf("list the earlier runs of item %s: %w", s.in.Item, err)
+		return nil, fmt.Errorf("list the earlier runs of item %s: %w", item, err)
 	}
 
 	// The prefix of item 12 also matches a run of item 12-r2, whose tail is not a number: only a numbered id is an attempt of this item.
@@ -137,10 +136,10 @@ func scopeOutput(step dbos.StepInfo) scopeRead {
 }
 
 // readClosing reads the closing issues of the pull request of the item, sorted and without a repeat.
-func (s *script) readClosing(ctx context.Context) (scopeRead, error) {
-	issues, found, err := s.e.deps.Forge.ClosingIssues(ctx, s.in.Project, s.in.Item)
+func (s *script) readClosing(ctx context.Context, item string) (scopeRead, error) {
+	issues, found, err := s.e.deps.Forge.ClosingIssues(ctx, s.in.Project, item)
 	if err != nil {
-		return scopeRead{}, fmt.Errorf("read the issues that the pull request of item %s closes: %w", s.in.Item, err)
+		return scopeRead{}, fmt.Errorf("read the issues that the pull request of item %s closes: %w", item, err)
 	}
 
 	return scopeRead{Found: found, Issues: sortedIssues(issues)}, nil
@@ -154,75 +153,117 @@ func sortedIssues(numbers []int) []int {
 	return slices.Compact(out)
 }
 
-// holdScope runs before a merge. It reads the closing issues again and refuses an issue that is new since the first review and has no owner line.
-// The read is a recorded step. A read that fails, or a pull request that is gone, refuses. A run that has fixed no scope has nothing to compare.
-// A new issue makes the run ask the owner. The answer is the owner line: it must name each new issue.
-func (s *script) holdScope(label string) error {
-	fresh, err := countedStep(s, scopeCheckStep, label, s.readFresh)
-	if err != nil {
-		return fmt.Errorf("%s of item %s: %w", scopeCheckStep, s.in.Item, err)
-	}
-
-	if len(fresh) == 0 {
-		return nil
-	}
-
-	return s.askScope(fresh)
+// scopeCheckRead is the record of the scope step of a member: the issues that its pull request closes now, that are new since its first review, and that have no owner line.
+type scopeCheckRead struct {
+	Fresh []int `json:"fresh"`
+	Then  []int `json:"then"`
 }
 
-// readFresh reads the closing issues and returns the ones that are new since the first review and have no owner line.
-// A run with no scope has nothing to compare, so it reads nothing.
-func (s *script) readFresh(ctx context.Context) ([]int, error) {
-	if !s.fixed {
-		return []int{}, nil
+// firstReview returns the issues of the first review of the item, and false when the item has none.
+// The first review of the run's own item is the scope of its gate. The first review of another item is the scope of its newest earlier run.
+func (s *script) firstReview(item string) (issues []int, known bool, err error) {
+	if item == s.in.Item {
+		return s.scope, s.fixed, nil
 	}
 
-	read, err := s.readClosing(ctx)
+	earlier, err := s.earlierScope(item)
+
+	return earlier.Issues, earlier.Found, err
+}
+
+// freshIssues reads the closing issues of the pull request of the item and returns the ones that are new since the first review and have no owner line, with the issues of the first review.
+// An item with no recorded scope has nothing to compare, so it reads nothing. A read that fails, or a pull request that is gone, is an error.
+func (s *script) freshIssues(ctx context.Context, item string) (scopeCheckRead, error) {
+	baseline, known, err := s.firstReview(item)
+	if err != nil || !known {
+		return scopeCheckRead{Fresh: []int{}, Then: []int{}}, err
+	}
+
+	read, err := s.readClosing(ctx, item)
 	if err != nil {
-		return nil, err
+		return scopeCheckRead{}, err
 	}
 
 	if !read.Found {
-		return nil, fmt.Errorf("read the issues that the pull request of item %s closes: the item has no pull request", s.in.Item)
+		return scopeCheckRead{}, fmt.Errorf("read the issues that the pull request of item %s closes: the item has no pull request", item)
 	}
 
-	return s.newIssues(read.Issues), nil
+	fresh := slices.DeleteFunc(slices.Clone(read.Issues), func(number int) bool {
+		return slices.Contains(baseline, number) || slices.Contains(s.owned[item], number)
+	})
+
+	return scopeCheckRead{Fresh: fresh, Then: baseline}, nil
 }
 
-// newIssues lists the issues that are not in the scope of the first review and have no owner line.
-func (s *script) newIssues(closing []int) []int {
-	fresh := []int{}
-
-	for _, number := range closing {
-		if !slices.Contains(s.scope, number) && !slices.Contains(s.owned, number) {
-			fresh = append(fresh, number)
-		}
-	}
-
-	return fresh
-}
-
-// askScope asks the owner about the new issues. The answer is the owner line: it names every issue to keep.
-// An issue that the answer does not name refuses the merge, and the error says how to add the line.
-func (s *script) askScope(fresh []int) error {
-	question := fmt.Sprintf("The pull request of item %s closes %s now, and did not at its first review (then: %s). Answer in the form \"keep #N[, #N ...]\", for example \"keep %s\". Any other answer stops the merge.",
-		s.in.Item, issueList(fresh), issueList(s.scope), strings.Join(strings.Fields(issueList(fresh)), ", "))
-
-	answer, err := s.e.waitOwner(s.ctx, s.in.Item, question)
+// holdScope runs before the merge of a member. A new issue makes the run ask the owner, and the answer is the owner line: it must name each new issue.
+// It returns the reason to refuse the member, or an empty text when the member may merge. The read is a recorded step of the member.
+func (b *batchBase) holdScope(m batch.Member) (string, error) {
+	read, err := b.recordedFresh(m)
 	if err != nil {
-		return err
+		return "", fmt.Errorf("scope check of item %s: %w", m.Item, err)
 	}
 
+	if len(read.Fresh) == 0 {
+		return "", nil
+	}
+
+	answer, err := b.s.e.waitOwner(b.s.ctx, b.s.in.Project, b.s.in.Item, b.scopeQuestion(m.Item, read.Fresh, read.Then))
+	if err != nil {
+		return "", err
+	}
+
+	return b.judge(m.Item, read.Fresh, answer), nil
+}
+
+// judge reads the answer of the owner. When it keeps every new issue of the member, judge remembers them and returns no reason. Otherwise it returns the reason to reject the member.
+func (b *batchBase) judge(item string, fresh []int, answer string) string {
+	if missing := unnamed(fresh, answer); len(missing) > 0 {
+		return b.scopeRefusal(item, missing)
+	}
+
+	b.keep(item, fresh)
+
+	return ""
+}
+
+// unnamed returns the issues that the answer of the owner does not keep. An answer that is not the keep form keeps none.
+func unnamed(fresh []int, answer string) []int {
 	named, _ := keptIssues(answer)
-	missing := slices.DeleteFunc(slices.Clone(fresh), func(number int) bool { return slices.Contains(named, number) })
-	if len(missing) > 0 {
-		return fmt.Errorf("%w: item %s: %s has no owner line. The accepted answer is \"keep #N[, #N ...]\", for example beehave answer %s \"keep %s\". Or remove the closing keyword",
-			errScopeRefused, s.in.Item, issueList(missing), s.in.Item, strings.Join(strings.Fields(issueList(missing)), ", "))
+
+	return slices.DeleteFunc(slices.Clone(fresh), func(number int) bool { return slices.Contains(named, number) })
+}
+
+// recordedFresh is the scope step of the member: the new issues of its pull request, recorded so a replay asks the forge nothing.
+func (b *batchBase) recordedFresh(m batch.Member) (scopeCheckRead, error) {
+	return runStep(b.s.e, b.s.ctx, b.stepName("scope", m.Item, 1), func(ctx context.Context) (scopeCheckRead, error) {
+		return b.s.freshIssues(ctx, m.Item)
+	}, dbos.WithStepMaxRetries(stepRetries))
+}
+
+// scopeQuestion is the question to the owner about the new issues of a member. It lists the issues of the first review and names the run that the answer goes to.
+func (b *batchBase) scopeQuestion(item string, fresh, then []int) string {
+	return fmt.Sprintf("The pull request of item %s closes %s now, and did not at its first review (then: %s). Answer in the form \"keep #N[, #N ...]\", for example \"keep %s\". Any other answer rejects item %s from this merge. The other members still land. Answer with beehave answer %s.",
+		item, issueList(fresh), issueList(then), keepList(fresh), item, b.s.in.Item)
+}
+
+// scopeRefusal is the reason to reject a member whose new issues have no owner line. It tells how to keep them.
+func (b *batchBase) scopeRefusal(item string, missing []int) string {
+	return fmt.Sprintf("%v: item %s: %s has no owner line, so this merge rejects it and the other members still land. To keep it, run the merge again and answer with beehave answer %s \"keep %s\". Or remove the closing keyword",
+		errScopeRefused, item, issueList(missing), b.s.in.Item, keepList(missing))
+}
+
+// keepList shows issue numbers as "#12, #13", the list of the keep form.
+func keepList(numbers []int) string {
+	return strings.Join(strings.Fields(issueList(numbers)), ", ")
+}
+
+// keep remembers the issues that the owner kept for a member, so a later merge call of the same member in this run asks no second question.
+func (b *batchBase) keep(item string, issues []int) {
+	if b.s.owned == nil {
+		b.s.owned = map[string][]int{}
 	}
 
-	s.owned = append(s.owned, fresh...)
-
-	return nil
+	b.s.owned[item] = append(b.s.owned[item], issues...)
 }
 
 // keptIssues returns the issue numbers of an owner line in the form "keep #N[, #N ...]". Any other text, or a number too large for int, gives false.

@@ -13,6 +13,9 @@ SCRIPTS = UPKEEP_FOLDER + "/scripts/"
 FIX_ATTEMPTS = 2
 RETRY_ASKS = 2
 RED_TIMEOUT = env("RED_TIMEOUT", default = "72h")
+# The push runs the git hooks of the repository, which are code of the repository and not of this example. A hook that starts processes without end
+# stops at this many new processes, and the step fails with a line that names the cap.
+PR_MAX_PROCESSES = 512
 TIMEOUT = struct(SCRIPT = "10m", UPDATE = "20m", FIX = "20m", PR = "5m")
 OUTCOME = struct(OPENED = "opened", SKIPPED = "skipped", RED = "red", ERROR = "error")
 STATUS = struct(CLOSED = "closed", HOLD = "hold")
@@ -98,7 +101,7 @@ def pull_request_text(job, table, attempts):
 
 def publish(job, attempts):
     text = pull_request_text(job, job.table, attempts)
-    pr = sh("pr", "pr.sh", [job.repo, job.week, job.fingerprint, job.base], stdin = text, timeout = TIMEOUT.PR)
+    pr = command(name = "pr", run = ["sh", SCRIPTS + "pr.sh", job.repo, job.week, job.fingerprint, job.base], stdin = text, timeout = TIMEOUT.PR, max_new_processes = PR_MAX_PROCESSES)
     if pr.rc != 0:
         return stop(OUTCOME.ERROR, "the push or the pull request failed", STATUS.HOLD)
     return stop(OUTCOME.OPENED, pr.stdout.strip(), STATUS.CLOSED)

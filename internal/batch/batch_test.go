@@ -367,7 +367,7 @@ func TestRun_OldGitFailsBeforeAnyStep(t *testing.T) {
 
 	_, err := Run(context.Background(), w.deps(), members("a"))
 
-	require.EqualError(t, err, "git 2.38 or newer is needed for batch_merge; found 2.30. Upgrade git on the gate host")
+	require.EqualError(t, err, "git 2.38 or newer is needed for merge; found 2.30. Upgrade git on the gate host")
 	assert.Empty(t, w.store.names)
 }
 

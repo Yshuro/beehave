@@ -56,7 +56,7 @@ const loopFlow = "load(\"@beehave//review_fix.star\", \"review_fix\")\n\n" +
 	"    return pipeline(item)\n\n" +
 	"def pipeline(item):\n" +
 	"    host_up(name = \"start\", host = \"gpu-b\")\n" +
-	"    impl = agent(name = \"implement\", lane = \"fix\", prompt = \"prompts/a.md\", model = \"sonnet\")\n" +
+	"    impl = agent(name = \"implement\", prompt = \"prompts/a.md\", model = \"sonnet\")\n" +
 	"    loop = review_fix(item, impl, \"prompts/a.md\", \"prompts/a.md\", base = \"main\", rounds = 2, steps = " + loopSteps + ")\n" +
 	"    return {\"approved\": loop.review != None and loop.review.verdict == \"approve\", \"host_losses\": loop.host_losses, \"host_lost\": loop.host_lost, \"held\": loop.held}\n"
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,7 +20,7 @@ import (
 	"github.com/tobocop2/beehave/internal/proc"
 )
 
-// The batch scripts run batch_merge in a real beehave process over a real git repository (the folder "tree" of the work folder) and a forge that lives in files.
+// The batch scripts run merge in a real beehave process over a real git repository (the folder "tree" of the work folder) and a forge that lives in files.
 // The pull request of the item mN is number N, on the branch mN. A merge on this forge makes a real merge commit on the branch main of the repository,
 // writes the file forge/merged-N, and adds a line to forge/calls.log. When the file forge/crash-after holds a number, the process exits right after the merge with that count,
 // once: the file forge/crashed stops the second exit. The exit comes before the engine records the merge step, as a power loss does.
@@ -136,7 +137,7 @@ func (f fileForge) PRView(ctx context.Context, pr int, _ ...string) (model.PullR
 	}
 
 	row := map[string]any{
-		"number": pr, "state": "OPEN", "isDraft": false, "baseRefName": "main", "headRefName": "m" + strconv.Itoa(pr),
+		"number": pr, "state": "OPEN", "isDraft": f.isDraft(pr), "baseRefName": "main", "headRefName": "m" + strconv.Itoa(pr),
 		"headRefOid": head, "mergeable": "MERGEABLE", "body": "text", "author": map[string]any{"login": "dev"},
 		"files":   []any{map[string]any{"path": "f" + strconv.Itoa(pr) + ".txt"}},
 		"commits": []any{map[string]any{"oid": head, "messageHeadline": "add", "messageBody": "", "authors": []any{map[string]any{"email": "dev@x", "login": "dev"}}}},
@@ -240,22 +241,47 @@ func (f fileForge) MergePR(ctx context.Context, pr int, sha string) error {
 		return err
 	}
 
-	log, err := os.OpenFile(f.path("calls.log"), os.O_APPEND|os.O_CREATE|os.O_RDWR, e2eFileMode)
-	if err != nil {
-		return err
-	}
-
-	if _, err := fmt.Fprintf(log, "MergePR %d %s\n", pr, sha); err != nil {
-		return errJoin(err, log.Close())
-	}
-
-	if err := log.Close(); err != nil {
+	if err := f.logCall("MergePR %d %s", pr, sha); err != nil {
 		return err
 	}
 
 	f.crashAfter()
 
 	return nil
+}
+
+// logCall adds a line to the log of the calls that the forge got.
+func (f fileForge) logCall(format string, args ...any) error {
+	log, err := os.OpenFile(f.path("calls.log"), os.O_APPEND|os.O_CREATE|os.O_RDWR, e2eFileMode)
+	if err != nil {
+		return err
+	}
+
+	if _, err := fmt.Fprintf(log, format+"\n", args...); err != nil {
+		return errJoin(err, log.Close())
+	}
+
+	return log.Close()
+}
+
+// isDraft says whether the file draft-N exists: the pull request N is a draft.
+func (f fileForge) isDraft(pr int) bool {
+	_, err := os.Stat(f.path("draft-" + strconv.Itoa(pr)))
+
+	return err == nil
+}
+
+// SetDraft makes the pull request a draft by making the file draft-N, or ready for review by removing it. The call goes into the log.
+func (f fileForge) SetDraft(_ context.Context, pr int, draft bool) error {
+	if err := f.logCall("SetDraft %d %t", pr, draft); err != nil {
+		return err
+	}
+
+	if draft {
+		return os.WriteFile(f.path("draft-"+strconv.Itoa(pr)), nil, e2eFileMode)
+	}
+
+	return os.Remove(f.path("draft-" + strconv.Itoa(pr)))
 }
 
 // crashAfter exits the process when the number of merges is the number in the crash file, once.
@@ -283,7 +309,7 @@ func (f fileForge) crashAfter() {
 
 // batchStar is the workflow of the batch scripts. The heads are the commits of the branches m1 to m3 of the repository.
 const batchStar = `def main(item):
-    done = batch_merge(
+    done = merge(
         name = "all",
         base = "main",
         repo = "example/shop",
@@ -296,7 +322,20 @@ const batchStar = `def main(item):
         fail("the batch did not land all three: merged=%%s rejected=%%s deferred=%%s" %% (done.merged, done.rejected, done.deferred))
 `
 
-// cmdBatchSetup is "batchsetup": it makes the repository with the branches m1 to m3, the forge folder, and the workflow file flow/batch.star.
+// handStar is the workflow of the hand-off script: the owner lands the pull request of the branch m1, whose head is the one given.
+const handStar = `def main(item):
+    out = merge(
+        name = "ask",
+        base = "main",
+        repo = "example/shop",
+        hand_off = True,
+        prs = [struct(item = "m1", head = %q)],
+    )
+    if out.merged != ["m1"] or out.rejected or out.moved:
+        fail("the owner did not land m1: merged=%%s rejected=%%s moved=%%s" %% (out.merged, out.rejected, out.moved))
+`
+
+// cmdBatchSetup is "batchsetup": it makes the repository with the branches m1 to m3, the forge folder, and the workflow files flow/batch.star and flow/handoff.star.
 func cmdBatchSetup(ts *testscript.TestScript, _ bool, _ []string) {
 	work := ts.Getenv(e2eDirVariable)
 	run := func(args ...string) string {
@@ -313,6 +352,8 @@ func cmdBatchSetup(ts *testscript.TestScript, _ bool, _ []string) {
 
 	var members strings.Builder
 
+	first := ""
+
 	for i := 1; i <= e2eMembers; i++ {
 		name := "m" + strconv.Itoa(i)
 		file := "f" + strconv.Itoa(i) + ".txt"
@@ -321,10 +362,14 @@ func cmdBatchSetup(ts *testscript.TestScript, _ bool, _ []string) {
 		ts.Check(os.WriteFile(filepath.Join(work, "tree", file), []byte(name+"\n"), e2eFileMode))
 		run("add", file)
 		run("commit", "-q", "-m", "add "+file)
-		fmt.Fprintf(&members, "            struct(item = %q, head = %q),\n", name, run("rev-parse", "HEAD"))
+		head := run("rev-parse", "HEAD")
+		fmt.Fprintf(&members, "            struct(item = %q, head = %q),\n", name, head)
+		first = cmp.Or(first, head)
+
 		run("checkout", "-q", "main")
 	}
 
 	ts.Check(os.MkdirAll(filepath.Join(work, e2eForgeFolder), e2eFolderMode))
+	ts.Check(os.WriteFile(filepath.Join(work, "flow", "handoff.star"), []byte(fmt.Sprintf(handStar, first)), e2eFileMode))
 	ts.Check(os.WriteFile(filepath.Join(work, "flow", "batch.star"), []byte(fmt.Sprintf(batchStar, filepath.Join(work, e2eForgeFolder, "gate.log"), members.String())), e2eFileMode))
 }

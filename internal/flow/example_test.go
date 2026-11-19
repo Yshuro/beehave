@@ -19,6 +19,7 @@ import (
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/review"
+	"github.com/tobocop2/beehave/internal/workflow"
 )
 
 func mustRead(t *testing.T, path string) []byte {
@@ -153,7 +154,7 @@ func exampleRigLimited(t *testing.T, verdicts, findings, mechanisms func(review 
 	folder := t.TempDir()
 	require.NoError(t, os.CopyFS(folder, os.DirFS(filepath.Join("..", "..", "examples", "remediation"))))
 
-	skill := exampleSkill(t, folder)
+	skill := exampleSkill(t)
 
 	rig := newAgentRig(t)
 	rig.h.mutation = exampleMutationCommand
@@ -200,7 +201,7 @@ func (rig *agentRig) answerLikeTheExample(skill string, verdicts, findings, mech
 					mechanism = `"mechanism":"` + mechanisms(reviews) + `",`
 				}
 
-				rig.put(path, `{"verdict":"`+verdict+`",`+mechanism+`"regressions":"0","findings":`+findings(reviews)+`}`)
+				rig.put(path, `{"verdict":"`+verdict+`",`+mechanism+`"regressions":"0","open":"`+openOf(findings(reviews))+`","findings":`+findings(reviews)+`}`)
 			}
 		}
 
@@ -233,15 +234,23 @@ func putNoParked(rig *agentRig, request AgentRequest) {
 	}
 }
 
-// exampleSkill returns the one skill that an agent of the example requires.
-func exampleSkill(t *testing.T, folder string) string {
+// exampleSkill is the one skill that the implement step of the example must call. The test reads it from the workflow file, which is the one place that names it.
+func exampleSkill(t *testing.T) string {
 	t.Helper()
 
-	skills, err := dryRequiredSkills(filepath.Join(folder, "workflow.star"))
-	require.NoError(t, err)
-	require.Len(t, skills, 1)
+	skills := workflow.RequiredSkills(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
+	require.Len(t, skills, 1, "the example checks for one skill")
 
 	return skills[0]
+}
+
+// openOf is the output open that a review writes for a list of findings: empty for none, else a line.
+func openOf(findings string) string {
+	if findings == "[]" {
+		return ""
+	}
+
+	return "an open finding"
 }
 
 func (r *agentRig) models() []string {
@@ -505,7 +514,7 @@ func TestReviewFix_TheFollowUpsArgumentReachesTheReviewAndTheDefaultAllowsThem(t
 	}
 }
 
-func TestReviewFix_TheStatusShowsTheRoundsUsedAgainstTheCapsOfTheLoop(t *testing.T) {
+func TestReviewFix_TheStatusShowsTheLabelOfTheLastReviewWithItsRoundAgainstTheCapOfTheLoop(t *testing.T) {
 	t.Parallel()
 
 	rig, file := exampleRigWithFindings(t, func(int) string { return "approve" }, func(review int) string {
@@ -523,8 +532,7 @@ func TestReviewFix_TheStatusShowsTheRoundsUsedAgainstTheCapsOfTheLoop(t *testing
 
 	info := onlyRun(t, rig.h.client(t, testVersion))
 
-	assert.Equal(t, Rounds{Used: 1, Cap: 12}, info.Fix, "a loop of 4 candidates has at most 3 scoped fixes for each")
-	assert.Equal(t, Rounds{Used: 3, Cap: 16}, info.Review, "two scoped reviews and the full review; each candidate has at most 3 scoped reviews and a full review")
+	assert.Equal(t, "review 3/16", info.Label, "two scoped reviews and the full review; each candidate has at most 3 scoped reviews and a full review")
 }
 
 // capModels is the models of the loop of a run of the example whose every review asks for changes, up to a cap of the given candidates.

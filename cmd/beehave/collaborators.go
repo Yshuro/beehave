@@ -868,7 +868,7 @@ func (p pulls) numberOf(ctx context.Context, built opened, item string) (opened,
 		}
 	}
 
-	return opened{}, 0, fmt.Errorf("%w: no pull request is on the branch %s", forge.ErrNoPull, item)
+	return built, 0, fmt.Errorf("%w: no pull request is on the branch %s", forge.ErrNoPull, item)
 }
 
 // listed returns the number of the one pull request in the state on the branch of the item, or 0 when there is none.
@@ -897,38 +897,6 @@ func (p pulls) Pull(ctx context.Context, project, item string) (review.Standing,
 	}
 
 	return review.Pull(ctx, built, number), nil
-}
-
-// Reviewed reads the standing as Pull does, then lets a review of the commit reviewed stand for a head that holds the same tree.
-func (p pulls) Reviewed(ctx context.Context, project, item, reviewed string) (review.Standing, error) {
-	built, number, err := p.find(ctx, project, item)
-	if err != nil {
-		return review.Standing{}, err
-	}
-
-	standing := review.Pull(ctx, built, number)
-	standing.Compare(ctx, built, reviewed)
-
-	return standing, nil
-}
-
-// Ready takes the pull request of the item out of draft. It reads the draft state first and makes no call for a pull request that is ready, so a step that runs again changes nothing.
-func (p pulls) Ready(ctx context.Context, project, item string) error {
-	built, number, err := p.find(ctx, project, item)
-	if err != nil {
-		return err
-	}
-
-	view, err := built.PRView(ctx, number, "isDraft")
-	if err != nil {
-		return err
-	}
-
-	if view.IsDraft != nil && !*view.IsDraft {
-		return nil
-	}
-
-	return built.SetDraft(ctx, number, false)
 }
 
 // ClosingIssues reads the issues that merging the pull request of the item closes, as the forge lists them.
@@ -960,53 +928,6 @@ func (p pulls) Comment(ctx context.Context, project, item, key, text string) (in
 	}
 
 	return number, forge.PostOnce(ctx, built, number, key, text)
-}
-
-// Assign assigns the pull request of the item to a login. With linked it then assigns each issue that merging the pull request closes, as the forge lists them.
-// An assignee that the forge already holds changes nothing, so a repeated call is safe. A project with no forge and an item with no pull request are errors.
-func (p pulls) Assign(ctx context.Context, project, item, assignee string, linked bool) (int, []int, error) {
-	built, number, err := p.find(ctx, project, item)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	if err := built.AddAssignee(ctx, number, assignee); err != nil {
-		return number, nil, err
-	}
-
-	if !linked {
-		return number, nil, nil
-	}
-
-	issues, err := assignClosing(ctx, built, number, assignee)
-
-	return number, issues, err
-}
-
-// assignClosing assigns each issue that merging the pull request closes, and returns their numbers.
-func assignClosing(ctx context.Context, built forge.Forge, number int, assignee string) ([]int, error) {
-	refs, err := built.ClosingRefs(ctx, number)
-	if err != nil {
-		return nil, fmt.Errorf("read the issues that pull request %d closes: %w", number, err)
-	}
-
-	for _, issue := range refs.Issues {
-		if err := built.AddAssignee(ctx, issue, assignee); err != nil {
-			return nil, err
-		}
-	}
-
-	return refs.Issues, nil
-}
-
-// Watch reads the pull request once.
-func (p pulls) Watch(ctx context.Context, project string, pr int) (review.Outcome, error) {
-	built, err := p.forgeOf(project)
-	if err != nil {
-		return review.Outcome{}, err
-	}
-
-	return review.Watch(ctx, built, pr)
 }
 
 // Merge merges the pull request of the item at head, through the guards of the merge package and the settings of the merge step.
@@ -1232,16 +1153,6 @@ func (p pulls) target(ctx context.Context, project, item, repo string) (opened, 
 	}
 
 	return p.numberOf(ctx, built, item)
-}
-
-// SetDraft sets or clears the draft state of the pull request.
-func (p pulls) SetDraft(ctx context.Context, project string, pr int, draft bool) error {
-	built, err := p.forgeOf(project)
-	if err != nil {
-		return err
-	}
-
-	return built.SetDraft(ctx, pr, draft)
 }
 
 // leases takes, renews and gives back the claim of an item in the claim store of its project.

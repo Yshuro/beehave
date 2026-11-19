@@ -59,12 +59,6 @@ const ofKeyword = "of"
 // ItemTargets lists the values of the of argument of an item_read call: the item of the run, or its parent.
 func ItemTargets() []string { return []string{"self", "parent"} }
 
-// ChildrenValues lists the values of the children argument of a merge call.
-func ChildrenValues() []string { return []string{"refuse", "retarget"} }
-
-// ForeignModes lists the values of the foreign argument of a preflight call.
-func ForeignModes() []string { return []string{"review"} }
-
 // ForbidKinds lists the values that an element of the forbid_commands argument takes: the names of the finding kinds.
 // The check and the run both read it.
 func ForbidKinds() []string { return model.FindingKindNames() }
@@ -263,11 +257,26 @@ func inputsRule(v starlark.Value) error {
 	return err
 }
 
-func allowRule(v starlark.Value) error {
-	_, _, err := AllowPaths(v)
+// pathsOutsideRule is the rule of the allow keyword of paths_outside.
+func pathsOutsideRule(v starlark.Value) error {
+	_, err := PathsOutsideAllow(v)
 
 	return err
 }
+
+// allowRule is the rule of allow_paths of agent, a list of globs of the agent scope.
+func allowRule(v starlark.Value) error {
+	_, _, err := AllowList("allow_paths", v)
+
+	return err
+}
+
+// The builtins that match text and record no step.
+const (
+	pathsOutsideName      = "paths_outside"
+	closingReferencesName = "closing_references"
+	allowWord             = "allow"
+)
 
 func one(name string, values []string) Param {
 	return Param{Name: name, Kind: KindText, Values: values}
@@ -289,20 +298,16 @@ func signatures() map[string][]Param {
 func agentParams() []Param {
 	return []Param{
 		req("prompt", KindText), req("model", KindText), opt("runner", KindText), ruled("inputs", KindDict, inputsRule), words("outputs"),
-		opt("pin", KindText), opt("resume", KindText), words("require_skills"),
+		opt("pin", KindText), opt("resume", KindText),
 		{Name: "forbid_commands", Kind: KindList, Each: ForbidKinds()},
 		ruled("allow_paths", KindList, allowRule), words("protect_paths"), ruled("output_tries", KindInt, triesRule),
-		opt("edits", KindBool), one("follow_ups", FollowUpModes()), one("kind", AgentKinds()), one("lane", Lanes()), ruled("timeout", KindText, durationRule("timeout")),
+		opt("edits", KindBool), opt(LabelKeyword, KindText), ruled("timeout", KindText, durationRule("timeout")),
 		ruled("idle_timeout", KindText, durationRule("idle_timeout")), ruled(budgetKeyword, KindAny, budgetRule(budgetKeyword)), opt(sandboxKeyword, KindAny), opt(nameKeyword, KindText),
-		ruled(RoundsKeyword, KindAny, roundsRule),
 	}
 }
 
-func roundsRule(v starlark.Value) error {
-	_, err := Rounds(v)
-
-	return err
-}
+// LabelKeyword is the keyword of the agent builtin that names the call in the ledger and the status line. It is free text and never picks behavior.
+const LabelKeyword = "label"
 
 // writeParams holds the keywords of the write builtin: the keywords of command that make sense for a program on this machine, and its read-back and undo.
 func writeParams() []Param {
@@ -320,7 +325,7 @@ func runParam() Param {
 // runWord is the keyword that names the program of a call.
 const runWord = "run"
 
-// treeKeyword is the keyword of merge that carries the tree that the gate recorded, and the name of that field in a result.
+// treeKeyword is the name of the tree field in the result of gate and merge.
 const treeKeyword = "tree"
 
 // processCap is the keyword max_new_processes of command. The run reads it as a value, so a None reaches the check of the hostWithCap pair.
@@ -335,6 +340,9 @@ func valueSignatures() map[string][]Param {
 		"env":     {req(nameKeyword, KindText), {Name: "default", Kind: KindText, AsValue: true}},
 		"now":     {},
 		factsName: {},
+		// The two matchers judge text and run no step. They read the dialect of the agent scope and the grammar of the merge guard.
+		pathsOutsideName:      {{Name: "allow", Kind: KindList, Required: true, Rule: pathsOutsideRule}, {Name: "paths", Kind: KindList, Required: true, Rule: wordsRule("paths")}},
+		closingReferencesName: {req("text", KindText)},
 	}
 }
 
@@ -344,7 +352,7 @@ func stepSignatures() map[string][]Param {
 
 	return map[string][]Param{
 		agentName:   agentParams(),
-		sandboxName: {ruled("network", KindList, networkRule), ruled("allow_write", KindList, writableRule)},
+		sandboxName: {ruled("network", KindList, networkRule)},
 		commandName: {
 			runParam(),
 			opt("host", KindText), opt("stdin", KindText), ruled("env", KindDict, envRule),
@@ -366,10 +374,10 @@ func swarmSignatures() map[string][]Param {
 	label := opt(nameKeyword, KindText)
 
 	return map[string][]Param{
-		batchMergeName: {
+		mergeName: {
 			{Name: "prs", Kind: KindList, Required: true, Rule: prsRule, Members: true},
 			filled("base"), filled("repo"), opt("hold", KindText), ruled("own", KindDict, ownRule),
-			forbidText(), words("gate_run"), opt("integration", KindInt),
+			forbidText(), words("gate_run"), opt("integration", KindInt), opt("hand_off", KindBool),
 			{Name: nameKeyword, Kind: KindText, Required: true, Why: "The name makes the step names of the call unique, so use one for each call of the run."},
 		},
 		gatherName: {req("runs", KindAny), one(failKeyword, FailModes()), one(untilKeyword, UntilModes()), label},
@@ -381,9 +389,8 @@ func swarmSignatures() map[string][]Param {
 // readSignatures holds the builtins that read the tracker, the forge or the item folder.
 func readSignatures() map[string][]Param {
 	return map[string][]Param{
-		itemReadName:     {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
-		prStateName:      {req("pr", KindInt), opt(nameKeyword, KindText)},
-		beforeReviewName: {filled("base"), filled("head"), ruled("allow", KindList, allowRule), opt("integration", KindBool), opt(nameKeyword, KindText)},
+		itemReadName: {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
+		prStateName:  {req("pr", KindInt), opt(nameKeyword, KindText)},
 	}
 }
 
@@ -392,22 +399,14 @@ func itemSignatures() map[string][]Param {
 	label := opt(nameKeyword, KindText)
 
 	return map[string][]Param{
-		itemAssignName:  {filled("id"), filled("assignee"), label},
 		itemCommentName: {filled("id"), filled("text"), filled("key"), forbidText(), label},
 		itemCreateName: {
 			filled("title"), filled("key"), opt("body", KindText), opt("parent", KindText), opt("assignee", KindText), opt("severity", KindText), opt("operator", KindBool), forbidText(), opt("shared", KindBool), label,
 		},
 		itemStatusName: {filled("id"), {Name: statusField, Kind: KindText, Required: true, Values: StatusValues()}, label},
-		boardSyncName:  {req("board", KindInt), filled(statusField), opt("owner", KindText), opt("issue", KindInt), label},
-		prAssignName:   {filled("assignee"), opt("linked", KindBool), label},
 		prCommentName:  {filled("text"), filled("key"), forbidText(), opt("integration", KindBool), label},
 		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), opt("integration", KindBool), label},
-		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), one("foreign", ForeignModes()), label},
-		mergeName: {
-			req("head", KindText), opt("repo", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("approved", KindBool),
-			{Name: treeKeyword, Kind: KindText, AsValue: true},
-			opt("steps", KindList), forbidText(), one("children", ChildrenValues()), opt("merge", KindBool), label,
-		},
+		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), label},
 	}
 }
 
@@ -558,54 +557,32 @@ func (g *graph) pairs(call *syntax.CallExpr, builtin string, params []Param) {
 	case commandName:
 		g.hostWithCap(call, params)
 		g.hostWithSlots(call, params)
-	case mergeName:
-		g.proof(call, params)
 	case waitName:
 		g.asking(call, params)
+	case mergeName:
+		g.handingOff(call, params)
 	}
 }
 
-// proof checks the tree and steps arguments of a merge call with the rules of the run. The run reads them only when the call sets merge to True,
-// so the check does the same. An empty list of steps is reported by mergeNeedsSteps, and a value of the wrong kind by the kind check.
-func (g *graph) proof(call *syntax.CallExpr, params []Param) {
-	if merges, isIdent := paramArg(call, params, "merge").(*syntax.Ident); !isIdent || merges.Name != trueName {
+// handingOff refuses a keyword of a landing on a merge call whose hand_off is the literal True, as the run does. A flag that only the run knows is left to the run.
+func (g *graph) handingOff(call *syntax.CallExpr, params []Param) {
+	flag, isName := paramArg(call, params, "hand_off").(*syntax.Ident)
+	if !isName || flag.Name != trueName {
 		return
 	}
 
-	if tree := paramArg(call, params, treeKeyword); tree != nil && g.proofFits(tree, KindText) {
-		_, err := GatedTree(g.literal(tree))
-		g.proofError(tree, err)
-	}
+	for _, keyword := range HandOffLanding() {
+		if paramArg(call, params, keyword) != nil {
+			g.reportRule(call, HandOffTakes(keyword))
 
-	if steps := paramArg(call, params, "steps"); steps != nil && !emptyList(steps) && g.proofFits(steps, KindList) {
-		g.proofError(steps, GateSteps(g.literal(steps)))
+			return
+		}
 	}
 }
 
 // paramArg returns the expression of the keyword of a call, found by the place of the keyword in the signature. It is nil when the call leaves it out.
 func paramArg(call *syntax.CallExpr, params []Param, keyword string) syntax.Expr { //nolint:ireturn // the syntax tree of starlark-go holds expressions as an interface
 	return argument(call, keyword, slices.IndexFunc(params, func(p Param) bool { return p.Name == keyword }))
-}
-
-// proofFits reports whether an argument is a literal of the kind, or None.
-func (g *graph) proofFits(arg syntax.Expr, kind Kind) bool {
-	value, ok := literalValue(arg)
-
-	return ok && (value == starlark.None || kindOf(arg) == kind)
-}
-
-// literal returns the value of an argument that proofFits accepted.
-func (g *graph) literal(arg syntax.Expr) starlark.Value { //nolint:ireturn // the value is any of the Starlark types
-	value, _ := literalValue(arg)
-
-	return value
-}
-
-// proofError reports an error of the run for an argument of a merge call.
-func (g *graph) proofError(arg syntax.Expr, err error) {
-	if err != nil {
-		g.report(placeOf(syntax.Start(arg)), mergeName+": "+err.Error()+".")
-	}
 }
 
 // hostWithCap checks max_new_processes of a command call with the rule of the run and the real pair of values the run passes it: the value and
@@ -751,38 +728,6 @@ func textList(value syntax.Expr) (texts []string, ok bool) {
 	}
 
 	return texts, true
-}
-
-// mergeNeedsSteps reports a merge call that can merge and names no gate steps: it leaves out `steps` or passes an empty list literal.
-// A call that sets `merge` to False, or leaves `merge` out, is an owner merge and needs none. A computed `merge` can be True, so it needs them.
-func (g *graph) mergeNeedsSteps(call *syntax.CallExpr, params []Param) {
-	if splat(call) {
-		return
-	}
-
-	merges := paramArg(call, params, "merge")
-	if ident, isIdent := merges.(*syntax.Ident); merges == nil || (isIdent && ident.Name == falseName) {
-		return
-	}
-
-	steps := paramArg(call, params, "steps")
-	if steps != nil && !emptyList(steps) {
-		return
-	}
-
-	g.report(placeOf(call.Lparen), "merge needs the gate steps when it merges. Add steps = <gate>.steps to the call, or set merge = False and the owner merges.")
-}
-
-// emptyList reports whether an expression is a list or a tuple literal with no item.
-func emptyList(expr syntax.Expr) bool {
-	switch e := expr.(type) {
-	case *syntax.ListExpr:
-		return len(e.List) == 0
-	case *syntax.TupleExpr:
-		return len(e.List) == 0
-	}
-
-	return false
 }
 
 // value checks one literal against the closed set and the kind of its keyword.

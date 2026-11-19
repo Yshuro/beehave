@@ -39,7 +39,7 @@ func TestCheck_AcceptsASandboxCallANoneAndALeftOutKeyword(t *testing.T) {
 	t.Parallel()
 
 	for _, body := range []string{
-		`agent(prompt = "p", model = "m", sandbox = sandbox(network = ["api.example.org"], allow_write = ["out"]))`,
+		`agent(prompt = "p", model = "m", sandbox = sandbox(network = ["api.example.org"]))`,
 		`agent(prompt = "p", model = "m", sandbox = sandbox())`,
 		`agent(prompt = "p", model = "m", sandbox = None)`,
 		`agent(prompt = "p", model = "m")`,
@@ -63,7 +63,7 @@ func TestCheck_ReportsASandboxValueThatIsNotASandboxCallOrNone(t *testing.T) {
 func TestCheck_LeavesANonLiteralSandboxListAndASplatCallToTheRun(t *testing.T) {
 	t.Parallel()
 
-	assert.Empty(t, problemsOf(t, `sandbox(network = list(str(item)), allow_write = ["out"])`))
+	assert.Empty(t, problemsOf(t, `sandbox(network = list(str(item)))`))
 	assert.Empty(t, problemsOf(t, `sandbox(**dict(network = []))`))
 	assert.Empty(t, problemsOf(t, `sandbox(network = [str(item), "ok.example.org"])`))
 	assert.Empty(t, problemsOf(t, `sandbox(["api.example.org"])`), "a positional list is checked like a keyword list")
@@ -73,19 +73,18 @@ func TestCheck_LeavesANonLiteralSandboxListAndASplatCallToTheRun(t *testing.T) {
 func TestCheck_ReportsASandboxCallWithAnUnknownKeywordOrTheWrongKind(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, problemsOf(t, `sandbox(read = [])`)[0], "sandbox takes no argument read. Use one of: network, allow_write.")
+	assert.Contains(t, problemsOf(t, `sandbox(read = [])`)[0], "sandbox takes no argument read. Use one of: network.")
+	assert.Contains(t, problemsOf(t, `sandbox(allow_write = ["out"])`)[0], "sandbox takes no argument allow_write. Use one of: network.")
 	assert.Contains(t, problemsOf(t, `sandbox(network = "api.example.org")`)[0], "network must be a list, not a text.")
-	assert.Contains(t, problemsOf(t, `sandbox(allow_write = "out")`)[0], "allow_write must be a list, not a text.")
 }
 
-func TestCheck_ReportsALiteralNetworkEntryThatIsNoDomainAndALiteralPathWithAParentReference(t *testing.T) {
+func TestCheck_ReportsALiteralNetworkEntryThatIsNoDomain(t *testing.T) {
 	t.Parallel()
 
-	got := problemsOf(t, `sandbox(network = ["https://example.org", "ok.example.org"], allow_write = ["../up", "out"])`)
+	got := problemsOf(t, `sandbox(network = ["https://example.org", "ok.example.org"])`)
 
-	require.Len(t, got, 2)
+	require.Len(t, got, 1)
 	assert.Contains(t, got[0], `sandbox network lists "https://example.org", which is not a domain name`)
-	assert.Contains(t, got[1], `sandbox allow_write lists "../up"`)
 }
 
 func TestCheck_ALocalFunctionNamedSandboxIsNotTheBuiltin(t *testing.T) {
@@ -149,7 +148,6 @@ func TestSignature_TheAgentTakesTheSandboxKeywordAndTheSandboxBuiltinHasItsOwnSi
 
 	box, ok := workflow.Signature("sandbox")
 	require.True(t, ok)
-	require.Len(t, box, 2)
+	require.Len(t, box, 1)
 	assert.Equal(t, "network", box[0].Name)
-	assert.Equal(t, "allow_write", box[1].Name)
 }

@@ -348,9 +348,9 @@ func TestProvenLoss_ALossThatCannotBeRecordedFailsTheGateCallAndGivesNoOutputs(t
 func TestBatchResult_ALossRecordThatAWorkflowCannotHoldFailsTheResult(t *testing.T) {
 	t.Parallel()
 
-	_, err := batchResult(batch.Result{}, batch.Report{}, nil, []hostLoss{{Loss: func() {}}})
+	_, err := batchResult(batch.Result{}, batch.Report{}, nil, []hostLoss{{Loss: func() {}}}, nil)
 
-	require.ErrorContains(t, err, "the host loss records of batch_merge: ")
+	require.ErrorContains(t, err, "the host loss records of merge: ")
 }
 
 func TestBatchGate_AGateRunProgramIsOneStepAndSubmitsNoHostJob(t *testing.T) {

@@ -38,6 +38,7 @@ wait
 exec beehavereal run req-1 approvals --workflow ops/workflow.star &
 waitstatus 'The deadline passed'
 exec beehavereal answer req-1 --as rita extend
+exec beehavereal answer req-1 --as raj extend
 exec signoff sam security approve req-1 msa
 exec signoff pat product approve req-1 msa
 wait
@@ -52,7 +53,7 @@ grep -count=1 '^remind-req-1-2 ' notices.log
 exec sh -c 'grep -n -e "^remind-req-1-1 " -e "^remind-req-1-2 " -e "^escalate-req-1 " notices.log | cut -d: -f2 | cut -d" " -f1 | tr "\n" " "'
 stdout '^remind-req-1-1 remind-req-1-2 escalate-req-1 $'
 exec sh -c 'sh ops/scripts/audit.sh req-1 - $(jq -r .head home/.approval/certs/req-1.json)'
-stdout -count=1 '\textended\t'
+stdout -count=1 '\textended\traj-rita\t'
 stdout -count=1 '\topened\t'
 stdout '\tclosed\t.*\tapproved\t'
 

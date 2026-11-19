@@ -32,8 +32,6 @@ func TestBuiltins_ABadCallIsRefusedAtItsPositionAndRunsNothing(t *testing.T) {
 		{"gate run is not a list", `gate(run = "x" + "")`, "run must be a list of strings"},
 		{"agent outputs is not a list", `agent(prompt = "p", model = "m", outputs = "x" + "")`, "outputs must be a list of strings"},
 		{"agent inputs is not a dict", `agent(prompt = "p", model = "m", inputs = "x" + "")`, "inputs must be a dict, not a string"},
-		{"merge forbid_text is not a list", `merge(head = "h", forbid_text = "x" + "", name = "s")`, "forbid_text must be a list of strings"},
-		{"merge own is not a dict", `merge(head = "h", own = "x" + "", name = "s")`, "`own` must be a dict with `logins` and `emails`"},
 		{"wait has an unknown argument", `wait(nope = 1)`, "nope"},
 		{"env has no name", `env()`, "name"},
 		{"earlier_calls has no call", `earlier_calls()`, "call"},
@@ -57,6 +55,28 @@ func TestBuiltins_ABadCallIsRefusedAtItsPositionAndRunsNothing(t *testing.T) {
 			require.ErrorContains(t, err, c.want)
 			assert.Contains(t, err.Error(), "workflow.star:")
 			assert.Empty(t, h.commands.ran())
+		})
+	}
+}
+
+func TestMerge_ABadCallIsRefusedAtItsPositionAndRunsNothing(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, extra, want string }{
+		{"forbid_text is not a list", `forbid_text = "x" + "", `, "forbid_text must be a list of strings"},
+		{"own is not a dict", `own = "x" + "", `, "`own` must be a dict with `logins` and `emails`"},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newBatchRig(t)
+			_, err := rig.engine(t).RunFile(testItem, testProject, writeFlow(t, bodyFlow(rig.call("1", c.extra))))
+
+			require.ErrorContains(t, err, c.want)
+			assert.Contains(t, err.Error(), "workflow.star:")
+			assert.Empty(t, rig.h.commands.ran())
 		})
 	}
 }
@@ -219,9 +239,6 @@ func TestScript_AStepOutsideARunReportsItsError(t *testing.T) {
 
 	_, err := s.env(starlark.NewBuiltin("env", nil), starlark.Tuple{starlark.String("HOME")}, nil)
 	require.Error(t, err)
-
-	_, err = s.watchOwner("", true)
-	require.ErrorContains(t, err, "cannot show that it waits for the owner to merge")
 }
 
 func TestRunStar_AnErrorInANestedFunctionNamesTheCallInThatFunction(t *testing.T) {

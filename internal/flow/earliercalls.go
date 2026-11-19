@@ -37,7 +37,7 @@ func earlierOutputs(count int) map[string]any { return map[string]any{"count": c
 
 // countEarlier adds up the agent calls named call in every other run of the item.
 func (s *script) countEarlier(call string) (int, error) {
-	ids, err := s.earlierRuns()
+	ids, err := s.earlierRuns(s.in.Item)
 	if err != nil {
 		return 0, err
 	}

@@ -310,6 +310,15 @@ func newEngine(opts Options, deps Deps, state store, held *flock.Flock, registry
 	return engine
 }
 
+// facts is the project as the config holds it. An engine whose deps have no Facts has no facts for any project.
+func (e *Engine) facts(project string) model.Project {
+	if e.deps.Facts == nil {
+		return model.Project{}
+	}
+
+	return e.deps.Facts(project)
+}
+
 // registered returns the engine when the registration worked. When it failed, it shuts the engine down, so the folder lock and the store do not stay open.
 func (e *Engine) registered(err error) (*Engine, error) {
 	if err == nil {

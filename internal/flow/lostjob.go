@@ -215,7 +215,7 @@ func (e *Engine) askLost(ctx dbos.Context, in ExclusiveInput, call string, lost 
 
 // answerThenRead waits for the next answer of the owner, then reads the proof once in the recorded step <call>/lost-ask.<answer>.
 func (e *Engine) answerThenRead(ctx dbos.Context, in ExclusiveInput, call string, lost LostJob, answer int) (lostLook, error) {
-	if _, err := e.waitOwner(ctx, in.Item, lostQuestion(lost)); err != nil {
+	if _, err := e.waitOwner(ctx, in.Project, in.Item, lostQuestion(lost)); err != nil {
 		return lostLook{}, err
 	}
 
@@ -304,10 +304,8 @@ func (e *Engine) lostProof(ctx context.Context, project string, lost LostJob) (m
 
 // lostJobWait is host.lost_job_wait of the project as the config of this engine holds it. A project with no host block waits for the default.
 func (e *Engine) lostJobWait(project string) time.Duration {
-	if e.deps.Facts != nil {
-		if block := e.deps.Facts(project).Host; block != nil {
-			return block.LostJobWait
-		}
+	if block := e.facts(project).Host; block != nil {
+		return block.LostJobWait
 	}
 
 	return config.DefaultLostJobWait

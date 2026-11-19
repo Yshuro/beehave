@@ -54,10 +54,8 @@ type StepLine struct {
 	Seconds  float64 `json:"duration_seconds"`
 	Error    string  `json:"error,omitempty"`
 	ExitCode *int    `json:"exit_code,omitempty"`
-	// Kind is the kind of the lane of an agent step, as the ledger of the method names it: fix, rework, relay, review or design. A step that is not an agent, and an agent that an older version recorded, have none.
-	Kind string `json:"kind,omitempty"`
-	// Rounds is the cap of the loop that an agent step named with its rounds keyword. It is 0 for a step that named none.
-	Rounds int `json:"rounds,omitempty"`
+	// Label is the label keyword of an agent step: a free text. It is empty for a step that is not an agent and for an agent call that sets none.
+	Label string `json:"label,omitempty"`
 	// Login is the runner that an agent step ran on: the pool pick, or the runner that the call named. An agent that an older version recorded has none.
 	Login string `json:"login,omitempty"`
 	// Model is the model that an agent step set. It is empty for a step that sets none.
@@ -390,11 +388,13 @@ func (l *StepLine) decode(record dbos.StepInfo) bool {
 	return true
 }
 
-// decodeAgentSub takes the fields of a sub-step of an agent call: the read of a finished run, a stop at a cap, the cost record of a run whose limit step failed
+// decodeAgentSub takes the fields of a sub-step of an agent call: the render before the run, the read of a finished run, a stop at a cap, the cost record of a run whose limit step failed
 // (and of a failed run that agent module 3 or an earlier one recorded),
 // or the limit record of a run that a provider limit stopped. Any other sub-step decodes nothing.
 func (l *StepLine) decodeAgentSub(sub string, output any) bool {
 	switch {
+	case strings.HasPrefix(sub, "render"):
+		return decodeThen(output, l.fromRender)
 	case strings.HasPrefix(sub, "read"):
 		// The cost comes through the reader of the run cap, so a cost that cannot be read marks the line, and the sum of a tree, unknown.
 		l.Spend = l.Plus(recordedSpend(output))
@@ -474,9 +474,19 @@ func (l *StepLine) fromPhase(phase PhaseOutput) {
 
 	if phase.Outcome != "" {
 		l.ExitCode = &phase.ExitCode
-		l.Kind, l.Rounds = phase.Kind, phase.Rounds
-		l.Login, l.Model = phase.Login, phase.Model
 	}
+}
+
+// renderFields are the label, the login and the model that the render step of an agent call records.
+type renderFields struct {
+	Label string `json:"label"`
+	Login string `json:"login"`
+	Model string `json:"model"`
+}
+
+// fromRender takes the label, the login and the model of an agent call from its render step, which runs before the agent starts.
+func (l *StepLine) fromRender(read recorded[renderFields]) {
+	l.Label, l.Login, l.Model = read.Outputs.Label, read.Outputs.Login, read.Outputs.Model
 }
 
 // fromAgentRead takes the head, the cap that stopped the agent and the verdict from the read of its outputs.

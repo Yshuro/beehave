@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 	"time"
 
@@ -128,24 +129,6 @@ func OutputTries(n int) error {
 	return nil
 }
 
-// RoundsKeyword is the keyword of the agent builtin that names the cap of the loop that the call belongs to.
-const RoundsKeyword = "rounds"
-
-// Rounds reads the cap of a loop: a whole number of 1 or more. The status view shows the rounds used against it.
-func Rounds(v starlark.Value) (int, error) {
-	n, isInt := v.(starlark.Int)
-	if !isInt {
-		return 0, errors.New(RoundsKeyword + " must be a whole number of 1 or more")
-	}
-
-	limit, small := n.Int64()
-	if !small || limit < 1 || limit > math.MaxInt32 {
-		return 0, errors.New(RoundsKeyword + " must be a whole number of 1 or more")
-	}
-
-	return int(limit), nil
-}
-
 // StopCodes reads the stop_on_rc list. Each code must be a whole number from 1 to 255.
 func StopCodes(v starlark.Value) ([]int, error) {
 	return ListOfEach(v, func(item starlark.Value) (int, error) {
@@ -200,10 +183,12 @@ func SlotClass(v starlark.Value, host string) (string, error) {
 	return class, nil
 }
 
-// AllowPaths reads the allow_paths argument: a list of globs in the doublestar dialect. A leading `./` is dropped from each glob, because the
-// paths that git lists have none. It returns the patterns as written and the clean globs. A missing argument gives none. An empty list is refused.
-func AllowPaths(v starlark.Value) (patterns, globs []string, err error) {
-	patterns, err = Words("allow_paths", v)
+// AllowList reads the list of globs in the doublestar dialect that the keyword of the given name holds. A leading `./` is dropped from each glob,
+// because the paths that git lists have none. It returns the patterns as written and the clean globs. A missing argument gives none.
+// The agent scope and the path check of before_review read their lists with it, so one dialect holds in both: an empty list, an empty entry,
+// an absolute path, a path with a `..` part in any brace choice and a pattern that does not parse are refused, and each message names the pattern.
+func AllowList(keyword string, v starlark.Value) (patterns, globs []string, err error) {
+	patterns, err = Words(keyword, v)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -213,28 +198,119 @@ func AllowPaths(v starlark.Value) (patterns, globs []string, err error) {
 			return nil, nil, nil
 		}
 
-		return nil, nil, errors.New("allow_paths is an empty list, which would allow every path. To turn the check off, leave the keyword out")
+		return nil, nil, fmt.Errorf("%s is an empty list, which would allow every path. To turn the check off, leave the keyword out", keyword)
 	}
 
-	globs, err = cleanGlobs(patterns)
+	globs, err = cleanGlobs(keyword, patterns)
 
 	return patterns, globs, err
 }
 
-// cleanGlobs drops the leading `./` of each pattern and refuses a pattern that does not parse.
-func cleanGlobs(patterns []string) ([]string, error) {
+// PathsOutsideAllow reads the allow keyword of paths_outside. It refuses None, because a check with no scope has nothing to compare, and reads the rest as AllowList does.
+func PathsOutsideAllow(v starlark.Value) (globs []string, err error) {
+	if v == starlark.None {
+		return nil, fmt.Errorf("%s is None, which names no scope. To check no scope, leave out the call of %s", allowWord, pathsOutsideName)
+	}
+
+	_, globs, err = AllowList(allowWord, v)
+
+	return globs, err
+}
+
+// cleanGlobs drops the leading `./` of each pattern and refuses a pattern that cannot match a path of the item folder, or that does not parse.
+func cleanGlobs(keyword string, patterns []string) ([]string, error) {
 	globs := make([]string, 0, len(patterns))
 
 	for _, pattern := range patterns {
 		clean := strings.TrimPrefix(pattern, "./")
-		if !doublestar.ValidatePattern(clean) {
-			return nil, fmt.Errorf("allow_paths has the pattern %q, which does not parse: %w", pattern, doublestar.ErrBadPattern)
+
+		switch {
+		case clean == "":
+			return nil, fmt.Errorf("%s has the empty pattern %q. Write a glob such as src/**", keyword, pattern)
+		case strings.HasPrefix(clean, "/"):
+			return nil, fmt.Errorf("%s has the absolute pattern %q. A path is relative to the item folder", keyword, pattern)
+		case slices.ContainsFunc(braceChoices(clean), leavesFolder):
+			return nil, fmt.Errorf("%s has the pattern %q, which leaves the item folder", keyword, pattern)
+		case !doublestar.ValidatePattern(clean):
+			return nil, fmt.Errorf("%s has the pattern %q, which does not parse: %w", keyword, pattern, doublestar.ErrBadPattern)
 		}
 
 		globs = append(globs, clean)
 	}
 
 	return globs, nil
+}
+
+// leavesFolder reports whether one slash-separated part of the pattern is `..`.
+func leavesFolder(pattern string) bool { return slices.Contains(strings.Split(pattern, "/"), "..") }
+
+// braceChoices returns each pattern that the brace choices of the pattern spell, read as the doublestar matcher reads them.
+// A pattern with no brace, or with a brace that does not close, is its own one choice.
+func braceChoices(pattern string) []string {
+	open := 0
+	for open < len(pattern) && pattern[open] != '{' {
+		open = tokenEnd(pattern, open) + 1
+	}
+
+	choices, closing := splitChoices(pattern, open+1)
+	if closing < 0 {
+		return []string{pattern}
+	}
+
+	var all []string
+	for _, choice := range choices {
+		all = append(all, braceChoices(pattern[:open]+choice+pattern[closing+1:])...)
+	}
+
+	return all
+}
+
+// splitChoices splits the brace choices that start at start at their top-level commas, and returns the index of the closing brace, or -1.
+func splitChoices(s string, start int) (choices []string, closing int) {
+	depth, from := 0, start
+	for i := start; i < len(s); i = tokenEnd(s, i) + 1 {
+		switch s[i] {
+		case '{':
+			depth++
+		case ',':
+			if depth == 0 {
+				choices, from = append(choices, s[from:i]), i+1
+			}
+		case '}':
+			if depth == 0 {
+				return append(choices, s[from:i]), i
+			}
+			depth--
+		}
+	}
+
+	return nil, -1
+}
+
+// tokenEnd returns the index of the last byte of the token at i: the byte that a backslash escapes, the end of a bracket class, or i itself.
+func tokenEnd(s string, i int) int {
+	switch s[i] {
+	case '\\':
+		return min(i+1, len(s)-1)
+	case '[':
+		for j := i + 1; j < len(s); j++ {
+			switch s[j] {
+			case '\\':
+				j++
+			case ']':
+				return j
+			}
+		}
+
+		return len(s) - 1
+	}
+
+	return i
+}
+
+// AllowsPath reports whether one of the clean globs of AllowList matches the path. It judges nothing else: the agent scope and before_review both ask it.
+func AllowsPath(globs []string, name string) bool {
+	return slices.ContainsFunc(globs, func(g string) bool { return doublestar.MatchUnvalidated(g, name) })
 }
 
 // InputMap converts the inputs dict of an agent call into the data of its prompt template. An absent dict is empty.

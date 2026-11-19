@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"slices"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +14,6 @@ import (
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/forge"
 	"github.com/tobocop2/beehave/internal/model"
-	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/store/beads"
 	"github.com/tobocop2/beehave/internal/store/beads/beadstest"
 )
@@ -33,13 +31,9 @@ type pullForge struct {
 	// refs and refsErr are the answer of ClosingRefs.
 	refs    model.ClosingRefs
 	refsErr error
-	// posted is the comments on the pull request. assigned holds each AddAssignee call as number|login.
+	// posted is the comments on the pull request.
 	posted     []model.Comment
 	commentErr error
-	assigned   []string
-	// assignErr fails each AddAssignee call after the first assignOK calls.
-	assignErr error
-	assignOK  int
 	// ready makes PRView report a pull request that is out of draft. readyOnCall does so once SetDraft has run. A fake that sets neither reports no draft state.
 	ready       bool
 	readyOnCall bool
@@ -51,7 +45,7 @@ func (f *pullForge) ClosingRefs(context.Context, int) (model.ClosingRefs, error)
 	return f.refs, f.refsErr
 }
 
-// Comments, PostComment and AddAssignee keep what the pulls type sent to the forge. commentErr and assignErr fail the matching write.
+// Comments and PostComment keep what the pulls type sent to the forge. commentErr fails the read.
 func (f *pullForge) Comments(context.Context, int) ([]model.Comment, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -64,19 +58,6 @@ func (f *pullForge) PostComment(_ context.Context, _ int, body string) error {
 	defer f.mu.Unlock()
 
 	f.posted = append(f.posted, model.Comment{Body: body})
-
-	return nil
-}
-
-func (f *pullForge) AddAssignee(_ context.Context, number int, login string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	f.assigned = append(f.assigned, strconv.Itoa(number)+"|"+login)
-
-	if f.assignErr != nil && len(f.assigned) > f.assignOK {
-		return f.assignErr
-	}
 
 	return nil
 }
@@ -153,67 +134,6 @@ func TestPulls_PullReadsThePullRequestOnTheBranchOfTheItem(t *testing.T) {
 	assert.Equal(t, []string{"--head", "bb-1", "--state", "open", "--json", "number"}, f.asked[0])
 }
 
-// treePull is a pullForge that reads the tree of a commit from trees. A commit that trees lacks cannot be read.
-type treePull struct {
-	*pullForge
-
-	trees map[string]string
-}
-
-func (f treePull) CommitTree(_ context.Context, commit string) (string, error) {
-	if tree, ok := f.trees[commit]; ok {
-		return tree, nil
-	}
-
-	return "", errFake
-}
-
-func (treePull) TreeBlobs(context.Context, string) (map[string]string, error) { return nil, errFake }
-
-func TestPulls_ReviewedLetsAReviewStandForAHeadWithTheSameTreeAndNotForAnotherTree(t *testing.T) {
-	t.Parallel()
-
-	for name, test := range map[string]struct {
-		trees     map[string]string
-		rewritten string
-		reasons   int
-	}{
-		"the same tree":    {map[string]string{"abc": "t1", "old": "t1"}, "old", 0},
-		"another tree":     {map[string]string{"abc": "t1", "old": "t2"}, "", 1},
-		"a tree not read":  {map[string]string{"abc": "t1"}, "", 2},
-		"the reviewed one": {map[string]string{}, "", 0},
-	} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
-			base := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, state: "OPEN"}
-			p := pulls{
-				projects: map[string]config.Project{"p": {}},
-				forge:    func(model.Project) (forge.Forge, error) { return treePull{base, test.trees}, nil },
-			}
-			reviewed := "old"
-
-			if name == "the reviewed one" {
-				reviewed = "abc"
-			}
-
-			standing, err := p.Reviewed(t.Context(), "p", "bb-1", reviewed)
-
-			require.NoError(t, err)
-			assert.Equal(t, test.rewritten, standing.Rewritten)
-			assert.Len(t, standing.Reasons(reviewed), test.reasons)
-		})
-	}
-}
-
-func TestPulls_ReviewedOfAnUnknownProjectIsAnError(t *testing.T) {
-	t.Parallel()
-
-	_, err := pullsOver(&pullForge{}).Reviewed(t.Context(), "zzz", "bb-1", "old")
-
-	require.ErrorIs(t, err, errUnknownProject)
-}
-
 func TestPulls_PullFindsAMergedPullRequestWhenNoneIsOpen(t *testing.T) {
 	t.Parallel()
 
@@ -265,44 +185,6 @@ func TestPulls_CommentPostsOneCommentForOneKeyEvenWhenTheCallRunsTwice(t *testin
 	require.ErrorIs(t, err, forge.ErrNoPull)
 }
 
-func TestPulls_AssignAssignsThePullRequestAndWithLinkedItsClosingIssues(t *testing.T) {
-	t.Parallel()
-
-	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, refs: model.ClosingRefs{Issues: []int{12, 13}}}
-
-	number, issues, err := pullsOver(f).Assign(t.Context(), "p", "bb-1", "alice", false)
-	require.NoError(t, err)
-	assert.Equal(t, 7, number)
-	assert.Empty(t, issues)
-	assert.Equal(t, []string{"7|alice"}, f.assigned)
-
-	f.assigned = nil
-	_, issues, err = pullsOver(f).Assign(t.Context(), "p", "bb-1", "alice", true)
-	require.NoError(t, err)
-	assert.Equal(t, []int{12, 13}, issues)
-	assert.Equal(t, []string{"7|alice", "12|alice", "13|alice"}, f.assigned)
-}
-
-func TestPulls_AssignRefusesWhenAnyReadOrWriteFails(t *testing.T) {
-	t.Parallel()
-
-	open := map[string][]model.PullRequest{"open": {{Number: 7}}}
-
-	_, _, err := pullsOver(&pullForge{}).Assign(t.Context(), "p", "bb-1", "a", true)
-	require.ErrorIs(t, err, forge.ErrNoPull)
-
-	_, _, err = pullsOver(&pullForge{listed: open, assignErr: errFake}).Assign(t.Context(), "p", "bb-1", "a", false)
-	require.ErrorIs(t, err, errFake)
-
-	_, _, err = pullsOver(&pullForge{listed: open, refsErr: errFake}).Assign(t.Context(), "p", "bb-1", "a", true)
-	require.ErrorIs(t, err, errFake)
-	require.ErrorContains(t, err, "read the issues that pull request 7 closes")
-
-	late := &pullForge{listed: open, refs: model.ClosingRefs{Issues: []int{12}}, assignErr: errFake, assignOK: 1}
-	_, _, err = pullsOver(late).Assign(t.Context(), "p", "bb-1", "a", true)
-	require.ErrorIs(t, err, errFake)
-}
-
 func TestPulls_ClosingIssuesGivesTheIssuesOfTheForgeAndAnItemWithNoPullRequestIsNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -349,9 +231,8 @@ func TestPulls_AProjectTheConfigLacksIsAnErrorForEveryCall(t *testing.T) {
 	ctx := t.Context()
 
 	_, pullErr := p.Pull(ctx, "zzz", "bb-1")
-	_, watchErr := p.Watch(ctx, "zzz", 1)
 
-	for _, err := range []error{pullErr, watchErr, p.Ready(ctx, "zzz", "bb-1"), p.SetDraft(ctx, "zzz", 1, true)} {
+	for _, err := range []error{pullErr} {
 		require.ErrorIs(t, err, errUnknownProject)
 	}
 }
@@ -361,62 +242,9 @@ func TestPulls_AForgeThatCannotBeBuiltIsAnError(t *testing.T) {
 
 	p := pulls{projects: map[string]config.Project{"p": {}}, forge: func(model.Project) (forge.Forge, error) { return nil, errFake }}
 
-	require.ErrorIs(t, p.Ready(t.Context(), "p", "bb-1"), errFake)
-}
+	_, err := p.Pull(t.Context(), "p", "bb-1")
 
-func TestPulls_ReadyTakesThePullRequestOutOfDraft(t *testing.T) {
-	t.Parallel()
-
-	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}}
-
-	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
-	assert.Equal(t, []draftCall{{7, false}}, f.drafts)
-
-	none := &pullForge{}
-	require.ErrorIs(t, pullsOver(none).Ready(t.Context(), "p", "bb-1"), forge.ErrNoPull)
-}
-
-func TestPulls_ReadyMakesNoCallForAPullRequestThatIsReady(t *testing.T) {
-	t.Parallel()
-
-	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, state: "OPEN", ready: true}
-
-	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
-	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
-	assert.Empty(t, f.drafts, "the pull request is ready, so no gh pr ready runs")
-}
-
-func TestPulls_ReadyARepeatAfterTheCallFindsTheReadyPullRequestAndSendsNoSecondCall(t *testing.T) {
-	t.Parallel()
-
-	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, state: "OPEN", readyOnCall: true}
-
-	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
-	require.NoError(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"))
-	assert.Equal(t, []draftCall{{7, false}}, f.drafts)
-}
-
-func TestPulls_ReadyRefusesWhenTheDraftStateCannotBeRead(t *testing.T) {
-	t.Parallel()
-
-	f := &pullForge{listed: map[string][]model.PullRequest{"open": {{Number: 7}}}, viewErr: errFake}
-
-	require.ErrorIs(t, pullsOver(f).Ready(t.Context(), "p", "bb-1"), errFake)
-	assert.Empty(t, f.drafts)
-}
-
-func TestPulls_WatchReadsOnceAndSetDraftChangesThePullRequest(t *testing.T) {
-	t.Parallel()
-
-	f := &pullForge{state: "MERGED"}
-	p := pullsOver(f)
-
-	outcome, err := p.Watch(t.Context(), "p", 7)
-	require.NoError(t, err)
-	assert.Equal(t, review.Merged, outcome.Kind)
-
-	require.NoError(t, p.SetDraft(t.Context(), "p", 7, true))
-	assert.Equal(t, []draftCall{{7, true}}, f.drafts)
+	require.ErrorIs(t, err, errFake)
 }
 
 func leasesOver(t *testing.T, owner string) (leases, *beads.Store) {
@@ -527,9 +355,8 @@ func TestPulls_AProjectWithNoForgeGetsTheTypedNoForgeErrorFromEveryCall(t *testi
 	ctx := t.Context()
 
 	_, pullErr := p.Pull(ctx, "p", "bb-1")
-	_, watchErr := p.Watch(ctx, "p", 1)
 
-	for _, err := range []error{pullErr, watchErr, p.Ready(ctx, "p", "bb-1"), p.SetDraft(ctx, "p", 1, true)} {
+	for _, err := range []error{pullErr} {
 		require.ErrorIs(t, err, forge.ErrNoForge)
 	}
 }

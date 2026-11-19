@@ -36,14 +36,11 @@ func (s *script) facts(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 // varsField is the field `vars` of the facts: the free settings of the project file.
 const varsField = "vars"
 
-// factsOutputs holds the fields of the facts struct. An empty fact is an empty list, an empty dict or empty text, never a missing field, so a prompt can range over it.
+// factsOutputs holds the fields of the facts struct. An empty fact is an empty list, an empty dict or empty text, never a missing field.
 func factsOutputs(p model.Project) map[string]any {
 	facts := map[string]any{
 		repoKeyword: p.Repo, "source": p.Source, "forge": string(p.Forge), "tracker": string(p.Tracker), "base_branch": p.BaseBranch, "gate": gateText(p), "gate_steps": gateStepNames(p), "build_host": p.BuildHost,
-		"people": orEmptyDict(p.People), "epics": orEmptyDict(p.Epics),
-		"gate_files": orEmptyList(p.GateFiles), "conventions": orEmptyList(p.Conventions), "brief_rules": orEmptyList(p.BriefRules), "stacked_rules": orEmptyList(p.StackedRules),
-		"limits": orEmptyList(p.Limits), "traps": orEmptyList(p.Traps), "token_rules": orEmptyList(p.TokenRules), "changelog": p.Changelog, varsField: orEmptyVars(p.Vars),
-		"board_number": p.Board.Number, "board_owner": p.Board.Owner, "board_started": p.Board.Started, "board_merged": p.Board.Merged,
+		varsField: orEmptyVars(p.Vars), "runners": runnerFacts(p.RunnerSkills),
 	}
 
 	return facts
@@ -76,14 +73,6 @@ func gateStepNames(p model.Project) []string {
 	return names
 }
 
-func orEmptyList(items []string) []string {
-	if items == nil {
-		return []string{}
-	}
-
-	return items
-}
-
 func orEmptyVars(items map[string]any) map[string]any {
 	if items == nil {
 		return map[string]any{}
@@ -92,10 +81,13 @@ func orEmptyVars(items map[string]any) map[string]any {
 	return items
 }
 
-func orEmptyDict(items map[string]string) map[string]string {
-	if items == nil {
-		return map[string]string{}
+// runnerFacts is the field `runners` of the facts: one entry for each runner of the config, with the fact reports_skills. It is an empty dict when the config has no runner.
+func runnerFacts(skills map[string]bool) map[string]any {
+	runners := make(map[string]any, len(skills))
+
+	for name, reports := range skills {
+		runners[name] = map[string]any{"reports_skills": reports}
 	}
 
-	return items
+	return runners
 }

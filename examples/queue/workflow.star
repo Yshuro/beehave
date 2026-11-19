@@ -10,7 +10,7 @@
 #   4. The loop removes the ended runs from its list, and it holds each failed item with a comment.
 # The loop ends when no item is ready and no run is open.
 #
-# One login runs one agent step at a time on each queue: a step with kind = "review" can run beside a step of another kind on the same login. The pick of a login prefers a login with no agent step running or queued, so the items spread over your logins. The parent run holds no login. With one login, the items run one at a time.
+# One login runs one agent step at a time on each queue: a step with edits = False can run beside a step that edits on the same login. The pick of a login prefers a login with no agent step running or queued, so the items spread over your logins. The parent run holds no login. With one login, the items run one at a time.
 #
 # This file is separate from examples/remediation because main is the entry of the parent and of a child alike.
 # The child function `work` is the one place to put the pipeline of one item: replace its agent call with the steps of the remediation example.
@@ -42,7 +42,7 @@ def work(item):
 
     # A cap ended the run (the output `stop` is "turns" or "budget"), so the pull request may be half done. The item fails with the reason.
     if implement.stop != "":
-        fail("REFUSE: the implement step stopped at the %s cap before it finished. Raise the cap or split the item, then run beehave resume %s." % (implement.stop, item.id))
+        fail("REFUSE: the implement step stopped at the %s cap before it finished. Raise the cap or split the item. A plain beehave resume replays this stop. To start the item again, run beehave resume %s, then beehave cancel %s, then beehave run %s." % (implement.stop, item.id, item.id, item.id))
 
 def main(item):
     # The runs that this parent started and has not seen end.

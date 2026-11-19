@@ -28,18 +28,13 @@ const (
 	mergeName        = "merge"
 	preflightName    = "preflight"
 	queueName        = "queue"
-	itemAssignName   = "item_assign"
 	itemCommentName  = "item_comment"
 	itemCreateName   = "item_create"
 	itemReadName     = "item_read"
 	itemStatusName   = "item_status"
-	boardSyncName    = "board_sync"
-	beforeReviewName = "before_review"
-	prAssignName     = "pr_assign"
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
 	prStateName      = "pr_state"
-	baseField        = "base"
 	revertField      = "revert"
 	numberField      = "number"
 	statusField      = "status"
@@ -52,15 +47,14 @@ const (
 // come in addition to the fields listed here.
 func resultFields() map[string][]string {
 	fields := map[string][]string{
-		agentName:        {"text", "session", "transcript", "head_sha", "violations", "stop", "cost_usd", "cost_estimated", "cost_unknown", "rewrote"},
-		batchMergeName:   {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", "findings", "note", "unproven", "host_loss", "host_losses"},
+		agentName:        {"text", "session", "transcript", "head_sha", "violations", "stop", "cost_usd", "cost_estimated", "cost_unknown", "rewrote", "skills"},
+		mergeName:        {"merged", "rejected", "deferred", "tip", treeKeyword, "gates", "findings", "note", "unproven", "moved", "host_loss", "host_losses"},
 		commandName:      {"stdout", "stderr", "rc"},
 		earlierCallsName: {"count"},
 		gatherName:       {"results"},
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
-		mergeName:        {stateField, reasonField},
-		preflightName:    {"ok", "stop", "code", reasonField, "foreign", "pr", "head", "author"},
+		preflightName:    {"ok", "stop", "code", reasonField},
 		queueName:        {"rows", "free"},
 		spawnName:        {"runs"},
 		waitName:         {"answer", "answers", "timed_out"},
@@ -73,33 +67,25 @@ func resultFields() map[string][]string {
 	return fields
 }
 
-// gateResultFields holds the fields of the builtins that judge a head: gate and before_review.
+// gateResultFields holds the fields of the gate builtin.
 func gateResultFields() map[string][]string {
 	return map[string][]string{
-		gateName:         {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests", revertField, "host_loss", "host_losses"},
-		beforeReviewName: {"ok", "findings", "new_tests", revertField, baseField, "keywords"},
+		gateName: {"passed", "head", treeKeyword, "report", "steps", "required", "checks", "new_tests", revertField, "host_loss", "host_losses"},
 	}
 }
 
 // factsResultFields holds the fields of the struct that facts returns.
 func factsResultFields() map[string][]string {
-	return map[string][]string{factsName: {
-		"repo", "source", "forge", "tracker", "base_branch", "gate", "gate_steps", "build_host", "people", "epics", "gate_files", "conventions",
-		"brief_rules", "stacked_rules", "limits", "traps", "token_rules", "changelog", "vars",
-		"board_number", "board_owner", "board_started", "board_merged",
-	}}
+	return map[string][]string{factsName: {"repo", "source", "forge", "tracker", "base_branch", "gate", "gate_steps", "build_host", "vars", "runners"}}
 }
 
 // trackerResultFields holds the fields of the builtins that write the tracker or the pull request, and of pr_state, which reads the pull request.
 func trackerResultFields() map[string][]string {
 	return map[string][]string{
-		boardSyncName:   {numberField, statusField},
-		itemAssignName:  {"id"},
 		itemCommentName: {"id"},
 		itemCreateName:  {"id", "created"},
 		itemReadName:    {"found", "id", "fields", "comments", "parent"},
 		itemStatusName:  {"id", statusField},
-		prAssignName:    {numberField, "issues"},
 		prCommentName:   {numberField},
 		prOpenName:      {numberField, "created", "stack"},
 		prStateName:     {stateField},
@@ -131,6 +117,8 @@ type bound struct {
 	count map[string]int
 	calls map[string]*syntax.CallExpr
 	item  string
+	// shadowed are the names that the file binds at the top level.
+	shadowed []string
 }
 
 // itemFunctions lists the functions of the workflow file that the run calls with an item: main, finish and each literal entry of a spawn call.
@@ -196,7 +184,7 @@ func callee(call *syntax.CallExpr) string {
 
 // holds finds the builtin call that each name of the function holds. A builtin whose name the function or the file binds is not the builtin.
 func holds(def *syntax.DefStmt, shadowed []string) bound {
-	held := bound{count: map[string]int{}, calls: map[string]*syntax.CallExpr{}}
+	held := bound{count: map[string]int{}, calls: map[string]*syntax.CallExpr{}, shadowed: shadowed}
 
 	for _, param := range def.Params {
 		held.names(param)
@@ -272,8 +260,14 @@ func (h bound) assigned(s *syntax.AssignStmt) {
 	}
 }
 
-// field reports `name.field` when name holds the result of a builtin and the result has no such field.
+// field reports `name.field` when name holds the result of a builtin and the result has no such field. It reports `builtin(...).field` the same way.
 func (g *graph) field(dot *syntax.DotExpr, held bound) {
+	if call, direct := dot.X.(*syntax.CallExpr); direct {
+		g.directField(dot, call, held)
+
+		return
+	}
+
 	id, ok := dot.X.(*syntax.Ident)
 	if !ok {
 		return
@@ -286,6 +280,14 @@ func (g *graph) field(dot *syntax.DotExpr, held bound) {
 	}
 
 	if call, found := held.calls[id.Name]; found {
+		g.resultField(dot, call)
+	}
+}
+
+// directField reports `builtin(...).field` when the call names a builtin that the function and the file do not bind.
+func (g *graph) directField(dot *syntax.DotExpr, call *syntax.CallExpr, held bound) {
+	name := callee(call)
+	if _, builtin := resultFields()[name]; builtin && held.count[name] == 0 && !slices.Contains(held.shadowed, name) {
 		g.resultField(dot, call)
 	}
 }

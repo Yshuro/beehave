@@ -537,7 +537,7 @@ func TestWaitOwner_ReportsAQuestionItCannotShow(t *testing.T) {
 
 	engine := idleEngine(t, newHarness(t))
 
-	_, err := engine.waitOwner(engine.ctx, testItem, "which way?")
+	_, err := engine.waitOwner(engine.ctx, testProject, testItem, "which way?")
 
 	require.ErrorContains(t, err, "item 12 cannot show its question")
 }
@@ -637,6 +637,15 @@ func stuckEvent(key string) func(dbos.Context, string) (string, error) {
 
 		return dbos.Recv[string](ctx, ownerTopic, time.Minute)
 	}
+}
+
+func TestResultOf_ARunWithNoOutputHasAnEmptyResult(t *testing.T) {
+	t.Parallel()
+
+	got, err := resultOf(dbos.WorkflowStatus{ID: stuckItemID})
+
+	require.NoError(t, err)
+	assert.Equal(t, ItemResult{}, got)
 }
 
 func TestClient_StatusReportsAnEventThatIsNotInItsShape(t *testing.T) {

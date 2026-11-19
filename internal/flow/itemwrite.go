@@ -18,8 +18,6 @@ type writer interface {
 	Create(ctx context.Context, project, key string, item trackerstore.NewItem) (id string, created bool, err error)
 	SetStatus(ctx context.Context, project, id string, status trackerstore.Status) error
 	Comment(ctx context.Context, project, id, key, text string) error
-	// Assign sets the assignee of an item. The same assignee again changes nothing, so a step that runs twice after a crash is safe.
-	Assign(ctx context.Context, project, id, assignee string) error
 }
 
 // The keywords that the item and pull request writes share.
@@ -126,25 +124,6 @@ func (s *script) itemStatus(b *starlark.Builtin, args starlark.Tuple, kwargs []s
 
 	return s.write("item_status", label, func(ctx context.Context) (map[string]any, error) {
 		return statusOutputs(id, string(status)), s.e.deps.Writer.SetStatus(ctx, s.in.Project, id, status)
-	})
-}
-
-// itemAssign sets the assignee of an item. The same assignee again changes nothing.
-func (s *script) itemAssign(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
-	var id, assignee, label string
-
-	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{
-		"id": &id, assigneeKeyword: &assignee, nameKeyword: &label,
-	}); err != nil {
-		return nil, err
-	}
-
-	if err := s.check(workflow.NotEmpty("id", id), workflow.NotEmpty(assigneeKeyword, assignee)); err != nil {
-		return nil, err
-	}
-
-	return s.write("item_assign", label, func(ctx context.Context) (map[string]any, error) {
-		return commentOutputs(id), s.e.deps.Writer.Assign(ctx, s.in.Project, id, assignee)
 	})
 }
 

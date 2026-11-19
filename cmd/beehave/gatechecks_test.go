@@ -66,7 +66,7 @@ func TestProjectGate_ACandidateGateGivesTheChecksOfItsLogToTheEngine(t *testing.
 func TestProjectGate_ACandidateGateGivesTheRevertRunOfItsLogToTheEngine(t *testing.T) {
 	t.Parallel()
 
-	// The new tests pkg TestA and pkg TestC passed on the base code. before_review names each test of RevertPassed in its refusal, so the
+	// The new tests pkg TestA and pkg TestC passed on the base code. the before_review function of the library names each test of RevertPassed in its refusal, so the
 	// engine must get every revert field of the log.
 	got := candidateChecks(t, "beehave-new-test pkg TestA\n"+
 		"beehave-new-test pkg TestC\n"+
@@ -88,7 +88,7 @@ func TestProjectGate_ACandidateGateGivesTheRevertRunOfItsLogToTheEngine(t *testi
 func TestProjectGate_ACandidateGateGivesTheReasonOfARevertErrorToTheEngine(t *testing.T) {
 	t.Parallel()
 
-	// before_review shows the reason of the error line in its refusal, in place of the generic reason of a log with no end marker.
+	// The before_review function of the library shows the reason of the error line in its refusal, in place of the generic reason of a log with no end marker.
 	got := candidateChecks(t, "beehave-new-test pkg TestA\n"+
 		"beehave-new-tests-end new=1 failed=0\n"+
 		"beehave-revert-error the base code did not check out\n"+

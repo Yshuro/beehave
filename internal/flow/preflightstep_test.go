@@ -3,7 +3,6 @@ package flow
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 
@@ -111,43 +110,6 @@ func TestPreflight_TheOwnLoginsGoToTheReader(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, []preflight.Request{{Own: []string{"owner", "bot"}}}, fake.asked)
-}
-
-func TestPreflight_TheForeignKeywordGoesToTheReader(t *testing.T) {
-	t.Parallel()
-
-	h, fake, _ := preflightHarness(t, preflight.Result{})
-
-	_, err := walkBody(t, h, "preflight(name = \"a\", foreign = \"review\")\npreflight(name = \"b\")\n")
-
-	require.NoError(t, err)
-	assert.Equal(t, []preflight.Request{{Foreign: true}, {}}, fake.asked)
-}
-
-func TestPreflight_AForeignKeywordThatIsNotReviewFailsAtItsLine(t *testing.T) {
-	t.Parallel()
-
-	h, fake, _ := preflightHarness(t, preflight.Result{})
-
-	_, err := walkBody(t, h, "preflight(foreign = \"take\")\n")
-
-	require.ErrorContains(t, err, "workflow.star:")
-	assert.Empty(t, fake.asked)
-}
-
-func TestPreflight_AForeignPullRequestRefusesTheItem(t *testing.T) {
-	t.Parallel()
-
-	foreign := preflight.Result{Foreign: true, PR: 7, Head: strings.Repeat("a", 40), Author: "someone", Lines: []string{"OK: foreign"}}
-	h, _, w := preflightHarness(t, foreign)
-
-	result, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, bodyFlow("pf = preflight(name = \"intake\", foreign = \"review\")\nitem_comment(id = \"1\", key = \"k\", text = str(pf.ok) + \"|\" + str(pf.foreign) + \"|\" + str(pf.pr) + \"|\" + pf.stop)\n")))
-
-	require.NoError(t, err)
-	require.NotNil(t, result.Stopped)
-	assert.Equal(t, preflight.Refused.Code(), result.Stopped.RC)
-	assert.Contains(t, result.Stopped.Output, "#7")
-	assert.Equal(t, []string{testProject + "|1|" + testRun + ":k|False|False|0|REFUSED"}, w.notes, "the workflow sees a refusal, never a foreign result")
 }
 
 func TestPreflight_TheIdKeywordNamesTheItemToRead(t *testing.T) {

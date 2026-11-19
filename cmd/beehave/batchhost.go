@@ -1,7 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -11,10 +13,11 @@ import (
 	"github.com/tobocop2/beehave/internal/forge"
 	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/review"
 	storegithub "github.com/tobocop2/beehave/internal/store/github"
 )
 
-// batchGitTimeout is the time that one git call of batch_merge may run.
+// batchGitTimeout is the time that one git call of merge may run.
 const batchGitTimeout = 10 * time.Minute
 
 // batchIdentity is the author and committer of the union commits. They exist in the object database of the worktree only, and no forge sees them.
@@ -22,7 +25,7 @@ func batchIdentity() []string {
 	return []string{"-c", "user.name=beehave", "-c", "user.email=beehave@localhost"}
 }
 
-// batchHost serves batch_merge: git in the worktree of the item, the base tip on the forge, and the intent of a member merge.
+// batchHost serves merge: git in the worktree of the item, the base tip on the forge, and the intent of a member merge.
 type batchHost struct {
 	pulls    pulls
 	programs programs
@@ -46,7 +49,7 @@ func (h batchHost) folder(ctx context.Context, project, item string) (string, er
 	}
 
 	if dir == "" {
-		return "", fmt.Errorf("item %s of project %s has no worktree, so batch_merge cannot run git for it. Make the worktree of the item first", item, project)
+		return "", fmt.Errorf("item %s of project %s has no worktree, so merge cannot run git for it. Make the worktree of the item first", item, project)
 	}
 
 	return dir, nil
@@ -195,7 +198,7 @@ func notMerged(ctx context.Context, built forge.Forge, integration int) (batch.R
 	switch state := strings.ToUpper(strings.TrimSpace(model.Deref(view.State))); state {
 	case "MERGED":
 		return batch.Report{}, false
-	case "OPEN", "CLOSED":
+	case stateOpen, "CLOSED":
 		return batch.Report{Note: fmt.Sprintf("issue states: the integration pull request %d is %s, not MERGED, so the issues are not read yet.", integration, state)}, true
 	default:
 		return batch.Report{Findings: []string{fmt.Sprintf("the integration pull request %d has the state %q, which is not OPEN, CLOSED or MERGED", integration, state)}}, true
@@ -214,11 +217,54 @@ func (h batchHost) Intent(ctx context.Context, project, item, repo, _, tipTree s
 		return merge.Intent{}, fmt.Errorf("read the pull request of item %s: %w", item, err)
 	}
 
-	if state := strings.ToUpper(strings.TrimSpace(model.Deref(view.State))); state != "OPEN" {
+	if state := strings.ToUpper(strings.TrimSpace(model.Deref(view.State))); state != stateOpen {
 		return merge.Intent{}, fmt.Errorf("the pull request of item %s is %s, %w, so a merge cannot be tied to this run", item, state, flow.ErrMemberNotOpen)
 	}
 
 	view.Number = number
 
 	return merge.NewIntent(view, tipTree, now)
+}
+
+// Pull reads the standing of the pull request of the item through the standing review. A non-empty reviewed is the commit that was marked ready: a head that is another commit
+// with the same tree is a rewrite of it. A read that fails goes into Unread, and an item with only a closed pull request is closed.
+func (h batchHost) Pull(ctx context.Context, project, item, repo, reviewed string) (review.Standing, error) {
+	built, number, err := h.pulls.target(ctx, project, item, repo)
+	if errors.Is(err, forge.ErrNoPull) {
+		return closedPull(ctx, built, item, err)
+	}
+
+	if err != nil {
+		return review.Standing{}, err
+	}
+
+	standing := review.Pull(ctx, built, number)
+	if reviewed != "" {
+		standing.Compare(ctx, built, reviewed)
+	}
+
+	return standing, nil
+}
+
+// stateOpen is the state of a pull request that is open.
+const stateOpen = "OPEN"
+
+// SetDraft marks the pull request of the item a draft, or ready for review when draft is false.
+func (h batchHost) SetDraft(ctx context.Context, project, item, repo string, draft bool) error {
+	built, number, err := h.pulls.target(ctx, project, item, repo)
+	if err != nil {
+		return err
+	}
+
+	return built.SetDraft(ctx, number, draft)
+}
+
+// closedPull is the standing of an item that has no open or merged pull request: closed when the forge lists a closed one, else the error of the lookup.
+func closedPull(ctx context.Context, built forge.Forge, item string, missing error) (review.Standing, error) {
+	number, err := listed(ctx, built, item, "closed")
+	if err != nil || number == 0 {
+		return review.Standing{}, cmp.Or(err, missing)
+	}
+
+	return review.Standing{Number: number, Closed: true}, nil
 }

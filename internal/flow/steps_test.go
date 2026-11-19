@@ -415,7 +415,7 @@ func TestStepLine_TheOutputsTheEngineRecordsDecodeIntoTheFieldsOfTheLine(t *test
 	assert.Nil(t, noOutcome.ExitCode, "the child workflow of a gate has no outcome, so the gate line has no exit code")
 	assert.False(t, noOutcome.OutputUnreadable)
 
-	read := callLine([]dbos.StepInfo{record("agent:a#1/read1", stepResult{Outputs: withVerdict(agentOutputs("t", "s", "p", "h2", "", "turns", agent.Spend{Cost: 0.5}, true), "approve")})}, "agent:a#1/read1")
+	read := callLine([]dbos.StepInfo{record("agent:a#1/read1", stepResult{Outputs: withVerdict(agentOutputs("t", "s", "p", "h2", "", "turns", agent.Spend{Cost: 0.5}, true, nil), "approve")})}, "agent:a#1/read1")
 	assert.Equal(t, "h2", read.Head)
 	assert.Equal(t, "turns", read.Stop)
 	assert.Equal(t, "approve", read.Verdict)
@@ -572,7 +572,7 @@ func TestStepLines_AWaitingGateIsNamedFromItsTipRecordAndAnOtherRecordFromItself
 	assert.Equal(t, "DBOS.sleep", other[0].Name)
 }
 
-func TestStepLine_AnAgentLineNamesTheKindOfItsPhase(t *testing.T) {
+func TestStepLine_AnAgentLineNamesTheLabelOfItsCall(t *testing.T) {
 	t.Parallel()
 
 	record := func(name string, output any) dbos.StepInfo {
@@ -582,14 +582,14 @@ func TestStepLine_AnAgentLineNamesTheKindOfItsPhase(t *testing.T) {
 		return dbos.StepInfo{StepName: name, Output: string(data)}
 	}
 
-	review := callLine([]dbos.StepInfo{withChild(record("any-name", PhaseOutput{Outcome: "exited", Kind: "review"}))}, "agent:a#1")
-	assert.Equal(t, "review", review.Kind)
+	review := callLine([]dbos.StepInfo{record("agent:a#1/render", map[string]any{"outputs": map[string]any{"label": "review"}}), withChild(record("any-name", PhaseOutput{Outcome: "exited"}))}, "agent:a#1")
+	assert.Equal(t, "review", review.Label)
 
-	rework := callLine([]dbos.StepInfo{withChild(record("any-name", PhaseOutput{Outcome: "exited", Kind: "rework"}))}, "agent:a#1")
-	assert.Equal(t, "rework", rework.Kind)
+	rework := callLine([]dbos.StepInfo{record("agent:a#1/render", map[string]any{"outputs": map[string]any{"label": "rework"}})}, "agent:a#1")
+	assert.Equal(t, "rework", rework.Label, "a step with no phase output yet has its label")
 
 	gate := callLine([]dbos.StepInfo{withChild(record("gate:stop", map[string]any{"holder": "x"}))}, "gate:g#1")
-	assert.Empty(t, gate.Kind, "a gate is not a lane, so its line has no kind")
+	assert.Empty(t, gate.Label, "a gate is not a lane, so its line has no label")
 }
 
 // loginFlow is an agent call that names the model and the runner that its test fills in.
@@ -599,12 +599,7 @@ const loginFlow = "def main(item):\n" +
 func TestStatus_AnAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
-		name, keywords, login, model string
-	}{
-		{name: "the_pool_pick_and_the_model_of_the_step", keywords: `model = "m-seen",`, login: testLogin, model: "m-seen"},
-		{name: "the_named_runner_and_the_model", keywords: `runner = "oc", model = "m-seen",`, login: "oc", model: "m-seen"},
-	} {
+	for _, tc := range loginCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -624,16 +619,82 @@ func TestStatus_AnAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
 	}
 }
 
+// loginCases are the two ways that an agent call gets its login: the pool pick, and the runner that the call names.
+var loginCases = []struct {
+	name, keywords, login, model string
+}{
+	{name: "the_pool_pick_and_the_model_of_the_step", keywords: `model = "m-seen",`, login: testLogin, model: "m-seen"},
+	{name: "the_named_runner_and_the_model", keywords: `runner = "oc", model = "m-seen",`, login: "oc", model: "m-seen"},
+}
+
+func TestStatus_AFailedAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range loginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			rig.reply("", agent.Result{Outcome: agent.OutcomeExited, ExitCode: 3, Note: "bad exit"})
+
+			_, err := rig.run(t, fmt.Sprintf(loginFlow, tc.keywords), "Write to {{ .output_file }}\n")
+			require.Error(t, err)
+
+			view, err := rig.h.client(t, testVersion).Steps(testRun)
+			require.NoError(t, err)
+
+			line := view.Steps[slices.IndexFunc(view.Steps, func(l StepLine) bool { return strings.HasPrefix(l.Name, "agent:a") })]
+			assert.Equal(t, stepFailed, line.State)
+			assert.Equal(t, tc.login, line.Login)
+			assert.Equal(t, tc.model, line.Model)
+		})
+	}
+}
+
+func TestStatus_ARunningAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range loginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			rig.h.agents.gate = make(chan struct{})
+			release := sync.OnceFunc(func() { close(rig.h.agents.gate) })
+			t.Cleanup(release)
+			rig.reply(`{"verdict":"approve"}`, exited)
+
+			engine := rig.h.engine(t)
+			done := runInBackground2(engine, flowFile(t, fmt.Sprintf(loginFlow, tc.keywords), "Write to {{ .output_file }}\n"))
+			waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, rig.h.agents.running() == 1, nil }})
+
+			view, err := rig.h.client(t, testVersion).Steps(testRun)
+			require.NoError(t, err)
+
+			line := view.Steps[slices.IndexFunc(view.Steps, func(l StepLine) bool { return strings.HasPrefix(l.Name, "agent:a") })]
+			assert.Equal(t, stepRunning, line.State)
+			assert.Equal(t, tc.login, line.Login)
+			assert.Equal(t, tc.model, line.Model)
+
+			release()
+			require.NoError(t, receive(t, done).err)
+		})
+	}
+}
+
 func TestStepLine_AnAgentRecordThatHasNoLoginAndNoModelLeavesThemOutOfTheLine(t *testing.T) {
 	t.Parallel()
 
-	data, err := json.Marshal(PhaseOutput{Outcome: "exited"})
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), "login", "a record with no login stays as an older version wrote it")
-	assert.NotContains(t, string(data), "model")
+	render := dbos.StepInfo{StepName: "agent:a#1/render", Output: `{"outputs":{"output_file":"/f.json"}}`}
+	phase := withChild(dbos.StepInfo{StepName: "any-name", Output: `{"outcome":"exited"}`})
 
-	line := callLine([]dbos.StepInfo{withChild(dbos.StepInfo{StepName: "any-name", Output: string(data)})}, "agent:a#1")
+	line := callLine([]dbos.StepInfo{render, phase}, "agent:a#1")
 	assert.Empty(t, line.Login)
 	assert.Empty(t, line.Model)
 	assert.False(t, line.OutputUnreadable)
+
+	data, err := json.Marshal(line)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "login")
+	assert.NotContains(t, string(data), "model")
 }

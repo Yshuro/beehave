@@ -41,9 +41,7 @@ func TestResultFields_TheOutputsOfEachBuiltinAreTheFieldsOfTheTable(t *testing.T
 	t.Parallel()
 
 	got := map[string][]string{
-		"agent":         keysOf(agentOutputs("", "", "", "", "", "", agent.Spend{}, false)),
-		"before_review": keysOf(reviewVerdict{}.outputs()),
-		"board_sync":    keysOf(boardOutputs(0, "")),
+		"agent":         keysOf(agentOutputs("", "", "", "", "", "", agent.Spend{}, false, nil)),
 		"command":       keysOf(commandOutputs("", "", 0)),
 		"earlier_calls": keysOf(earlierOutputs(0)),
 		"gate":          keysOf(gateOutputs(true, "", "", "", nil, nil, nil)),
@@ -52,10 +50,8 @@ func TestResultFields_TheOutputsOfEachBuiltinAreTheFieldsOfTheTable(t *testing.T
 		"item_create":   keysOf(createOutputs("", true)),
 		"item_read":     keysOf(readOutputs(false, "", nil, nil, "")),
 		"item_status":   keysOf(statusOutputs("", "")),
-		"merge":         keysOf(mergeOutputs("", "")),
 		"host_teardown": keysOf(teardownOutputs(true, "")),
 		"host_up":       keysOf(upOutputs(true, "")),
-		"pr_assign":     keysOf(prOutputs(0, nil)),
 		"pr_comment":    keysOf(prCommentOutputs(0)),
 		"pr_open":       keysOf(openOutputs(OpenResult{})),
 		"pr_state":      keysOf(prStateOutputs("")),
@@ -84,14 +80,14 @@ func TestResultFields_TheStructsOfTheSwarmBuiltinsAreTheFieldsOfTheTable(t *test
 	gathered, err := outcomesValue([]childOutcome{{}})
 	require.NoError(t, err)
 
-	landed, err := batchResult(batch.Result{}, batch.Report{}, nil, nil)
+	landed, err := batchResult(batch.Result{}, batch.Report{}, nil, nil, nil)
 	require.NoError(t, err)
 
 	got := map[string][]string{
-		"batch_merge": batchStruct(t, landed).AttrNames(),
-		"gather":      gathered.AttrNames(),
-		"queue":       queuedValue(queued{}).AttrNames(),
-		"spawn":       runsValue([]spawnedRun{{}}).AttrNames(),
+		"merge":  batchStruct(t, landed).AttrNames(),
+		"gather": gathered.AttrNames(),
+		"queue":  queuedValue(queued{}).AttrNames(),
+		"spawn":  runsValue([]spawnedRun{{}}).AttrNames(),
 	}
 
 	for builtin, names := range got {
@@ -103,10 +99,11 @@ func TestResultFields_TheStructsOfTheSwarmBuiltinsAreTheFieldsOfTheTable(t *test
 func TestResultFields_TheTableHasEveryBuiltinThatReturnsAStruct(t *testing.T) {
 	t.Parallel()
 
+	noStruct := []string{"env", "json", "now", "struct", "sandbox", "paths_outside", "closing_references"}
 	for _, name := range workflow.Builtins() {
 		_, has := workflow.ResultFields(name)
-		assert.Equal(t, name != "env" && name != "json" && name != "now" && name != "struct" && name != "sandbox", has, name)
+		assert.Equal(t, !slices.Contains(noStruct, name), has, name)
 	}
 
-	assert.Len(t, workflow.Results(), len(workflow.Builtins())-5)
+	assert.Len(t, workflow.Results(), len(workflow.Builtins())-len(noStruct))
 }

@@ -258,7 +258,7 @@ func (w *landWorld) git(ctx context.Context, args ...string) (string, error) {
 	return strings.TrimSpace(res.Stdout), nil
 }
 
-// forgeMerger is the merger of a build: the real merge over the forge fake of each item, with the request that a build makes from the settings of batch_merge.
+// forgeMerger is the merger of a build: the real merge over the forge fake of each item, with the request that a build makes from the settings of merge.
 type forgeMerger struct {
 	worlds map[string]*landWorld
 
@@ -337,7 +337,7 @@ func TestExampleMerge_TheRoundLandsThroughTheBatchMergerAndTheGuardsOfTheForgeFa
 		"own work lands, because its member carries the approval of its review": {
 			over: map[string]any{"author": map[string]any{"login": shipOwner}},
 		},
-		"a pull request with a child is refused, because batch_merge never retargets": {
+		"a pull request with a child is refused, because merge never retargets": {
 			setup: func(w *landWorld) {
 				branch := "1"
 				w.children = []model.PullRequest{{Number: shipChild}}
@@ -450,7 +450,7 @@ func rejectReviewOf(t *testing.T, rig *roundRig, item string) {
 		result := inner(request)
 
 		if request.Item == item && strings.Contains(request.Prompt, reviewMarker) {
-			if err := os.WriteFile(promptOutput(request.Prompt), []byte(`{"verdict":"reject","mechanism":"","regressions":"0","findings":[]}`), 0o600); err != nil {
+			if err := os.WriteFile(promptOutput(request.Prompt), []byte(`{"verdict":"reject","mechanism":"","regressions":"0","open":"","findings":[]}`), 0o600); err != nil {
 				t.Errorf("write the reject verdict of item %s: %v", item, err)
 			}
 		}
