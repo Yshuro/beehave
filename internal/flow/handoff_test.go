@@ -28,7 +28,12 @@ type handForge struct {
 	treeErr error
 	// onRead, when set, runs at each read with the number of the read of that item, counted from 1.
 	onRead func(item string, read int)
+	// overran holds the item whose pull request the watch read more than handReadCap times.
+	overran string
 }
+
+// handReadCap is the most reads of one pull request that a test of the hand-off allows before the test fails.
+const handReadCap = 200
 
 func (f *handForge) pull(item string) (PullView, error) {
 	f.mu.Lock()
@@ -39,6 +44,15 @@ func (f *handForge) pull(item string) (PullView, error) {
 
 	if hook != nil {
 		hook(item, read)
+	}
+
+	// A watch that no owner ends reads for ever. The read past the cap closes the pull request so that the call ends, and the test fails with the item.
+	if read > handReadCap {
+		f.mu.Lock()
+		f.overran = item
+		f.mu.Unlock()
+
+		return PullView{State: "CLOSED"}, nil
 	}
 
 	if f.pullErr != nil {
@@ -87,6 +101,13 @@ func newHandRig(t *testing.T) *handRig {
 	rig := &handRig{batchRig: newBatchRig(t)}
 	rig.host.pr = &handForge{views: map[string][]PullView{}, reads: map[string]int{}, draftErr: map[bool]error{}}
 	rig.h.facts = notifyFacts(notifyProgram)
+
+	t.Cleanup(func() {
+		rig.host.pr.mu.Lock()
+		defer rig.host.pr.mu.Unlock()
+
+		assert.Empty(t, rig.host.pr.overran, "the watch read the pull request of this item more than %d times: it waits for an owner who does not merge", handReadCap)
+	})
 
 	return rig
 }
