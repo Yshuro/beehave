@@ -208,7 +208,7 @@ func (s *script) askScope(fresh []int) error {
 	question := fmt.Sprintf("The pull request of item %s closes %s now, and did not at its first review (then: %s). Answer in the form \"keep #N[, #N ...]\", for example \"keep %s\". Any other answer stops the merge.",
 		s.in.Item, issueList(fresh), issueList(s.scope), strings.Join(strings.Fields(issueList(fresh)), ", "))
 
-	answer, err := s.e.waitOwner(s.ctx, s.in.Item, question)
+	answer, err := s.e.waitOwner(s.ctx, s.in.Project, s.in.Item, question)
 	if err != nil {
 		return err
 	}

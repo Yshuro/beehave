@@ -537,7 +537,7 @@ func TestWaitOwner_ReportsAQuestionItCannotShow(t *testing.T) {
 
 	engine := idleEngine(t, newHarness(t))
 
-	_, err := engine.waitOwner(engine.ctx, testItem, "which way?")
+	_, err := engine.waitOwner(engine.ctx, testProject, testItem, "which way?")
 
 	require.ErrorContains(t, err, "item 12 cannot show its question")
 }

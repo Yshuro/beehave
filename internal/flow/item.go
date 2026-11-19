@@ -284,16 +284,18 @@ func (e *Engine) lifecycle(ctx dbos.Context, step model.Step, call func(context.
 
 // waitOwner blocks until the owner answers through beehave answer. The wait holds no queue slot.
 // The findings are the question: status shows them while the run waits.
-func (e *Engine) waitOwner(ctx dbos.Context, item, question string) (string, error) {
-	answer, _, err := e.waitOwnerUntil(ctx, item, question, 0)
+func (e *Engine) waitOwner(ctx dbos.Context, project, item, question string) (string, error) {
+	answer, _, err := e.waitOwnerUntil(ctx, project, item, question, 0)
 	return answer, err
 }
 
 // waitOwnerUntil is waitOwner with a deadline. A deadline of zero is no deadline. When the deadline passes first, the answer is empty and timedOut is true.
-func (e *Engine) waitOwnerUntil(ctx dbos.Context, item, question string, deadline time.Duration) (answer string, timedOut bool, err error) {
+func (e *Engine) waitOwnerUntil(ctx dbos.Context, project, item, question string, deadline time.Duration) (answer string, timedOut bool, err error) {
 	if err := show(ctx, item, questionKey, question, "its question"); err != nil {
 		return "", false, err
 	}
+
+	e.announce(ctx, project, item, question)
 
 	answer, timedOut, err = e.receiveAnswer(ctx, deadline)
 	if err == nil {

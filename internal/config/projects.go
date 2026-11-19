@@ -42,7 +42,9 @@ type rawProject struct {
 	// TestCommand is the command that runs the test suite alone, without the lint of the gate. The new-tests check runs it on the base.
 	TestCommand text
 	// TestPaths are the globs of the test files that the revert run copies from the head onto the base, for a new test that needs a changed helper.
-	TestPaths   paths
+	TestPaths paths
+	// Notify is the program and its arguments that the engine runs when a wait for the owner opens.
+	Notify      command
 	PinFile     text
 	Changelog   text
 	Visibility  text
@@ -87,7 +89,7 @@ func loadProject(path string, registry Adapters) (Project, error) {
 
 // projectSpec is the schema of the project call. The arguments after the fixed ones are the adapter blocks that the registry declares, each optional and named as its block.
 func projectSpec(declared []Block) spec {
-	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "test_paths?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "vars?", "board?", "schedules?"}
+	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "test_paths?", "notify?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "people?", "epics?", "gate_files?", "conventions?", "brief_rules?", "stacked_rules?", "limits?", "traps?", "token_rules?", "changelog?", "vars?", "board?", "schedules?"}
 
 	for _, block := range declared {
 		args = append(args, block.Name+"?")
@@ -151,7 +153,7 @@ func newProject(at syntax.Position, kwargs []starlark.Tuple, declared []Block) (
 
 	host, board, held := nested[rawHost]{want: hostSpecName}, nested[rawBoard]{want: boardSpec().name}, holders(declared)
 	dests := []any{
-		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.TestCommand, &raw.TestPaths, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer,
+		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.TestCommand, &raw.TestPaths, &raw.Notify, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer,
 		&raw.People, &raw.Epics, &raw.GateFiles, &raw.Conventions, &raw.BriefRules, &raw.StackedRules, &raw.Limits, &raw.Traps, &raw.TokenRules, &raw.Changelog, &raw.Vars, &board, &raw.Schedules,
 	}
 
@@ -182,13 +184,13 @@ func profileOf(path string, raw rawProject, registry Adapters) (model.Project, e
 	return withFacts(path, model.Project{
 		Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Repo: raw.Repo.Value, Source: source, Tracker: names.tracker, Claims: names.claims,
 		Forge: names.forge, Blocks: blocksOf(raw, names), Tools: toolsOf(names), BaseBranch: raw.BaseBranch, Gate: raw.Gate, GateSteps: slices.Clone(raw.GateSteps), BuildHost: host, BuildHosts: declaredHosts(raw.BuildHost), Host: hostTable, TestReport: raw.TestReport.Value, TestCommand: raw.TestCommand.Value,
-		TestPaths: slices.Clone(raw.TestPaths), PinFile: raw.PinFile.Value, Visibility: visibility, Sandbox: sandbox, SandboxRead: slices.Clone(raw.SandboxRead), SandboxDeny: slices.Clone(raw.SandboxDeny), GateNetwork: slices.Clone(raw.GateNetwork), GateAllowWrite: slices.Clone(raw.GateAllowWrite), SandboxEnforcer: raw.SandboxEnforcer.Value,
+		TestPaths: slices.Clone(raw.TestPaths), Notify: slices.Clone(raw.Notify.Words), PinFile: raw.PinFile.Value, Visibility: visibility, Sandbox: sandbox, SandboxRead: slices.Clone(raw.SandboxRead), SandboxDeny: slices.Clone(raw.SandboxDeny), GateNetwork: slices.Clone(raw.GateNetwork), GateAllowWrite: slices.Clone(raw.GateAllowWrite), SandboxEnforcer: raw.SandboxEnforcer.Value,
 	}, raw)
 }
 
 // checkKeys checks the keys that the named adapters need and returns the build host and the source.
 func checkKeys(raw rawProject, names adapters) (string, string, error) {
-	if err := requiredKeys(raw, names); err != nil {
+	if err := errors.Join(requiredKeys(raw, names), notifyCommand(raw)); err != nil {
 		return "", "", err
 	}
 
@@ -213,6 +215,23 @@ func checkKeys(raw rawProject, names adapters) (string, string, error) {
 func testPaths(raw rawProject) error {
 	if slices.ContainsFunc(raw.TestPaths, func(glob string) bool { return strings.TrimSpace(glob) == "" }) {
 		return refuseAt(raw.At, "`test_paths` holds an empty glob. Each entry names test files, for example `\"**/*_test.go\"`. Remove the empty entry.")
+	}
+
+	return nil
+}
+
+// notifyCommand refuses a notify that is set and names no program: an empty list, or a first item with no text. An unset notify is allowed: the project then sends no notice.
+func notifyCommand(raw rawProject) error {
+	if !raw.Notify.Set {
+		return nil
+	}
+
+	if len(raw.Notify.Words) == 0 {
+		return refuseAt(raw.At, "`notify` is an empty list. Name the program, such as [\"ntfy\", \"publish\", \"beehave\"], or leave `notify` out.")
+	}
+
+	if strings.TrimSpace(raw.Notify.Words[0]) == "" {
+		return refuseAt(raw.At, "`notify` names an empty program. Put the program first in the list, such as [\"ntfy\", \"publish\", \"beehave\"].")
 	}
 
 	return nil
