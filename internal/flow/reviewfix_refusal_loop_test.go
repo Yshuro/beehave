@@ -260,12 +260,28 @@ func TestReviewFixBeforeReview_AClosingKeywordStopsTheLoopBeforeAnyFixAgentWithT
 	run, err := tryLoop(t, rig, "", func() { gitIn(t, rig.dir, "commit", "-q", "--allow-empty", "-m", "try to fix it") })
 
 	require.ErrorContains(t, err, "REFUSE: the checks before review refused the head of")
-	require.ErrorContains(t, err, "no new commit repairs it")
+	require.ErrorContains(t, err, "no new commit repairs the closing keyword")
 	require.ErrorContains(t, err, "the commit "+keyword[:7]+" (add a) closes #12 with a closing keyword")
 	require.ErrorContains(t, err, "Rebuild the branch without the keyword")
+	assert.Equal(t, 1, strings.Count(err.Error(), "Rebuild the branch"), "the stop text says the repair once")
 	require.ErrorContains(t, err, "A plain beehave resume replays this stop")
 	assert.Empty(t, run.fixes, "no fix round is spent on a refusal that a new commit cannot repair")
 	assert.Len(t, run.reviews, 1, "the one scoped review of the implementer runs before the candidate")
 	assert.Zero(t, fullReviews(run.names), "the full review does not read a head with the keyword")
 	assert.EqualValues(t, 1, run.gate.runs.Load(), "the gate runs once, for the first candidate")
+}
+
+// TestReviewFixBeforeReview_AMixedRefusalStopsTheLoopAndTheTextListsEveryFinding drives the loop over a head with a closing keyword and a path outside allow.
+// The keyword stops the loop at once, and the stop text lists the path finding too, so one rebuild of the branch repairs both.
+func TestReviewFixBeforeReview_AMixedRefusalStopsTheLoopAndTheTextListsEveryFinding(t *testing.T) {
+	t.Parallel()
+
+	rig := workRig(t, "src/a.go", "docs/stray.md")
+	gitIn(t, rig.dir, "commit", "-q", "--allow-empty", "-m", "add a\n\nFixes #12")
+
+	run, err := tryLoop(t, rig, `, allow = ["src/**"]`, func() {})
+
+	require.ErrorContains(t, err, "closes #12 with a closing keyword")
+	require.ErrorContains(t, err, "the head changed 1 path(s) outside allow [src/**]: docs/stray.md")
+	assert.Empty(t, run.fixes, "no fix round is spent")
 }

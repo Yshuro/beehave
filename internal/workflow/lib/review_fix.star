@@ -232,7 +232,7 @@ def closing_findings(base, head, name):
         sha, _, message = record.partition(FIELD)
         refs = closing_references(text = message)
         if refs:
-            findings.append("the commit %s (%s) closes %s with a closing keyword. Only the integration pull request may close an issue. Rebuild the branch without the keyword" % (sha[:7], message.strip().split("\n")[0], ", ".join(refs)))
+            findings.append("the commit %s (%s) closes %s with a closing keyword. Only the integration pull request may close an issue" % (sha[:7], message.strip().split("\n")[0], ", ".join(refs)))
     return findings
 
 def checked_allow(allow):
@@ -274,7 +274,7 @@ def check_before_review(loop, check):
     A finding that no new commit repairs stops the item at once: no fix round is spent on it."""
     judged = before_review(check, base = "origin/" + loop.base, allow = loop.allow, name = "candidate-before-review")
     if judged.unrepairable:
-        fail("REFUSE: the checks before review refused the head of %s, and no new commit repairs it:\n%s\nA fix adds commits and never rewrites history. Rebuild the branch without the keyword. %s" % (loop.item.id, "\n".join(["- " + finding for finding in judged.unrepairable]), restart_steps(loop.item)))
+        fail("REFUSE: the checks before review refused the head of %s, and no new commit repairs the closing keyword. The findings are:\n%s\nA fix adds commits and never rewrites history. Rebuild the branch without the keyword, with every finding above repaired. %s" % (loop.item.id, "\n".join(["- " + finding for finding in judged.findings]), restart_steps(loop.item)))
 
     if judged.ok:
         return ""
