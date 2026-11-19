@@ -20,6 +20,7 @@ import (
 	"github.com/tobocop2/beehave/internal/forge"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/proc"
+	"github.com/tobocop2/beehave/internal/review"
 )
 
 // hostTrees gives the one folder that the host tests use, or an error.
@@ -342,52 +343,54 @@ func TestBatchHost_IntentFailsForAReadThatFailsAndForAPullRequestThatIsNotFound(
 	require.ErrorContains(t, err, "cannot make an intent", "a read with no head proves nothing")
 }
 
-func TestBatchHost_PullReadsTheStateTheDraftFlagAndTheHeadOfTheOpenPullRequest(t *testing.T) {
+func TestBatchHost_PullReadsTheDraftFlagAndTheHeadOfTheOpenPullRequestThroughTheStandingReview(t *testing.T) {
 	t.Parallel()
 
 	draft := true
 	f := hostForge{state: " open ", draft: &draft, viewHead: gated, listed: []model.PullRequest{{Number: 9}}}
 
-	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r")
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r", "")
 
 	require.NoError(t, err)
-	assert.Equal(t, flow.PullView{State: "OPEN", Draft: true, Head: gated}, got)
+	assert.Equal(t, 9, got.Number)
+	assert.True(t, got.Draft)
+	assert.Equal(t, gated, got.Head)
+	assert.False(t, got.Merged || got.Closed)
+	assert.Empty(t, got.Unread)
 }
 
 func TestBatchHost_PullShowsAClosedPullRequestAsClosedAndRefusesAnItemWithNoPullRequest(t *testing.T) {
 	t.Parallel()
 
-	got, err := hostOver("", hostForge{closed: []model.PullRequest{{Number: 4}}}, nil).Pull(t.Context(), "p", "item", "o/r")
+	got, err := hostOver("", hostForge{closed: []model.PullRequest{{Number: 4}}}, nil).Pull(t.Context(), "p", "item", "o/r", "")
 
 	require.NoError(t, err)
-	assert.Equal(t, flow.PullView{State: "CLOSED"}, got)
+	assert.Equal(t, review.Standing{Number: 4, Closed: true}, got)
 
-	_, err = hostOver("", hostForge{}, nil).Pull(t.Context(), "p", "item", "o/r")
+	_, err = hostOver("", hostForge{}, nil).Pull(t.Context(), "p", "item", "o/r", "")
 	require.ErrorIs(t, err, forge.ErrNoPull, "no open, merged or closed pull request is an error, not a closed one")
 
-	_, err = hostOver("", hostForge{listErr: errFake}, nil).Pull(t.Context(), "p", "item", "o/r")
+	_, err = hostOver("", hostForge{listErr: errFake}, nil).Pull(t.Context(), "p", "item", "o/r", "")
 	require.ErrorIs(t, err, errFake)
 }
 
-func TestBatchHost_PullFailsForAProjectWithNoForgeAMissingDraftFlagAndAReadThatFails(t *testing.T) {
+func TestBatchHost_PullFailsForAProjectWithNoForgeAndPutsAViewThatFailsIntoUnread(t *testing.T) {
 	t.Parallel()
 
 	listed := []model.PullRequest{{Number: 9}}
 
-	_, err := hostOver("", hostForge{state: "OPEN", listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r")
-	require.ErrorContains(t, err, "the forge gave no draft state for the pull request of item item")
+	got, err := hostOver("", hostForge{viewErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"pull request"}, got.Unread, "a read that fails is a reason in the standing, never an empty fact")
 
-	_, err = hostOver("", hostForge{viewErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r")
-	require.ErrorIs(t, err, errFake)
-
-	_, err = hostOver("", hostForge{}, nil).Pull(t.Context(), "p", "item", "other/repo")
+	_, err = hostOver("", hostForge{}, nil).Pull(t.Context(), "p", "item", "other/repo", "")
 	require.ErrorContains(t, err, "other/repo")
 }
 
 func TestBatchHost_PullOfAProjectThatTheConfigLacksFails(t *testing.T) {
 	t.Parallel()
 
-	_, err := hostOver("", hostForge{}, nil).Pull(t.Context(), "unknown", "item", "o/r")
+	_, err := hostOver("", hostForge{}, nil).Pull(t.Context(), "unknown", "item", "o/r", "")
 
 	require.Error(t, err)
 }
@@ -429,98 +432,64 @@ func TestBatchHost_PullReadsTheConflictTheChangeRequestsAndTheThreadsOfAnOpenPul
 	draft := false
 	f := hostForge{state: "OPEN", draft: &draft, viewHead: gated, mergeable: "CONFLICTING", changes: 2, threads: 3, listed: []model.PullRequest{{Number: 9}}}
 
-	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r")
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r", "")
 
 	require.NoError(t, err)
-	assert.Equal(t, flow.PullView{State: "OPEN", Head: gated, Conflicting: true, ChangeRequests: 2, Threads: 3}, got)
+	assert.True(t, got.Conflicting)
+	assert.Len(t, got.ChangeRequests, 2)
+	assert.Equal(t, 3, got.UnresolvedThreads)
 }
 
-func TestBatchHost_PullReadsNoStandingOfAMergedPullRequest(t *testing.T) {
+func TestBatchHost_PullShowsAMergedPullRequestAsMerged(t *testing.T) {
 	t.Parallel()
 
 	draft := false
-	f := hostForge{state: "MERGED", draft: &draft, viewHead: gated, changesErr: errFake, threadsErr: errFake, listed: []model.PullRequest{{Number: 9}}}
+	f := hostForge{state: "MERGED", draft: &draft, viewHead: gated, listed: []model.PullRequest{{Number: 9}}}
 
-	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r")
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r", "")
 
-	require.NoError(t, err, "a merged pull request needs no read of its reviews")
-	assert.Equal(t, flow.PullView{State: "MERGED", Head: gated}, got)
+	require.NoError(t, err)
+	assert.True(t, got.Merged)
+	assert.Equal(t, gated, got.Head)
 }
 
-func TestBatchHost_PullFailsWhenTheChangeRequestsOrTheThreadsCannotBeRead(t *testing.T) {
+func TestBatchHost_PullPutsTheChangeRequestsAndTheThreadsThatCannotBeReadIntoUnread(t *testing.T) {
 	t.Parallel()
 
 	draft := false
 	listed := []model.PullRequest{{Number: 9}}
 
-	_, err := hostOver("", hostForge{state: "OPEN", draft: &draft, changesErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r")
-	require.ErrorContains(t, err, "read the change requests of the pull request of item item")
-	require.ErrorIs(t, err, errFake)
+	got, err := hostOver("", hostForge{state: "OPEN", draft: &draft, changesErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"change requests"}, got.Unread)
 
-	_, err = hostOver("", hostForge{state: "OPEN", draft: &draft, threadsErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r")
-	require.ErrorContains(t, err, "read the review threads of the pull request of item item")
-	require.ErrorIs(t, err, errFake)
+	got, err = hostOver("", hostForge{state: "OPEN", draft: &draft, threadsErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r", "")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"review threads"}, got.Unread)
 }
 
-func TestBatchHost_SameTreeSaysWhetherTwoCommitsHoldTheSameTree(t *testing.T) {
+func TestBatchHost_PullComparesTheTreeOfAHeadThatIsNotTheReviewedCommit(t *testing.T) {
 	t.Parallel()
 
-	f := hostForge{listed: []model.PullRequest{{Number: 9}}, trees: map[string]string{"a": "t1", "b": "t1", "c": "t2", "e": ""}}
+	draft := false
+	listed := []model.PullRequest{{Number: 9}}
+	trees := map[string]string{"a": "t1", gated: "t1", "c": "t2"}
 
-	same, err := hostOver("", f, nil).SameTree(t.Context(), "p", "item", "o/r", "a", "b")
+	same, err := hostOver("", hostForge{state: "OPEN", draft: &draft, viewHead: gated, listed: listed, trees: trees}, nil).Pull(t.Context(), "p", "item", "o/r", "a")
 	require.NoError(t, err)
-	assert.True(t, same)
+	assert.Equal(t, "a", same.Rewritten, "the head holds the tree of the reviewed commit")
 
-	same, err = hostOver("", f, nil).SameTree(t.Context(), "p", "item", "o/r", "a", "c")
+	other, err := hostOver("", hostForge{state: "OPEN", draft: &draft, viewHead: gated, listed: listed, trees: trees}, nil).Pull(t.Context(), "p", "item", "o/r", "c")
 	require.NoError(t, err)
-	assert.False(t, same)
+	assert.Empty(t, other.Rewritten)
 
-	same, err = hostOver("", f, nil).SameTree(t.Context(), "p", "item", "o/r", "e", "e")
+	itself, err := hostOver("", hostForge{state: "OPEN", draft: &draft, viewHead: gated, listed: listed, treeErr: errFake}, nil).Pull(t.Context(), "p", "item", "o/r", gated)
 	require.NoError(t, err)
-	assert.False(t, same, "a tree that the forge did not give is no proof of a rewrite")
-}
+	assert.Empty(t, itself.Unread, "a head that is the reviewed commit needs no tree read")
 
-func TestBatchHost_SameTreeFailsForAReadThatFailsAndForAPullRequestThatTheItemLacks(t *testing.T) {
-	t.Parallel()
-
-	f := hostForge{listed: []model.PullRequest{{Number: 9}}, treeErr: errFake}
-
-	_, err := hostOver("", f, nil).SameTree(t.Context(), "p", "item", "o/r", "a", "b")
-	require.ErrorContains(t, err, "read the tree of commit a")
-	require.ErrorIs(t, err, errFake)
-
-	_, err = hostOver("", hostForge{}, nil).SameTree(t.Context(), "p", "item", "o/r", "a", "b")
-	require.ErrorIs(t, err, forge.ErrNoPull)
-}
-
-func TestBatchHost_SameTreeFailsWhenOnlyTheSecondTreeCannotBeRead(t *testing.T) {
-	t.Parallel()
-
-	f := hostForge{listed: []model.PullRequest{{Number: 9}}, trees: map[string]string{"a": "t1"}}
-	failing := &secondTreeFails{hostForge: f, fail: "b"}
-
-	host := hostOver("", f, nil)
-	host.pulls.forge = func(model.Project) (forge.Forge, error) { return failing, nil }
-
-	_, err := host.SameTree(t.Context(), "p", "item", "o/r", "a", "b")
-
-	require.ErrorContains(t, err, "read the tree of commit b")
-	require.ErrorIs(t, err, errFake)
-}
-
-// secondTreeFails is a forge whose tree read fails for one commit.
-type secondTreeFails struct {
-	hostForge
-
-	fail string
-}
-
-func (f *secondTreeFails) CommitTree(ctx context.Context, commit string) (string, error) {
-	if commit == f.fail {
-		return "", errFake
-	}
-
-	return f.hostForge.CommitTree(ctx, commit)
+	failed, err := hostOver("", hostForge{state: "OPEN", draft: &draft, viewHead: gated, listed: listed, treeErr: errFake}, nil).Pull(t.Context(), "p", "item", "o/r", "a")
+	require.NoError(t, err)
+	assert.Equal(t, []string{"tree of the reviewed commit", "tree of the head"}, failed.Unread)
 }
 
 // TreeBlobs is the other half of the tree reads of a forge. A tree comparison reads no files, so it gives none.

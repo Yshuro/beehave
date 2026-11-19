@@ -578,6 +578,8 @@ type harness struct {
 	slots func(project, cluster, class string) (SlotGrant, error)
 	ticks chan time.Time
 	sleep time.Duration
+	// draft is the limit of each draft of a hand-off that ends. A test sets it to shorten the limit.
+	draft time.Duration
 	// wall replaces the wall clock of the engine when a test sets it.
 	wall func() time.Time
 	// reading replaces the reading of the clock that the now builtin and the wait for a lost job read, when a test sets it.
@@ -650,7 +652,7 @@ func (h *harness) deps() Deps {
 	deps := Deps{
 		Agents: h.agents, Gate: h.gate, Logins: h.logins, Lifecycle: h.life, Forge: h.forge, Trees: h.trees, Beats: h.beats, Commands: h.commands, Items: h.items, Writer: h.writer, Reader: h.reader,
 		Kept:  []error{errFake},
-		Clock: clock{Tick: h.ticks, Poll: storePoll, Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Watch: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, Reading: h.reading, CapWait: cmp.Or(h.capWait, time.Millisecond), Overload: cmp.Or(h.overload, time.Millisecond), LostPoll: cmp.Or(h.lostPoll, time.Millisecond)},
+		Clock: clock{Tick: h.ticks, Poll: storePoll, Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Watch: cmp.Or(h.sleep, time.Millisecond), Draft: h.draft, Wall: h.wall, Reading: h.reading, CapWait: cmp.Or(h.capWait, time.Millisecond), Overload: cmp.Or(h.overload, time.Millisecond), LostPoll: cmp.Or(h.lostPoll, time.Millisecond)},
 	}
 	if h.merge != nil {
 		deps.Merge = h.merge

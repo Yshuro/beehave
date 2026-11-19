@@ -17,6 +17,7 @@ import (
 	"github.com/tobocop2/beehave/internal/batch"
 	"github.com/tobocop2/beehave/internal/host"
 	"github.com/tobocop2/beehave/internal/merge"
+	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -48,12 +49,11 @@ type batchHost interface {
 	Checkout(ctx context.Context, project, item, commit string) (tree string, err error)
 	Tip(ctx context.Context, project, item, base string) (batch.Tip, error)
 	Intent(ctx context.Context, project, item, repo, base, tipTree string, now time.Time) (merge.Intent, error)
-	// Pull reads the state, the draft flag and the head of the pull request of an item. SetDraft marks it a draft, or ready for review when draft is false.
+	// Pull reads the standing of the pull request of an item: its state, draft flag, head, conflict, change requests and unresolved threads. A read that fails goes into Unread.
+	// A non-empty reviewed is the commit that was marked ready: a head with the tree of that commit is a rewrite. SetDraft marks it a draft, or ready for review when draft is false.
 	// Both serve a hand-off and write nothing else.
-	Pull(ctx context.Context, project, item, repo string) (PullView, error)
+	Pull(ctx context.Context, project, item, repo, reviewed string) (review.Standing, error)
 	SetDraft(ctx context.Context, project, item, repo string, draft bool) error
-	// SameTree says whether two commits of the pull request hold the same tree. A head that was rewritten with the same tree is not a move.
-	SameTree(ctx context.Context, project, item, repo, was, now string) (bool, error)
 }
 
 // batchCall are the arguments of a merge call after the checks.
@@ -224,14 +224,11 @@ func (c *batchCall) refuseLanding(gateRun, forbid, own starlark.Value) error {
 		return nil
 	}
 
-	landing := []struct {
-		name string
-		set  bool
-	}{{"hold", c.settings.Hold != ""}, {"own", own != nil}, {"forbid_text", forbid != nil}, {"gate_run", gateRun != nil}, {"integration", c.integration != 0}}
+	set := map[string]bool{"hold": c.settings.Hold != "", "own": own != nil, "forbid_text": forbid != nil, "gate_run": gateRun != nil, "integration": c.integration != 0}
 
-	for _, keyword := range landing {
-		if keyword.set {
-			return workflow.HandOffTakes(keyword.name)
+	for _, keyword := range workflow.HandOffLanding() {
+		if set[keyword] {
+			return workflow.HandOffTakes(keyword)
 		}
 	}
 

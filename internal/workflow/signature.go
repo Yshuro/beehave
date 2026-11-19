@@ -577,7 +577,7 @@ func (g *graph) handingOff(call *syntax.CallExpr, params []Param) {
 		return
 	}
 
-	for _, keyword := range handOffLanding() {
+	for _, keyword := range HandOffLanding() {
 		if paramArg(call, params, keyword) != nil {
 			g.reportRule(call, HandOffTakes(keyword))
 

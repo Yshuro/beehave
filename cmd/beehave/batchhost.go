@@ -13,6 +13,7 @@ import (
 	"github.com/tobocop2/beehave/internal/forge"
 	"github.com/tobocop2/beehave/internal/merge"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/review"
 	storegithub "github.com/tobocop2/beehave/internal/store/github"
 )
 
@@ -225,60 +226,28 @@ func (h batchHost) Intent(ctx context.Context, project, item, repo, _, tipTree s
 	return merge.NewIntent(view, tipTree, now)
 }
 
-// Pull reads the state, the draft flag and the head of the pull request of the item.
-func (h batchHost) Pull(ctx context.Context, project, item, repo string) (flow.PullView, error) {
+// Pull reads the standing of the pull request of the item through the standing review. A non-empty reviewed is the commit that was marked ready: a head that is another commit
+// with the same tree is a rewrite of it. A read that fails goes into Unread, and an item with only a closed pull request is closed.
+func (h batchHost) Pull(ctx context.Context, project, item, repo, reviewed string) (review.Standing, error) {
 	built, number, err := h.pulls.target(ctx, project, item, repo)
 	if errors.Is(err, forge.ErrNoPull) {
 		return closedPull(ctx, built, item, err)
 	}
 
 	if err != nil {
-		return flow.PullView{}, err
+		return review.Standing{}, err
 	}
 
-	return readView(ctx, built, number, item)
-}
-
-// readView reads the view of an open or merged pull request, and its standing when it is open.
-func readView(ctx context.Context, built forge.Forge, number int, item string) (flow.PullView, error) {
-	view, err := built.PRView(ctx, number, "state", "isDraft", "headRefOid", "mergeable")
-	if err != nil {
-		return flow.PullView{}, err
+	standing := review.Pull(ctx, built, number)
+	if reviewed != "" {
+		standing.Compare(ctx, built, reviewed)
 	}
 
-	if view.IsDraft == nil {
-		return flow.PullView{}, fmt.Errorf("the forge gave no draft state for the pull request of item %s", item)
-	}
-
-	pull := flow.PullView{State: strings.ToUpper(strings.TrimSpace(model.Deref(view.State))), Draft: *view.IsDraft, Head: model.Deref(view.HeadRefOid)}
-	if pull.State != stateOpen {
-		return pull, nil
-	}
-
-	pull.Conflicting = strings.EqualFold(model.Deref(view.Mergeable), "CONFLICTING")
-
-	return pull, readStanding(ctx, built, number, item, &pull)
+	return standing, nil
 }
 
 // stateOpen is the state of a pull request that is open.
 const stateOpen = "OPEN"
-
-// readStanding fills the change requests and the unresolved threads of an open pull request. A read that fails is an error, never an empty count.
-func readStanding(ctx context.Context, built forge.Forge, number int, item string, pull *flow.PullView) error {
-	changes, err := built.OpenChangeRequests(ctx, number)
-	if err != nil {
-		return fmt.Errorf("read the change requests of the pull request of item %s: %w", item, err)
-	}
-
-	threads, err := built.UnresolvedThreads(ctx, number)
-	if err != nil {
-		return fmt.Errorf("read the review threads of the pull request of item %s: %w", item, err)
-	}
-
-	pull.ChangeRequests, pull.Threads = len(changes), len(threads)
-
-	return nil
-}
 
 // SetDraft marks the pull request of the item a draft, or ready for review when draft is false.
 func (h batchHost) SetDraft(ctx context.Context, project, item, repo string, draft bool) error {
@@ -290,32 +259,12 @@ func (h batchHost) SetDraft(ctx context.Context, project, item, repo string, dra
 	return built.SetDraft(ctx, number, draft)
 }
 
-// closedPull is the view of an item that has no open or merged pull request: CLOSED when the forge lists a closed one, else the error of the lookup.
-func closedPull(ctx context.Context, built forge.Forge, item string, missing error) (flow.PullView, error) {
+// closedPull is the standing of an item that has no open or merged pull request: closed when the forge lists a closed one, else the error of the lookup.
+func closedPull(ctx context.Context, built forge.Forge, item string, missing error) (review.Standing, error) {
 	number, err := listed(ctx, built, item, "closed")
 	if err != nil || number == 0 {
-		return flow.PullView{}, cmp.Or(err, missing)
+		return review.Standing{}, cmp.Or(err, missing)
 	}
 
-	return flow.PullView{State: "CLOSED"}, nil
-}
-
-// SameTree says whether two commits of the pull request of the item hold the same tree. A tree that cannot be read is an error, and a forge that does not read trees gives one.
-func (h batchHost) SameTree(ctx context.Context, project, item, repo, was, now string) (bool, error) {
-	built, _, err := h.pulls.target(ctx, project, item, repo)
-	if err != nil {
-		return false, err
-	}
-
-	before, err := built.CommitTree(ctx, was)
-	if err != nil {
-		return false, fmt.Errorf("read the tree of commit %s: %w", was, err)
-	}
-
-	after, err := built.CommitTree(ctx, now)
-	if err != nil {
-		return false, fmt.Errorf("read the tree of commit %s: %w", now, err)
-	}
-
-	return before != "" && before == after, nil
+	return review.Standing{Number: number, Closed: true}, nil
 }

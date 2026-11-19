@@ -436,8 +436,10 @@ It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`,
 - A MERGED pull request goes into `merged`. A pull request that is not open goes into `rejected` with its reason, and nothing is drafted.
 - If the head of an open pull request is not the head of the member, the call marks it a draft again, unless it is a draft already. It goes into `rejected` with a reason that names the new head, and into `moved` as `struct(item, head)` with that head. The workflow can review the new head and call `merge` again. A head that is another commit with the same tree is a rewrite and not a move.
 - If a review asks for changes, or the pull request conflicts with its base branch, the call marks a ready pull request a draft again, at the first read or later. It goes into `rejected` with the reasons. An unresolved thread does not draft a ready pull request.
+- If a pull request is a draft during the watch, whatever made it a draft, the member goes into `rejected` and the reason says why: the reasons to wait when a change request or a conflict stands, else "it is a draft". The call marks nothing ready again.
 - The call returns when no member waits.
-- A call that ends by a cancel of the run, or by an error, marks each member that has not ended a draft again, when it is open and ready for review. A resume of a canceled run goes on with the watch and does not mark the pull request ready again. If the draft call fails, the owner gets a notice that tells them to convert the pull request by hand. A stop of the engine does not draft a pull request, because the run resumes.
+- A call that ends by a cancel of the run, or by an error, marks each member that has not ended a draft again, when it is open and ready for review. Each member has a limit of 30 seconds of its own. A resume of a canceled run goes on with the watch, finds the draft and ends the member as above. If a read or a draft call fails, the owner gets a notice that tells them to convert the pull request by hand, and the notice has its own limit of 30 seconds. A stop of the engine does not draft a pull request, because the run resumes.
+- The call reads each pull request through the standing review of `internal/review`, so the reasons use the same words as the ready read.
 
 #### A lost batch gate job
 

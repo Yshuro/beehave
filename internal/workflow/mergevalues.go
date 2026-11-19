@@ -161,8 +161,8 @@ func ownerList(dict *starlark.Dict, key string) ([]string, error) {
 	return Words("own."+key, list)
 }
 
-// handOffLanding lists the keywords of merge that only a landing reads, in the order that the refusal looks at them.
-func handOffLanding() []string {
+// HandOffLanding lists the keywords of merge that only a landing reads, in the order that the refusal looks at them.
+func HandOffLanding() []string {
 	return []string{"hold", "own", "forbid_text", "gate_run", "integration"}
 }
 
