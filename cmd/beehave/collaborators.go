@@ -868,7 +868,7 @@ func (p pulls) numberOf(ctx context.Context, built opened, item string) (opened,
 		}
 	}
 
-	return opened{}, 0, fmt.Errorf("%w: no pull request is on the branch %s", forge.ErrNoPull, item)
+	return built, 0, fmt.Errorf("%w: no pull request is on the branch %s", forge.ErrNoPull, item)
 }
 
 // listed returns the number of the one pull request in the state on the branch of the item, or 0 when there is none.

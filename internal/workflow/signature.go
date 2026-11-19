@@ -380,7 +380,7 @@ func swarmSignatures() map[string][]Param {
 		mergeName: {
 			{Name: "prs", Kind: KindList, Required: true, Rule: prsRule, Members: true},
 			filled("base"), filled("repo"), opt("hold", KindText), ruled("own", KindDict, ownRule),
-			forbidText(), words("gate_run"), opt("integration", KindInt),
+			forbidText(), words("gate_run"), opt("integration", KindInt), opt("hand_off", KindBool),
 			{Name: nameKeyword, Kind: KindText, Required: true, Why: "The name makes the step names of the call unique, so use one for each call of the run."},
 		},
 		gatherName: {req("runs", KindAny), one(failKeyword, FailModes()), one(untilKeyword, UntilModes()), label},

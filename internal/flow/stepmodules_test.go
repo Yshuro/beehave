@@ -74,8 +74,8 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land6.gate6.host1.round2", applicationVersion("v1"))
-	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land6.gate7.host1.round2", versionWithModule("v1", moduleGate, 7))
+	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land7.gate6.host1.round2", applicationVersion("v1"))
+	assert.Equal(t, "v1+core6.agent9.tracker1.forge2.land7.gate7.host1.round2", versionWithModule("v1", moduleGate, 7))
 }
 
 func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
@@ -84,11 +84,11 @@ func TestStepModules_TheCoreModuleIsAtVersionSix(t *testing.T) {
 	assert.Contains(t, strings.Split(moduleVersions(), "."), "core6", "the facts step records ten fields: the method and board fields moved under vars at core5 and runners came at core6, so a run recorded at core5 replays no facts step")
 }
 
-func TestStepModules_TheLandModuleIsAtVersionSix(t *testing.T) {
+func TestStepModules_TheLandModuleIsAtVersionSeven(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "land6", "merge is the old batch_merge and a merge of one pull request records the batch steps, "+
-		"and each member records its scope check as batch:<call>.scope#<item> before its intent")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "land7", "merge is the old batch_merge and a merge of one pull request records the batch steps, "+
+		"each member records its scope check as batch:<call>.scope#<item> before its intent, and a hand-off records batch:<call>.ready#<item> and batch:<call>.watch#<item>@<round>")
 }
 
 func TestStepModules_TheGateModuleIsAtVersionSix(t *testing.T) {

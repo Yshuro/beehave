@@ -82,7 +82,7 @@ func TestResultFields_TheStructsOfTheSwarmBuiltinsAreTheFieldsOfTheTable(t *test
 	gathered, err := outcomesValue([]childOutcome{{}})
 	require.NoError(t, err)
 
-	landed, err := batchResult(batch.Result{}, batch.Report{}, nil, nil)
+	landed, err := batchResult(batch.Result{}, batch.Report{}, nil, nil, nil)
 	require.NoError(t, err)
 
 	got := map[string][]string{

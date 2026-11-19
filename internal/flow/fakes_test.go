@@ -650,7 +650,7 @@ func (h *harness) deps() Deps {
 	deps := Deps{
 		Agents: h.agents, Gate: h.gate, Logins: h.logins, Lifecycle: h.life, Forge: h.forge, Trees: h.trees, Beats: h.beats, Commands: h.commands, Items: h.items, Writer: h.writer, Reader: h.reader,
 		Kept:  []error{errFake},
-		Clock: clock{Tick: h.ticks, Poll: storePoll, Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, Reading: h.reading, CapWait: cmp.Or(h.capWait, time.Millisecond), Overload: cmp.Or(h.overload, time.Millisecond), LostPoll: cmp.Or(h.lostPoll, time.Millisecond)},
+		Clock: clock{Tick: h.ticks, Poll: storePoll, Settle: cmp.Or(h.sleep, time.Millisecond), Queued: cmp.Or(h.sleep, time.Millisecond), Watch: cmp.Or(h.sleep, time.Millisecond), Wall: h.wall, Reading: h.reading, CapWait: cmp.Or(h.capWait, time.Millisecond), Overload: cmp.Or(h.overload, time.Millisecond), LostPoll: cmp.Or(h.lostPoll, time.Millisecond)},
 	}
 	if h.merge != nil {
 		deps.Merge = h.merge

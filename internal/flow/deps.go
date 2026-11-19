@@ -192,6 +192,7 @@ type beats interface {
 // Grace replaces the time that a phase waits for the first trust of a run that is not open.
 // Settle replaces the time of the durable sleep between two reads of a batch member whose mergeable state is UNKNOWN.
 // Queued replaces the time of the durable sleep between two reads of a pull request whose merge the forge holds.
+// Watch replaces the time of the durable sleep between two reads of a pull request that a hand-off of merge watches.
 // CapWait replaces the least time of the durable sleep that waits for a usage cap to reset.
 // Overload replaces the first wait of the backoff after an overload of the provider.
 // LostPoll replaces the time of the durable sleep between two looks for the proof that a lost gate job can no longer run.
@@ -212,6 +213,7 @@ type clock struct {
 	Grace     time.Duration
 	Settle    time.Duration
 	Queued    time.Duration
+	Watch     time.Duration
 	// Gone is how long a joining run waits for an engine to come back before it reports that the engine stopped.
 	Gone time.Duration
 }

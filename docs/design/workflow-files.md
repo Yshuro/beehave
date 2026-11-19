@@ -406,13 +406,13 @@ A run that `spawn` started reads the hold of its item in the tracker again befor
 
 ### `merge`
 
-`merge(prs, base, repo, hold, own, forbid_text, gate_run, integration, name)` lands a list of `struct(item, head, approved)` with one gate run on the union tree of the base tip and all heads. It splits the list when the gate is red. A forge with a native merge queue needs no `merge`.
+`merge(prs, base, repo, hold, own, forbid_text, gate_run, integration, hand_off, name)` lands a list of `struct(item, head, approved)` with one gate run on the union tree of the base tip and all heads. It splits the list when the gate is red. A forge with a native merge queue needs no `merge`.
 
 `approved` is an optional bool of each member, and a member that leaves it out is not approved. It applies to that member only: a pull request of an `own` identity merges only when its own member sets `approved = True`. The call has no `approved` of its own, so the approval of one member never reaches another. A value that is not a bool fails the call and names the field.
 
 `beehave check workflow` reads each `struct(...)` member of a `prs` list with the parser that the run uses, so a wrong field is a problem before the run. The error names the member and the field, for example ``prs[1]: `approved` of a member of `prs` must be a bool, not string``, and is the same text that the run gives. The check reads the first wrong field of a member. A member that is a literal but not a struct, such as `1`, a dict or a list, is refused. A list, a dict or a struct that a field or a member holds counts as that type, whatever it contains. A value that only the run knows, such as a variable or a call, is left to the run: the check skips that field or that member and still reads the other fields. A file that defines its own `struct` is not read as the builtin.
 
-It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note`, `unproven`, `host_loss` and `host_losses`.
+It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`, `note`, `unproven`, `moved`, `host_loss` and `host_losses`.
 
 - Each entry of `rejected` and `deferred` has `item` and `reason`. For a member that a merge guard refused, the reason is every line of that refusal, one per line. No line of it matches a pattern of `forbid_text`, with each line tested as the posting steps test it, so a step can post it with the same `forbid_text`. This holds only for patterns that do not match the words of beehave itself, such as "left out".
 - Each entry of `unproven` has `item` and `reason`. An item of `merged` that `unproven` names has not landed.
@@ -424,6 +424,17 @@ It returns `merged`, `rejected`, `deferred`, `tip`, `tree`, `gates`, `findings`,
 - Each member merges through the guards of the merge package, pinned to its head and to the tree of its prefix.
 - Git 2.38 or newer is the minimum on the gate host.
 - For each member, the step `batch:<name>.intent#<item>` records the pull request as OPEN before the step `batch:<name>.merge#<item>` merges it. A resume after a crash therefore counts a merge that the forge already made as done.
+
+#### `hand_off`
+
+`hand_off = True` hands the landing to the owner. The call lands nothing, runs no gate and takes no `hold`, `own`, `forbid_text`, `gate_run` or `integration`: a call with one of them fails and names it.
+
+- For each member, the step `batch:<name>.ready#<item>` reads the pull request. A draft at the head of the member is marked ready. A resume replays the step and marks nothing ready again.
+- If a member waits, the run shows the merge state `owner_merge` and runs the `notify` command of the project once for the whole call. See `notify` in [configuration.md](configuration.md).
+- Then the step `batch:<name>.watch#<item>@<round>` reads each member that still waits, and a durable sleep of one hour separates two rounds. A restart resumes the watch.
+- A MERGED pull request goes into `merged`. A pull request that is not open goes into `rejected` with its reason, and nothing is drafted.
+- If the head of an open pull request is not the head of the member, the call marks it a draft again, unless it is a draft already. It goes into `rejected` with a reason that names the new head, and into `moved` as `struct(item, head)` with that head. The workflow can review the new head and call `merge` again.
+- The call returns when no member waits. A cancel of the run does not draft a pull request.
 
 #### A lost batch gate job
 

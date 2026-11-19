@@ -1,6 +1,7 @@
 package workflow_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -269,7 +270,7 @@ func TestCheck_MergeTakesTheKeywordsOfABatchAndNoKeywordOfTheOldSingleMerge(t *t
 			got := checkText(t, "def main(item):\n    merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", "+keyword+")\n")
 
 			require.NotEmpty(t, got)
-			assert.Contains(t, got[0], "merge takes no argument "+name+". Use one of: prs, base, repo, hold, own, forbid_text, gate_run, integration, name.")
+			assert.Contains(t, got[0], "merge takes no argument "+name+". Use one of: prs, base, repo, hold, own, forbid_text, gate_run, integration, hand_off, name.")
 		})
 	}
 }
@@ -303,4 +304,17 @@ func TestCheck_TheResultOfMergeHasNoStateField(t *testing.T) {
 
 	require.NotEmpty(t, got)
 	assert.Contains(t, got[0], "state is not a field of the result of merge")
+}
+
+func TestCheck_MergeTakesHandOffAsABool(t *testing.T) {
+	t.Parallel()
+
+	const call = "def main(item):\n    merge(name = \"land\", prs = [struct(item = \"1\", head = \"h\")], base = \"main\", repo = \"o/r\", hand_off = %s)\n"
+
+	assert.Empty(t, checkText(t, fmt.Sprintf(call, "True")))
+
+	got := checkText(t, fmt.Sprintf(call, `"yes"`))
+
+	require.NotEmpty(t, got)
+	assert.Contains(t, got[0], "hand_off")
 }

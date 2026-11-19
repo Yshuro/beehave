@@ -48,6 +48,10 @@ type batchHost interface {
 	Checkout(ctx context.Context, project, item, commit string) (tree string, err error)
 	Tip(ctx context.Context, project, item, base string) (batch.Tip, error)
 	Intent(ctx context.Context, project, item, repo, base, tipTree string, now time.Time) (merge.Intent, error)
+	// Pull reads the state, the draft flag and the head of the pull request of an item. SetDraft marks it a draft, or ready for review when draft is false.
+	// Both serve a hand-off and write nothing else.
+	Pull(ctx context.Context, project, item, repo string) (PullView, error)
+	SetDraft(ctx context.Context, project, item, repo string, draft bool) error
 }
 
 // batchCall are the arguments of a merge call after the checks.
@@ -58,15 +62,27 @@ type batchCall struct {
 	gateRun  []string
 	// integration is the number of the integration pull request, or 0 when the call names none.
 	integration int
+	// handOff is true when the owner merges: the call marks each member ready and watches it, and lands nothing.
+	handOff bool
 }
 
 // batchMerge lands the pull requests of `prs` with one gate run for the whole set, and a split of the set when the gate is red.
+// With `hand_off` it marks them ready and watches them until the owner merges them.
 func (s *script) batchMerge(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	call, err := s.batchCall(b, args, kwargs)
 	if err != nil {
 		return nil, err
 	}
 
+	if call.handOff {
+		return s.handOff(call)
+	}
+
+	return s.landBatch(call)
+}
+
+// landBatch runs the gate of the union of the members and merges the members that pass.
+func (s *script) landBatch(call batchCall) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	git, err := s.batchGit(call)
 	if err != nil {
 		return nil, err
@@ -110,7 +126,7 @@ func (s *script) batchOutcome(call batchCall, done batch.Result, losses []hostLo
 		return nil, fmt.Errorf("merge %q: %w", call.name, err)
 	}
 
-	return batchResult(done, report, unproven, losses)
+	return batchResult(done, report, unproven, losses, nil)
 }
 
 // batchProof checks as one recorded step that each merged member is on the base, so a replay returns the first proof and does not read the forge again.
@@ -184,7 +200,7 @@ func (s *script) batchCall(b *starlark.Builtin, args starlark.Tuple, kwargs []st
 
 	err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{
 		"prs": &prs, baseKeyword: &set.Base, repoKeyword: &set.Repo, holdKeyword: &set.Hold, ownKeyword: &own, "forbid_text": &forbid, "gate_run": &gateRun,
-		"integration": &call.integration, nameKeyword: &call.name,
+		"integration": &call.integration, nameKeyword: &call.name, handOffKeyword: &call.handOff,
 	})
 	if err != nil {
 		return call, err
@@ -197,9 +213,36 @@ func (s *script) batchCall(b *starlark.Builtin, args starlark.Tuple, kwargs []st
 	return call, call.fill(prs, gateRun, forbid, own)
 }
 
+// handOffKeyword is the keyword of merge that hands the landing to the owner.
+const handOffKeyword = "hand_off"
+
+// refuseLanding refuses a keyword that only a landing reads. A call with `hand_off` lands nothing, so each of them would do nothing.
+func (c *batchCall) refuseLanding(gateRun, forbid, own starlark.Value) error {
+	if !c.handOff {
+		return nil
+	}
+
+	landing := []struct {
+		name string
+		set  bool
+	}{{"hold", c.settings.Hold != ""}, {"own", own != nil}, {"forbid_text", forbid != nil}, {"gate_run", gateRun != nil}, {"integration", c.integration != 0}}
+
+	for _, keyword := range landing {
+		if keyword.set {
+			return fmt.Errorf("merge with `hand_off` lands nothing, so it takes no `%s`. Remove `%s` from the call", keyword.name, keyword.name)
+		}
+	}
+
+	return nil
+}
+
 // fill checks the settings of the call and reads the members, the gate program and the refusal settings from the raw arguments.
 func (c *batchCall) fill(prs, gateRun, forbid, own starlark.Value) (err error) {
 	set := &c.settings
+
+	if err = c.refuseLanding(gateRun, forbid, own); err != nil {
+		return err
+	}
 
 	if err = errors.Join(workflow.NotEmpty("base", set.Base), workflow.NotEmpty("repo", set.Repo)); err != nil {
 		return err
@@ -259,7 +302,8 @@ func members(v starlark.Value) ([]batch.Member, error) {
 // `findings` holds one line for each problem of the issues, `note` says why no read ran, and `unproven` holds an item and a reason for each merged member
 // that is neither in the history of the base nor on the vehicle commit. An item of `merged` that is also named in `unproven` has not landed.
 // `host_loss` lists the record of each lost gate job of the call, and `host_losses` is the count of the host losses of the item tree that the last record read, or 0.
-func batchResult(done batch.Result, report batch.Report, unproven []batch.Outcome, losses []hostLoss) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
+// `moved` holds the item and the new head of each member of a hand-off that went back to draft because its head moved. It is empty for a landing.
+func batchResult(done batch.Result, report batch.Report, unproven []batch.Outcome, losses []hostLoss, moved []batch.Member) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	recorded, count, err := lossFields(losses)
 	if err != nil {
 		return nil, err
@@ -275,6 +319,7 @@ func batchResult(done batch.Result, report batch.Report, unproven []batch.Outcom
 		"findings":    textList(report.Findings),
 		"note":        starlark.String(report.Note),
 		"unproven":    outcomes(unproven),
+		"moved":       movedList(moved),
 		hostLossKey:   recorded,
 		hostLossesKey: count,
 	}), nil

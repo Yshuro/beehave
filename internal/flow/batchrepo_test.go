@@ -128,6 +128,8 @@ type repoHost struct {
 	unproven   []batch.Outcome
 	proofErr   error
 	proofCalls []string
+	// pr answers Pull and SetDraft for a hand-off.
+	pr *handForge
 }
 
 func (h *repoHost) Git(context.Context, string, string) (batch.Git, error) {

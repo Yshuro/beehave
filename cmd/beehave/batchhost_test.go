@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -44,6 +46,20 @@ type hostForge struct {
 	listed   []model.PullRequest
 	listErr  error
 	viewHead string
+	// draft is the isDraft field of the view, nil when the forge sends none. closed is what the list of closed pull requests holds.
+	draft  *bool
+	closed []model.PullRequest
+	// drafted records each SetDraft call as the number and the flag. setDraftErr is the error of that call.
+	drafted     *[]string
+	setDraftErr error
+}
+
+func (f hostForge) SetDraft(_ context.Context, number int, draft bool) error {
+	if f.drafted != nil {
+		*f.drafted = append(*f.drafted, fmt.Sprintf("%d:%t", number, draft))
+	}
+
+	return f.setDraftErr
 }
 
 func (f hostForge) ClosingRefs(context.Context, int) (model.ClosingRefs, error) {
@@ -54,7 +70,11 @@ func (f hostForge) BranchRef(context.Context, string) (string, bool, error) {
 	return f.tip, f.found, f.tipErr
 }
 
-func (f hostForge) PRList(context.Context, int, ...string) ([]model.PullRequest, error) {
+func (f hostForge) PRList(_ context.Context, _ int, args ...string) ([]model.PullRequest, error) {
+	if slices.Contains(args, "closed") {
+		return f.closed, f.listErr
+	}
+
 	return f.listed, f.listErr
 }
 
@@ -64,7 +84,7 @@ func (f hostForge) PRView(_ context.Context, number int, _ ...string) (model.Pul
 	}
 
 	head, base := f.viewHead, "main"
-	view := model.PullRequest{Number: number, HeadRefOid: &head, BaseRefName: &base}
+	view := model.PullRequest{Number: number, HeadRefOid: &head, BaseRefName: &base, IsDraft: f.draft}
 
 	if f.state != "" { // a state that the forge did not send is nil, not an empty text
 		view.State = &f.state
@@ -309,4 +329,70 @@ func TestBatchHost_IntentFailsForAReadThatFailsAndForAPullRequestThatIsNotFound(
 
 	_, err = hostOver("", hostForge{state: "OPEN", listed: listed}, nil).Intent(t.Context(), "p", "item", "o/r", "main", "t", time.Time{})
 	require.ErrorContains(t, err, "cannot make an intent", "a read with no head proves nothing")
+}
+
+func TestBatchHost_PullReadsTheStateTheDraftFlagAndTheHeadOfTheOpenPullRequest(t *testing.T) {
+	t.Parallel()
+
+	draft := true
+	f := hostForge{state: " open ", draft: &draft, viewHead: gated, listed: []model.PullRequest{{Number: 9}}}
+
+	got, err := hostOver("", f, nil).Pull(t.Context(), "p", "item", "o/r")
+
+	require.NoError(t, err)
+	assert.Equal(t, flow.PullView{State: "OPEN", Draft: true, Head: gated}, got)
+}
+
+func TestBatchHost_PullShowsAClosedPullRequestAsClosedAndRefusesAnItemWithNoPullRequest(t *testing.T) {
+	t.Parallel()
+
+	got, err := hostOver("", hostForge{closed: []model.PullRequest{{Number: 4}}}, nil).Pull(t.Context(), "p", "item", "o/r")
+
+	require.NoError(t, err)
+	assert.Equal(t, flow.PullView{State: "CLOSED"}, got)
+
+	_, err = hostOver("", hostForge{}, nil).Pull(t.Context(), "p", "item", "o/r")
+	require.ErrorIs(t, err, forge.ErrNoPull, "no open, merged or closed pull request is an error, not a closed one")
+
+	_, err = hostOver("", hostForge{listErr: errFake}, nil).Pull(t.Context(), "p", "item", "o/r")
+	require.ErrorIs(t, err, errFake)
+}
+
+func TestBatchHost_PullFailsForAProjectWithNoForgeAMissingDraftFlagAndAReadThatFails(t *testing.T) {
+	t.Parallel()
+
+	listed := []model.PullRequest{{Number: 9}}
+
+	_, err := hostOver("", hostForge{state: "OPEN", listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r")
+	require.ErrorContains(t, err, "the forge gave no draft state for the pull request of item item")
+
+	_, err = hostOver("", hostForge{viewErr: errFake, listed: listed}, nil).Pull(t.Context(), "p", "item", "o/r")
+	require.ErrorIs(t, err, errFake)
+
+	_, err = hostOver("", hostForge{}, nil).Pull(t.Context(), "p", "item", "other/repo")
+	require.ErrorContains(t, err, "other/repo")
+}
+
+func TestBatchHost_PullOfAProjectThatTheConfigLacksFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := hostOver("", hostForge{}, nil).Pull(t.Context(), "unknown", "item", "o/r")
+
+	require.Error(t, err)
+}
+
+func TestBatchHost_SetDraftMarksThePullRequestOfTheItem(t *testing.T) {
+	t.Parallel()
+
+	calls := []string{}
+	f := hostForge{listed: []model.PullRequest{{Number: 9}}, drafted: &calls}
+
+	require.NoError(t, hostOver("", f, nil).SetDraft(t.Context(), "p", "item", "o/r", true))
+	require.NoError(t, hostOver("", f, nil).SetDraft(t.Context(), "p", "item", "o/r", false))
+	assert.Equal(t, []string{"9:true", "9:false"}, calls)
+
+	f.setDraftErr = errFake
+	require.ErrorIs(t, hostOver("", f, nil).SetDraft(t.Context(), "p", "item", "o/r", true), errFake)
+
+	require.ErrorIs(t, hostOver("", hostForge{}, nil).SetDraft(t.Context(), "p", "item", "o/r", true), forge.ErrNoPull)
 }

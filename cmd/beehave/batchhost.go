@@ -1,7 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -221,4 +223,47 @@ func (h batchHost) Intent(ctx context.Context, project, item, repo, _, tipTree s
 	view.Number = number
 
 	return merge.NewIntent(view, tipTree, now)
+}
+
+// Pull reads the state, the draft flag and the head of the pull request of the item.
+func (h batchHost) Pull(ctx context.Context, project, item, repo string) (flow.PullView, error) {
+	built, number, err := h.pulls.target(ctx, project, item, repo)
+	if errors.Is(err, forge.ErrNoPull) {
+		return closedPull(ctx, built, item, err)
+	}
+
+	if err != nil {
+		return flow.PullView{}, err
+	}
+
+	view, err := built.PRView(ctx, number, "state", "isDraft", "headRefOid")
+	if err != nil {
+		return flow.PullView{}, err
+	}
+
+	if view.IsDraft == nil {
+		return flow.PullView{}, fmt.Errorf("the forge gave no draft state for the pull request of item %s", item)
+	}
+
+	return flow.PullView{State: strings.ToUpper(strings.TrimSpace(model.Deref(view.State))), Draft: *view.IsDraft, Head: model.Deref(view.HeadRefOid)}, nil
+}
+
+// SetDraft marks the pull request of the item a draft, or ready for review when draft is false.
+func (h batchHost) SetDraft(ctx context.Context, project, item, repo string, draft bool) error {
+	built, number, err := h.pulls.target(ctx, project, item, repo)
+	if err != nil {
+		return err
+	}
+
+	return built.SetDraft(ctx, number, draft)
+}
+
+// closedPull is the view of an item that has no open or merged pull request: CLOSED when the forge lists a closed one, else the error of the lookup.
+func closedPull(ctx context.Context, built forge.Forge, item string, missing error) (flow.PullView, error) {
+	number, err := listed(ctx, built, item, "closed")
+	if err != nil || number == 0 {
+		return flow.PullView{}, cmp.Or(err, missing)
+	}
+
+	return flow.PullView{State: "CLOSED"}, nil
 }
