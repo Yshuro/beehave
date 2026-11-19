@@ -293,7 +293,7 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "facts#2", "command:candidate-before-review-ancestor#1", "command:candidate-before-review-keywords#2",
 		"host_job", "DBOS.getResult", "command:mutation#3", "preflight:before-review-1#3",
-		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "phase", "DBOS.getResult", "agent:candidate-review#4/read1",
+		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "phase", "DBOS.getResult", "agent:candidate-review#4/read1", "pr_comment:approved#1",
 		"worktree", "release",
 	}, remediationStepNames(t))
 }
@@ -313,7 +313,7 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound
 		"agent:scoped-review-1#5/render", "agent:scoped-review-1#5/clear1", "phase", "DBOS.getResult", "agent:scoped-review-1#5/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:candidate-gate#2", "facts#2", "command:candidate-before-review-ancestor#1", "command:candidate-before-review-keywords#2",
 		"host_job", "DBOS.getResult", "command:mutation#3", "preflight:before-review-2#5",
-		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "phase", "DBOS.getResult", "agent:candidate-review#6/read1",
+		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "phase", "DBOS.getResult", "agent:candidate-review#6/read1", "pr_comment:approved#1",
 		"worktree", "release",
 	}, remediationStepNames(t, WithRedGate()))
 }
