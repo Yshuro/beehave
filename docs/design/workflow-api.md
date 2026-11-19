@@ -1,0 +1,188 @@
+# The workflow API
+
+This page is the contract of the builtins and keywords that a workflow file can call. It lists every builtin and every keyword that the engine registers, the fields that `facts()` returns, and where an example uses each pair.
+
+## The rule
+
+Every builtin and every keyword that the engine registers has one use in `examples/` or in the embedded library `internal/workflow/lib`, and a test for that use. A pair with no use is removed. The test `TestExamples_EveryBuiltinAndKeywordHasAUse` in `internal/flow` enforces the rule. It reads the registry of the engine, the table below and every call in the Starlark files. It fails for these cases:
+
+- A builtin or keyword of the code with no row in the table.
+- A pair of the code that no call uses.
+- A row of the table that names no builtin or keyword of the code.
+
+A second test checks that `workflow.Builtins` and the registry hold the same builtins.
+
+A call uses a keyword when it names the keyword, when it passes the value at the position of the keyword, or when it splats a dict that the same file builds with that key.
+
+## The fields of `facts()`
+
+`facts()` returns the ten fields below. Every other setting of a project lives under `vars`.
+
+| Field | Meaning |
+|---|---|
+| `base_branch` | The default branch of the repository. |
+| `build_host` | The build host of the project. |
+| `forge` | The forge adapter. |
+| `gate` | The gate command of the project. |
+| `gate_steps` | The steps that the gate must run. |
+| `repo` | The repository, as `owner/name`. |
+| `runners` | The runners that the project allows. |
+| `source` | The local checkout of the repository. |
+| `tracker` | The tracker adapter. |
+| `vars` | The dict of the project settings: the people, the rules, the limits, the board and the settings of a round. |
+
+## The builtins and keywords
+
+The Change column says how the pair differs from the contract that the five pieces of the API shrink started with. The Use column gives the number of files that use the pair and the first two.
+
+<!-- contract:target -->
+| Builtin | Keyword | Change | Use |
+|---|---|---|---|
+| `agent` | `-` | unchanged | 13: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 11 more |
+| `agent` | `allow_paths` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
+| `agent` | `edits` | #497: also picks the review queue | 10: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 8 more |
+| `agent` | `forbid_commands` | unchanged | 11: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 9 more |
+| `agent` | `idle_timeout` | unchanged | 2: `examples/swarm/workflow.star`, `examples/ticket-pipeline/partition.star` |
+| `agent` | `inputs` | unchanged | 13: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 11 more |
+| `agent` | `label` | #497: new, a free text for the ledger and the status line | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
+| `agent` | `max_budget_usd` | unchanged | 1: `examples/swarm/workflow.star` |
+| `agent` | `model` | unchanged | 13: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 11 more |
+| `agent` | `name` | unchanged | 13: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 11 more |
+| `agent` | `output_tries` | unchanged | 3: `examples/remediation/workflow.star`, `examples/research/workflow.star` and 1 more |
+| `agent` | `outputs` | unchanged | 11: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 9 more |
+| `agent` | `pin` | unchanged | 3: `examples/local/workflow.star`, `examples/remediation/workflow.star` and 1 more |
+| `agent` | `prompt` | unchanged | 13: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 11 more |
+| `agent` | `protect_paths` | unchanged | 3: `examples/maintenance/bump.star`, `examples/remediation/workflow.star` and 1 more |
+| `agent` | `resume` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
+| `agent` | `runner` | unchanged | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
+| `agent` | `sandbox` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
+| `agent` | `timeout` | unchanged | 6: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 4 more |
+| `closing_references` | `-` | #586: new, reads the issues that the pull request of the item closes | 1: `internal/workflow/lib/review_fix.star` |
+| `closing_references` | `text` | #586: new | 1: `internal/workflow/lib/review_fix.star` |
+| `command` | `-` | unchanged | 16: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 14 more |
+| `command` | `env` | unchanged | 4: `examples/research-desk/workflow.star`, `examples/research/workflow.star` and 2 more |
+| `command` | `host` | unchanged | 1: `examples/remediation/workflow.star` |
+| `command` | `max_new_processes` | unchanged | 1: `examples/maintenance/bump.star` |
+| `command` | `name` | unchanged | 16: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 14 more |
+| `command` | `run` | unchanged | 16: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 14 more |
+| `command` | `slots` | unchanged | 1: `examples/remediation/workflow.star` |
+| `command` | `stdin` | unchanged | 8: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 6 more |
+| `command` | `stop_on_rc` | unchanged | 2: `examples/remediation/workflow.star`, `examples/research/workflow.star` |
+| `command` | `timeout` | unchanged | 7: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 5 more |
+| `earlier_calls` | `-` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
+| `earlier_calls` | `call` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
+| `earlier_calls` | `name` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
+| `env` | `-` | unchanged | 17: `examples/approvals/audit.star`, `examples/approvals/policy.star` and 15 more |
+| `env` | `default` | unchanged | 10: `examples/approvals/policy.star`, `examples/desk/eval.star` and 8 more |
+| `env` | `name` | unchanged | 17: `examples/approvals/audit.star`, `examples/approvals/policy.star` and 15 more |
+| `facts` | `-` | unchanged | 3: `examples/remediation/workflow.star`, `examples/ticket-pipeline/backfill.star` and 1 more |
+| `gate` | `-` | unchanged | 5: `examples/local/workflow.star`, `examples/maintenance/bump.star` and 3 more |
+| `gate` | `base` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
+| `gate` | `head` | unchanged | 1: `examples/remediation/workflow.star` |
+| `gate` | `host` | unchanged | 1: `examples/remediation/workflow.star` |
+| `gate` | `name` | unchanged | 5: `examples/local/workflow.star`, `examples/maintenance/bump.star` and 3 more |
+| `gate` | `run` | unchanged | 2: `examples/remediation/workflow.star`, `examples/research-desk/workflow.star` |
+| `gate` | `timeout` | unchanged | 1: `examples/remediation/workflow.star` |
+| `gather` | `-` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
+| `gather` | `fail` | unchanged | 5: `examples/desk/eval.star`, `examples/desk/workflow.star` and 3 more |
+| `gather` | `name` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
+| `gather` | `runs` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
+| `gather` | `until` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
+| `host_teardown` | `-` | unchanged | 1: `examples/remediation/workflow.star` |
+| `host_teardown` | `host` | unchanged | 1: `examples/remediation/workflow.star` |
+| `host_teardown` | `name` | unchanged | 1: `examples/remediation/workflow.star` |
+| `host_up` | `-` | unchanged | 1: `examples/remediation/workflow.star` |
+| `host_up` | `host` | unchanged | 1: `examples/remediation/workflow.star` |
+| `host_up` | `name` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_comment` | `-` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `item_comment` | `forbid_text` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_comment` | `id` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `item_comment` | `key` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `item_comment` | `name` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `item_comment` | `text` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `item_create` | `-` | unchanged | 7: `examples/desk/eval.star`, `examples/desk/workflow.star` and 5 more |
+| `item_create` | `assignee` | unchanged | 1: `examples/ticket-pipeline/backfill.star` |
+| `item_create` | `body` | unchanged | 7: `examples/desk/eval.star`, `examples/desk/workflow.star` and 5 more |
+| `item_create` | `forbid_text` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_create` | `key` | unchanged | 7: `examples/desk/eval.star`, `examples/desk/workflow.star` and 5 more |
+| `item_create` | `name` | unchanged | 7: `examples/desk/eval.star`, `examples/desk/workflow.star` and 5 more |
+| `item_create` | `operator` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_create` | `parent` | unchanged | 6: `examples/desk/eval.star`, `examples/desk/workflow.star` and 4 more |
+| `item_create` | `severity` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_create` | `shared` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_create` | `title` | unchanged | 7: `examples/desk/eval.star`, `examples/desk/workflow.star` and 5 more |
+| `item_read` | `-` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_read` | `name` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_read` | `of` | unchanged | 1: `examples/remediation/workflow.star` |
+| `item_status` | `-` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `item_status` | `id` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `item_status` | `name` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `item_status` | `status` | unchanged | 13: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 11 more |
+| `json` | `-` | unchanged | 13: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 11 more |
+| `merge` | `-` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
+| `merge` | `base` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
+| `merge` | `forbid_text` | #585: from `batch_merge` | 1: `examples/remediation/workflow.star` |
+| `merge` | `gate_run` | #585: from `batch_merge` | 1: `examples/remediation/workflow.star` |
+| `merge` | `hold` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
+| `merge` | `integration` | #585: from `batch_merge` | 1: `examples/remediation/workflow.star` |
+| `merge` | `name` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
+| `merge` | `own` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
+| `merge` | `prs` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
+| `merge` | `repo` | #585: from `batch_merge` | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
+| `now` | `-` | unchanged | 2: `examples/remediation/workflow.star`, `examples/swarm/workflow.star` |
+| `paths_outside` | `-` | #586: new, lists the changed paths outside an allowed set | 1: `internal/workflow/lib/review_fix.star` |
+| `paths_outside` | `allow` | #586: new | 1: `internal/workflow/lib/review_fix.star` |
+| `paths_outside` | `paths` | #586: new | 1: `internal/workflow/lib/review_fix.star` |
+| `pr_comment` | `-` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_comment` | `forbid_text` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_comment` | `integration` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_comment` | `key` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_comment` | `name` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_comment` | `text` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `-` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `base` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `body` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `forbid_text` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `integration` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `issue` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `name` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `parent` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_open` | `title` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_state` | `-` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_state` | `name` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_state` | `pr` | unchanged | 1: `examples/remediation/workflow.star` |
+| `preflight` | `-` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
+| `preflight` | `base` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
+| `preflight` | `head` | unchanged | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
+| `preflight` | `hold` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
+| `preflight` | `id` | unchanged | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
+| `preflight` | `name` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
+| `preflight` | `own` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
+| `queue` | `-` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
+| `queue` | `hold` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
+| `queue` | `label` | unchanged | 1: `examples/remediation/workflow.star` |
+| `queue` | `name` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
+| `sandbox` | `-` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
+| `sandbox` | `network` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
+| `spawn` | `-` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
+| `spawn` | `entry` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
+| `spawn` | `items` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
+| `spawn` | `name` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
+| `struct` | `-` | unchanged | 15: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 13 more |
+| `wait` | `-` | unchanged | 10: `examples/approvals/workflow.star`, `examples/desk/eval.star` and 8 more |
+| `wait` | `choices` | unchanged | 4: `examples/approvals/workflow.star`, `examples/maintenance/bump.star` and 2 more |
+| `wait` | `name` | unchanged | 10: `examples/approvals/workflow.star`, `examples/desk/eval.star` and 8 more |
+| `wait` | `question` | unchanged | 6: `examples/approvals/workflow.star`, `examples/desk/eval.star` and 4 more |
+| `wait` | `quorum` | unchanged | 1: `examples/approvals/workflow.star` |
+| `wait` | `remind` | unchanged | 1: `examples/approvals/workflow.star` |
+| `wait` | `timeout` | unchanged | 7: `examples/approvals/workflow.star`, `examples/incident/workflow.star` and 5 more |
+| `wait` | `to` | unchanged | 2: `examples/approvals/workflow.star`, `examples/remediation/workflow.star` |
+| `write` | `-` | unchanged | 2: `examples/desk/workflow.star`, `examples/remediation/workflow.star` |
+| `write` | `env` | unchanged | 1: `examples/remediation/workflow.star` |
+| `write` | `name` | unchanged | 2: `examples/desk/workflow.star`, `examples/remediation/workflow.star` |
+| `write` | `read_back` | unchanged | 1: `examples/desk/workflow.star` |
+| `write` | `run` | unchanged | 2: `examples/desk/workflow.star`, `examples/remediation/workflow.star` |
+| `write` | `stdin` | unchanged | 2: `examples/desk/workflow.star`, `examples/remediation/workflow.star` |
+| `write` | `timeout` | unchanged | 1: `examples/remediation/workflow.star` |
+| `write` | `undo` | unchanged | 1: `examples/desk/workflow.star` |
+<!-- /contract:target -->
