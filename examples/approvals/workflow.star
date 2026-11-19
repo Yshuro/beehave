@@ -2,7 +2,8 @@
 # The sign-offs are signed files that people put in the inbox of the desk; scripts/intake.sh verifies them (ssh-keygen -Y verify).
 # The rules are data in policy.star: the roles, how many people each needs, which roles are required (a veto), and min_roles.
 # The deadline and the reminders are ledger facts. The run waits in rounds (scripts/await.sh).
-# The extension is a wait addressed to the people in escalate_to, with the choices extend and cancel. The ledger row names the person.
+# The extension is a wait addressed to the people in escalate_to, with the choices extend and cancel. It needs extend_quorum of them, and it reminds them
+# at half of its window. The ledger row names the people who answered.
 # The engine does not prove the name; the signed inbox is why the sign-offs do not use a wait.
 # Set APPROVALS_DIR to the absolute path of this folder. The desk folder (default ~/.approval) holds the ledger and the keys.
 load("//policy.star", "KINDS", "ROUNDS", "ROUND_SECONDS")
@@ -24,6 +25,7 @@ AWAIT_SLACK_SECONDS = 120
 EXTENSIONS_ALLOWED = 1
 ANSWER_EXTEND = "extend"
 ANSWER_CANCEL = "cancel"
+EXTEND_REMIND = 0.5
 ESCALATE_ROLE = "@escalate"
 AUTHOR_ROLE = "@author"
 BRIEF_MODEL = "sonnet"
@@ -177,12 +179,12 @@ def handle_expiry(item, request, state, memory, number):
     if memory.done:
         return memory
     question = "The deadline passed. Missing: %s. Answer extend for %d more seconds, or cancel." % (", ".join(state.missing), request.policy.extend)
-    ruling = wait(question, name = "extend-%d" % number, to = state.escalate_to, choices = [ANSWER_EXTEND, ANSWER_CANCEL], timeout = "%ds" % request.policy.extend)
-    if not ruling.timed_out and ruling.answer == ANSWER_EXTEND:
-        return extend(item, request, sorted(ruling.answers.keys())[0], memory, number)
+    ruling = wait(question, name = "extend-%d" % number, to = state.escalate_to, quorum = request.policy.extend_quorum, remind = [EXTEND_REMIND], choices = [ANSWER_EXTEND, ANSWER_CANCEL], timeout = "%ds" % request.policy.extend)
+    if not ruling.timed_out and all([answer == ANSWER_EXTEND for answer in ruling.answers.values()]):
+        return extend(item, request, "-".join(sorted(ruling.answers.keys())), memory, number)
     return close_as_state(item, request, state, memory, number)
 
-# The wait refuses a name that is not in escalate_to, and the engine does not prove the name. The ledger row records the name given.
+# The wait refuses a name that is not in escalate_to, and the engine does not prove the name. The ledger row records the names given.
 def extend(item, request, who, memory, number):
     run_script("extend", "extend-%d" % number, [item.id, str(request.policy.extend), who, "answered " + ANSWER_EXTEND])
     return memory
