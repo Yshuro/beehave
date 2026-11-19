@@ -47,6 +47,9 @@ func (g *lossyGate) Run(context.Context, string, string, string, GateJob) (GateR
 	return GateResult{Passed: true, Head: g.head, Tree: exampleTree, Steps: commandStep(true)}, nil
 }
 
+// loopSteps is the steps argument of the loops that the flows below run: the models that their tests do not assert.
+const loopSteps = "{\"implement\": {\"model\": \"sonnet\"}, \"review\": {\"model\": \"opus\"}, \"fix\": {\"model\": \"sonnet\"}}"
+
 // loopFlow runs the review loop of the library on the base main, on the host gpu-b, and returns the loop result fields that the tests read.
 const loopFlow = "load(\"@beehave//review_fix.star\", \"review_fix\")\n\n" +
 	"def main(item):\n" +
@@ -54,7 +57,7 @@ const loopFlow = "load(\"@beehave//review_fix.star\", \"review_fix\")\n\n" +
 	"def pipeline(item):\n" +
 	"    host_up(name = \"start\", host = \"gpu-b\")\n" +
 	"    impl = agent(name = \"implement\", lane = \"fix\", prompt = \"prompts/a.md\", model = \"sonnet\")\n" +
-	"    loop = review_fix(item, impl, \"prompts/a.md\", \"prompts/a.md\", base = \"main\", rounds = 2)\n" +
+	"    loop = review_fix(item, impl, \"prompts/a.md\", \"prompts/a.md\", base = \"main\", rounds = 2, steps = " + loopSteps + ")\n" +
 	"    return {\"approved\": loop.review != None and loop.review.verdict == \"approve\", \"host_losses\": loop.host_losses, \"host_lost\": loop.host_lost, \"held\": loop.held}\n"
 
 // hostLossLimit is HOST_LOSS_LIMIT of the library.
@@ -72,6 +75,16 @@ type loopValue struct {
 func lossyLoop(t *testing.T, void, lose int32) (loopValue, []string) {
 	t.Helper()
 
+	value, steps, err := lossyLoopWith(t, void, lose, "")
+	require.NoError(t, err)
+
+	return value, steps
+}
+
+// lossyLoopWith is lossyLoop with extra arguments of review_fix, written as ", name = value", and the error of the run.
+func lossyLoopWith(t *testing.T, void, lose int32, extra string) (loopValue, []string, error) {
+	t.Helper()
+
 	rig := newAgentRig(t)
 	clock := newReadingClock()
 	hosts := &upHosts{started: true, proofs: []model.LostProof{{Kind: model.LostStopped}}, afterProof: func() { clock.advance(time.Minute) }}
@@ -81,19 +94,22 @@ func lossyLoop(t *testing.T, void, lose int32) (loopValue, []string) {
 	rig.baseAt(t, "main")
 	rig.reply(`{"verdict":"approve"}`, exited)
 
-	file := writeFlow(t, loopFlow)
+	file := writeFlow(t, strings.Replace(loopFlow, "rounds = 2", "rounds = 2"+extra, 1))
 	require.NoError(t, os.MkdirAll(filepath.Join(filepath.Dir(file), "prompts"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(filepath.Dir(file), "prompts", "a.md"), []byte("Write to {{ .output_file }}\n"), 0o600))
 
 	engine := rig.h.engine(t)
+
 	result, err := runPipelineOf(engine, testItem, file)
-	require.NoError(t, err)
+	if err != nil {
+		return loopValue{}, stepNamesOf(t, engine, testRun), err
+	}
 
 	var value loopValue
 
 	require.NoError(t, json.Unmarshal(result.Value, &value))
 
-	return value, stepNamesOf(t, engine, testRun)
+	return value, stepNamesOf(t, engine, testRun), nil
 }
 
 // stepsNamed counts the steps whose name contains part. The sub-steps of a call, such as its host-loss record, are not counted.

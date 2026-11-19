@@ -20,6 +20,19 @@ builds:
       - -s -w
       - -X main.version={{.Version}}
 
+  # The remedy command has no version variable, so it takes no version flag.
+  - id: remedy
+    main: ./examples/remediation/tools/cmd/remedy
+    binary: remedy
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w
+
 archives:
   - id: beehave
     formats: [tar.gz]
@@ -28,6 +41,26 @@ archives:
 checksum:
   name_template: checksums.txt
 
-# Publishing (GitHub release, Homebrew tap) is added in the release PR.
 release:
-  disable: true
+  prerelease: auto
+
+# The binaries are not signed, so the cask removes the quarantine attribute of each one.
+homebrew_casks:
+  - name: beehave
+    repository:
+      owner: tobocop2
+      name: homebrew-tap
+      branch: main
+      git:
+        url: git@github.com:tobocop2/homebrew-tap.git
+        private_key: "{{ .Env.HOMEBREW_TAP_SSH_KEY }}"
+    binaries:
+      - beehave
+      - remedy
+    hooks:
+      post:
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/beehave"]
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/remedy"]
+          end

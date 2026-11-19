@@ -1,7 +1,26 @@
 # The remediation workflow: plan, implement, then review and fix until the gate passes and the review approves.
 # Every method value is in this file, in the review loop it loads, or in a prompt next to it. Go holds none of it.
 
-load("@beehave//review_fix.star", "HOST_LOSS_LIMIT", "candidates_spent", "capped", "is_host_void", "review_fix")
+load("@beehave//review_fix.star", "DESIGN_AFTER", "FIX_ESCALATE_AFTER", "HOST_LOSS_LIMIT", "VOID_ASKS", "VOID_RERUNS", "candidates_spent", "capped", "is_host_void", "review_fix")
+
+# The model of each step of the method. This table is the one place a model is named. A project overrides the model or the runner of a step with vars.round.steps.
+# fix runs the fix rounds up to vars.round.escalate_after, and fix_late runs the rounds after them.
+STEP_DEFAULTS = {
+    "plan": "opus",
+    "implement": "sonnet",
+    "review": "opus",
+    "fix": "sonnet",
+    "fix_late": "opus",
+    "design": "opus",
+    "take_review": "opus",
+    "sync_review": "opus",
+    "sync_resolve": "opus",
+    "queue_audit": "sonnet",
+    "settle": "sonnet",
+}
+
+# The steps that review_fix takes. The other steps of STEP_DEFAULTS are agent calls of this file.
+LOOP_STEPS = ["implement", "review", "fix", "fix_late", "design"]
 
 # A pull request is stale after this many hours with no push, comment, review or answer from the author. The same values are the idle threshold and the grace period that the take-over passes to the tool as flags.
 IDLE_HOURS = "1"
@@ -86,6 +105,11 @@ ROUND_KEYS = {
     "lane_kind": ("string", "impl, papers or design"),
     "allow_paths": ("list", "the paths that a papers or design lane may change"),
     "wait_hours": ("int", "the hours that the round waits for the owner, 1 or more"),
+    "steps": ("dict", "a dict from a step name to {\"model\": text, \"runner\": text}, for example {\"review\": {\"model\": \"your-model\"}}"),
+    "design_after": ("int", "the fixes on one mechanism before the design step, 1 to 100"),
+    "void_reruns": ("int", "the reruns of a void gate before the loop asks the owner, 0 to 100"),
+    "void_asks": ("int", "the questions to the owner about a void gate, 0 to 100"),
+    "escalate_after": ("int", "the last fix round that resumes the implementer, 0 to 100"),
 }
 
 # The keys that a round cannot go without, and the value of each other key that the file leaves out.
@@ -105,7 +129,15 @@ ROUND_DEFAULTS = {
     "lane_kind": "impl",
     "allow_paths": [],
     "wait_hours": 24,
+    "steps": {},
+    "design_after": DESIGN_AFTER,
+    "void_reruns": VOID_RERUNS,
+    "void_asks": VOID_ASKS,
+    "escalate_after": FIX_ESCALATE_AFTER,
 }
+
+# The most that a limit takes.
+LIMIT_MOST = 100
 
 ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
@@ -145,7 +177,7 @@ def _round_value(block, key):
 
     value = block[key]
     if type(value) != kind:
-        _round_refuse(key, "is %r, of type %s. Write %s, of type %s." % (value, type(value), fix, kind))
+        _round_refuse(key, "is %r, of type %s. Write %s." % (value, type(value), fix))
 
     return value
 
@@ -159,6 +191,51 @@ def _round_numbers(got):
     for key, least in [("lane_cap", 1), ("fix_rounds", 1), ("wait_hours", 1), ("integration_pr", 0)]:
         if got[key] < least:
             _round_refuse(key, "is %d. Write %s." % (got[key], ROUND_KEYS[key][1]))
+
+    for key, least in [("design_after", 1), ("void_reruns", 0), ("void_asks", 0), ("escalate_after", 0)]:
+        if got[key] < least or got[key] > LIMIT_MOST:
+            _round_refuse(key, "is %d. Write %s." % (got[key], ROUND_KEYS[key][1]))
+
+def _step_entry(name, entry):
+    # One entry of vars.round.steps: a dict of a model (non-blank text) and a runner (text). Returns the entry with the default model of the step.
+    path = "steps." + name
+    if type(entry) != "dict":
+        _round_refuse(path, "is %r, of type %s. Write a dict with a model, a runner or both, for example {\"model\": \"your-model\"}." % (entry, type(entry)))
+
+    for field in entry:
+        if field not in ["model", "runner"]:
+            _round_refuse(path + "." + field, "is not a step field. The fields are: model, runner.")
+
+    model = entry.get("model", STEP_DEFAULTS[name])
+    if type(model) != "string" or model.strip() == "":
+        _round_refuse(path + ".model", "is %r. Write the name of a model, or leave the key out for the default." % (model,))
+
+    runner = entry.get("runner", "")
+    if type(runner) != "string":
+        _round_refuse(path + ".runner", "is %r, of type %s. Write the name of a runner, or an empty text for the pool." % (runner, type(runner)))
+
+    return {"model": model, "runner": runner}
+
+def _round_steps(block):
+    # Returns every step of STEP_DEFAULTS with its model and runner. A step that the project leaves out keeps its default model and the pool.
+    for name in block:
+        if name not in STEP_DEFAULTS:
+            _round_refuse("steps." + name, "is not a step. The steps are: %s." % ", ".join(sorted(STEP_DEFAULTS)))
+
+    steps = {name: _step_entry(name, block[name]) if name in block else {"model": STEP_DEFAULTS[name], "runner": ""} for name in STEP_DEFAULTS}
+
+    # A review on the model of the implementer judges its own work with the same blind spots. One model for every step has no other model to take, so it is accepted.
+    models = {steps[name]["model"]: True for name in steps}
+    if len(models) > 1 and steps["review"]["model"] == steps["implement"]["model"]:
+        _round_refuse("steps.review.model", "is %r, the model of the implement step. Review on another model: set vars.round.steps.review.model or vars.round.steps.implement.model." % (steps["review"]["model"],))
+
+    return steps
+
+def _model(round_settings, name):
+    return round_settings["steps"][name]["model"]
+
+def _runner(round_settings, name):
+    return round_settings["steps"][name]["runner"]
 
 def _round_lane(got):
     if got["lane_kind"] not in ["impl", "papers", "design"]:
@@ -215,6 +292,7 @@ def settings(project):
         _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for base-reds.md.")
 
     _round_numbers(got)
+    got["steps"] = _round_steps(got["steps"])
     _round_lists(got)
     _round_lane(got)
     _round_selector(block, got)
@@ -452,7 +530,8 @@ def take_over(item, pr, author, project, round_settings):
     agent(
         name = "take-review",
         prompt = "prompts/take_review.md",
-        model = "opus",
+        model = _model(round_settings, "take_review"),
+        runner = _runner(round_settings, "take_review"),
         edits = False,
         kind = "review",
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
@@ -596,7 +675,8 @@ def sync_land(item, project, round_settings, line, n):
     review = agent(
         name = "sync-review-%d" % n,
         prompt = "prompts/sync_review.md",
-        model = "opus",
+        model = _model(round_settings, "sync_review"),
+        runner = _runner(round_settings, "sync_review"),
         kind = "review",
         edits = False,
         pin = head,
@@ -627,7 +707,8 @@ def sync_trunk(item, project, round_settings, n):
         resolve = agent(
             name = "sync-resolve-%d" % n,
             prompt = "prompts/sync.md",
-            model = "opus",
+            model = _model(round_settings, "sync_resolve"),
+            runner = _runner(round_settings, "sync_resolve"),
             forbid_commands = FORBID,
             protect_paths = protected(round_settings),
             sandbox = sandbox(network = ["github.com", "api.github.com"]),
@@ -707,7 +788,8 @@ def queue_audit(item, project, round_settings, n):
     agent(
         name = "queue-audit-%d" % n,
         prompt = "prompts/queue.md",
-        model = "sonnet",
+        model = _model(round_settings, "queue_audit"),
+        runner = _runner(round_settings, "queue_audit"),
         edits = False,
         kind = "review",
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
@@ -860,7 +942,8 @@ def pipeline(item):
     plan = agent(
         name = "plan",
         prompt = "prompts/plan.md",
-        model = "opus",
+        model = _model(round_settings, "plan"),
+        runner = _runner(round_settings, "plan"),
         edits = False,
         outputs = ["regressions"],
         # The repeat-offender check in the prompt reads pull requests with gh, so the shell reaches the forge and nothing else.
@@ -874,7 +957,8 @@ def pipeline(item):
     implement = agent(
         name = "implement",
         prompt = "prompts/implement.md",
-        model = "sonnet",
+        model = _model(round_settings, "implement"),
+        runner = _runner(round_settings, "implement"),
         require_skills = ["blast-radius-review"],
         forbid_commands = FORBID,
         protect_paths = protected(round_settings),
@@ -906,7 +990,7 @@ def pipeline(item):
 
     # Five fix rounds need six candidates: the sixth checks the fifth fix. A candidate gets the gate on the base, the checks before review, the mutation run and a full review once.
     # Between candidates, scoped fixes and scoped reviews run with no gate. Each reviewer starts fresh and judges the commit it is pinned to.
-    # The fixes after candidate k are fix round k. Rounds 1 to 3 resume the implementer on a cheaper model; rounds 4 and 5 start fresh, one tier up.
+    # The fixes after candidate k are fix round k. The rounds up to vars.round.escalate_after run on the step fix and resume the implementer when both steps use the same runner; later rounds start fresh on the step fix_late.
     # This method has no follow-ups: a review that leaves any finding open gets the verdict "changes", and the loop runs a fix.
     # Before each review, design and fix agent, the loop reads the pull request again, with the head of the worktree, the base, the hold label and the own logins.
     # A stop in the loop ends the run as the stop at the intake does: no more agents start, and the result holds the step, the exit code and the reason.
@@ -919,7 +1003,7 @@ def pipeline(item):
     def mutants(gate):
         return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, checks = [mutants])
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths", []), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"])
 
     if loop.stopped:
         return item_value(item, "", False, "stopped", loop.host_losses)
@@ -971,7 +1055,8 @@ def pipeline(item):
         settle = agent(
             name = "settle",
             prompt = "prompts/settle.md",
-            model = "sonnet",
+            model = _model(round_settings, "settle"),
+            runner = _runner(round_settings, "settle"),
             outputs = ["parked"],
             inputs = {"ruling": ruling.answer, "facts": project},
             **scope

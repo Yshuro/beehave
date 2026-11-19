@@ -112,12 +112,14 @@ func TestExampleTake_TheReviewComesFirstThenTheNoticeThenTheTakeAfterTheGraceAns
 	t.Parallel()
 
 	rig, file := takeRig(t)
+	rig.setRound("steps", nil)
 	done := runTake(rig.h.engine(t), file)
 
 	waitOn(t, ownerAsks(t, rig.h))
 
 	// At the grace question the review agent and the notice have run, and the take has not.
 	assert.Len(t, rig.h.agents.seen(), 1, "the review of the pull request is the only agent step")
+	assert.Equal(t, "opus", rig.h.agents.seen()[0].Model, "the project file names no steps: take_review runs on its default model")
 	assert.Contains(t, rig.h.agents.seen()[0].Prompt, "belongs to somebody else")
 	assert.Equal(t, []string{"--apply"}, flagsOf(rig.h.commands.requests), "only the notice has run")
 

@@ -37,6 +37,41 @@ DECISIONS = ["keep", "replace", "delete"]
 # The fixes on one mechanism after which the next fix of it is a design step that decides whether the mechanism should exist.
 DESIGN_AFTER = 2
 
+# The last fix round that resumes the session of the implementer. Later rounds start a fresh agent on the step fix_late, or on fix when there is no fix_late.
+FIX_ESCALATE_AFTER = 3
+
+# The steps of the loop that need a model, and the optional steps. design is needed only when the loop has a design prompt.
+STEPS_NEEDED = ["implement", "review", "fix"]
+STEPS_OPTIONAL = ["fix_late", "design"]
+
+def checked_steps(steps, design_prompt):
+    """Returns the steps with a runner in each entry. The library holds no model: a missing or blank model of a needed step is a refusal that names the step."""
+    if type(steps) != "dict":
+        fail("REFUSE: review_fix got steps %r, of type %s. Pass a dict from a step name to {\"model\": <model>, \"runner\": <runner>}." % (steps, type(steps)))
+
+    needed = STEPS_NEEDED + (["design"] if design_prompt != "" else [])
+    for name in needed:
+        if name not in steps:
+            fail("REFUSE: review_fix has no entry for the %s step. Add steps[%r] = {\"model\": <model>}." % (name, name))
+
+    result = {}
+    for name in steps:
+        if name not in STEPS_NEEDED + STEPS_OPTIONAL:
+            fail("REFUSE: review_fix has no step %s. The steps are: %s." % (name, ", ".join(STEPS_NEEDED + STEPS_OPTIONAL)))
+
+        entry = steps[name]
+        model = entry.get("model") if type(entry) == "dict" else None
+        if type(model) != "string" or model.strip() == "":
+            fail("REFUSE: the %s step of review_fix has no model. Set steps[%r][\"model\"] to the name of a model." % (name, name))
+
+        runner = entry.get("runner", "")
+        if type(runner) != "string":
+            fail("REFUSE: the runner of the %s step of review_fix is %r, of type %s. Write a runner name, or an empty text for the pool." % (name, runner, type(runner)))
+
+        result[name] = {"model": model, "runner": runner}
+
+    return result
+
 def stopped_before(item, name, head, guard):
     """Asks the forge about the pull request of the item right before an agent of the loop starts.
     The head is the head of the worktree that the agent works on. A pull request that is merged, closed, held, a draft,
@@ -48,8 +83,8 @@ def stopped_before(item, name, head, guard):
     return None if check.ok else check
 
 # A gate with no failed step and an unknown step gave no verdict about the code: it is void, not red. The loop reruns a void gate
-# VOID_RERUNS times at once. Each rerun is a new gate step, so the engine records each, and a replay never reads an old void as the answer.
-# Then it asks the owner up to VOID_ASKS times; an answer reruns the gate. The wait is the way back: a resume would replay the recorded void.
+# void_reruns times at once (default VOID_RERUNS). Each rerun is a new gate step, so the engine records each, and a replay never reads an old void as the answer.
+# Then it asks the owner up to void_asks times (default VOID_ASKS); an answer reruns the gate. The wait is the way back: a resume would replay the recorded void.
 VOID_RERUNS = 2
 VOID_ASKS = 3
 
@@ -88,7 +123,7 @@ def check_gate(loop):
     note_losses(loop, check)
     hosts = 0
     attempt = 0
-    for _ in range(HOST_LOSS_LIMIT + VOID_RERUNS + VOID_ASKS + 1):
+    for _ in range(HOST_LOSS_LIMIT + loop.void_reruns + loop.void_asks + 1):
         if not is_void(check):
             return check
 
@@ -102,10 +137,10 @@ def check_gate(loop):
             continue
 
         attempt += 1
-        if attempt > VOID_RERUNS + VOID_ASKS:
+        if attempt > loop.void_reruns + loop.void_asks:
             break
 
-        if attempt > VOID_RERUNS:
+        if attempt > loop.void_reruns:
             wait(
                 "The gate gave no result for %s (steps with no result: %s). %s Fix the cause, then answer to run the gate again." % (loop.item.id, void_names(check), check.report),
                 name = "gate-void-%d" % attempt,
@@ -116,7 +151,7 @@ def check_gate(loop):
 
     # A gate that is still void after the reruns and the asks gave no verdict about the code. No fix agent reads its report.
     if is_void(check):
-        fail("REFUSE: the gate gave no result for %s after %d reruns and %d questions (steps with no result: %s). %s" % (loop.item.id, VOID_RERUNS, VOID_ASKS, void_names(check), check.report))
+        fail("REFUSE: the gate gave no result for %s after %d reruns and %d questions (steps with no result: %s). %s" % (loop.item.id, loop.void_reruns, loop.void_asks, void_names(check), check.report))
 
     return check
 
@@ -141,7 +176,8 @@ def review_args(loop, head, violations, scope, outputs):
         lane = "review",
         rounds = loop.review_cap,
         prompt = loop.review_prompt,
-        model = "opus",
+        model = loop.steps["review"]["model"],
+        runner = loop.steps["review"]["runner"],
         pin = head,
         outputs = (["verdict", "mechanism"] if loop.design_prompt != "" else ["verdict"]) + outputs,
         forbid_commands = REVIEW_FORBID + loop.extra,
@@ -205,9 +241,9 @@ def check_candidate(loop, inner, outer):
     return check_review(loop, check, inner, outer)
 
 def design_round(loop, pending, fixes, decided, outer, lane):
-    """Runs the design step when the mechanism of the findings had DESIGN_AFTER fixes. Returns the end of the loop for a replace or a delete, or the findings for the fix."""
+    """Runs the design step when the mechanism of the findings had design_after fixes. Returns the end of the loop for a replace or a delete, or the findings for the fix."""
     mechanism = pending.mechanism
-    if mechanism == "" or fixes.get(mechanism, 0) < DESIGN_AFTER or mechanism in decided:
+    if mechanism == "" or fixes.get(mechanism, 0) < loop.design_after or mechanism in decided:
         return pending
 
     if stopped_before(loop.item, "before-design-%d" % outer, lane.head_sha, loop.guard) != None:
@@ -217,7 +253,8 @@ def design_round(loop, pending, fixes, decided, outer, lane):
         name = "design",
         lane = "design",
         prompt = loop.design_prompt,
-        model = "opus",
+        model = loop.steps["design"]["model"],
+        runner = loop.steps["design"]["runner"],
         outputs = ["decision", "reason"],
         forbid_commands = REVIEW_FORBID + loop.extra,
         protect_paths = loop.protect,
@@ -248,15 +285,19 @@ def scoped_fix(loop, pending, fixes, decided, outer, inner, lane):
     if stopped_before(loop.item, "before-fix-%d" % outer, lane.head_sha, loop.guard) != None:
         return struct(end = ended(loop, lane.head_sha, stopped = True, gate = pending.gate, review = pending.review))
 
-    # The fixes after candidate k are fix round k, and the fixes inside candidate 1 are round 1. Rounds 1 to 3 resume the implementer on sonnet; later rounds start fresh on opus.
+    # The fixes after candidate k are fix round k, and the fixes inside candidate 1 are round 1. The rounds up to escalate_after run on the step fix, and they resume the session of the implementer
+    # when both steps name the same runner: a session belongs to one login. Later rounds start a fresh agent on the step fix_late, or on fix when the project names no fix_late.
     round = max(outer - 1, 1)
+    early = round <= loop.escalate_after
+    chosen = loop.steps["fix"] if early else loop.steps.get("fix_late", loop.steps["fix"])
     fix = agent(
         name = "fix-scoped-%d" % inner,
         lane = "rework",
         rounds = loop.fix_cap,
         prompt = loop.fix_prompt,
-        model = "sonnet" if round <= 3 else "opus",
-        resume = loop.impl.session if round <= 3 else "",
+        model = chosen["model"],
+        runner = chosen["runner"],
+        resume = loop.impl.session if early and loop.steps["fix"]["runner"] == loop.steps["implement"]["runner"] else "",
         forbid_commands = FORBID + loop.extra,
         protect_paths = loop.protect,
         inputs = {"item": loop.item, "round": round, "findings": pending.findings, "facts": loop.facts},
@@ -300,9 +341,11 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     # The last scoped review asked for changes. Its findings go to the full checks, and its violations keep the full review from a clean approve.
     return struct(end = None, lane = lane, open = pending.findings, breach = review.violations)
 
-def review_fix(item, impl, review_prompt, fix_prompt, base, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None, checks = []):
+def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = [], review_outputs = [], facts = {}, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER):
     """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
 
+    steps is a dict from a step name to {"model": text, "runner": text}. The entries implement, review and fix are required, design is required with a design_prompt, and fix_late is optional.
+    The library holds no model. An empty runner means the pool pick. design_after, void_reruns, void_asks and escalate_after are the limits of the loop, and the constants of the same names are their defaults.
     base is the base branch of the item. The gate of each candidate runs on it, and the checks before review compare the head with origin/<base>.
     rounds caps the candidates. With 0 the loop runs no agent and ends exhausted at the head of the implementer. checks lists functions of one argument, the passed gate, that run after the checks before review and before the full review.
     Each returns an empty text for a clean head, or the findings as text, which send the candidate back to a fix.
@@ -326,6 +369,11 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, rounds = 6, follow_u
         scope = {"allow_paths": allow} if allow else {},
         scope_check = {"allow": allow} if allow else {},
         design_prompt = design_prompt,
+        steps = checked_steps(steps, design_prompt),
+        design_after = design_after,
+        void_reruns = void_reruns,
+        void_asks = void_asks,
+        escalate_after = escalate_after,
         guard = guard,
         review_outputs = review_outputs,
         facts = facts,
