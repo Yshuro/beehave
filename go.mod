@@ -11,7 +11,6 @@ require (
 	github.com/gofrs/flock v0.13.1
 	github.com/google/renameio/v2 v2.0.2
 	github.com/landlock-lsm/go-landlock v0.11.0
-	github.com/robfig/cron/v3 v3.0.1
 	github.com/rogpeppe/go-internal v1.15.0
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.12.1
@@ -37,6 +36,7 @@ require (
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/ncruces/go-strftime v1.1.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/spf13/pflag v1.1.0 // indirect
 	golang.org/x/sync v0.25.0 // indirect
 	golang.org/x/tools v0.52.0 // indirect

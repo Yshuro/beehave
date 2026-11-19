@@ -3,8 +3,6 @@ package config
 import (
 	"go.starlark.net/starlark"
 	"go.starlark.net/syntax"
-
-	"github.com/tobocop2/beehave/internal/model"
 )
 
 // movedKey reports whether a key was an argument of project() before the free settings moved into vars.
@@ -28,17 +26,4 @@ func refuseMovedKeys(at syntax.Position, kwargs []starlark.Tuple) error {
 	}
 
 	return nil
-}
-
-// withFacts checks the schedules of a project file and copies them and the vars into the profile.
-func withFacts(path string, profile model.Project, raw rawProject) (model.Project, error) {
-	schedules, err := schedulesOf(path, raw)
-	if err != nil {
-		return model.Project{}, err
-	}
-
-	profile.Schedules = schedules
-	profile.Vars = raw.Vars
-
-	return profile, nil
 }

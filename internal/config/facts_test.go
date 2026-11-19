@@ -27,6 +27,21 @@ func TestLoadFolder_AMethodSettingAtTheTopOfAProjectIsRefusedAndSaysToMoveItUnde
 	}
 }
 
+func TestLoadFolder_AProjectThatSetsSchedulesIsRefusedAndNamesTheKey(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct{ value, want string }{
+		"an empty list":   {`[]`, "schedules"},
+		"a schedule call": {`[schedule(name = "bump", cron = "@daily", workflow = "w.star", item = "bump")]`, "schedule"},
+	} {
+		_, problems := loadProjectText(t, "\n"+call(localProject+", schedules = "+test.value))
+
+		require.Len(t, problems, 1, name)
+		require.Contains(t, problems[0].Error(), "p.star:2:", name)
+		require.Contains(t, problems[0].Error(), test.want, name)
+	}
+}
+
 func TestLoadFolder_TheBoardBlockCallIsNoLongerDefined(t *testing.T) {
 	t.Parallel()
 

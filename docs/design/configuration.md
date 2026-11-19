@@ -30,6 +30,26 @@ Each file is Starlark with the step limit of the workflow files. The limits and 
 | `review_lookback_days` | The days that the review poll looks back for replies. | Default 3. The least is 1. The most is 365. | `BEEHAVE_REVIEW_LOOKBACK_DAYS` |
 | `retention_days` | The age in days at which `beehave run` deletes a finished run. | Default 7. 0 keeps every finished run. The most is 36500. | `BEEHAVE_AGENTS_RETENTION_DAYS` |
 
+### `pool(...)`
+
+`pool(...)` sets the usage caps of the Claude runners, in percent. Call it once. Both keys are optional. `beehave run` picks the runner that is under both caps.
+
+| Key | Meaning | Default and limits | Override |
+| --- | --- | --- | --- |
+| `five_hour_max` | The cap for the five-hour usage of a runner. | Default 90. Above 0 and up to 100. | `BEEHAVE_POOL_FIVE_HOUR_MAX` |
+| `seven_day_max` | The cap for the seven-day usage of a runner. | Default 95. Above 0 and up to 100. | `BEEHAVE_POOL_SEVEN_DAY_MAX` |
+
+### `runner(...)`
+
+`runner(...)` declares one agent login. Call it once for each login. Each name is used once.
+
+| Key | Meaning |
+| --- | --- |
+| `name` | Required. The label of the runner. |
+| `agent` | Required. The agent CLI: `claude` or `opencode`. |
+| `config_dir` | Optional. The config folder of the login. beehave sets `CLAUDE_CONFIG_DIR` to it for a Claude run. `~/` is the home folder. |
+| `keychain` | Optional. The name of the macOS Keychain entry that holds the login token, for a machine with no logged-in profile. |
+
 ### `project(...)`
 
 The project arguments are `repo`, `source`, `tracker`, `claims`, `forge`, `base_branch`, `gate`, `gate_steps`, `test_report`, `test_command`, `test_paths`, `notify`, `pin_file`, `visibility`, `sandbox`, `sandbox_read`, `sandbox_deny`, `sandbox_enforcer`, `gate_network`, `gate_allow_write` and `build_host`.
@@ -80,21 +100,6 @@ The engine has no round settings. The remediation example keeps its own under th
 | `void_reruns`, `void_asks`, `escalate_after` | Optional. A whole number from 0 to 100. The defaults are 2, 3 and 3. |
 
 The example refuses any other key under `round`.
-
-#### `schedules`
-
-The optional project key `schedules` is a list of `schedule(name, cron, workflow, item, timezone, catch_up)`. This key declares and validates the schedules only: no engine fires them yet.
-
-| Argument | Rule |
-| --- | --- |
-| `name` | Lower case letters, digits and hyphens. Unique in the project. |
-| `cron` | Read by the parser that DBOS uses (robfig cron with a leading seconds field). A 5-field text is refused, and `@weekly` is accepted. |
-| `workflow` | A file. A relative path starts in the folder of the project file, and `~/` is the home folder. |
-| `item` | The prefix of the item id. |
-| `timezone` | An IANA zone. Defaults to `UTC`. |
-| `catch_up` | A bool. Defaults to `False`. |
-
-The loader parses `CRON_TZ=<timezone> <cron>`, as DBOS does. It refuses a `cron` text that starts with `TZ=` or `CRON_TZ=`, because the `timezone` key sets the zone. It refuses a bad schedule with the file and the line.
 
 ### What the loader refuses
 

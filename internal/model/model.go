@@ -62,19 +62,6 @@ type Project struct {
 	Vars map[string]any
 	// RunnerSkills maps the name of each runner of the config to whether its agent CLI reports skill calls. The engine fills it from the runner profiles; a project file does not set it.
 	RunnerSkills map[string]bool
-	// Schedules are the cron schedules that start an item run. The file order is kept.
-	Schedules []Schedule
-}
-
-// Schedule starts a run of Workflow on a new item each time Cron fires. Cron has seconds, or is a descriptor such as @weekly.
-// Workflow is an absolute path. Timezone names an IANA zone. Item is the prefix of the item id. CatchUp asks for the ticks that an engine missed.
-type Schedule struct {
-	Name     string
-	Cron     string
-	Workflow string
-	Item     string
-	Timezone string
-	CatchUp  bool
 }
 
 // HasRepository reports whether the project has a git repository: it sets a source or a forge, and the forge gives the clone URL.
