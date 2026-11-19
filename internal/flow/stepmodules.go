@@ -32,7 +32,8 @@ const (
 
 // coreVersion is the version of the core module. Version 2 added the vars field to the result of facts. Version 3 removed the round_* fields from it.
 // Version 4 records the wait:notify step at every wait, before the receive of the answer. Version 5 removed the method and board fields from the result of facts.
-const coreVersion = 5
+// Version 6 adds the runners field to the result of facts.
+const coreVersion = 6
 
 // agentVersion is the version of the agent module. Version 2 added the limit field to the phase output, and the limit step and the later looks at the caps
 // that an agent call records when a provider limit stops its run. Version 3 added the start_head field to the phase input, the session and diff_stat fields
@@ -95,7 +96,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core4.agent9.tracker1.forge2.land4.gate5.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core6.agent9.tracker1.forge2.land4.gate5.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

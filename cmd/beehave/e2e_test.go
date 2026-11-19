@@ -84,7 +84,7 @@ func e2eFlow(dir, path string) cli.Flow {
 			files := e2eFiles{dir: dir}
 
 			engine, err := flow.NewEngine(ctx, withModules(opts), withBatch(flow.Deps{
-				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg.Projects),
+				Agents: e2eAgents{dir: dir, path: path}, Gate: e2eGate{dir: dir}, Logins: e2eLogins{}, Commands: e2eCommands{dir: dir}, Slots: slotsOf(cfg.Projects), Facts: factsOf(cfg.Projects, nil),
 				Lifecycle: files, Forge: files, Watch: files, Trees: files, Beats: files, Items: files, Preflight: files, Reader: files, Hosts: files,
 			}, dir, cfg))
 			if err != nil {
@@ -394,7 +394,10 @@ if [ "$step" = settle ]; then
 fi
 # The tool calls arrive as assistant lines of the stream, as with the real claude.
 # The fake claude calls the skill that the example requires, so the session reports it.
-echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"%SKILL%"}}]}}'
+# When the file no-skill exists, the fake reports no skill call, as a CLI that does not report them.
+if [ ! -e no-skill ]; then
+  echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"%SKILL%"}}]}}'
+fi
 # The implementer stages everything, the command that the example forbids.
 if [ "$step" = implement ]; then
   if [ -e edit-file ]; then write_call toolu_edit edited.txt; fi

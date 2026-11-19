@@ -8,6 +8,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/agent/claude"
+	"github.com/tobocop2/beehave/internal/agent/opencode"
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/host/ssh"
@@ -30,10 +32,20 @@ func TestDepsOn_TheSentinelsOfTheHostEntriesReachTheEngineAsKeptErrors(t *testin
 func TestFactsOf_TheFactsOfTheProjectInTheConfigReachTheEngineAndAnUnknownProjectHasNone(t *testing.T) {
 	t.Parallel()
 
-	facts := factsOf(map[string]config.Project{"p": {Project: model.Project{Name: "p", Vars: map[string]any{"limits": []any{"never run rm on a glob"}}}}})
+	facts := factsOf(map[string]config.Project{"p": {Project: model.Project{Name: "p", Vars: map[string]any{"limits": []any{"never run rm on a glob"}}}}}, nil)
 
 	require.Equal(t, []any{"never run rm on a glob"}, facts("p").Vars["limits"])
 	require.Equal(t, model.Project{}, facts("other"))
+}
+
+func TestFactsOf_TheFactsCarryWhetherEachRunnerReportsSkillCalls(t *testing.T) {
+	t.Parallel()
+
+	runners := []model.Runner{{Name: "a", Agent: claude.Name}, {Name: "o", Agent: opencode.Name}}
+	skills := runnerSkills(runners, newAdapters(nil, nil, nil))
+	facts := factsOf(map[string]config.Project{"p": {Project: model.Project{Name: "p"}}}, skills)
+
+	require.Equal(t, map[string]bool{"a": true, "o": false}, facts("p").RunnerSkills, "the Claude runner reports skill calls and the OpenCode runner does not")
 }
 
 func TestFlowFactory_ARunForAnUnknownProjectEndsWithAnErrorAndNoPanic(t *testing.T) {

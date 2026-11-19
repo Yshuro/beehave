@@ -40,7 +40,7 @@ const varsField = "vars"
 func factsOutputs(p model.Project) map[string]any {
 	facts := map[string]any{
 		repoKeyword: p.Repo, "source": p.Source, "forge": string(p.Forge), "tracker": string(p.Tracker), "base_branch": p.BaseBranch, "gate": gateText(p), "gate_steps": gateStepNames(p), "build_host": p.BuildHost,
-		varsField: orEmptyVars(p.Vars),
+		varsField: orEmptyVars(p.Vars), "runners": runnerFacts(p.RunnerSkills),
 	}
 
 	return facts
@@ -79,4 +79,15 @@ func orEmptyVars(items map[string]any) map[string]any {
 	}
 
 	return items
+}
+
+// runnerFacts is the field `runners` of the facts: one entry for each runner of the config, with the fact reports_skills. It is an empty dict when the config has no runner.
+func runnerFacts(skills map[string]bool) map[string]any {
+	runners := make(map[string]any, len(skills))
+
+	for name, reports := range skills {
+		runners[name] = map[string]any{"reports_skills": reports}
+	}
+
+	return runners
 }

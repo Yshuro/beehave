@@ -111,6 +111,7 @@ The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `before_rev
 | --- | --- |
 | `repo`, `source`, `forge`, `tracker`, `base_branch`, `gate`, `gate_steps`, `build_host` | The project value of that name. |
 | `vars` | Dict. The `vars` of the project file, as written, and frozen. Every setting of a workflow is a key of it. |
+| `runners` | Dict. One entry for each runner of the config, by its name, with the field `reports_skills`: true when the agent CLI of the runner reports skill calls, false for OpenCode. The project file does not set it. A workflow reads it to refuse a step before any agent starts, for example a step that needs a skill. |
 
 - A fact that the project file leaves out is empty text, an empty list or an empty dict, never a missing field. A key that `vars` leaves out is missing: read it with `facts().vars.get("key", default)`.
 - The call is a recorded step named `facts#<n>`, so a replay returns the facts the run started with and never reads the config again.

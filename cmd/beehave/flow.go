@@ -186,13 +186,36 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 		SandboxDefault: func(project string) bool { return cfg.Projects[project].SandboxByDefault() },
 		RefuseGate:     gateRefusal(cfg.Projects, enforcers.Refusal),
 		Repository:     repositoryOf(cfg.Projects),
-		Facts:          factsOf(cfg.Projects), Slots: slotsOf(cfg.Projects),
+		Facts:          factsOf(cfg.Projects, runnerSkills(cfg.Runners, table)), Slots: slotsOf(cfg.Projects),
 	}
 }
 
-// factsOf returns the project as the config holds it. A project that the config does not hold has no facts.
-func factsOf(projects map[string]config.Project) func(string) model.Project {
-	return func(project string) model.Project { return projects[project].Project }
+// factsOf returns the project as the config holds it, with the runner facts. A project that the config does not hold has no facts.
+func factsOf(projects map[string]config.Project, skills map[string]bool) func(string) model.Project {
+	return func(project string) model.Project {
+		found, ok := projects[project]
+		if !ok {
+			return model.Project{}
+		}
+
+		facts := found.Project
+		facts.RunnerSkills = skills
+
+		return facts
+	}
+}
+
+// runnerSkills says for each runner whether its agent CLI reports skill calls. A runner whose agent has no adapter is left out.
+func runnerSkills(runners []model.Runner, table adapters) map[string]bool {
+	skills := make(map[string]bool, len(runners))
+
+	for _, runner := range runners {
+		if adapter := table.agent(runner.Agent); adapter != nil {
+			skills[runner.Name] = !adapter.Profile().NoSkillCalls
+		}
+	}
+
+	return skills
 }
 
 // repositoryOf tells whether a project has a git repository. A project that the config does not hold counts as one that has it.

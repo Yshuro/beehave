@@ -406,6 +406,17 @@ def mutation_command(project):
 
     return words
 
+def refuse_runner_without_skill_calls(project, round_settings, step):
+    """Stops the run before any agent starts when the step is on a runner whose CLI reports no skill calls, because the step could not prove that it called the skill.
+    A step on the pool needs no check: the pool holds the runners that report them. A runner that the facts do not list is left to the agent step, which refuses an unknown runner."""
+    runner = _runner(round_settings, step)
+    if runner == "":
+        return
+
+    known = project.runners.get(runner)
+    if known != None and not known["reports_skills"]:
+        fail("REFUSE: runner %s of step %s does not report skill calls, so the step cannot show that it called the skill it needs. The step did not start. Set vars.round.steps.%s.runner to a runner that reports skill calls, or to an empty text for the pool." % (runner, step, step))
+
 def check_mutation(words, base):
     """Runs the mutation command of the project on the build host, in the slot class mutation, and returns the findings as text. An empty text means the head is clean.
     `base` is vars.round.base: the last word of the command is origin/<base>.
@@ -1012,6 +1023,9 @@ def pipeline(item):
     # The mutation command is read before any agent starts, so a project with no vars.mutation_command is refused here.
     mutation = mutation_command(project)
 
+    # The implement step needs the skill below, so its runner must report skill calls. The check runs here, before any agent starts, so a runner that cannot report them costs nothing.
+    refuse_runner_without_skill_calls(project, round_settings, "implement")
+
     # The item this one depends on is the parent of its row. An item with no parent has none.
     parent = item_read(name = "parent", of = "parent")
 
@@ -1049,7 +1063,7 @@ def pipeline(item):
 
     # The implementer must run the skill blast-radius-review. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
     if "blast-radius-review" not in implement.skills:
-        fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls, then run beehave resume %s." % item.id)
+        fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls. A plain beehave resume replays this stop. To start the item again, run beehave resume %s, then beehave cancel %s, then beehave run %s." % (item.id, item.id, item.id))
 
     # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the agent pushed.
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
