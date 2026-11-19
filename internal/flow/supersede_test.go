@@ -193,9 +193,28 @@ func gateDumpWithin(bound time.Duration, engine *Engine, g supersedeGate) string
 }
 
 func gateState(engine *Engine, g supersedeGate) string {
-	var out strings.Builder
+	return fmt.Sprintf("gates started %d, stopped %d\n%s", g.started.Load(), g.stopped.Load(), workflowState(engine))
+}
 
-	fmt.Fprintf(&out, "gates started %d, stopped %d\n", g.started.Load(), g.stopped.Load())
+// The texts of the two lines that the engine of DBOS logs at Info when a run cancels itself through its own context.
+const (
+	cancelStartedMarker = "Cancelling workflow"    //nolint:misspell // the spelling of the DBOS log line
+	cancelEndedMarker   = "Workflow was cancelled" //nolint:misspell // the spelling of the DBOS log line
+)
+
+// dumpTime is the time in a form that sorts as text, or a dash for a time that is not set.
+func dumpTime(at time.Time) string {
+	if at.IsZero() {
+		return "-"
+	}
+
+	return at.UTC().Format("15:04:05.000000")
+}
+
+// workflowState is the part of the dump that needs no gate: each workflow of the engine with its status, times, executor, queue, partition and parent,
+// the steps of each with their times, every cancel line of the engine log, and the last warnings and errors of the engine log.
+func workflowState(engine *Engine) string {
+	var out strings.Builder
 
 	rows, err := dbos.ListWorkflows(engine.ctx)
 	if err != nil {
@@ -203,7 +222,8 @@ func gateState(engine *Engine, g supersedeGate) string {
 	}
 
 	for _, row := range rows {
-		fmt.Fprintf(&out, "workflow %s name=%s status=%s queue=%q partition=%q\n", row.ID, row.Name, row.Status, row.QueueName, row.QueuePartitionKey)
+		fmt.Fprintf(&out, "workflow %s name=%s status=%s queue=%q partition=%q updated_at=%s completed_at=%s executor=%q parent=%q\n",
+			row.ID, row.Name, row.Status, row.QueueName, row.QueuePartitionKey, dumpTime(row.UpdatedAt), dumpTime(row.CompletedAt), row.ExecutorID, row.ParentWorkflowID)
 
 		steps, err := dbos.GetWorkflowSteps(engine.ctx, row.ID)
 		if err != nil {
@@ -211,26 +231,68 @@ func gateState(engine *Engine, g supersedeGate) string {
 		}
 
 		for _, step := range steps {
-			fmt.Fprintf(&out, "  step %d %s error=%v\n", step.StepID, step.StepName, step.Error)
+			fmt.Fprintf(&out, "  step %d %s started_at=%s completed_at=%s error=%v\n", step.StepID, step.StepName, dumpTime(step.StartedAt), dumpTime(step.CompletedAt), step.Error)
 		}
 	}
+
+	out.WriteString(logState(engine))
+
+	return out.String()
+}
+
+// logState is the part of the dump that reads the engine log: every cancel line, and the last warnings and errors.
+func logState(engine *Engine) string {
+	var out strings.Builder
 
 	text, err := os.ReadFile(filepath.Join(engine.dir, logFileName))
 	if err != nil {
 		fmt.Fprintf(&out, "cannot read the engine log: %v\n", err)
 	}
 
-	var problems []string
+	var problems, cancels []string
 
 	for line := range strings.Lines(string(text)) {
 		if strings.Contains(line, "level=WARN") || strings.Contains(line, "level=ERROR") {
 			problems = append(problems, line)
 		}
+
+		if strings.Contains(line, cancelStartedMarker) || strings.Contains(line, cancelEndedMarker) {
+			cancels = append(cancels, line)
+		}
 	}
 
+	fmt.Fprintf(&out, "engine log, %d cancel lines:\n%s", len(cancels), strings.Join(cancels, ""))
 	fmt.Fprintf(&out, "engine log, %d warnings and errors, the last %d:\n%s", len(problems), min(len(problems), logLinesInDump), strings.Join(problems[max(0, len(problems)-logLinesInDump):], ""))
 
 	return out.String()
+}
+
+// printStateIfTheTestFails prints the state of the engine at the end of the test when err is set and the test has failed. It reads the store before the cleanup that shuts the engine down.
+// A test that passes prints nothing, so a test that expects an error stays quiet.
+func printStateIfTheTestFails(t *testing.T, engine *Engine, err error, extra func() string) {
+	t.Helper()
+
+	if err == nil {
+		return
+	}
+
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Logf("the end of a run failed with: %v\n%s%s", err, extra(), within(dumpBound, func() string { return workflowState(engine) }))
+		}
+	})
+}
+
+// receiveEnd waits for the end of a queued gate. When the gate ends with an error and the test fails, the test prints the state of the engine.
+func receiveEnd(t *testing.T, engine *Engine, g supersedeGate, ended <-chan gateEnd) gateEnd {
+	t.Helper()
+
+	end := receive(t, ended)
+	printStateIfTheTestFails(t, engine, end.err, func() string {
+		return fmt.Sprintf("gates started %d, stopped %d\n", g.started.Load(), g.stopped.Load())
+	})
+
+	return end
 }
 
 // reachCount waits until count holds want, the wanted number of gates that verb names. A count above want fails the wait at once: a gate that starts or stops twice is a defect,
@@ -385,6 +447,33 @@ func TestGateDump_ShowsTheCountsTheWorkflowsAndTheStepsOfARunningGate(t *testing
 	require.NoError(t, receive(t, ended).err)
 }
 
+func TestWorkflowState_ShowsTheTimesTheExecutorTheParentAndEveryCancelLineOfTheEngineLog(t *testing.T) {
+	t.Parallel()
+
+	gated := newSupersedeGate("")
+	_, engine := supersedeEngine(t, gated, "A")
+
+	ended := queueGate(engine, "A")
+
+	waitOn(t, startsReach(t, engine, gated, 1))
+
+	engine.logger.Info(cancelStartedMarker, "workflow_id", "gate-a")
+	engine.logger.Info(cancelEndedMarker, "workflow_id", "gate-b")
+	engine.logger.Info("Workflow started", "workflow_id", "gate-c")
+
+	state := workflowState(engine)
+
+	assert.Regexp(t, `workflow \S+ name=\S+ status=PENDING queue="[^"]*" partition="[^"]*" updated_at=\d\d:\d\d:\d\d\.\d{6} completed_at=- executor="[^"]*" parent=""`, state)
+	assert.Regexp(t, `  step 0 \S+ started_at=\d\d:\d\d:\d\d\.\d{6} completed_at=\d\d:\d\d:\d\d\.\d{6} error=<nil>`, state)
+	assert.Contains(t, state, "engine log, 2 cancel lines:")
+	assert.Contains(t, state, fmt.Sprintf("msg=%q workflow_id=gate-a", cancelStartedMarker))
+	assert.Contains(t, state, fmt.Sprintf("msg=%q workflow_id=gate-b", cancelEndedMarker))
+	assert.NotContains(t, state, "gate-c", "an Info line that is no cancel line stays out")
+
+	close(gated.release)
+	require.NoError(t, receive(t, ended).err)
+}
+
 func TestStartsReach_AGateThatStartsTwiceFailsTheWaitAtOnce(t *testing.T) {
 	t.Parallel()
 
@@ -459,7 +548,7 @@ func TestGateDump_ShowsAGateThatIsQueuedAndHasNoSteps(t *testing.T) {
 	waitOn(t, condition(waitsInTheQueue(engine, 1)))
 
 	dump := gateDump(engine, gated)
-	assert.Regexp(t, fmt.Sprintf(`status=ENQUEUED queue=%q partition=%q\n(?:workflow |engine log)`, exclusiveQueueName, testProject), dump, "a queued gate has a line and no step")
+	assert.Regexp(t, fmt.Sprintf(`status=ENQUEUED queue=%q partition=%q [^\n]*\n(?:workflow |engine log)`, exclusiveQueueName, testProject), dump, "a queued gate has a line and no step")
 
 	close(gated.release)
 	require.NoError(t, receive(t, running).err)
