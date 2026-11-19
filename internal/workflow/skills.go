@@ -65,7 +65,19 @@ func inScope(body []syntax.Stmt, visit func(syntax.Node)) {
 // skillAliases lists the names that every binding in the function takes from a `.skills` field: `calls = r.skills`.
 // A parameter, a loop variable, a nested function or any other assignment to the name makes it no alias.
 func skillAliases(def *syntax.DefStmt) map[string]bool {
-	from, other := map[string]bool{}, map[string]bool{}
+	from, other := skillBindings(def)
+	aliases := map[string]bool{}
+
+	for name := range from {
+		aliases[name] = !other[name]
+	}
+
+	return aliases
+}
+
+// skillBindings returns the names that the function binds from a `.skills` field, and the names that it binds in any other way.
+func skillBindings(def *syntax.DefStmt) (from, other map[string]bool) {
+	from, other = map[string]bool{}, map[string]bool{}
 
 	for _, param := range def.Params {
 		markNames(param, other)
@@ -74,11 +86,7 @@ func skillAliases(def *syntax.DefStmt) map[string]bool {
 	inScope(def.Body, func(n syntax.Node) {
 		switch s := n.(type) {
 		case *syntax.AssignStmt:
-			if target, isName := s.LHS.(*syntax.Ident); isName && s.Op == syntax.EQ && isSkillField(s.RHS) {
-				from[target.Name] = true
-			} else {
-				markNames(s.LHS, other)
-			}
+			bindAssign(s, from, other)
 		case *syntax.ForStmt:
 			markNames(s.Vars, other)
 		case *syntax.DefStmt:
@@ -86,13 +94,18 @@ func skillAliases(def *syntax.DefStmt) map[string]bool {
 		}
 	})
 
-	aliases := map[string]bool{}
+	return from, other
+}
 
-	for name := range from {
-		aliases[name] = !other[name]
+// bindAssign adds the names of an assignment to from when it is `name = <expression>.skills`, and to other for any other assignment.
+func bindAssign(assign *syntax.AssignStmt, from, other map[string]bool) {
+	if target, isName := assign.LHS.(*syntax.Ident); isName && assign.Op == syntax.EQ && isSkillField(assign.RHS) {
+		from[target.Name] = true
+
+		return
 	}
 
-	return aliases
+	markNames(assign.LHS, other)
 }
 
 // markNames adds each name in the expression to the set.
@@ -109,31 +122,14 @@ func markNames(expr syntax.Expr, set map[string]bool) {
 // requirement returns the skill that an if requires: its test is a membership of a text literal in a skills list, through not and parentheses,
 // and a statement of the branch that runs when the skill is missing is a call of fail.
 func requirement(test *syntax.IfStmt, aliases map[string]bool) (string, bool) {
-	cond, negations := test.Cond, 0
-
-	for {
-		cond = unparen(cond)
-
-		not, isNot := cond.(*syntax.UnaryExpr)
-		if !isNot || not.Op != syntax.NOT {
-			break
-		}
-
-		cond, negations = not.X, negations+1
-	}
-
-	member, ok := cond.(*syntax.BinaryExpr)
-	if !ok || (member.Op != syntax.IN && member.Op != syntax.NOT_IN) || !isSkillList(member.Y, aliases) {
+	member, negations := membership(test.Cond)
+	if member == nil || !isSkillList(member.Y, aliases) {
 		return "", false
 	}
 
-	name, isText := literal(unparen(member.X))
+	name, isText := skillName(member.X)
 	if !isText {
 		return "", false
-	}
-
-	if member.Op == syntax.NOT_IN {
-		negations++
 	}
 
 	missing := test.False
@@ -142,6 +138,38 @@ func requirement(test *syntax.IfStmt, aliases map[string]bool) (string, bool) {
 	}
 
 	return name, callsFail(missing)
+}
+
+// membership returns the in or not in test under any parentheses and not around the condition, and how many negations the condition holds.
+// A not in counts as one negation. It returns nil when the condition is not such a test.
+func membership(cond syntax.Expr) (*syntax.BinaryExpr, int) {
+	switch c := cond.(type) {
+	case *syntax.ParenExpr:
+		return membership(c.X)
+	case *syntax.UnaryExpr:
+		if inner, negations := membership(c.X); c.Op == syntax.NOT && inner != nil {
+			return inner, negations + 1
+		}
+	case *syntax.BinaryExpr:
+		if c.Op == syntax.IN {
+			return c, 0
+		}
+
+		if c.Op == syntax.NOT_IN {
+			return c, 1
+		}
+	}
+
+	return nil, 0
+}
+
+// skillName returns the text of a string literal under any parentheses. ok is false for any other expression.
+func skillName(expr syntax.Expr) (string, bool) {
+	if paren, ok := expr.(*syntax.ParenExpr); ok {
+		return skillName(paren.X)
+	}
+
+	return literal(expr)
 }
 
 // callsFail reports whether a statement of the branch is a call of fail.
@@ -159,29 +187,24 @@ func callsFail(branch []syntax.Stmt) bool {
 
 // isSkillList reports whether the expression is a `.skills` field or a name that the function binds from one.
 func isSkillList(expr syntax.Expr, aliases map[string]bool) bool {
-	expr = unparen(expr)
-	if name, ok := expr.(*syntax.Ident); ok {
-		return aliases[name.Name]
+	switch e := expr.(type) {
+	case *syntax.ParenExpr:
+		return isSkillList(e.X, aliases)
+	case *syntax.Ident:
+		return aliases[e.Name]
 	}
 
 	return isSkillField(expr)
 }
 
-// isSkillField reports whether the expression reads the field skills of a value.
+// isSkillField reports whether the expression reads the field skills of a value, under any parentheses.
 func isSkillField(expr syntax.Expr) bool {
-	field, ok := unparen(expr).(*syntax.DotExpr)
-
-	return ok && field.Name.Name == skillsField
-}
-
-// unparen returns the expression inside any parentheses around it.
-func unparen(expr syntax.Expr) syntax.Expr {
-	for {
-		paren, ok := expr.(*syntax.ParenExpr)
-		if !ok {
-			return expr
-		}
-
-		expr = paren.X
+	switch e := expr.(type) {
+	case *syntax.ParenExpr:
+		return isSkillField(e.X)
+	case *syntax.DotExpr:
+		return e.Name.Name == skillsField
 	}
+
+	return false
 }
