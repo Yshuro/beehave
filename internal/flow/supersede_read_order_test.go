@@ -63,5 +63,5 @@ func TestSuperseded_AStopThatReadTheHeadBeforeItMovedNeverStopsTheGateOfTheNewHe
 
 	close(gated.release)
 
-	require.NoError(t, receiveEnd(t, engine, gated, current).err, "a stop that read the old head cancelled the gate of the new head")
+	require.NoError(t, receiveEnd(t, engine, gated, current).err, "a stop that read the old head canceled the gate of the new head")
 }
