@@ -19,6 +19,7 @@ import (
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/review"
+	"github.com/tobocop2/beehave/internal/workflow"
 )
 
 func mustRead(t *testing.T, path string) []byte {
@@ -237,8 +238,7 @@ func putNoParked(rig *agentRig, request AgentRequest) {
 func exampleSkill(t *testing.T) string {
 	t.Helper()
 
-	skills, err := dryRequiredSkills(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	require.NoError(t, err)
+	skills := workflow.RequiredSkills(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
 	require.Len(t, skills, 1, "the example checks for one skill")
 
 	return skills[0]

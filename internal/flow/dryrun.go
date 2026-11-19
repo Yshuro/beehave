@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +24,7 @@ import (
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/step"
 	trackerstore "github.com/tobocop2/beehave/internal/store"
+	"github.com/tobocop2/beehave/internal/workflow"
 )
 
 const (
@@ -71,25 +71,6 @@ type dryChoice struct {
 	vars              map[string]any
 	entry             string
 	skills            []string
-}
-
-// skillCheck matches a check of the workflow that a step called a skill: "name" not in step.skills.
-var skillCheck = regexp.MustCompile(`"([^"]+)" not in \w+\.skills`)
-
-// dryRequiredSkills lists the skills that the workflow file checks for, so that the fake agent reports them as called.
-func dryRequiredSkills(file string) ([]string, error) {
-	text, err := os.ReadFile(file) //nolint:gosec // the owner names the workflow file
-	if err != nil {
-		return nil, fmt.Errorf("read the workflow file: %w", err)
-	}
-
-	var skills []string
-
-	for _, match := range skillCheck.FindAllStringSubmatch(string(text), -1) {
-		skills = append(skills, match[1])
-	}
-
-	return skills, nil
 }
 
 // DryOption is a choice for a dry run.
@@ -156,9 +137,7 @@ func dryPrepare(ctx context.Context, root, item, file string, chosen dryChoice) 
 		return Deps{}, err
 	}
 
-	if chosen.skills, err = dryRequiredSkills(file); err != nil {
-		return Deps{}, err
-	}
+	chosen.skills = workflow.RequiredSkills(file)
 
 	return dryDeps(tree, head, item, chosen), nil
 }
