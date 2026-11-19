@@ -10,12 +10,8 @@ grep -count=3 '^review ' calls.log
 grep -count=1 '^found=The mutation command exited with code 1 and printed no finding.' findings.log
 
 -- mutations --
-clean
-clean
-silent
-clean
-clean
-clean
+sh mutation.sh origin/integration => silent
+sh mutation.sh origin/integration => clean
 -- verdicts --
 approve
 approve

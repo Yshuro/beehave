@@ -241,7 +241,9 @@ func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, err
 }
 
 // e2eCommands answers the command calls of the example: the git steps of the checks before review and the mutation job on the host of the project.
-// Each call adds its command line to mutation.log. The Nth call of any command takes the Nth line of the file mutations: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, any other text or no line is a clean run.
+// Each call adds its command line to mutation.log. A line of the file mutations is "<command> => <answer>", where the command is the words of the step.
+// The Nth call of a command, on any host and slot class, takes the Nth line that names it: "lived" is a failed job that printed one finding, "silent" is a failed job that printed nothing, "clean" is a clean run.
+// A call with no line for its command is a clean run, so a new step in the workflow moves no answer. A line with no " => " or an unknown answer fails the call.
 type e2eCommands struct{ dir string }
 
 func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.CommandOutput, error) {
@@ -250,7 +252,9 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 		return flow.CommandOutput{}, err
 	}
 
-	if _, err := log.WriteString(request.Host + " " + request.SlotClass + " " + strings.Join(request.Run, " ") + "\n"); err != nil {
+	words := strings.Join(request.Run, " ")
+
+	if _, err := log.WriteString(request.Host + " " + request.SlotClass + " " + words + "\n"); err != nil {
 		return flow.CommandOutput{}, errJoin(err, log.Close())
 	}
 
@@ -264,14 +268,12 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 		return flow.CommandOutput{}, err
 	}
 
-	lines := strings.Split(string(answers), "\n")
-
-	n := strings.Count(string(text), "\n")
-	if n > len(lines) {
-		return flow.CommandOutput{}, nil
+	answer, err := keyedAnswer(string(answers), words, callsOf(string(text), words))
+	if err != nil {
+		return flow.CommandOutput{}, err
 	}
 
-	switch lines[n-1] {
+	switch answer {
 	case "lived":
 		return flow.CommandOutput{Stdout: "      KILLED CONDITIONALS_NEGATION at internal/a.go:30:4\nfinding: internal/a.go:12: a mutant lived: CONDITIONALS_NEGATION\n", RC: 1}, nil
 	case "silent":
@@ -279,6 +281,53 @@ func (c e2eCommands) Run(_ context.Context, request flow.CommandRequest) (flow.C
 	}
 
 	return flow.CommandOutput{}, nil
+}
+
+// callsOf is the number of lines of the log whose command words equal words, on any host and slot class. A log line is "<host> <slot class> <words>".
+func callsOf(log, words string) int {
+	n := 0
+
+	for _, line := range strings.Split(log, "\n") {
+		if fields := strings.SplitN(line, " ", 3); len(fields) == 3 && fields[2] == words {
+			n++
+		}
+	}
+
+	return n
+}
+
+// e2eAnswers are the answers that a line of the file mutations may give.
+var e2eAnswers = []string{"clean", "lived", "silent"}
+
+// keyedAnswer returns the answer of the nth call of a command: the nth line of the answers whose key is exactly the words. It is empty when no such line exists.
+// A non-blank line with no " => ", or with an answer that is not in e2eAnswers, is an error that names the line.
+func keyedAnswer(answers, words string, nth int) (string, error) {
+	var keyed []string
+
+	for number, line := range strings.Split(answers, "\n") {
+		if line == "" {
+			continue
+		}
+
+		key, answer, found := strings.Cut(line, " => ")
+		if !found {
+			return "", fmt.Errorf("mutations line %d %q has no \" => \"", number+1, line)
+		}
+
+		if !slices.Contains(e2eAnswers, answer) {
+			return "", fmt.Errorf("mutations line %d %q gives the unknown answer %q, want one of %v", number+1, line, answer, e2eAnswers)
+		}
+
+		if key == words {
+			keyed = append(keyed, answer)
+		}
+	}
+
+	if nth < 1 || nth > len(keyed) {
+		return "", nil
+	}
+
+	return keyed[nth-1], nil
 }
 
 // e2eAgents starts the claude program of the script PATH through the real agent runner.
@@ -636,6 +685,66 @@ func TestE2E_TheOneItemCopyHasOneMain(t *testing.T) {
 	assert.Equal(t, 1, strings.Count(copied, exampleMain))
 	assert.Contains(t, copied, "def round_main(item):")
 	assert.True(t, strings.HasSuffix(copied, exampleMain+"\n    return pipeline(item)\n"))
+}
+
+// e2eCommandCall runs the command words once on the host and slot class, with the mutations file text, and returns the exit code.
+func e2eCommandCall(t *testing.T, dir, host, slots string, run ...string) (int, error) {
+	t.Helper()
+
+	out, err := e2eCommands{dir: dir}.Run(t.Context(), flow.CommandRequest{Run: run, Host: host, SlotClass: slots})
+
+	return out.RC, err
+}
+
+func TestE2ECommands_CountsTheCallsOfTheSameWordsAcrossHosts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mutations"), []byte("sh m.sh => silent\nsh m.sh => clean\n"), e2eFileMode))
+
+	first, err := e2eCommandCall(t, dir, "build", "mutation", "sh", "m.sh")
+	require.NoError(t, err)
+	second, err := e2eCommandCall(t, dir, "other", "", "sh", "m.sh")
+	require.NoError(t, err)
+
+	require.Equal(t, 1, first, "the first call takes the first line")
+	require.Equal(t, 0, second, "the same words on another host take the second line")
+}
+
+func TestE2ECommands_AKeyThatIsAPrefixMatchesNothing(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "mutations"), []byte("sh m.sh => silent\ngit => silent\n"), e2eFileMode))
+
+	longer, err := e2eCommandCall(t, dir, "", "", "sh", "m.sh", "origin/integration")
+	require.NoError(t, err)
+	git, err := e2eCommandCall(t, dir, "", "", "git", "status")
+	require.NoError(t, err)
+
+	require.Equal(t, 0, longer, "a key that is a prefix of the words gives no answer")
+	require.Equal(t, 0, git, "a key that is a prefix of one word gives no answer")
+}
+
+func TestE2ECommands_RefusesAMutationsLineThatIsNotAnAnswer(t *testing.T) {
+	t.Parallel()
+
+	for name, test := range map[string]struct{ text, want string }{
+		"line_without_the_arrow": {"clean\n", `mutations line 1 "clean" has no " => "`},
+		"arrow_without_spaces":   {"sh m.sh => clean\nsh m.sh=>lived\n", `mutations line 2 "sh m.sh=>lived" has no " => "`},
+		"unknown_answer":         {"sh m.sh => lvied\n", `mutations line 1 "sh m.sh => lvied" gives the unknown answer "lvied"`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			require.NoError(t, os.WriteFile(filepath.Join(dir, "mutations"), []byte(test.text), e2eFileMode))
+
+			_, err := e2eCommandCall(t, dir, "", "", "git", "status")
+
+			require.ErrorContains(t, err, test.want)
+		})
+	}
 }
 
 func TestE2E_TheOneItemCopyRefusesAnExampleWithTwoMains(t *testing.T) {
