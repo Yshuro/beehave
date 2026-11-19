@@ -791,8 +791,8 @@ The line then shows the fields that decide the flow, when the step has them:
 
 - `exit_code`
 - `kind`: the kind of the lane of an agent step (`fix`, `rework`, `relay`, `review` or `design`)
-- `login`: the runner that an agent step ran on. It is the runner that the call names with `runner`, or the login that the pool picked when the call names none.
-- `model`: the model that an agent step set. A record that an older version wrote has no `login` and no `model`, and its line shows neither.
+- `login`: the runner that an agent step runs on. It is the runner that the call names with `runner`, or the login that the pool picked when the call names none. The line shows it while the step runs and after the step fails.
+- `model`: the model that an agent step sets. The line shows it while the step runs and after the step fails. A step that sets no model shows none.
 - `stop`
 - `verdict`
 - `head`

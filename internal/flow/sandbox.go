@@ -114,6 +114,13 @@ const recordedOutputFile = "output_file"
 // recordedStartHead is the name of the output of the render step that holds the commit of the item folder before the agent starts.
 const recordedStartHead = "start_head"
 
+// recordedLogin is the name of the output of the render step that holds the runner that the call runs on: the pool pick, or the runner that the call names.
+// recordedModel holds the model that the call sets, and is left out for a call that sets none. The view of a run reads both from the render step, so a running or a failed step shows them.
+const (
+	recordedLogin = "login"
+	recordedModel = "model"
+)
+
 // recalledOutputFile reads the output file that the render step recorded. A record made before the path was pinned has none, and the caller keeps the computed path.
 func recalledOutputFile(outputs map[string]any, computed string) string {
 	if file, ok := outputs[recordedOutputFile].(string); ok && file != "" {

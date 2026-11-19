@@ -599,12 +599,7 @@ const loginFlow = "def main(item):\n" +
 func TestStatus_AnAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
 	t.Parallel()
 
-	for _, tc := range []struct {
-		name, keywords, login, model string
-	}{
-		{name: "the_pool_pick_and_the_model_of_the_step", keywords: `model = "m-seen",`, login: testLogin, model: "m-seen"},
-		{name: "the_named_runner_and_the_model", keywords: `runner = "oc", model = "m-seen",`, login: "oc", model: "m-seen"},
-	} {
+	for _, tc := range loginCases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -624,16 +619,82 @@ func TestStatus_AnAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
 	}
 }
 
+// loginCases are the two ways that an agent call gets its login: the pool pick, and the runner that the call names.
+var loginCases = []struct {
+	name, keywords, login, model string
+}{
+	{name: "the_pool_pick_and_the_model_of_the_step", keywords: `model = "m-seen",`, login: testLogin, model: "m-seen"},
+	{name: "the_named_runner_and_the_model", keywords: `runner = "oc", model = "m-seen",`, login: "oc", model: "m-seen"},
+}
+
+func TestStatus_AFailedAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range loginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			rig.reply("", agent.Result{Outcome: agent.OutcomeExited, ExitCode: 3, Note: "bad exit"})
+
+			_, err := rig.run(t, fmt.Sprintf(loginFlow, tc.keywords), "Write to {{ .output_file }}\n")
+			require.Error(t, err)
+
+			view, err := rig.h.client(t, testVersion).Steps(testRun)
+			require.NoError(t, err)
+
+			line := view.Steps[slices.IndexFunc(view.Steps, func(l StepLine) bool { return strings.HasPrefix(l.Name, "agent:a") })]
+			assert.Equal(t, stepFailed, line.State)
+			assert.Equal(t, tc.login, line.Login)
+			assert.Equal(t, tc.model, line.Model)
+		})
+	}
+}
+
+func TestStatus_ARunningAgentStepLineShowsItsLoginAndItsModel(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range loginCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			rig.h.agents.gate = make(chan struct{})
+			release := sync.OnceFunc(func() { close(rig.h.agents.gate) })
+			t.Cleanup(release)
+			rig.reply(`{"verdict":"approve"}`, exited)
+
+			engine := rig.h.engine(t)
+			done := runInBackground2(engine, flowFile(t, fmt.Sprintf(loginFlow, tc.keywords), "Write to {{ .output_file }}\n"))
+			waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, rig.h.agents.running() == 1, nil }})
+
+			view, err := rig.h.client(t, testVersion).Steps(testRun)
+			require.NoError(t, err)
+
+			line := view.Steps[slices.IndexFunc(view.Steps, func(l StepLine) bool { return strings.HasPrefix(l.Name, "agent:a") })]
+			assert.Equal(t, stepRunning, line.State)
+			assert.Equal(t, tc.login, line.Login)
+			assert.Equal(t, tc.model, line.Model)
+
+			release()
+			require.NoError(t, receive(t, done).err)
+		})
+	}
+}
+
 func TestStepLine_AnAgentRecordThatHasNoLoginAndNoModelLeavesThemOutOfTheLine(t *testing.T) {
 	t.Parallel()
 
-	data, err := json.Marshal(PhaseOutput{Outcome: "exited"})
-	require.NoError(t, err)
-	assert.NotContains(t, string(data), "login", "a record with no login stays as an older version wrote it")
-	assert.NotContains(t, string(data), "model")
+	render := dbos.StepInfo{StepName: "agent:a#1/render", Output: `{"outputs":{"output_file":"/f.json"}}`}
+	phase := withChild(dbos.StepInfo{StepName: "any-name", Output: `{"outcome":"exited"}`})
 
-	line := callLine([]dbos.StepInfo{withChild(dbos.StepInfo{StepName: "any-name", Output: string(data)})}, "agent:a#1")
+	line := callLine([]dbos.StepInfo{render, phase}, "agent:a#1")
 	assert.Empty(t, line.Login)
 	assert.Empty(t, line.Model)
 	assert.False(t, line.OutputUnreadable)
+
+	data, err := json.Marshal(line)
+	require.NoError(t, err)
+	assert.NotContains(t, string(data), "login")
+	assert.NotContains(t, string(data), "model")
 }
