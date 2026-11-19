@@ -235,6 +235,10 @@ def before_review(check, base, allow = [], name = "before-review"):
     It reads the new tests, the revert run and the secret scan from check, the result of gate(base = ...). A gate with no base gives a cut log, which is a finding.
     With git it checks that the head holds the base, that the changed paths are inside allow (no allow, every path), and that no commit closes an issue.
     base is a git ref. The steps are named name-ancestor, name-paths and name-keywords."""
+    project = facts()
+    if project.source == "" and project.forge == "":
+        fail("REFUSE: before_review needs a repository, and this project has no repository. Set `source` or `forge` in the project file, or remove the before_review call.")
+
     head = check.head
     findings = gate_findings(check)
 

@@ -351,6 +351,8 @@ At the start of a run, the engine lists the other orchestrators that hold items 
 
 `before_review(check, base, allow = [], name = "before-review")` returns `struct(ok, findings)`. `check` is the result of a `gate(base = ...)` call. The function reads `check.new_tests`, `check.checks` (the new tests and the secret scan) and `check.revert` from it. A gate without `base` holds no checks, so the function refuses it as a cut log. `base` is a git ref.
 
+The function reads `facts()` first. If the project has no repository (no `source` and no `forge` in the project file), it stops the item before any step, with a message that names the keys to set. It is a refusal of the call, not a finding.
+
 The function runs git in the item folder with three `command` steps: `<name>-ancestor`, `<name>-paths` (only when `allow` is not empty) and `<name>-keywords`. A git command that fails with an exit code other than the ones that it documents stops the item with an error. It is never a finding.
 
 A finding is a result, not an error. `ok` is true when `findings` is empty. The function gives a finding when:

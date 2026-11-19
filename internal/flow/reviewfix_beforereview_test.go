@@ -64,6 +64,7 @@ func reviewHarness(t *testing.T, tree reviewTree, checks *GateChecks) *harness {
 
 	h := reuseHarness(t, []GateResult{{Passed: true, Head: tree.head, Tree: "tree-1", Steps: stepsPass, Checks: checks}}, nil)
 	h.trees = &fakeTrees{dir: tree.dir}
+	h.facts = func(string) model.Project { return model.Project{Source: tree.dir} }
 
 	return h
 }
@@ -320,6 +321,7 @@ func TestReviewFixBeforeReview_TheFunctionJudgesTheGateResultItGetsWhateverGateC
 		{Passed: true, Head: tree.other, Tree: "tree-2", Steps: stepsPass, Checks: &GateChecks{Complete: true, Secrets: &zero}},
 	}, nil)
 	h.trees = &fakeTrees{dir: tree.dir}
+	h.facts = func(string) model.Project { return model.Project{Source: tree.dir} }
 	h.commands.reply = gitReply(t, tree.dir)
 
 	_, err := walkText(t, h, "load(\"@beehave//review_fix.star\", \"before_review\")\n\n"+bodyFlow(
@@ -465,5 +467,23 @@ func TestReviewFixBeforeReview_TheChecksOfARealLogAreFindings(t *testing.T) {
 			assert.Contains(t, shown, "show False")
 			assert.Contains(t, shown, c.finds)
 		})
+	}
+}
+
+func TestReviewFixBeforeReview_AProjectWithNoRepositoryStopsBeforeAnyCommandWithAMessageThatNamesTheKeys(t *testing.T) {
+	t.Parallel()
+
+	tree := reviewTreeOf(t, "src/a.go", "add a")
+	h := reviewHarness(t, tree, cleanChecks())
+	h.facts = func(string) model.Project { return model.Project{} }
+	h.bare = true
+	h.commands.reply = gitReply(t, tree.dir)
+
+	_, err := walkText(t, h, libReviewFlow(tree.base, ""))
+
+	require.ErrorContains(t, err, "before_review needs a repository, and this project has no repository. Set `source` or `forge` in the project file")
+
+	for _, line := range h.commands.ran() {
+		assert.NotContains(t, line, "git", "no git command runs in a project with no repository")
 	}
 }

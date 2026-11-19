@@ -17,35 +17,45 @@ var exampleMutationCommand = []string{"sh", "scripts/mutation-pr.sh"}
 
 // factsWithMutation returns the facts of the run: the facts a test set, with the vars key mutation_command added when the test gave the harness a command.
 // The added key never replaces a key of the vars that the test set.
+// A project that the harness says has a repository (every project, unless a test sets repository) holds a source, as the config gives one.
 func (h *harness) factsWithMutation() func(project string) model.Project {
-	if h.mutation == nil {
-		return h.facts
-	}
-
 	return func(project string) model.Project {
 		out := model.Project{Name: project}
 		if h.facts != nil {
 			out = h.facts(project)
 		}
 
-		vars := map[string]any{}
-		for key, value := range out.Vars {
-			vars[key] = value
+		if !h.bare && out.Source == "" && out.Forge == "" && (h.repository == nil || h.repository(project)) {
+			out.Source = "/repo"
 		}
 
-		if _, set := vars[mutationKey]; !set {
-			words := make([]any, 0, len(h.mutation))
-			for _, word := range h.mutation {
-				words = append(words, word)
-			}
+		return h.withMutationVar(out)
+	}
+}
 
-			vars[mutationKey] = words
-		}
-
-		out.Vars = vars
-
+// withMutationVar adds the key mutation_command to the vars of the project when the harness holds a command and the vars hold no such key.
+func (h *harness) withMutationVar(out model.Project) model.Project {
+	if h.mutation == nil {
 		return out
 	}
+
+	vars := map[string]any{}
+	for key, value := range out.Vars {
+		vars[key] = value
+	}
+
+	if _, set := vars[mutationKey]; !set {
+		words := make([]any, 0, len(h.mutation))
+		for _, word := range h.mutation {
+			words = append(words, word)
+		}
+
+		vars[mutationKey] = words
+	}
+
+	out.Vars = vars
+
+	return out
 }
 
 const mutationKey = "mutation_command"

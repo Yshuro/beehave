@@ -207,7 +207,7 @@ func dryDeps(tree, head, item string, chosen dryChoice) Deps {
 		Agents: agents, Gate: newDryGate(tree, head, chosen.redGate), Logins: dryLogins{}, Lifecycle: dryLifecycle{}, Beats: dryBeats{},
 		Forge: dryForge{head: head}, Trees: dryTrees{dir: tree}, Commands: dryCommands{}, Items: dryItems{item: item},
 		Writer: dryWriter{}, Reader: dryReader{}, Preflight: dryPreflight{}, Slots: drySlots,
-		Facts: func(string) model.Project { return model.Project{Vars: chosen.vars} },
+		Facts: func(string) model.Project { return model.Project{Source: tree, Vars: chosen.vars} },
 		Clock: clock{Poll: dryPoll, Settle: dryWait, Reading: dryReading()},
 	}
 }
