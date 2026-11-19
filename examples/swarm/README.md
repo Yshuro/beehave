@@ -9,24 +9,22 @@ A swarm runs one backlog with many agents at once. Each line of the parent item 
 - **Merge queue.** Finished tasks wait until `BATCH` pull requests are ready or no agent runs, or until a waiting pull request outranks the ready items. Then one `merge` runs for each priority, `P0` first, so a high priority lands before a low one and one gate run covers each union.
 - **Deferred landing.** If the forge defers a pull request in an early landing, the parent does not land it early again. The next regular landing (full batch or no agent runs) tries it again.
 - **Conflicts.** A pull request that conflicts gets a fix item, at most twice. The fix agent merges the base into the branch and pushes it. After two tries, or for any other reason, the item gets a comment and the status `hold`.
-- **Limits.** `CAP_USD` stops new runs when the ledger reaches it. A file `$HOME/.swarm/<swarm>/STOP` stops new runs. `DEADLINE_MIN` stops new runs after that many minutes. A limit never stops a run that already started.
+- **Limits.** The setting `agents.max_tree_budget_usd` caps the dollars of the whole swarm. At the cap, the engine holds each agent step that has not started, so the swarm waits until you raise the cap and restart beehave. A file `$HOME/.swarm/<swarm>/STOP` stops new runs. `DEADLINE_MIN` stops new runs after that many minutes. `STOP` and `DEADLINE_MIN` never stop a run that already started. The cap never stops an agent step that already started.
 
 ## Files
 
 - `workflow.star`: the parent and the two child entries, `task` and `resolve`.
 - `project.star`: the project file to copy to `projects/<name>.star`. The tracker must accept new items. The forge is required.
-- `scripts/ledger.sh`: the spend ledger (`add`, `check`, `report`).
 - `prompts/task.md`, `prompts/resolve.md`: the prompts of the two entries.
 
 ## Variables
 
-`REPO`, `BASE`, `OWNER_LOGIN`, `OWNER_EMAIL`, `SWARM` (the id of the parent item), `SWARM_DIR` (the absolute path of this folder), `CAP_USD`. Optional: `REMOTE` (the default is the GitHub address of `REPO`, so a private repository needs credentials for `git ls-remote`), `DEADLINE_MIN`, `BATCH`.
+`REPO`, `BASE`, `OWNER_LOGIN`, `OWNER_EMAIL`, `SWARM` (the id of the parent item). Optional: `REMOTE` (the default is the GitHub address of `REPO`, so a private repository needs credentials for `git ls-remote`), `DEADLINE_MIN`, `BATCH`.
 
 ## Engine gaps
 
 Each gap is true on main now.
 
-- **A swarm cap needs a ledger.** The results of `gather` carry no cost, and a spawned run has its own sum. The example writes the cost of each agent step to `scripts/ledger.sh` and reads the total before each pass. `docs/design/durable-loop.md` says that a cap for an item tree or a swarm is not covered.
 - **The clock is text.** `now()` returns an RFC 3339 string. The deadline parses it in Starlark.
 - **One priority for each call.** `merge` folds its members in the order of the item id, so priority needs one call for each tier.
 - **An item has no priority.** `item_create` takes no severity or priority argument, and `queue` sorts rows by severity. The example keeps the priority of each item in its own map and sorts the ready items itself.
