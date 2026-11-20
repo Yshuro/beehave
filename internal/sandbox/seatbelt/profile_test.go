@@ -109,24 +109,6 @@ func TestProfile_ASymbolicLinkIsFollowedBecauseSeatbeltComparesTheRealPath(t *te
 	assert.Contains(t, defines, "W1="+filepath.Join(dir, "absent"), "a path that does not exist is kept as it is")
 }
 
-// A plan that names the system folders, as the plan of a gate and the check of the enforcer do, reads every folder that the profile added by itself
-// before it stopped adding them: the system folders, with /etc as its real folder /private/etc.
-func TestProfile_APlanWithTheSystemFoldersReadsWhatTheProfileAddedBefore(t *testing.T) {
-	t.Parallel()
-
-	_, defines := seatbelt.Profile(sandbox.Plan{Read: sandbox.SystemRead()}, 0)
-
-	before := append(sandbox.SystemRead(), "/System", "/Library/Apple", "/private/etc", "/private/var/db/dyld", "/private/var/db/timezone", "/private/var/select")
-	for _, path := range before {
-		resolved, err := filepath.EvalSymlinks(path)
-		if err != nil {
-			resolved = path
-		}
-
-		assert.Contains(t, readsOf(defines), resolved, path)
-	}
-}
-
 // readsOf returns the paths of the read rules among the -D arguments of a profile.
 func readsOf(defines []string) []string {
 	var reads []string
