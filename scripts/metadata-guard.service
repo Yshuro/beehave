@@ -3,6 +3,7 @@ Description=Reject non-root access to the instance metadata server
 DefaultDependencies=no
 After=local-fs.target nftables.service
 PartOf=nftables.service
+ReloadPropagatedFrom=nftables.service
 Wants=network-pre.target
 Before=network-pre.target systemd-user-sessions.service
 
@@ -10,6 +11,7 @@ Before=network-pre.target systemd-user-sessions.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/nft -f /etc/beehave/metadata-guard.nft
+ExecReload=/usr/sbin/nft -f /etc/beehave/metadata-guard.nft
 
 [Install]
 WantedBy=multi-user.target

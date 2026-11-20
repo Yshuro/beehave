@@ -166,7 +166,7 @@ func rootActions(log string) []string {
 	var actions []string
 
 	for line := range strings.SplitSeq(log, "\n") {
-		if strings.HasPrefix(line, "sudo ") && line != "sudo -n true" {
+		if strings.HasPrefix(line, "sudo ") && line != "sudo -n -l" {
 			actions = append(actions, line)
 		}
 	}
@@ -1402,7 +1402,7 @@ func TestMetadataGuard_UnitLoadsAfterNftablesAndBeforeTheNetworkAndUserSessions(
 
 	assert.Contains(t, unit["Unit"]["After"], "nftables.service", "the flush of the default ruleset runs first, so it cannot drop the table")
 	assert.Contains(t, unit["Unit"]["Wants"], "network-pre.target", "network-pre.target is passive: only a Wants pulls it in")
-	assert.Equal(t, []string{"nftables.service"}, unit["Unit"]["PartOf"], "a restart or reload of nftables restarts the guard, so the table is made again")
+	assert.Equal(t, []string{"nftables.service"}, unit["Unit"]["PartOf"], "a stop or restart of nftables stops or restarts the guard, so the table is made again")
 	assert.Contains(t, unit["Unit"]["Before"], "network-pre.target")
 	assert.Contains(t, unit["Unit"]["Before"], "systemd-user-sessions.service")
 	assert.Equal(t, []string{"multi-user.target"}, unit["Install"]["WantedBy"], "the rules load at every boot")
@@ -1410,4 +1410,15 @@ func TestMetadataGuard_UnitLoadsAfterNftablesAndBeforeTheNetworkAndUserSessions(
 	assert.Equal(t, []string{"oneshot"}, unit["Service"]["Type"])
 	assert.Equal(t, []string{"yes"}, unit["Service"]["RemainAfterExit"])
 	assert.NotContains(t, unit["Service"], "ExecStop", "a stop that deletes the table opens a window with no rule during a restart")
+}
+
+func TestMetadataGuard_UnitLoadsTheTableAgainWhenNftablesReloads(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	unit := parseGuardUnit(h.readSource("metadata-guard.service"))
+
+	assert.Equal(t, []string{"nftables.service"}, unit["Unit"]["ReloadPropagatedFrom"], "a reload of nftables runs flush ruleset, so it must reload the guard too")
+	assert.Equal(t, unit["Service"]["ExecStart"], unit["Service"]["ExecReload"], "a reload loads the same file as a start, so the table is made again")
+	assert.Contains(t, unit["Unit"]["After"], "nftables.service", "the reload of the guard runs after the reload of nftables, so the flush cannot come last")
 }

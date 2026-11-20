@@ -19,7 +19,7 @@ const (
 )
 
 // rootGroups are the groups that give root, by the group name that a Debian or Ubuntu host uses.
-var rootGroups = []string{"root", "sudo", "admin", "wheel", "google-sudoers", "docker", "lxd", "disk", "shadow"}
+var rootGroups = []string{"root", "sudo", "admin", "wheel", "google-sudoers", "docker", "lxd", "disk", "shadow", "staff"}
 
 // jobKeyFile is where the root stage puts the key of the controller for the job user.
 func (h *fakeHost) jobKeyFile() string {
@@ -299,6 +299,31 @@ func TestHostSetupJob_RefusesAUserThatCanUseSudo(t *testing.T) {
 
 	require.Error(t, err)
 	assert.Contains(t, out, "the user "+"builder"+" can run sudo without a password, so a step of a gate can become root and take the token. Run the job stage as the job user "+jobUser)
+	assert.NotContains(t, out, done)
+	assert.NotContains(t, h.read(h.log), "make ", "the refusal comes before the code of the clone runs")
+}
+
+func TestHostSetupJob_RefusesRoot(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.setup("FAKE_UID=0", "FAKE_SUDO_RC=0")
+
+	require.Error(t, err)
+	assert.Contains(t, out, "run the job stage as the job user "+jobUser+", not as root")
+	assert.NotContains(t, out, done)
+	assert.NotContains(t, h.read(h.log), "sudo ", "the refusal comes before any other check")
+	assert.NotContains(t, h.read(h.log), "make ", "the refusal comes before the code of the clone runs")
+}
+
+func TestHostSetupJob_RefusesAUserThatCanUseSudoForSomeCommandsOnly(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.setup("FAKE_SUDO_PARTIAL=1")
+
+	require.Error(t, err)
+	assert.Contains(t, out, "the user builder can run sudo without a password")
 	assert.NotContains(t, out, done)
 	assert.NotContains(t, h.read(h.log), "make ", "the refusal comes before the code of the clone runs")
 }

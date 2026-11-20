@@ -28,7 +28,7 @@ landlock_minor=7
 job_user=beehave-jobs
 job_home=/home/$job_user
 # The groups that give root, or the files of root, to a member.
-root_groups='root sudo admin wheel google-sudoers docker lxd disk shadow'
+root_groups='root sudo admin wheel google-sudoers docker lxd disk shadow staff'
 
 root=$(cd "$(dirname "$0")/.." && pwd)
 sysroot=${HOST_SETUP_SYSROOT:-}
@@ -148,10 +148,11 @@ reject_root_groups() {
 }
 
 # check_no_way_to_root fails when the user of the job stage can become root: with sudo without a password, or through a group.
-# A step of a gate that runs as such a user can take the token of the machine.
+# A step of a gate that runs as such a user can take the token of the machine. sudo -n -l succeeds for any entry without a password,
+# also one that allows some commands only.
 check_no_way_to_root() {
 	name=$(id -un)
-	if sudo -n true 2>/dev/null; then
+	if sudo -n -l >/dev/null 2>&1; then
 		fail "the user $name can run sudo without a password, so a step of a gate can become root and take the token. Run the job stage as the job user $job_user"
 	fi
 	reject_root_groups "the user $name" "$name" "$(id -nG)"
