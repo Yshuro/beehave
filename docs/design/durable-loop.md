@@ -613,7 +613,7 @@ The release steps run on every exit of the item except a cancel, while the claim
 The worktree step removes the worktree only when all of these are true:
 
 - The tree is clean.
-- `git ls-remote --heads origin` lists a branch tip.
+- `git ls-remote --heads` lists a branch tip. It reads the address of the project in the push repository, never the remote that the clone config names.
 - HEAD equals that tip.
 
 In every other case the tree stays, and the log says why. One timeout covers all the git calls. The claim release runs last.

@@ -481,6 +481,11 @@ func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) erro
 	return nil
 }
 
+// Heads reads the branches of the bare remote that the dry run made, with no global or system git config.
+func (t dryTrees) Heads(ctx context.Context, _ string) (string, error) {
+	return dryGit(ctx, t.dir, []string{"ls-remote", "--heads", remoteName})
+}
+
 func (t dryTrees) Ensure(context.Context, string, string, string, string) (string, error) {
 	return t.dir, nil
 }

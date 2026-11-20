@@ -44,6 +44,13 @@ func (t workTree) Ensure(ctx context.Context, project, item, _, _ string) (strin
 	return t.Path(ctx, project, item)
 }
 
+// Fetch fetches the origin remote of the folder "tree", which holds the base of every item.
+func (t workTree) Fetch(ctx context.Context, _ string) error {
+	dir := filepath.Join(t.dir, "tree")
+
+	return gitExit("fetch", dir, proc.ExecRunner{Binary: "git", Dir: dir, Timeout: batchGitTimeout}.Run(ctx, []string{"fetch", "-q", "origin"}))
+}
+
 // e2eBatch returns the merger, the batch host and the command runner of the batch scripts, or false when the script made no forge folder.
 func e2eBatch(dir string, cfg config.Config) (pulls, batchHost, programs, bool) {
 	if _, err := os.Stat(filepath.Join(dir, e2eForgeFolder)); err != nil {
@@ -59,7 +66,7 @@ func e2eBatch(dir string, cfg config.Config) (pulls, batchHost, programs, bool) 
 		exec: func(spec proc.ExecRunner) proc.Runner { return spec },
 	}
 
-	return p, batchHost{pulls: p, programs: commands}, commands, true
+	return p, batchHost{pulls: p, programs: commands, base: workTree{dir: dir}}, commands, true
 }
 
 // withBatch adds the collaborators of the batch scripts to the dependencies.

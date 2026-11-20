@@ -709,6 +709,22 @@ func TestDryFakes_AnswerWithoutTouchingAnything(t *testing.T) {
 	assert.Equal(t, CommandOutput{}, out)
 }
 
+func TestDryTrees_HeadsReadsTheBranchesOfTheBareRemoteOfTheDryRun(t *testing.T) {
+	t.Parallel()
+
+	dir, remote := filepath.Join(t.TempDir(), "tree"), filepath.Join(t.TempDir(), "remote")
+	head, err := dryRepo(t.Context(), dir, remote)
+	require.NoError(t, err)
+
+	_, err = dryGit(t.Context(), dir, []string{"push", "-q", remoteName, "HEAD:refs/heads/item-1"})
+	require.NoError(t, err)
+
+	heads, err := dryTrees{dir: dir}.Heads(t.Context(), "p")
+
+	require.NoError(t, err)
+	assert.Contains(t, heads, head+"\trefs/heads/item-1")
+}
+
 func countStep(names []string, prefix string) int {
 	n := 0
 

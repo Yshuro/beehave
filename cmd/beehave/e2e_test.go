@@ -184,6 +184,9 @@ func (e2eFiles) WithTree(_ context.Context, _, _ string, fn func(string)) error 
 	return nil
 }
 
+// Heads is never read: WithTree gives no worktree.
+func (e2eFiles) Heads(context.Context, string) (string, error) { return "", nil }
+
 // Ensure gives the git folder that e2eSetup makes. The gate reads the commit of that folder.
 func (f e2eFiles) Ensure(context.Context, string, string, string, string) (string, error) {
 	return filepath.Join(f.dir, "tree"), nil

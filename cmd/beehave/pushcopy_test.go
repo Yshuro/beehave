@@ -398,7 +398,7 @@ func TestPulls_APushWithNoEnforcerIsRefusedAndNamesWhy(t *testing.T) {
 	require.ErrorContains(t, err, "this kernel does not run Landlock")
 	require.ErrorContains(t, err, "sandbox_enforcer")
 	assert.Empty(t, gitOut(t, rig.remote, "branch", "--list", pushItem), "the remote has no branch of the item")
-	assert.NoDirExists(t, filepath.Join(rig.opts.StateDir, "push"), "nothing was copied")
+	assert.Empty(t, gitOut(t, filepath.Join(rig.opts.StateDir, "push", "p.git"), "branch", "--list", pushItem), "nothing was copied")
 }
 
 func TestPulls_APushWhoseProgramPathIsUnknownIsRefused(t *testing.T) {
@@ -441,7 +441,10 @@ func TestPulls_APushWhoseRepositoryCannotBeMadeIsRefused(t *testing.T) {
 			t.Parallel()
 
 			rig := newPushRig(t)
-			c.plant(t, filepath.Join(rig.opts.StateDir, "push"))
+			root := filepath.Join(rig.opts.StateDir, "push")
+			// The fetch that made the worktree of the rig made the folder; each case plants its own.
+			require.NoError(t, os.RemoveAll(root))
+			c.plant(t, root)
 
 			err := rig.pulls.Push(t.Context(), "p", pushItem, pushItem, rig.head, "")
 

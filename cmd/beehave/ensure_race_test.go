@@ -141,7 +141,7 @@ func TestWorktrees_EnsureForTwoItemsOfOneProjectAtOnceClonesOnceAndAddsBoth(t *t
 	trees := worktrees{
 		root: filepath.Join(state, "trees"), repos: filepath.Join(state, "repos"),
 		projects: map[string]config.Project{"p": {Project: model.Project{Name: "p", Repo: "owner/name", Forge: forgegithub.Name, BaseBranch: "main"}}},
-		git:      git.runner, forge: fakeForges,
+		git:      git.runner, remote: git.runner, forge: fakeForges,
 	}
 
 	const items = 6
@@ -181,7 +181,7 @@ func TestWorktrees_EnsureForTwoProjectsAtOnceDoesNotMakeOneWaitForTheOther(t *te
 			"a": {Project: model.Project{Name: "a", Repo: "owner/a", Forge: forgegithub.Name, BaseBranch: "main"}},
 			"b": {Project: model.Project{Name: "b", Repo: "owner/b", Forge: forgegithub.Name, BaseBranch: "main"}},
 		},
-		git: git.runner, forge: fakeForges,
+		git: git.runner, remote: git.runner, forge: fakeForges,
 	}
 
 	errs := make([]error, 2)
@@ -235,7 +235,7 @@ func TestWorktrees_EnsureForTwoEnginesOnOneRepoFolderClonesOnce(t *testing.T) {
 	projects := map[string]config.Project{"p": {Project: model.Project{Name: "p", Repo: "owner/name", Forge: forgegithub.Name, BaseBranch: "main"}}}
 	// Each value is the worktrees of one engine. Only the folders are shared.
 	engine := func() worktrees {
-		return worktrees{root: filepath.Join(state, "trees"), repos: filepath.Join(state, "repos"), projects: projects, git: git.runner, forge: fakeForges}
+		return worktrees{root: filepath.Join(state, "trees"), repos: filepath.Join(state, "repos"), projects: projects, git: git.runner, remote: git.runner, forge: fakeForges}
 	}
 
 	errs := make([]error, 2)

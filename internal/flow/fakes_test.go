@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -1292,7 +1293,9 @@ type fakeTrees struct {
 	err error
 	// ensureErr fails Ensure only.
 	ensureErr error
-	late      *lateFolder
+	// headsErr fails Heads only, and Heads still returns the branches it read, so a release that ignores the error sees the tip.
+	headsErr error
+	late     *lateFolder
 	// per, when set, gives the folder of each item and wins over dir and late.
 	per func(ctx context.Context, item string) (string, error)
 	// ensured records the item of each Ensure call when a test sets it.
@@ -1371,6 +1374,33 @@ func (f fakeTrees) WithTree(ctx context.Context, project, item string, fn func(d
 	fn(dir)
 
 	return nil
+}
+
+// Heads reads the branches of the origin remote of the one folder that the fake gives. A fake that gives a folder for each item has no one remote.
+func (f fakeTrees) Heads(ctx context.Context, _ string) (string, error) {
+	dir := f.dir
+	if f.late != nil {
+		dir = f.late.path()
+	}
+
+	if dir == "" {
+		return "", errFake
+	}
+
+	// The read of the branches reaches the remote, so it runs with plain git and not with the local git calls of the release.
+	cmd := proc.GroupCommand(ctx, "git", []string{"ls-remote", "--heads", remoteName}, dir)
+	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
+
+	var stderr bytes.Buffer
+
+	cmd.Stderr = &stderr
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	return string(out), f.headsErr
 }
 
 func (f fakeTrees) Ensure(ctx context.Context, _, item, start, base string) (string, error) {

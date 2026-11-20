@@ -282,27 +282,35 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailedWhenItMovesAKeptRoundWorktree(
 	for _, step := range []string{"status", "fetch", "log", "checkout", "update-ref"} {
 		trees, git, _ := ensureFixture(t)
 
-		_, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
+		kept, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 		require.NoError(t, err)
 
 		git.fail = step
+		if step == "update-ref" {
+			git.failIn = kept
+		}
 
 		got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 		require.ErrorContains(t, err, "git "+step, step)
 		assert.Empty(t, got, step)
+
+		if step == "update-ref" {
+			require.ErrorContains(t, err, "git update-ref in "+kept+" exited with code 128", "the placed mark of the kept tree fails, not the ref of the clone")
+		}
 	}
 }
 
 func TestWorktrees_EnsureNamesTheGitCallThatFailedWhenItMarksANewRoundWorktree(t *testing.T) {
 	t.Parallel()
 
-	trees, git, _ := ensureFixture(t)
-	git.fail = "update-ref"
+	trees, git, state := ensureFixture(t)
+	tree := filepath.Join(state, "trees", "p", model.SafeName(roundItem))
+	git.fail, git.failIn = "update-ref", tree
 
 	got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
-	require.ErrorContains(t, err, "git update-ref")
+	require.ErrorContains(t, err, "git update-ref in "+tree+" exited with code 128", "the placed mark of the new tree fails, not the ref of the clone")
 	assert.Empty(t, got)
 }
 
@@ -342,12 +350,12 @@ func TestWorktrees_EnsureCallsGitInTheOrderThatCutsARoundItemFromItsBase(t *test
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
-	assert.Equal(t, []string{
-		filepath.Join(state, "repos") + ": clone https://example.test/owner/name.git " + clone,
-		clone + ": fetch origin integration/r1",
-		clone + ": worktree add --force --detach " + want + " origin/integration/r1",
-		want + ": update-ref " + placedMark + " HEAD",
-	}, git.calls)
+	calls := []string{filepath.Join(state, "repos") + ": clone https://example.test/owner/name.git " + clone}
+	calls = append(calls, baseFetch(state, "integration/r1")...)
+	assert.Equal(t, append(calls,
+		clone+": worktree add --force --detach "+want+" origin/integration/r1",
+		want+": update-ref "+placedMark+" HEAD",
+	), git.calls)
 }
 
 func TestWorktrees_EnsureMakesARoundWorktreeAgainThatSomeoneRemovedAtTheRecordedStartCommit(t *testing.T) {
@@ -490,7 +498,8 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailedForARoundItem(t *testing.T) {
 	for _, step := range []string{"clone", "fetch", "worktree"} {
 		trees, _, _ := ensureFixture(t)
 
-		trees.git = (&fakeGit{fail: step}).runner
+		failing := (&fakeGit{fail: step}).runner
+		trees.git, trees.remote = failing, failing
 
 		got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
@@ -499,7 +508,7 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailedForARoundItem(t *testing.T) {
 	}
 
 	trees, _, _ := ensureFixture(t)
-	trees.git = (&fakeGit{fail: "fetch"}).runner
+	trees.remote = (&fakeGit{fail: "fetch"}).runner
 
 	_, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
