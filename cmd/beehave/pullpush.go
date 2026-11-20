@@ -68,8 +68,7 @@ func (p pulls) copyHead(ctx context.Context, project, branch, head string) (stri
 		return "", err
 	}
 
-	root := filepath.Join(filepath.Dir(p.trees.repos), "push")
-	dir := filepath.Join(root, model.SafeName(project)+".git")
+	root, dir := pushRepository(p.trees.repos, project)
 
 	err = cloneLock{repos: p.trees.repos}.hold(ctx, project, func(string) error { return fetchHead(ctx, root, dir, folder, program, branch, head) })
 
@@ -97,9 +96,15 @@ func (p pulls) copySource(project string) (folder, program string, err error) {
 	return folder, uploadPackProgram(self, enforcer.Name(), folder), nil
 }
 
-// fetchHead makes the push repository dir in the owner-only folder root when it is missing, with no template and so no hooks, and fetches head from the
-// clone folder onto refs/heads/branch with program as git upload-pack.
-func fetchHead(ctx context.Context, root, dir, folder, program, branch, head string) error {
+// pushRepository returns the owner-only folder of the push repositories, beside the repos folder, and the push repository of the project in it.
+func pushRepository(repos, project string) (root, dir string) {
+	root = filepath.Join(filepath.Dir(repos), "push")
+
+	return root, filepath.Join(root, model.SafeName(project)+".git")
+}
+
+// openPushRepository makes the push repository dir in the owner-only folder root with git when it is missing, with no template and so no hooks.
+func openPushRepository(ctx context.Context, git proc.Runner, root, dir string) error {
 	if err := os.MkdirAll(dir, ownerOnly); err != nil {
 		return fmt.Errorf("make the push repository: %w", err)
 	}
@@ -108,7 +113,12 @@ func fetchHead(ctx context.Context, root, dir, folder, program, branch, head str
 		return fmt.Errorf("the folder of the push repositories: %w", err)
 	}
 
-	if err := gitExit("init", dir, pushGit(dir).Run(ctx, []string{"init", "-q", "--bare", "--template=", dir})); err != nil {
+	return gitExit("init", dir, git.Run(ctx, []string{"init", "-q", "--bare", "--template=", dir}))
+}
+
+// fetchHead opens the push repository dir in root and fetches head from the clone folder onto refs/heads/branch with program as git upload-pack.
+func fetchHead(ctx context.Context, root, dir, folder, program, branch, head string) error {
+	if err := openPushRepository(ctx, pushGit(dir), root, dir); err != nil {
 		return err
 	}
 

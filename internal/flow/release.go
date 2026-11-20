@@ -28,9 +28,11 @@ const treeMakeStepName = "make worktree"
 const remoteName = "origin"
 
 // trees finds the worktree of an item. WithTree runs fn with the worktree while it holds the lock of the clone, so no other worktree command on the
-// clone runs meanwhile. An empty path means the item has none.
+// clone runs meanwhile. An empty path means the item has none. Heads runs inside fn and returns the git ls-remote --heads lines of the remote of the
+// project, read from the address that the engine holds and with no setting of the clone config.
 type trees interface {
 	WithTree(ctx context.Context, project, item string, fn func(dir string)) error
+	Heads(ctx context.Context, project string) (string, error)
 }
 
 // treeMaker finds the worktree of an item and makes it when it is missing. Ensure returns the folder, and an empty folder is not a success.
@@ -84,7 +86,7 @@ func (d ReleaseDeps) removeTree(ctx context.Context, project, item string) (stri
 		bounded, cancel := d.limit(ctx)
 		defer cancel()
 
-		kept = tryRemove(bounded, dir)
+		kept = tryRemove(bounded, dir, func(ctx context.Context) (string, error) { return d.Trees.Heads(ctx, project) })
 	}); err != nil {
 		return "", fmt.Errorf("find the worktree of item %s: %w", item, err)
 	}
@@ -119,9 +121,9 @@ func (d ReleaseDeps) giveBack(ctx context.Context, logger *slog.Logger, project,
 	return treeErr
 }
 
-// tryRemove removes the worktree, or returns the reason it stays.
-func tryRemove(ctx context.Context, dir string) string {
-	common, reason := keepReason(ctx, dir)
+// tryRemove removes the worktree, or returns the reason it stays. heads reads the branches of the remote.
+func tryRemove(ctx context.Context, dir string, heads func(context.Context) (string, error)) string {
+	common, reason := keepReason(ctx, dir, heads)
 	if reason != "" {
 		return reason
 	}
@@ -136,24 +138,27 @@ func tryRemove(ctx context.Context, dir string) string {
 // keepReason returns why the tree must stay. When the tree is clean and its HEAD is the tip of a remote branch,
 // it returns the repository that owns the tree and an empty reason.
 // The remote is read, not the local tracking refs: a tracking ref can show a push that the remote lost.
-func keepReason(ctx context.Context, dir string) (common, reason string) {
+func keepReason(ctx context.Context, dir string, heads func(context.Context) (string, error)) (common, reason string) {
 	head, reason := cleanHead(ctx, dir)
 	if reason != "" {
 		return "", reason
 	}
 
-	remote, reason := readAll(ctx, dir,
-		read{"read the branches of the remote", []string{"ls-remote", "--heads", remoteName}},
-		read{"read the repository of the worktree", []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}})
+	listing, err := heads(ctx)
+	if err != nil {
+		return "", explain(ctx, "read the branches of the remote", err)
+	}
+
+	local, reason := readAll(ctx, dir, read{"read the repository of the worktree", []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}})
 	if reason != "" {
 		return "", reason
 	}
 
-	if !isTip(remote[0], head) {
+	if !isTip(listing, head) {
 		return "", "HEAD is not the tip of a branch on the remote"
 	}
 
-	return strings.TrimSpace(remote[1]), ""
+	return strings.TrimSpace(local[0]), ""
 }
 
 // cleanHead returns the commit at HEAD of a tree with no changes that are not committed. A dirty tree is a reason to keep it.

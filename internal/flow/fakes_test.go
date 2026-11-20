@@ -1373,6 +1373,20 @@ func (f fakeTrees) WithTree(ctx context.Context, project, item string, fn func(d
 	return nil
 }
 
+// Heads reads the branches of the origin remote of the one folder that the fake gives. A fake that gives a folder for each item has no one remote.
+func (f fakeTrees) Heads(ctx context.Context, _ string) (string, error) {
+	dir := f.dir
+	if f.late != nil {
+		dir = f.late.path()
+	}
+
+	if dir == "" {
+		return "", errFake
+	}
+
+	return git(ctx, dir, "ls-remote", "--heads", remoteName)
+}
+
 func (f fakeTrees) Ensure(ctx context.Context, _, item, start, base string) (string, error) {
 	if f.ensured != nil {
 		f.ensured.add(item)

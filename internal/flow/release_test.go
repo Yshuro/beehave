@@ -237,6 +237,42 @@ func (l lockedTrees) WithTree(_ context.Context, _, _ string, fn func(dir string
 	return nil
 }
 
+func (l lockedTrees) Heads(ctx context.Context, _ string) (string, error) {
+	return git(ctx, l.dir, "ls-remote", "--heads", remoteName)
+}
+
+// addressTrees gives one worktree and reads the branches of the remote from the address that the engine holds, as the worktrees of the engine do.
+type addressTrees struct {
+	dir     string
+	address string
+}
+
+func (a addressTrees) WithTree(_ context.Context, _, _ string, fn func(dir string)) error {
+	fn(a.dir)
+
+	return nil
+}
+
+func (a addressTrees) Heads(ctx context.Context, _ string) (string, error) {
+	return git(ctx, a.dir, "ls-remote", "--heads", a.address)
+}
+
+func TestRemoveTree_ReadsTheBranchesOfTheRemoteFromTheTreesAndNotFromTheRemoteThatTheCloneNames(t *testing.T) {
+	t.Parallel()
+
+	r := newRepos(t)
+	decoy := filepath.Join(t.TempDir(), "decoy.git")
+	require.NoError(t, os.Mkdir(decoy, 0o700))
+	gitIn(t, decoy, "init", "--bare", "-b", "main")
+	gitIn(t, r.main, "remote", "set-url", "origin", decoy)
+
+	kept, err := ReleaseDeps{Trees: addressTrees{dir: r.tree, address: r.remote}}.removeTree(t.Context(), testProject, testItem)
+
+	require.NoError(t, err)
+	assert.Empty(t, kept, "the release reads the remote at the address of the trees, which holds the head of the item")
+	assert.NoDirExists(t, r.tree)
+}
+
 func TestRemoveTree_RemovesTheWorktreeBeforeItGivesTheLockOfTheCloneBack(t *testing.T) {
 	t.Parallel()
 

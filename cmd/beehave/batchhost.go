@@ -29,6 +29,12 @@ func batchIdentity() []string {
 type batchHost struct {
 	pulls    pulls
 	programs programs
+	base     baseFetcher
+}
+
+// baseFetcher fetches a branch of the remote of the project into its clone, from the address that the engine read.
+type baseFetcher interface {
+	Fetch(ctx context.Context, project, branch string) error
 }
 
 // signed runs git with the identity of the union commits in front of the arguments.
@@ -84,14 +90,14 @@ func (h batchHost) tree(ctx context.Context, dir, commit string) (string, error)
 	return h.programs.git(ctx, dir, batchGitTimeout, "git rev-parse of "+commit, "rev-parse", commit+"^{tree}")
 }
 
-// Tip fetches the remote, reads the tip of the base on the forge, and returns it with its tree id.
+// Tip reads the tip of the base on the forge, fetches the base into the clone, and returns the tip with its tree id.
 func (h batchHost) Tip(ctx context.Context, project, item, base string) (batch.Tip, error) {
 	commit, err := h.baseTip(ctx, project, base)
 	if err != nil {
 		return batch.Tip{}, err
 	}
 
-	dir, err := h.fetched(ctx, project, item)
+	dir, err := h.fetched(ctx, project, item, base)
 	if err != nil {
 		return batch.Tip{}, err
 	}
@@ -120,15 +126,15 @@ func (h batchHost) baseTip(ctx context.Context, project, base string) (string, e
 	return commit, nil
 }
 
-// fetched fetches the remote in the worktree of the item and returns the folder of the worktree.
-func (h batchHost) fetched(ctx context.Context, project, item string) (string, error) {
+// fetched fetches the base into the clone of the project and returns the folder of the worktree of the item.
+func (h batchHost) fetched(ctx context.Context, project, item, base string) (string, error) {
 	dir, err := h.folder(ctx, project, item)
 	if err != nil {
 		return "", err
 	}
 
-	if _, err := h.programs.git(ctx, dir, batchGitTimeout, "git fetch", "fetch", "-q", "origin"); err != nil {
-		return "", err
+	if err := h.base.Fetch(ctx, project, base); err != nil {
+		return "", fmt.Errorf("fetch the base %s of project %s: %w", base, project, err)
 	}
 
 	return dir, nil

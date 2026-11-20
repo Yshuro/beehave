@@ -119,7 +119,7 @@ func flowFactoryFrom(build func(context.Context, config.Config, flow.Options) (*
 			// The client never reads usage, so the table needs no environment.
 			table := newAdapters(proc.NewExecRunner("bd", ""), stateFolder(opts.StateDir), nil)
 
-			client, err := flow.OpenClient(ctx, opts, releaseDeps(newLife(cfg, table, newWorktrees(cfg.Projects, opts, nil)), cfg.Projects, opts))
+			client, err := flow.OpenClient(ctx, opts, releaseDeps(cfg, opts, table))
 			if err != nil {
 				return nil, err
 			}
@@ -177,7 +177,7 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 		Commands: commands, Items: trackerItems{projects: cfg.Projects, tracker: table.tracker},
 		Writer: trackerWriter{projects: cfg.Projects, tracker: table.tracker},
 		Reader: trackerReader{projects: cfg.Projects, tracker: table.tracker},
-		Batch:  batchHost{pulls: life.pulls, programs: commands},
+		Batch:  batchHost{pulls: life.pulls, programs: commands, base: trees},
 		Hosts:  hostStop{programs: commands},
 		Queue:  queueReads{items: trackerItems{projects: cfg.Projects, tracker: table.tracker}, pulls: life.pulls},
 		Poll:   pollReads{projects: cfg.Projects, pulls: life.pulls},
@@ -230,9 +230,13 @@ func repositoryOf(projects map[string]config.Project) func(string) bool {
 }
 
 // releaseDeps builds what the client needs: the claim to take and give back, the lease reader of a move to this build, and the worktrees.
-// The projects tell the worktrees and the release which projects have no repository, so a release never reads git in a plain folder.
-func releaseDeps(life itemLife, projects map[string]config.Project, opts flow.Options) flow.ReleaseDeps {
-	return flow.ReleaseDeps{Lifecycle: life, Beats: life, Trees: newWorktrees(projects, opts, nil), Repository: repositoryOf(projects), Merge: life}
+// The projects tell the worktrees and the release which projects have no repository, so a release never reads git in a plain folder. The forge of the
+// table gives the address at which the release reads the branches of the remote.
+func releaseDeps(cfg config.Config, opts flow.Options, table adapters) flow.ReleaseDeps {
+	trees := newWorktrees(cfg.Projects, opts, table.forge)
+	life := newLife(cfg, table, trees)
+
+	return flow.ReleaseDeps{Lifecycle: life, Beats: life, Trees: trees, Repository: repositoryOf(cfg.Projects), Merge: life}
 }
 
 // newLife builds the claim, the renewal and the forge calls of the merge step. The pull request of an item is on the branch named for the item.
@@ -251,17 +255,22 @@ func newLife(cfg config.Config, table adapters, trees worktrees) itemLife {
 
 // newWorktrees finds item worktrees in the trees folder of the state folder. It adds a missing one from the clone of the project in the repos folder.
 // The client of the commands only reads worktrees; it passes the projects so that it knows which have no repository.
-// Every git call sets GIT_TERMINAL_PROMPT=0, so a private repository fails and never waits for a password.
+// Every git call sets GIT_TERMINAL_PROMPT=0, so a private repository fails and never waits for a password. A git call in the clone or a worktree
+// allows the file transport only (GIT_ALLOW_PROTOCOL, which no git config overrides), so no setting in the clone config can send it to the network.
 func newWorktrees(projects map[string]config.Project, opts flow.Options, forges func(model.Project) (forge.Forge, error)) worktrees {
 	return worktrees{
 		root: filepath.Join(opts.StateDir, "trees"), repos: filepath.Join(opts.StateDir, "repos"), projects: projects, forge: forges,
-		git: func(dir string) proc.Runner {
-			runner := gitexec.New(dir, proc.DefaultTimeout)
-			runner.Env = []string{"GIT_TERMINAL_PROMPT=0"}
-
-			return runner
-		},
+		git:    func(dir string) proc.Runner { return gitWith(dir, "GIT_TERMINAL_PROMPT=0", "GIT_ALLOW_PROTOCOL=file") },
+		remote: func(dir string) proc.Runner { return gitWith(dir, "GIT_TERMINAL_PROMPT=0") },
 	}
+}
+
+// gitWith runs git in dir, with the hooks off and env on top of the environment of the process.
+func gitWith(dir string, env ...string) proc.Runner { //nolint:ireturn // the worktrees take the runner as the interface
+	runner := gitexec.New(dir, proc.DefaultTimeout)
+	runner.Env = env
+
+	return runner
 }
 
 // localRunner runs a program with the environment of the process. A git call runs with the hooks of the repository off.
