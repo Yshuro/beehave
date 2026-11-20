@@ -140,7 +140,7 @@ func (e *Engine) makeTree(ctx dbos.Context, in ItemInput) (string, error) {
 			return "", err
 		}
 
-		return folderHead(c, dir)
+		return folderHead(c, e.deps.Trees.Git(dir))
 	})
 	if err != nil {
 		return "", fmt.Errorf("%s of item %s: %w", treeMakeStepName, in.Item, err)

@@ -19,6 +19,7 @@ import (
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
 // snippetRunes is the longest command text in one violation line.
@@ -59,12 +60,16 @@ type agents struct {
 	prices agent.Prices
 	// home returns the home folder of the owner, which a sandboxed step cannot read.
 	home func() (string, error)
-	// identity returns the git identity of the engine at a worktree, which the commits of a sandboxed step carry.
-	identity func(ctx context.Context, dir string) agent.GitIdentity
+	// identity returns the git identity that git reads at the work folder of a step, which the commits of a sandboxed step carry.
+	identity func(ctx context.Context, git gitexec.Runner) agent.GitIdentity
+	// repos finds the repository of a worktree of a project with a repository, whose identity and hooks folder the git of the engine reads.
+	repos gitexec.Repositories
 }
 
 // newAgents runs the agent CLIs with the environment of the process.
 func newAgents(cfg config.Config, opts flow.Options, trees treeFinder, table adapters) agents {
+	repos := gitexec.NewRepositories(reposFolder(opts.StateDir))
+
 	return agents{
 		runners:  cfg.Runners,
 		trees:    trees,
@@ -75,6 +80,7 @@ func newAgents(cfg config.Config, opts flow.Options, trees treeFinder, table ada
 		guard:    guardCommand(os.Executable),
 		home:     os.UserHomeDir,
 		identity: gitIdentity,
+		repos:    repos,
 
 		maxTurns: cfg.Agents.MaxTurns, maxBudget: cfg.Agents.MaxBudgetUSD, maxRunBudget: cfg.Agents.MaxRunBudgetUSD, maxTreeBudget: cfg.Agents.MaxTreeBudgetUSD,
 		prices: agent.DefaultPrices(),

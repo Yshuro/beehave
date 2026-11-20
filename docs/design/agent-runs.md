@@ -314,8 +314,8 @@ Not seen:
 
 The setting `data` of an `agent` step is a dict of values that the agent reads from a file, not from the prompt. A large record, such as a list of reds or of pull requests, then costs no prompt text.
 
-- The call encodes the dict once to JSON, with the encoder of the Starlark JSON library. The `/render` step records the text and the path `<state>/inputs/<item>.<step>.json`, beside the output files.
-- The phase writes the file, mode 0600, from the recorded text before each start of the agent. A replay writes the same bytes to the same path. The value is as fresh as the step that read it, never a read at the start of the agent.
+- The call encodes the dict once to JSON, with the encoder of the Starlark JSON library. The `/render` step records the text and the path `<state>/inputs/<item>.<step>/data.json`, a folder of its own in the inputs folder.
+- The phase writes the file, mode 0600, from the recorded text before each start of the agent. The phase derives the path from the state folder of the engine, the item and the step, and the phase input carries no path. A replay writes the same bytes to the same path. The value is as fresh as the step that read it, never a read at the start of the agent.
 - The prompt names the file as `{{ .data_file }}`. A step with no `data` gets no file and an empty `data_file`.
 - A value that is not a dict is refused, by the run and by `beehave check workflow`.
 

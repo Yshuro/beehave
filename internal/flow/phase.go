@@ -53,10 +53,9 @@ type PhaseInput struct {
 	OutputFile string   `json:"output_file,omitempty"`
 	Outputs    []string `json:"outputs,omitempty"`
 
-	// DataFile is the file that the phase writes Data to before each start of the agent: the JSON text of the data keyword that the render step recorded.
-	// Both are left out of a recorded phase for a call with no data.
-	DataFile string `json:"data_file,omitempty"`
-	Data     string `json:"data,omitempty"`
+	// Data is the JSON text of the data keyword that the render step recorded, which the phase writes to the data file of the item and the call before each start
+	// of the agent. It is left out of a recorded phase for a call with no data.
+	Data string `json:"data,omitempty"`
 
 	// ResetPassed is true for the rerun after a provider limit whose reset time had passed. A rerun that a limit with a past reset time stops again fails.
 	// It is left out of a recorded phase for any other run.
@@ -151,14 +150,15 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)) })()
 	defer e.endGroups(in.Run)
 
-	if err := writeData(in); err != nil {
+	data, err := e.writeData(in)
+	if err != nil {
 		return PhaseOutput{}, err
 	}
 
 	saver := e.saveSession(ctx, in)
 	defer saver.finish()
 
-	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, lost, saver.name))
+	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, data, lost, saver.name))
 
 	out, err := e.judgePhase(ctx, in, result, err)
 	out.ResumeOf = lost.session()
@@ -183,28 +183,35 @@ func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Res
 	return out, phaseEnd(in, out, e.deps.Clock.wall())
 }
 
-// agentRequest is the request for the agent of a phase. named receives each new session id that the agent names.
-func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, lost *LostRun, named func(session string)) AgentRequest {
+// agentRequest is the request for the agent of a phase. data is the data file of the phase, and named receives each new session id that the agent names.
+func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, data string, lost *LostRun, named func(session string)) AgentRequest {
 	return AgentRequest{
 		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: named, Lost: lost,
 		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
 		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
-		DataFile: in.DataFile,
+		DataFile: data,
 	}
 }
 
-// writeData writes the recorded data of the phase to its data file, mode 0600, so each start of the agent reads the bytes of the record. A phase with no data writes nothing.
-func writeData(in PhaseInput) error {
-	if in.DataFile == "" {
-		return nil
+// writeData writes the recorded data of the phase, mode 0600, to the data file that the engine derives for the item and the call, and returns that file.
+// A phase with no data writes nothing and returns "". A phase with data and no call name stops before the agent starts.
+func (e *Engine) writeData(in PhaseInput) (string, error) {
+	if in.Data == "" {
+		return "", nil
 	}
 
-	err := errors.Join(os.MkdirAll(filepath.Dir(in.DataFile), outputsMode), os.WriteFile(in.DataFile, []byte(in.Data), dataMode), os.Chmod(in.DataFile, dataMode))
+	if in.Call == "" {
+		return "", fmt.Errorf("the agent phase of item %s has data and no step name, so beehave cannot find its data file. The agent did not start. Start a new run", in.Item)
+	}
+
+	file := dataFile(e.dir, in.Item, in.Call)
+
+	err := errors.Join(os.MkdirAll(filepath.Dir(file), outputsMode), os.WriteFile(file, []byte(in.Data), dataMode), os.Chmod(file, dataMode))
 	if err != nil {
-		return fmt.Errorf("write the data file %s of the step: %w", in.DataFile, err)
+		return "", fmt.Errorf("write the data file %s of the step: %w", file, err)
 	}
 
-	return nil
+	return file, nil
 }
 
 // phaseOutput records how the agent of a phase ended.

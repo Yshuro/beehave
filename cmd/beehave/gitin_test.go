@@ -19,6 +19,7 @@ import (
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/proc"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
 func TestDisposableTree_DoesNotRunThePostCheckoutHookOfTheRepository(t *testing.T) {
@@ -30,12 +31,12 @@ func TestDisposableTree_DoesNotRunThePostCheckoutHookOfTheRepository(t *testing.
 	require.NoError(t, os.MkdirAll(filepath.Dir(hook), 0o700))
 	require.NoError(t, exectest.Write(hook, "#!/bin/sh\ntouch '"+marker+"'\n"))
 
-	work, release, err := disposableTree(t.Context(), dir, t.TempDir(), cloneLock{repos: t.TempDir()}.of("p"))
+	copied, release, err := disposableTree(t.Context(), dir, t.TempDir(), gateCloneOf(dir, cloneLock{repos: t.TempDir()}.of("p")))
 	require.NoError(t, err)
 
 	defer release()
 
-	assert.DirExists(t, work)
+	assert.DirExists(t, copied.WorkTree)
 	assert.NoFileExists(t, marker, "the worktree add ran the hook of the repository")
 }
 
@@ -50,7 +51,7 @@ func putGitOnPath(t *testing.T, script string) {
 func TestGitIn_AFailureKeepsTheTextOfGit(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	putGitOnPath(t, "#!/bin/sh\necho 'fatal: not a repository' >&2\nexit 128\n")
 
-	_, err := gitIn(t.Context(), t.TempDir(), "status")
+	_, err := gitIn(t.Context(), gitexec.New(t.TempDir(), 0), "status")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "exited with code 128")
@@ -63,7 +64,7 @@ func TestGitIn_ATimeoutReadsAsATimeout(t *testing.T) { //nolint:paralleltest // 
 	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
 	defer cancel()
 
-	_, err := gitIn(ctx, t.TempDir(), "status")
+	_, err := gitIn(ctx, gitexec.New(t.TempDir(), 0), "status")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "timed out")
@@ -76,7 +77,7 @@ func TestGitIn_ACancelReadsAsACancel(t *testing.T) { //nolint:paralleltest // t.
 	ctx, cancel := context.WithCancel(t.Context())
 	time.AfterFunc(200*time.Millisecond, cancel)
 
-	_, err := gitIn(ctx, t.TempDir(), "status")
+	_, err := gitIn(ctx, gitexec.New(t.TempDir(), 0), "status")
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "was canceled")
@@ -87,18 +88,23 @@ func TestEveryPathToGitRunsWithTheHooksOff(t *testing.T) { //nolint:paralleltest
 	log := filepath.Join(bin, "calls")
 	putGitOnPath(t, "#!/bin/sh\necho \"$@\" >> "+log+"\n")
 
-	dir := t.TempDir()
+	// The folder is a clone in the engine layout, so each path pins its repository. The read of the clone settings comes first and runs no hook.
+	state := t.TempDir()
+	repos := filepath.Join(state, "repos")
+	dir := filepath.Join(repos, "p")
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git"), 0o700))
+
 	paths := map[string]func() model.CommandResult{
 		"gitIn": func() model.CommandResult {
-			out, err := gitIn(t.Context(), dir, "status")
+			out, err := gitIn(t.Context(), gitexec.NewRepositories(repos).Runner(dir, 0), "status")
 
 			return model.CommandResult{Stdout: out, SetupErr: err}
 		},
 		"the item worktrees": func() model.CommandResult {
-			return newWorktrees(nil, flow.Options{StateDir: dir}, nil).git(dir).Run(t.Context(), []string{"status"})
+			return newWorktrees(nil, flow.Options{StateDir: state}, nil).git(dir).Run(t.Context(), []string{"status"})
 		},
 		"the batch and gate": func() model.CommandResult {
-			return newPrograms(config.Config{}, nil, cloneLock{}, adapters{}).local("git", dir, 0).Run(t.Context(), []string{"status"})
+			return newPrograms(config.Config{Projects: repositoryProject()}, nil, cloneLock{repos: repos}, adapters{}).local("p", "git", dir, 0).Run(t.Context(), []string{"status"})
 		},
 	}
 
@@ -107,7 +113,8 @@ func TestEveryPathToGitRunsWithTheHooksOff(t *testing.T) { //nolint:paralleltest
 		assert.NoError(t, run().SetupErr, name)
 		data, err := os.ReadFile(log) //nolint:gosec // a file of the test
 		require.NoError(t, err, name)
-		assert.True(t, strings.HasPrefix(string(data), "-c core.hooksPath=/dev/null "), "%s ran git with %q", name, data)
+		lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+		assert.True(t, strings.HasPrefix(lines[len(lines)-1], "-c core.hooksPath=/dev/null "), "%s ran git with %q", name, data)
 	}
 }
 
@@ -134,7 +141,7 @@ func TestGitIn_ReturnsWhenAChildOfGitKeepsTheOutputOpen(t *testing.T) {
 	// The cleanup runs before the removal of the temporary folders, kills the child, and fails the test if the child outlives it.
 	t.Cleanup(func() { endChild(t, pidFile) })
 
-	_, err := gitIn(t.Context(), t.TempDir(), "status")
+	_, err := gitIn(t.Context(), gitexec.New(t.TempDir(), 0), "status")
 
 	require.Error(t, err, "the runner reports the pipe that the child kept open")
 

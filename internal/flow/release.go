@@ -1,17 +1,17 @@
 package flow
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
-	"github.com/tobocop2/beehave/internal/proc/gitexec"
+	"github.com/tobocop2/beehave/internal/proc"
 )
 
 // releaseTimeout bounds every git call of one release when the clock sets none.
@@ -32,6 +32,8 @@ const remoteName = "origin"
 type trees interface {
 	WithTree(ctx context.Context, project, item string, fn func(dir string)) error
 	Heads(ctx context.Context, project string) (string, error)
+	// Git returns the runner of the engine for git in a folder that the trees hold: a clone or a worktree.
+	Git(dir string) proc.Runner
 }
 
 // treeMaker finds the worktree of an item and makes it when it is missing. Ensure returns the folder, and an empty folder is not a success.
@@ -85,7 +87,7 @@ func (d ReleaseDeps) removeTree(ctx context.Context, project, item string) (stri
 		bounded, cancel := d.limit(ctx)
 		defer cancel()
 
-		kept = tryRemove(bounded, dir, func(ctx context.Context) (string, error) { return d.Trees.Heads(ctx, project) })
+		kept = tryRemove(bounded, d.Trees, dir, func(ctx context.Context) (string, error) { return d.Trees.Heads(ctx, project) })
 	}); err != nil {
 		return "", fmt.Errorf("find the worktree of item %s: %w", item, err)
 	}
@@ -120,14 +122,14 @@ func (d ReleaseDeps) giveBack(ctx context.Context, logger *slog.Logger, project,
 	return treeErr
 }
 
-// tryRemove removes the worktree, or returns the reason it stays. heads reads the branches of the remote.
-func tryRemove(ctx context.Context, dir string, heads func(context.Context) (string, error)) string {
-	common, reason := keepReason(ctx, dir, heads)
+// tryRemove removes the worktree from the clone that owns it, or returns the reason it stays. heads reads the branches of the remote.
+func tryRemove(ctx context.Context, found trees, dir string, heads func(context.Context) (string, error)) string {
+	common, reason := keepReason(ctx, found.Git(dir), heads)
 	if reason != "" {
 		return reason
 	}
 
-	if _, err := git(ctx, common, "worktree", "remove", dir); err != nil {
+	if _, err := git(ctx, found.Git(filepath.Dir(common)), "worktree", "remove", dir); err != nil {
 		return explain(ctx, "remove the worktree", err)
 	}
 
@@ -137,8 +139,8 @@ func tryRemove(ctx context.Context, dir string, heads func(context.Context) (str
 // keepReason returns why the tree must stay. When the tree is clean and its HEAD is the tip of a remote branch,
 // it returns the repository that owns the tree and an empty reason.
 // The remote is read, not the local tracking refs: a tracking ref can show a push that the remote lost.
-func keepReason(ctx context.Context, dir string, heads func(context.Context) (string, error)) (common, reason string) {
-	head, common, reason := cleanHead(ctx, dir)
+func keepReason(ctx context.Context, tree proc.Runner, heads func(context.Context) (string, error)) (common, reason string) {
+	head, common, reason := cleanHead(ctx, tree)
 	if reason != "" {
 		return "", reason
 	}
@@ -156,8 +158,8 @@ func keepReason(ctx context.Context, dir string, heads func(context.Context) (st
 }
 
 // cleanHead returns the commit at HEAD and the repository that owns a tree with no changes that are not committed. A dirty tree is a reason to keep it.
-func cleanHead(ctx context.Context, dir string) (head, common, reason string) {
-	local, reason := readAll(ctx, dir,
+func cleanHead(ctx context.Context, tree proc.Runner) (head, common, reason string) {
+	local, reason := readAll(ctx, tree,
 		read{"read the state of the worktree", []string{"status", "--porcelain"}},
 		read{"read HEAD", []string{"rev-parse", "HEAD"}},
 		read{"read the repository of the worktree", []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}})
@@ -184,11 +186,11 @@ func isTip(listing, sha string) bool {
 }
 
 // readAll runs the reads in order and returns their outputs. The first failure ends it with the reason to keep the tree.
-func readAll(ctx context.Context, dir string, reads ...read) ([]string, string) {
+func readAll(ctx context.Context, tree proc.Runner, reads ...read) ([]string, string) {
 	outputs := make([]string, 0, len(reads))
 
 	for _, r := range reads {
-		out, err := git(ctx, dir, r.args...)
+		out, err := git(ctx, tree, r.args...)
 		if err != nil {
 			return nil, explain(ctx, r.doing, err)
 		}
@@ -208,18 +210,22 @@ func explain(ctx context.Context, doing string, err error) string {
 	return fmt.Sprintf("git could not %s: %v", doing, err)
 }
 
-// git runs one git command in dir and returns its output. A canceled context kills the process group of the call.
-func git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := gitexec.Command(ctx, dir, args, "GIT_TERMINAL_PROMPT=0")
+// gitExit is a git call that exited with a code other than 0.
+type gitExit struct {
+	code   int
+	stderr string
+}
 
-	var stderr bytes.Buffer
+func (e *gitExit) Error() string {
+	return fmt.Sprintf("exit status %d: %s", e.code, e.stderr)
+}
 
-	cmd.Stderr = &stderr
-
-	out, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+// git runs one git command with the runner of the engine for a tree and returns its output.
+func git(ctx context.Context, tree proc.Runner, args ...string) (string, error) {
+	result := tree.Run(ctx, args)
+	if result.ExitCode != 0 {
+		return "", &gitExit{code: result.ExitCode, stderr: strings.TrimSpace(result.Stderr)}
 	}
 
-	return string(out), nil
+	return result.Stdout, nil
 }

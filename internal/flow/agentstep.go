@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -60,11 +60,13 @@ type agentArgs struct {
 	edits bool
 	tries int
 	dir   string
-	file  string
+	// git is the runner of the engine for git in dir.
+	git  proc.Runner
+	file string
 	// sandbox is the sandbox keyword as written. box is the sandbox the step runs with, which the render step records, or nil for no sandbox.
 	sandbox sandboxChoice
 	box     *model.Sandbox
-	// record is the JSON text of the data keyword, and dataFile the file that the phase writes it to. Both are empty for a call with no data.
+	// record is the JSON text of the data keyword, and dataFile the file that the prompt names for it. Both are empty for a call with no data.
 	record   string
 	dataFile string
 }
@@ -206,9 +208,10 @@ func outputFile(state, item, step string) string {
 	return stepFile(state, outputsFolder, item, step)
 }
 
-// dataFile is the path where the phase of a step writes the data of the call, in the inputs folder of the state folder.
+// dataFile is the path where the phase of a step writes the data of the call: the one file of a folder of its own in the inputs folder of the state folder,
+// so the sandbox can name that folder as a working directory and open no other file.
 func dataFile(state, item, step string) string {
-	return stepFile(state, inputsFolder, item, step)
+	return filepath.Join(state, inputsFolder, model.SafeName(item)+"."+model.SafeName(step), "data.json")
 }
 
 // dataFileOf is the data file of the call, or "" for a call with no data.
@@ -281,7 +284,8 @@ func (s *script) promptOf(a *agentArgs, name, login string) (string, error) {
 }
 
 // recall reads the sandbox and the output file that the render step recorded. The output file is the one that the recorded prompt names,
-// whatever the name function gives today. A record made before the path was pinned keeps the computed path.
+// whatever the name function gives today. A record made before the path was pinned keeps the computed path. A recorded prompt that names a data file other than
+// the file that the phase writes for this item and step stops the call, because the agent would read a file that the engine did not write.
 func (a *agentArgs) recall(outputs map[string]any) (err error) {
 	a.file = recalledOutputFile(outputs, a.file)
 	a.startHead, _ = outputs[recordedStartHead].(string) //nolint:errcheck // a record made before the start head was kept has none
@@ -290,7 +294,11 @@ func (a *agentArgs) recall(outputs map[string]any) (err error) {
 		return err
 	}
 
-	a.dataFile, a.record = given.File, given.Text
+	if given.File != "" && given.File != a.dataFile {
+		return fmt.Errorf("the recorded prompt names the data file %s, and the data file of this item and step is %s. The step did not start. Start a new run", given.File, a.dataFile)
+	}
+
+	a.record = given.Text
 
 	if err = os.MkdirAll(filepath.Dir(a.file), outputsMode); err != nil {
 		return fmt.Errorf("make the folder of the output file: %w", err)
@@ -345,7 +353,7 @@ func (s *script) prepare(a *agentArgs, name string) (err error) {
 		return fmt.Errorf("item %s of project %s has no folder for the agent", s.in.Item, s.in.Project)
 	}
 
-	a.plain = !s.hasRepository()
+	a.git, a.plain = s.e.deps.Trees.Git(a.dir), !s.hasRepository()
 	if err = a.refusePlain(s.in.Project); err != nil {
 		return err
 	}
@@ -381,13 +389,13 @@ func (a agentArgs) phase(in ItemInput, login, prompt, treeStart string) PhaseInp
 		Item: in.Item, Project: in.Project, Login: login, Prompt: prompt,
 		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, MaxBudget: a.maxBudget,
 		NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart, Base: in.Base,
-		DataFile: a.dataFile, Data: a.record,
+		Data: a.record,
 	}
 }
 
 // render checks the pin, reads the prompt file and fills it. The data are the inputs, output_file and data_file.
 func (s *script) render(ctx context.Context, a agentArgs) (string, error) {
-	if err := checkPin(ctx, a.dir, a.pin); err != nil {
+	if err := checkPin(ctx, a.git, a.pin); err != nil {
 		return "", err
 	}
 
@@ -437,12 +445,12 @@ func fill(text string, data map[string]any) (string, error) {
 }
 
 // checkPin refuses a folder whose HEAD is not the pin. An empty pin accepts any HEAD.
-func checkPin(ctx context.Context, dir, pin string) error {
+func checkPin(ctx context.Context, tree proc.Runner, pin string) error {
 	if pin == "" {
 		return nil
 	}
 
-	head, err := folderHead(ctx, dir)
+	head, err := folderHead(ctx, tree)
 	if err != nil {
 		return err
 	}
@@ -473,7 +481,7 @@ func (s *script) attempts(name string, a agentArgs, in PhaseInput) (stepResult, 
 // A run that a provider limit stopped is followed by a wait for the reset and a rerun inside the same try: a limit spends no output try and no lane.
 // Each phase looks at the caps first, because the limited run can have spent money before the limit stopped it.
 func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (stepResult, error) {
-	if err := s.clearOutput(name, a.file, try); err != nil {
+	if err := s.clearOutput(name, a, try); err != nil {
 		return stepResult{}, err
 	}
 
@@ -551,11 +559,19 @@ func (s *script) countFailedRun(name string, try int, spend agent.Spend) {
 	}
 }
 
-// clearOutput removes the old output file of an agent call in a recorded step.
-func (s *script) clearOutput(name, file string, try int) error {
+// clearOutput makes the output file of an agent call empty in a recorded step: it removes the old file, and a call that declares outputs gets a new empty one.
+func (s *script) clearOutput(name string, a agentArgs, try int) error {
 	_, err := runStep(s.e, s.ctx, name+"/clear"+strconv.Itoa(try), func(context.Context) (stepResult, error) {
-		if rmErr := os.Remove(file); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		if rmErr := os.Remove(a.file); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 			return stepResult{}, fmt.Errorf("remove the old output file: %w", rmErr)
+		}
+
+		if len(a.declared) == 0 {
+			return stepResult{}, nil
+		}
+
+		if mkErr := os.WriteFile(a.file, nil, dataMode); mkErr != nil {
+			return stepResult{}, fmt.Errorf("make the empty output file: %w", mkErr)
 		}
 
 		return stepResult{}, nil
@@ -631,11 +647,11 @@ func addDeclared(outputs map[string]any, names []string, written map[string]any)
 	return ""
 }
 
-// writtenObject reads the JSON object in the output file. The second result says what is wrong with the file. A missing file names the tools whose
+// writtenObject reads the JSON object in the output file. The second result says what is wrong with the file. A missing or empty file names the tools whose
 // calls to write it the permission check of the agent CLI refused.
 func writtenObject(file string, denials []agent.Denial) (map[string]any, string) {
 	raw, err := fs.ReadFile(os.DirFS(filepath.Dir(file)), filepath.Base(file))
-	if err != nil {
+	if err != nil || len(raw) == 0 {
 		return nil, "the agent wrote no output file at " + file + refusedWrites(file, denials)
 	}
 
@@ -688,12 +704,12 @@ func (a agentArgs) writeStartMark(ctx context.Context) (string, error) {
 		return "", nil
 	}
 
-	head, err := folderHead(ctx, a.dir)
+	head, err := folderHead(ctx, a.git)
 	if err != nil {
 		return "", err
 	}
 
-	if _, err = git(ctx, a.dir, "update-ref", callStartRef, head); err != nil {
+	if _, err = git(ctx, a.git, "update-ref", callStartRef, head); err != nil {
 		return "", fmt.Errorf("write the start mark of the item folder: %w", err)
 	}
 
@@ -707,15 +723,15 @@ func (a agentArgs) checkEnd(ctx context.Context) (head string, rewrote bool, err
 		return "", false, nil
 	}
 
-	if head, err = folderHead(ctx, a.dir); err != nil {
+	if head, err = folderHead(ctx, a.git); err != nil {
 		return "", false, err
 	}
 
-	if err = a.scope.check(ctx, a.dir, a.start); err != nil {
+	if err = a.scope.check(ctx, a.git, a.start); err != nil {
 		return "", false, err
 	}
 
-	rewrote, err = rewroteHistory(ctx, a.dir, a.startHead, head)
+	rewrote, err = rewroteHistory(ctx, a.git, a.startHead, head)
 
 	return head, rewrote, err
 }
@@ -752,7 +768,7 @@ func (a agentArgs) changedReadOnly(ctx context.Context, head string) (bool, erro
 		return true, nil
 	}
 
-	out, err := git(ctx, a.dir, "status", "--porcelain", "--untracked-files=no")
+	out, err := git(ctx, a.git, "status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return false, fmt.Errorf("read the tracked changes of the item folder: %w", err)
 	}
@@ -762,15 +778,15 @@ func (a agentArgs) changedReadOnly(ctx context.Context, head string) (bool, erro
 
 // rewroteHistory is true when the commit the agent started on is not in the history of the commit it ended on: the agent amended, squashed or reset.
 // The ancestor test of git answers with exit code 1 for "not an ancestor"; any other failure is an error.
-func rewroteHistory(ctx context.Context, dir, start, head string) (bool, error) {
+func rewroteHistory(ctx context.Context, tree proc.Runner, start, head string) (bool, error) {
 	if start == "" || start == head {
 		return false, nil
 	}
 
-	_, err := git(ctx, dir, "merge-base", "--is-ancestor", start, head)
+	_, err := git(ctx, tree, "merge-base", "--is-ancestor", start, head)
 
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	var exit *gitExit
+	if errors.As(err, &exit) && exit.code == 1 {
 		return true, nil
 	}
 
@@ -782,8 +798,8 @@ func rewroteHistory(ctx context.Context, dir, start, head string) (bool, error) 
 }
 
 // folderHead returns the commit at HEAD of the item folder.
-func folderHead(ctx context.Context, dir string) (string, error) {
-	out, err := git(ctx, dir, "rev-parse", "HEAD")
+func folderHead(ctx context.Context, tree proc.Runner) (string, error) {
+	out, err := git(ctx, tree, "rev-parse", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("read HEAD of the item folder: %w", err)
 	}

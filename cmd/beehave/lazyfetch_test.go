@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/proc"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
 // promisorRig is a push rig whose clone config names a promisor remote. The worktree has HEAD at a commit whose tree only the promisor holds, and the
@@ -79,7 +80,7 @@ type promisorRead struct {
 var promisorReads = map[string]promisorRead{
 	"the read of a commit by the batch host": {
 		read: func(ctx context.Context, rig promisorRig) error {
-			_, err := batchHost{programs: programs{local: localRunner}}.tree(ctx, rig.tree, rig.commit)
+			_, err := batchHost{programs: programs{local: localRunner(repositoryProject(), gitexec.NewRepositories(rig.pulls.trees.repos))}}.tree(ctx, "p", rig.tree, rig.commit)
 
 			return err
 		},
@@ -88,7 +89,7 @@ var promisorReads = map[string]promisorRead{
 	},
 	"the read of the worktree by the gate": {
 		read: func(ctx context.Context, rig promisorRig) error {
-			_, err := projectGate{programs: programs{local: localRunner}}.tree(ctx, rig.tree)
+			_, err := projectGate{programs: programs{local: localRunner(repositoryProject(), gitexec.NewRepositories(rig.pulls.trees.repos))}}.tree(ctx, "p", rig.tree)
 
 			return err
 		},

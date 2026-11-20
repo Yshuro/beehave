@@ -204,11 +204,9 @@ func (rig *agentRig) answerLikeTheExample(skill string, verdicts, findings, mech
 			}
 		}
 
-		if !strings.Contains(request.Prompt, reviewMarker) && slices.Contains(request.Outputs, "regressions") {
-			rig.put(request.OutputFile, `{"regressions":"0"}`)
+		if !strings.Contains(request.Prompt, reviewMarker) {
+			rig.putDeclared(request)
 		}
-
-		putNoParked(rig, request)
 
 		if strings.Contains(request.Prompt, designMarker) {
 			rig.put(promptOutput(request.Prompt), design)
@@ -226,11 +224,53 @@ func promptOutput(prompt string) string {
 	return path
 }
 
-// putNoParked makes the settle agent of the example rig leave no finding open: a request that declares the output `parked` gets an empty list.
-func putNoParked(rig *agentRig, request AgentRequest) {
-	if slices.Contains(request.Outputs, "parked") {
-		rig.put(request.OutputFile, `{"parked":"[]"}`)
+// cleanLaneReport is the report that a lane of the example rig writes: the four tables and the background line. The kind is the lane that wrote it, so a test tells the reports apart.
+func cleanLaneReport(kind string) string {
+	return "# Report of the " + kind + " lane\n\n## Claims\n| Claim | Where | Evidence | Verified at |\n|---|---|---|---|\n| none: " + kind + " | none | none | none |\n\n" +
+		"## Hunks\n| Hunk | Arm | Red test line |\n|---|---|---|\n| none: " + kind + " | none | none |\n\n## Inputs\n| Input class | Base | Head | Test |\n|---|---|---|---|\n| none: " + kind + " | none | none | none |\n\n" +
+		"## Siblings\n| Site | Same behavior | Updated |\n|---|---|---|\n| none: " + kind + " | none | none |\n\nno background commands left\n"
+}
+
+// laneKind names the lane that a request of the example rig starts, by a phrase of its prompt.
+func laneKind(request AgentRequest) string {
+	if strings.Contains(request.Prompt, fixMarker) {
+		return "fix"
 	}
+
+	return "implement"
+}
+
+// putDeclared makes a request of the example rig that is no review answer each output it declares with a clean value: a count of none, no parked
+// finding, no red that the lane did not cause and a whole report. The outputs of a review and of the design step are written by their own rules.
+// The file holds no value for any other name, so a new output of the example fails the run until this table knows it.
+func (rig *agentRig) putDeclared(request AgentRequest) {
+	clean := map[string]string{"regressions": "0", "parked": "[]", "uncaused": "[]", "report": cleanLaneReport(laneKind(request))}
+	answer := map[string]string{}
+
+	for _, name := range request.Outputs {
+		value, known := clean[name]
+
+		if known {
+			answer[name] = value
+		}
+	}
+
+	if len(answer) == 0 {
+		return
+	}
+
+	rig.putOutputs(request.OutputFile, answer)
+}
+
+// putOutputs writes the outputs of a fake agent as the JSON object that the agent step reads. An encoding error is kept like a failed write, and run reports it.
+func (rig *agentRig) putOutputs(path string, outputs map[string]string) {
+	text, err := json.Marshal(outputs)
+
+	rig.mu.Lock()
+	rig.failed = append(rig.failed, err)
+	rig.mu.Unlock()
+
+	rig.put(path, string(text))
 }
 
 // exampleSkill is the skill that the project of the example rig names in vars.review_skill, and that the fake agent reports.

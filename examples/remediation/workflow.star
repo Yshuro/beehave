@@ -484,6 +484,16 @@ def check_mutation(words, base):
 
     return "The mutation run failed. Each line is one finding:\n" + "\n".join(["- " + line for line in lines])
 
+def lane_report(lane):
+    """Checks the report that a lane wrote, as the command step candidate-lane-report, and returns the findings as text. An empty text means the report is whole.
+    `remedy report` reads the report from its stdin and judges it against the head of the lane: the four tables, the head and the line about background commands.
+    Exit code 1 gives the defect lines as the findings. Exit code 2 means the check could not run, and it ends the item."""
+    done = command(name = "candidate-lane-report", run = ["remedy", "report", "/dev/stdin", "--head", lane.head_sha], stdin = lane.report, stop_on_rc = [2])
+    if done.rc == 0:
+        return ""
+
+    return "The report of the lane has a defect. Each line is one finding:\n" + done.stdout.strip()
+
 def id_patterns(ids):
     """Returns the forbid_text patterns of a merge for the ids of its items, to add to the attribution patterns. No line of a pull request body or of a commit message may match them.
     A text names a change by its problem, fix and result, and never by a tracker id. An id that is only digits is the number of a GitHub issue, which a body may cite as #N, so it adds no pattern."""
@@ -532,28 +542,48 @@ def changelog_missing(changelog, base, head, id, fetch = False):
 
     return ""
 
-def file_parked(parked):
-    """Files one issue for each finding that the review loop leaves open. `parked` is the output of the settle step: a JSON list.
+def uncaused_text(lanes):
+    """The JSON list of the reds that the lanes did not cause: the output `uncaused` of each lane, joined. An entry whose id an earlier lane already listed is left out, so two lanes that report one red file one item.
+    An entry that is no object stays in the list, and file_parked refuses it."""
+    joined = []
+    seen = []
+    for lane in lanes:
+        listed = json.decode(lane.uncaused)
+        if type(listed) != "list":
+            fail("REFUSE: the output uncaused of a lane is not a JSON list. Write [] when the lane found no red that it did not cause")
+
+        for entry in listed:
+            id = entry.get("id") if type(entry) == "dict" else None
+            if id != None and id in seen:
+                continue
+
+            seen.append(id)
+            joined.append(entry)
+
+    return json.encode(joined)
+
+def file_parked(parked, output = "parked"):
+    """Files one issue for each finding that the review loop leaves open. `parked` is the output of the settle step, or the joined outputs `uncaused` of the lanes: a JSON list. `output` names it in a refusal.
     Each finding has an id (words in lower case joined by hyphens, the same for the same finding), a title, a body in the template of the repository,
     `found` (how the finding was found, with the commit and the exact command), a severity of P0 to P3, and `operator` (true when an operator hits it in normal use).
     The issue has no assignee, so the queue can give it out. The key is the id of the finding: a resume that files again returns the issue that exists.
     Every finding is checked before the first issue is filed, so a bad entry files nothing."""
     findings = json.decode(parked)
     if type(findings) != "list":
-        fail("REFUSE: the output parked is not a JSON list. Write [] when no finding stays open")
+        fail("REFUSE: the output %s is not a JSON list. Write [] when no finding stays open" % output)
 
     seen = []
     for entry in findings:
         if type(entry) != "dict":
-            fail("REFUSE: an entry of parked is not a JSON object: %r" % entry)
+            fail("REFUSE: an entry of %s is not a JSON object: %r" % (output, entry))
 
         for field in FINDING_FIELDS:
             if field not in entry:
-                fail("REFUSE: an entry of parked has no %r: %r" % (field, entry))
+                fail("REFUSE: an entry of %s has no %r: %r" % (output, field, entry))
 
         id = entry["id"]
         if id == "" or id != id.lower() or not id.replace("-", "").isalnum() or id in seen:
-            fail("REFUSE: the id %r of a parked finding is empty, repeated or not words in lower case joined by hyphens" % id)
+            fail("REFUSE: the id %r of a finding in %s is empty, repeated or not words in lower case joined by hyphens" % (id, output))
 
         seen.append(id)
 
@@ -1153,6 +1183,7 @@ def pipeline(item):
         model = _model(round_settings, "implement"),
         runner = _runner(round_settings, "implement"),
         label = "implement",
+        outputs = ["report", "uncaused"],
         forbid_commands = FORBID,
         protect_paths = protected(round_settings),
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
@@ -1209,7 +1240,7 @@ def pipeline(item):
     def mutants(gate):
         return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"], push_branch = item.id)
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], fix_outputs = ["report", "uncaused"], lane_check = lane_report, facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"], push_branch = item.id)
 
     if loop.stopped:
         return item_value(item, "", False, "stopped", loop.host_losses)
@@ -1217,6 +1248,9 @@ def pipeline(item):
     # The limit of host losses stopped the loop. The host is at fault and not the item, so the item gets no comment and no hold status, and a later run starts it again.
     if loop.host_lost:
         return item_value(item, loop.head, False, "host-loss", loop.host_losses)
+
+    # Each red that a lane says it did not cause is filed as its own item before any verdict, so no approval exists without the item. A refused filing ends the item with no approval.
+    file_parked(uncaused_text([implement] + loop.lanes), "uncaused")
 
     # A reject verdict ends the loop with no fix round. The item gets the text of the review as the reason and the hold status.
     # A scoped review can reject before the first gate, so an item that the loop holds reports loop.head, the commit that the loop judged last.

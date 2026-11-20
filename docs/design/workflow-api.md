@@ -71,7 +71,7 @@ The Change column says how the pair differs from the contract that the five piec
 | `command` | `name` | unchanged | 16: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 14 more |
 | `command` | `run` | unchanged | 16: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 14 more |
 | `command` | `slots` | unchanged | 1: `examples/remediation/workflow.star` |
-| `command` | `stdin` | unchanged | 8: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 6 more |
+| `command` | `stdin` | unchanged | 9: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 7 more |
 | `command` | `stop_on_rc` | unchanged | 2: `examples/remediation/workflow.star`, `examples/research/workflow.star` |
 | `command` | `timeout` | unchanged | 7: `examples/approvals/audit.star`, `examples/approvals/workflow.star` and 5 more |
 | `earlier_calls` | `-` | unchanged | 1: `internal/workflow/lib/review_fix.star` |

@@ -24,6 +24,7 @@ import (
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/proc"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/step"
 )
@@ -630,7 +631,8 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 
 	tree, _ := gitTree(t)
-	folder := t.TempDir()
+	folder, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err, "the temp folder of the OS can be a link, and the engine holds the real path of its state folder")
 	require.NoError(t, os.MkdirAll(filepath.Join(folder, "prompts"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(folder, defaultFlowName), []byte(defaultFlow), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(folder, "prompts", "work.md"), []byte("Work on the item.\n"), 0o600))
@@ -1298,6 +1300,8 @@ type fakeTrees struct {
 	late     *lateFolder
 	// per, when set, gives the folder of each item and wins over dir and late.
 	per func(ctx context.Context, item string) (string, error)
+	// repos, when set, is the folder of the clones, for item folders that are not beside their clone.
+	repos string
 	// ensured records the item of each Ensure call when a test sets it.
 	ensured *ensureLog
 	// starts records the start of each Ensure call when a test sets it.
@@ -1365,6 +1369,19 @@ func (f fakeTrees) Path(ctx context.Context, _, item string) (string, error) {
 	return f.dir, f.err
 }
 
+// engineGit is the runner of the engine for a folder whose parent folder holds the clones: a repository there, or a worktree of one.
+func engineGit(dir string) proc.Runner {
+	return gitexec.NewRepositories(filepath.Dir(dir)).Runner(dir, 0)
+}
+
+func (f fakeTrees) Git(dir string) proc.Runner {
+	if f.repos != "" {
+		return gitexec.NewRepositories(f.repos).Runner(dir, 0)
+	}
+
+	return engineGit(dir)
+}
+
 func (f fakeTrees) WithTree(ctx context.Context, project, item string, fn func(dir string)) error {
 	dir, err := f.Path(ctx, project, item)
 	if err != nil {
@@ -1387,9 +1404,10 @@ func (f fakeTrees) Heads(ctx context.Context, _ string) (string, error) {
 		return "", errFake
 	}
 
-	// The read of the branches reaches the remote, so it runs with plain git and not with the local git calls of the release.
+	// The read of the branches reaches the remote, so it runs with plain git and not with the local git calls of the release. It allows the ext transport,
+	// so a test can give the remote a program that does not answer.
 	cmd := proc.GroupCommand(ctx, "git", []string{"ls-remote", "--heads", remoteName}, dir)
-	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0", "GIT_ALLOW_PROTOCOL=file:ext")
 
 	var stderr bytes.Buffer
 

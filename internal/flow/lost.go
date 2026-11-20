@@ -265,7 +265,7 @@ func (e *Engine) lostDiff(ctx context.Context, in PhaseInput) (string, lostView,
 		return "", view, err
 	}
 
-	out, err := git(ctx, dir, "diff", "--stat", "--stat-count="+strconv.Itoa(diffStatFiles), in.StartHead)
+	out, err := git(ctx, e.deps.Trees.Git(dir), "diff", "--stat", "--stat-count="+strconv.Itoa(diffStatFiles), in.StartHead)
 	if err != nil {
 		return "", viewUnread, fmt.Errorf("read the diff summary of the item folder: %w", err)
 	}
@@ -285,7 +285,7 @@ func (e *Engine) lostFolder(ctx context.Context, in PhaseInput) (string, lostVie
 		return "", viewOtherTree, nil
 	}
 
-	mark, err := git(ctx, dir, "for-each-ref", "--format=%(objectname)", callStartRef)
+	mark, err := git(ctx, e.deps.Trees.Git(dir), "for-each-ref", "--format=%(objectname)", callStartRef)
 	if err != nil {
 		return "", viewUnread, fmt.Errorf("read the start mark of the item folder: %w", err)
 	}

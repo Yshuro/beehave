@@ -53,7 +53,8 @@ const coreVersion = 7
 // Version 10 removed the allow_write list from the recorded sandbox of an agent call.
 // Version 11 adds the data keyword: the prompt_data output of the render step and the data and data_file fields of the phase input.
 // Version 12 adds the committed field to the result of an agent call.
-const agentVersion = 12
+// Version 13 puts the data file in a folder of its own and removes the data_file field of the phase input: the phase derives the path.
+const agentVersion = 13
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.

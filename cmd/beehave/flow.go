@@ -258,11 +258,19 @@ func newLife(cfg config.Config, table adapters, trees worktrees) itemLife {
 // Every git call sets GIT_TERMINAL_PROMPT=0, so a private repository fails and never waits for a password. A git call in the clone or a worktree is
 // local (see gitexec), so no setting in the clone config can send it to the network.
 func newWorktrees(projects map[string]config.Project, opts flow.Options, forges func(model.Project) (forge.Forge, error)) worktrees {
+	repos := reposFolder(opts.StateDir)
+	found := gitexec.NewRepositories(repos)
+
 	return worktrees{
-		root: filepath.Join(opts.StateDir, "trees"), repos: filepath.Join(opts.StateDir, "repos"), projects: projects, forge: forges,
-		git:    func(dir string) proc.Runner { return noPrompt(gitexec.New(dir, proc.DefaultTimeout)) },
+		root: filepath.Join(opts.StateDir, "trees"), repos: repos, projects: projects, forge: forges,
+		git:    func(dir string) proc.Runner { return noPrompt(found.Runner(dir, proc.DefaultTimeout)) },
 		remote: func(dir string) proc.Runner { return noPrompt(gitexec.NewRemote(dir, proc.DefaultTimeout)) },
 	}
+}
+
+// reposFolder returns the folder of the clones of the projects in the state folder.
+func reposFolder(stateDir string) string {
+	return filepath.Join(stateDir, "repos")
 }
 
 // noPrompt sets GIT_TERMINAL_PROMPT=0 on the runner.
@@ -272,13 +280,16 @@ func noPrompt(runner gitexec.Runner) proc.Runner { //nolint:ireturn // the workt
 	return runner
 }
 
-// localRunner runs a program with the environment of the process. A git call runs with the hooks of the repository off, and it is local (see gitexec).
-func localRunner(binary, dir string, timeout time.Duration) proc.Runner { //nolint:ireturn // programs.local is a func field that returns the interface
-	if binary == gitexec.Binary {
-		return gitexec.New(dir, timeout)
-	}
+// localRunner returns the runner of a program of a project with the environment of the process. A git call runs with the hooks of the repository off,
+// with the git of the project (see gitOf), and it is local (see gitexec).
+func localRunner(projects map[string]config.Project, found gitexec.Repositories) func(project, binary, dir string, timeout time.Duration) proc.Runner {
+	return func(project, binary, dir string, timeout time.Duration) proc.Runner {
+		if binary == gitexec.Binary {
+			return gitOf(projects, project, found).Runner(dir, timeout)
+		}
 
-	return proc.ExecRunner{Binary: binary, Dir: dir, Timeout: timeout}
+		return proc.ExecRunner{Binary: binary, Dir: dir, Timeout: timeout}
+	}
 }
 
 // newPrograms runs command steps in the worktree of the item, or on the host of the project.
@@ -287,7 +298,7 @@ func newPrograms(cfg config.Config, trees programTrees, clones cloneLock, table 
 	return programs{
 		trees:    trees,
 		sandbox:  newGateSandbox(cfg.Projects, clones),
-		local:    localRunner,
+		local:    localRunner(cfg.Projects, gitexec.NewRepositories(clones.repos)),
 		exec:     func(spec proc.ExecRunner) proc.Runner { return spec },
 		hosts:    func(project, cluster string) (host.Host, error) { return buildHostOf(cfg, table, project, cluster) },
 		declared: func(project, cluster string) (string, error) { return declaredHostOf(cfg, project, cluster) },
