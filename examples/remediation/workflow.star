@@ -447,6 +447,12 @@ def mutation_command(project):
 
     return words
 
+def require_review_skill_named(project):
+    """Stops the run before any agent starts when the project vars do not name the review skill of the implement step. The key vars.review_skill is required: the workflow names no skill itself."""
+    name = project.vars.get("review_skill")
+    if type(name) != "string" or name.strip() == "":
+        fail("REFUSE: vars.review_skill of the project file is %r. Set it to the name of the skill that the implement step must call before it reports, such as \"your-review-skill\". See docs/design/workflow-files.md, the review skill of the implement step" % (name,))
+
 def refuse_runner_without_skill_calls(project, round_settings, step):
     """Stops the run before any agent starts when the step is on a runner whose CLI reports no skill calls, because the step could not prove that it called the skill.
     A step on the pool needs no check: the pool holds the runners that report them. A runner that the facts do not list is left to the agent step, which refuses an unknown runner."""
@@ -1107,6 +1113,7 @@ def pipeline(item):
 
     # The implement step needs the skill below, so its runner must report skill calls. The check runs here, before any agent starts, so a runner that cannot report them costs nothing.
     refuse_runner_without_skill_calls(project, round_settings, "implement")
+    require_review_skill_named(project)
 
     # The item this one depends on is the parent of its row. An item with no parent has none.
     parent = item_read(name = "parent", of = "parent")
@@ -1145,9 +1152,9 @@ def pipeline(item):
     # A cap ended the run (the output `stop` is "turns" or "budget"), so the work may be half done. The item stops here, before the gate and the review.
     capped(implement, "implement", item)
 
-    # The implementer must run the skill blast-radius-review. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
-    if "blast-radius-review" not in implement.skills:
-        fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls. %s" % restart_steps(item))
+    # The implementer must run the skill that vars.review_skill names. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
+    if project.vars["review_skill"] not in implement.skills:
+        fail("REFUSE: the implement step did not call the skill %s, which vars.review_skill names. Check that the runner has the skill and reports its calls. %s" % (project.vars["review_skill"], restart_steps(item)))
 
     # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the agent pushed.
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,

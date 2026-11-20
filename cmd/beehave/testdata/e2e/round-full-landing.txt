@@ -104,6 +104,7 @@ project(
     vars = {
         "round": {"base": "integration/s1", "owner": "agent", "owner_email": "agent@example.com", "lane_cap": 1, "fix_rounds": 2, "items": ["432"], "merge": True, "wait_hours": 72, "source_checkout": "/own/checkout"},
         "mutation_command": ["sh", "mutation.sh"],
+        "review_skill": "the-review-skill",
     },
 )
 -- flow/prompts/plan.md --
@@ -141,7 +142,7 @@ prompt=$(cat)
 field() { printf '%s\n' "$prompt" | sed -n "s/^$1=//p"; }
 step=$(field step)
 echo "$step" >> @WORK@/calls.log
-echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"blast-radius-review"}}]}}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"the-review-skill"}}]}}'
 case $step in
   plan) printf '{"regressions":"0"}\n' > "$(field write)" ;;
   review) printf '{"verdict":"approve","mechanism":"","regressions":"0","open":"","findings":[]}\n' > "$(field write)" ;;
