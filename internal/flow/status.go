@@ -512,7 +512,7 @@ func (c *Client) claimFresh(project, item, id string) (string, error) {
 	return owner, nil
 }
 
-// Cancel stops the open run of an item and the phases it started. A canceled run is canceled again when a run under it is still open, so the cancel reaches the children that an earlier cancel left open.
+// Cancel stops the open run of an item and the phases it started, and ends a failed run as canceled. A canceled run is canceled again when a run under it is still open, so the cancel reaches the children that an earlier cancel left open.
 func (c *Client) Cancel(item string) error {
 	last, err := c.latest(item)
 	if err != nil {
@@ -526,7 +526,7 @@ func (c *Client) Cancel(item string) error {
 	return c.cancelRun(item, last)
 }
 
-// CancelRun stops the open run with this run id, a pass run included, and cancels a canceled run with an open run under it again, as Cancel does. The run need not be the latest run of its item.
+// CancelRun stops the open run with this run id, a pass run included, ends a failed one, and cancels a canceled run with an open run under it again, as Cancel does. The run need not be the latest run of its item.
 func (c *Client) CancelRun(id string) error {
 	target, err := c.runWithID(id)
 	if err != nil {
@@ -585,7 +585,7 @@ func (c *Client) cancelHeld(item string, last run) error {
 		return err
 	}
 
-	if err := dbos.CancelWorkflow(c.flow, last.Status.ID, dbos.WithCancelChildren()); err != nil {
+	if err := dbos.CancelWorkflow(c.flow, last.Status.ID, dbos.WithCancelChildren(), dbos.WithCancelFailed()); err != nil {
 		return err
 	}
 

@@ -129,7 +129,7 @@ ROUND_DEFAULTS = {
     "union_gate": [],
     "base_result": "",
     "base_reds": [],
-    "base_reds_file": "base-reds.md",
+    "base_reds_file": "",
     "lane_kind": "impl",
     "allow_paths": [],
     "wait_hours": 24,
@@ -271,7 +271,7 @@ def _round_selector(block, got):
 def settings(project):
     """Returns the settings of the round as a dict, with the default of each key that the project vars leave out.
     The engine reads no setting. This function is the one check of them: it refuses project vars with no `round`, a missing key, a key of the wrong type, a value out of range and a key that is no setting,
-    and it refuses a method setting of the vars (the lists, the dicts, the changelog and the board) of the wrong type or form, each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
+    and it refuses a method setting of the vars (the lists, the dicts, the gate map, the changelog and the board) of the wrong type or form, each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
     if "round" not in project.vars:
         fail("REFUSE: the project vars hold no round. Add the settings of the round to the project file: vars = {\"round\": {\"base\": \"integration/r2\", \"owner\": \"your-login\", \"lane_cap\": 4, \"fix_rounds\": 5, \"label\": \"beehave-round\"}}.")
 
@@ -296,8 +296,12 @@ def settings(project):
     if not _valid_base(got["base"]):
         _round_refuse("base", "is %r. Write a branch name such as integration/r2: letters, digits, `.`, `_` and `-`, with `/` between parts." % got["base"])
 
-    if got["base_reds_file"].strip() == "":
-        _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for base-reds.md.")
+    if "base_reds_file" not in block:
+        got["base_reds_file"] = "../base-reds-" + got["base"].replace("/", "_2F") + ".md"
+    elif got["base_reds_file"].strip() == "":
+        _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for ../base-reds-<base>.md, one file for each round.")
+    elif _leaves_project(got["base_reds_file"]):
+        _round_refuse("base_reds_file", "is %r, which leaves the folder of the project. Write a path from the folder of the round that stays in the project folder, such as ../base-reds.md, or an absolute path." % got["base_reds_file"])
 
     _round_numbers(got)
     got["steps"] = _round_steps(got["steps"])
@@ -307,6 +311,20 @@ def settings(project):
     _method_vars(project.vars)
 
     return got
+
+def _leaves_project(path):
+    """Reports whether a relative path from the folder of the round leaves the folder of the project, its parent: its clean form starts with two ".." parts or more. An absolute path is the choice of the owner."""
+    if path.startswith("/"):
+        return False
+    depth = 0
+    for part in path.split("/"):
+        if part == "..":
+            depth -= 1
+        elif part not in ["", "."]:
+            depth += 1
+        if depth < -1:
+            return True
+    return False
 
 # The method settings of the project vars that the example and its prompts read. Each key is optional. The lists hold text, the dicts map text to text.
 METHOD_LISTS = ["gate_files", "conventions", "brief_rules", "stacked_rules", "limits", "traps", "token_rules"]
@@ -321,7 +339,7 @@ def _is_text(value):
 
 def _method_vars(vars):
     """Refuses a method setting of the project vars that has the wrong type or a blank entry, before any step runs. The engine keeps vars a free map, so this function is the one check of these keys.
-    The keys are the lists and dicts of facts, the changelog path and the board. A key that the project leaves out passes. Each refusal names the key and the fix."""
+    The keys are the lists and dicts of facts, the gate map, the changelog path and the board. A key that the project leaves out passes. Each refusal names the key and the fix."""
     for key in METHOD_LISTS:
         if key in vars:
             _method_list(key, vars[key])
@@ -329,6 +347,9 @@ def _method_vars(vars):
     for key in METHOD_DICTS:
         if key in vars:
             _method_dict(key, vars[key])
+
+    if "gate_map" in vars:
+        _method_gate_map(vars["gate_map"])
 
     if "changelog" in vars:
         _method_changelog(vars["changelog"])
@@ -351,6 +372,18 @@ def _method_dict(key, value):
     for name, entry in value.items():
         if not _is_text(name) or not _is_text(entry):
             _vars_refuse(key, "holds a blank or non-text name or value (%r: %r). Write both as text or remove the entry." % (name, entry))
+
+def _method_gate_map(value):
+    if type(value) != "dict":
+        _vars_refuse("gate_map", "is %r, of type %s. Write a dict of each CI command to a list of gate_steps names, for example {\"make test\": [\"test\"], \"go install x@v1\": []}." % (value, type(value)))
+
+    for command_text, names in value.items():
+        if not _is_text(command_text) or type(names) != "list":
+            _vars_refuse("gate_map", "holds %r: %r. Write the CI command as text and the gate_steps names that run it as a list, or [] when it is not a check." % (command_text, names))
+
+        for name in names:
+            if not _is_text(name):
+                _vars_refuse("gate_map", "lists %r for the command %r. Write each gate_steps name as text that is not blank." % (name, command_text))
 
 def _method_changelog(value):
     # The check compares the path with the lines that git prints, so only the exact form of such a line matches.
@@ -413,6 +446,12 @@ def mutation_command(project):
         fail("REFUSE: vars.mutation_command of the project file is %r. Set it to the command that runs the mutation tool, a list of words such as [\"sh\", \"scripts/mutation-pr.sh\"]. See docs/design/workflow-files.md, the mutation step" % (words,))
 
     return words
+
+def require_review_skill_named(project):
+    """Stops the run before any agent starts when the project vars do not name the review skill of the implement step. The key vars.review_skill is required: the workflow names no skill itself."""
+    name = project.vars.get("review_skill")
+    if type(name) != "string" or name.strip() == "":
+        fail("REFUSE: vars.review_skill of the project file is %r. Set it to the name of the skill that the implement step must call before it reports, such as \"your-review-skill\". See docs/design/workflow-files.md, the review skill of the implement step" % (name,))
 
 def refuse_runner_without_skill_calls(project, round_settings, step):
     """Stops the run before any agent starts when the step is on a runner whose CLI reports no skill calls, because the step could not prove that it called the skill.
@@ -755,7 +794,7 @@ def sync_check(name, run):
 
 def sync_land(item, project, round_settings, line, n):
     """Puts the folder of the round at the head of a synced line, runs the gate command on it, reviews the sync pull request and lands it pinned to that head.
-    The gate has no base, so it runs the gate command only: no new-tests check and no mutation step.
+    The gate has no base, so it runs the gate command only: no new-tests check and no mutation step. Its pin_base is the round base, so it reads the pin file there.
     A void gate with a host cause runs again as sync-gate-<n>-host-<k>, until the engine counts HOST_LOSS_LIMIT host losses in the tree of the run.
     Returns sync_end with the reason sync-red, sync-review or host-loss when the pass must end, else an empty reason."""
     head = line["head"]
@@ -763,13 +802,13 @@ def sync_land(item, project, round_settings, line, n):
         if command(name = step, run = run).rc != 0:
             fail("REFUSE: the step %s could not put the folder of the round at the head %s of %s. Check the folder of the round. %s" % (step, head, line["branch"], restart_steps(item)))
 
-    check = gate(name = "sync-gate-%d" % n, head = head)
+    check = gate(name = "sync-gate-%d" % n, head = head, pin_base = round_settings["base"])
     losses = check.host_losses
     for k in range(1, HOST_LOSS_LIMIT + 1):
         if not is_host_void(check) or check.host_losses >= HOST_LOSS_LIMIT:
             break
 
-        check = gate(name = "sync-gate-%d-host-%d" % (n, k), head = head)
+        check = gate(name = "sync-gate-%d-host-%d" % (n, k), head = head, pin_base = round_settings["base"])
         losses = max(losses, check.host_losses)
 
     if is_host_void(check):
@@ -805,7 +844,7 @@ def sync_land(item, project, round_settings, line, n):
 
 def sync_trunk(item, project, round_settings, n):
     """Merges a moved trunk into the round branch at the start of pass `n`, before its queue audit. Returns sync_end: a reason of SYNC_REASONS that ends the pass, or an empty reason, and the host_losses that its gate read.
-    A conflict gets one agent step, sync-resolve-<n>, on the sync branch, and then one more check. The tool merges the forge side and writes no checkout."""
+    A conflict gets one agent step, sync-resolve-<n>, on the sync branch, the push of its head by the engine, and then one more check. The tool merges the forge side and writes no checkout."""
     run = ["remedy", "sync", "--base", round_settings["base"], "--trunk", project.base_branch]
     line = sync_check("sync-%d" % n, run)
 
@@ -821,6 +860,11 @@ def sync_trunk(item, project, round_settings, n):
             inputs = {"branch": line["branch"], "source": line["source"], "base": round_settings["base"], "facts": project},
         )
         capped(resolve, "sync-resolve", item)
+
+        # The agent has no credential, so the engine pushes the merge commit to the sync branch. With no lease, git takes the merge only as a fast forward of the sync branch.
+        # A resolve that made no commit ends on the head it started on, which is not a commit of the sync branch, so a push of it would move the branch off its commits.
+        if resolve.committed:
+            push(name = "push-sync-%d" % n, branch = line["branch"], head = resolve.head_sha, expect = "")
         line = sync_check("sync-again-%d" % n, run)
 
     state = line["state"]
@@ -879,7 +923,8 @@ def next_round(project, round_settings, pr):
 
 def record_base_reds(round_settings):
     """Writes the one record of the known base reds: the reds of vars.round.base_reds, the time and the tip of the base. Each new write replaces the file, so the file holds one record.
-    vars.round.base_reds_file names the file. The prompts tell each lane to read this file and not to copy the list."""
+    vars.round.base_reds_file names the file, as a path from the folder of the round. The default is ../base-reds-<base>.md, with each "/" of the base written as _2F. It lies in the folder of the project, outside every item folder, so the gate sees a clean folder, and each round has its own file.
+    The file is the record for the owner. A lane reads the same list from the data file of its step, because its sandbox cannot read this file."""
     base = round_settings["base"]
     tip = command(name = "base-tip", run = ["git", "rev-parse", "origin/" + base], stop_on_rc = [2]).stdout.strip()
     text = "# Known base reds\n\nMeasured at %s on the tip %s of %s.\n\n%s\n" % (now(), tip, base, "\n".join(["- " + red for red in round_settings["base_reds"]]))
@@ -893,11 +938,30 @@ def record_base_reds(round_settings):
         timeout = WRITE_TIMEOUT,
     )
 
+def derive_gate_list(project):
+    """Derives the gate list of the round from the CI workflow files of vars.gate_files, and holds gate_steps to it by vars.gate_map. A project with no gate_files derives nothing.
+    `remedy gatelist` stops the round (exit code 2) when the files give no step, or when gate_map does not map each derived command exactly to gate_steps names.
+    See the gate list section of docs/design/agent-runs.md."""
+    files = project.vars.get("gate_files", [])
+
+    if len(files) == 0:
+        return
+
+    if len(project.gate_steps) == 0:
+        _vars_refuse("gate_files", "is set, but the project has no gate_steps. Set gate_steps in the project file, one named step for each command of the gate, and map each CI command to them in vars.gate_map.")
+
+    steps = []
+    for name in project.gate_steps:
+        steps += ["--steps", name]
+
+    command(name = "gate-list", run = ["remedy", "gatelist"] + steps + ["--map", json.encode(project.vars.get("gate_map", {}))] + files, stop_on_rc = [2])
+
 # A bound for the loop of the round, because Starlark has no while. A pass ends one run or starts one, so the bound is far above the work of any real round.
 MAX_PASSES = 500
 
-def queue_audit(item, project, round_settings, n):
-    """Runs the agent step queue-audit-<n> before the queue read of the pass and before every spawn, also when the queue is empty."""
+def queue_audit(item, project, round_settings, n, q):
+    """Runs the agent step queue-audit-<n> after the queue read `q` of the pass and before every spawn, also when the queue is empty.
+    The agent audits the rows and the open pull requests that the engine read, from the data file: it holds no forge tool and reads no forge itself."""
     agent(
         name = "queue-audit-%d" % n,
         prompt = "prompts/queue.md",
@@ -905,20 +969,21 @@ def queue_audit(item, project, round_settings, n):
         runner = _runner(round_settings, "queue_audit"),
         edits = False,
         label = "queue audit",
-        sandbox = sandbox(network = ["github.com", "api.github.com"]),
+        sandbox = sandbox(),
         inputs = {"item": item, "pass": n, "base": round_settings["base"], "facts": project},
+        data = {"rows": q.rows, "pulls": q.pulls},
     )
 
 def ready_items(q, round_settings):
     """Returns the ids of the rows of the queue `q` that this pass may start, in the order of the rank rule, up to the free slots and vars.round.lane_cap.
-    The queue read applies vars.round.label, because the rows hold no labels. The item list vars.round.items is applied here, to the rows."""
+    The queue read applies vars.round.label. The item list vars.round.items is applied here, to the rows."""
     listed = round_settings["items"]
     rows = [r for r in q.rows if len(listed) == 0 or r.item in listed]
     return [r.item for r in rank(rows, round_settings["owner"])][:min(q.free, round_settings["lane_cap"])]
 
 def round(item):
     """The round: one entry for the whole round, with one child run (the entry pipeline) for each item. `item` is the round itself, an id that no tracker row uses.
-    A pass is sync-<n> (sync_trunk), queue-audit-<n>, round-queue-<n>, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
+    A pass is sync-<n> (sync_trunk), round-queue-<n>, queue-audit-<n> on the rows of that read, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
     A sync that ends with a reason holds the round: the later passes start no sync and no item, and only gather the open runs. With none open, the round waits in round-wait with the reason.
     The host losses hold it too. `seen` is the highest host_losses that a child result, the landing or the sync gate gave: the count of the engine for the tree of the run, and no count of the round.
     At HOST_LOSS_LIMIT or more, and above `acked`, the reason is host-loss. CONTINUE sets `acked` to `seen`, so the round asks again only after a newer loss.
@@ -930,6 +995,7 @@ def round(item):
     # The round starts its host once. The child entry pipeline calls no host builtin, so a child cannot stop it. finish stops it.
     host_up(name = "round-host", host = project.build_host)
     record_base_reds(round_settings)
+    derive_gate_list(project)
 
     runs = []
     approved = []
@@ -947,11 +1013,11 @@ def round(item):
             seen = max(seen, synced.host_losses)
 
         if held == "":
-            queue_audit(item, project, round_settings, n)
             q = queue(name = "round-queue-%d" % n, hold = "hold", label = round_settings["label"])
+            queue_audit(item, project, round_settings, n, q)
             take = ready_items(q, round_settings)
             if len(take) > 0:
-                runs = runs + spawn(items = take, entry = "pipeline", name = "round-spawn-%d" % n).runs
+                runs = runs + spawn(items = take, entry = "pipeline", base = round_settings["base"], name = "round-spawn-%d" % n).runs
 
         if len(runs) > 0:
             ended = gather(runs, until = "any", name = "round-gather-%d" % n).results
@@ -1042,6 +1108,10 @@ def pipeline(item):
     if not intake.ok:
         return item_value(item, "", False, "stopped", 0)
 
+    # The engine reads the pull requests of the item in every state, each closed or merged one with its closing comment, before any agent starts.
+    # The plan and the implementer read them from their data file for the repeat-offender check: no sandboxed agent reads the forge.
+    history = pr_history(name = "history")
+
     scope = lane_scope(round_settings)
 
     # The cap is for the pull request, not for one run: the candidates that earlier runs of this item started count against it. A candidate counts when its first agent starts.
@@ -1054,6 +1124,7 @@ def pipeline(item):
 
     # The implement step needs the skill below, so its runner must report skill calls. The check runs here, before any agent starts, so a runner that cannot report them costs nothing.
     refuse_runner_without_skill_calls(project, round_settings, "implement")
+    require_review_skill_named(project)
 
     # The item this one depends on is the parent of its row. An item with no parent has none.
     parent = item_read(name = "parent", of = "parent")
@@ -1065,12 +1136,16 @@ def pipeline(item):
         runner = _runner(round_settings, "plan"),
         edits = False,
         outputs = ["regressions"],
-        # The repeat-offender check in the prompt reads pull requests with gh, so the shell reaches the forge and nothing else.
-        sandbox = sandbox(network = ["github.com", "api.github.com"]),
+        # The plan reads the earlier pull requests of the item from its data file, so its shell reaches no host.
+        sandbox = sandbox(),
         inputs = {"item": item, "facts": project},
+        data = {"pulls": history.pulls},
     )
 
     capped(plan, "plan", item)
+
+    # The implementer, each fix and each review read the known base reds of the round from the data file that the engine writes, not from the record of the owner.
+    lane_data = {"base_reds": round_settings["base_reds"], "base": base}
 
     implement = agent(
         name = "implement",
@@ -1082,17 +1157,22 @@ def pipeline(item):
         protect_paths = protected(round_settings),
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
         inputs = {"item": item, "plan": plan.text, "facts": project, "base": base, "acceptance": round_settings["acceptance"], "base_result": round_settings["base_result"]},
+        data = dict(lane_data, pulls = history.pulls),
         **scope
     )
 
     # A cap ended the run (the output `stop` is "turns" or "budget"), so the work may be half done. The item stops here, before the gate and the review.
     capped(implement, "implement", item)
 
-    # The implementer must run the skill blast-radius-review. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
-    if "blast-radius-review" not in implement.skills:
-        fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls. %s" % restart_steps(item))
+    # The implementer must run the skill that vars.review_skill names. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
+    if project.vars["review_skill"] not in implement.skills:
+        fail("REFUSE: the implement step did not call the skill %s, which vars.review_skill names. Check that the runner has the skill and reports its calls. %s" % (project.vars["review_skill"], restart_steps(item)))
 
-    # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the agent pushed.
+    # The agent of a sandboxed step has no credential, so the engine pushes its head to the branch of the item, the branch of its worktree. This is the first push of the branch in the run:
+    # with no lease, git takes only a new branch or a fast forward. Every gate clones the forge, so the push comes before the first gate.
+    push(name = "push-implement", branch = item.id, head = implement.head_sha, expect = "")
+
+    # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the engine pushed.
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
     # when the item has a parent, links it into the native stack of the pull request of that item. The call owns only the closing line of the body:
     # `Closes #N` when the base is the default branch and `Addresses #N` on any other. An item id that is not an issue number gets no line, and a body that exists is kept.
@@ -1129,7 +1209,7 @@ def pipeline(item):
     def mutants(gate):
         return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"])
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"], push_branch = item.id)
 
     if loop.stopped:
         return item_value(item, "", False, "stopped", loop.host_losses)
@@ -1190,10 +1270,13 @@ def pipeline(item):
 
         capped(settle, "settle", item)
 
+        # The settle agent commits the changes of the ruling and has no credential, so the engine pushes its head. The lease is the head that the loop pushed last.
+        push(name = "push-settle", branch = item.id, head = settle.head_sha, expect = loop.head)
+
         # Each finding that the owner parked stays open after the last round: it gets its own issue, so it is not lost with the pull request.
         file_parked(settle.parked)
 
-        return item_value(item, loop.head, False, "settled", loop.host_losses)
+        return item_value(item, settle.head_sha, False, "settled", loop.host_losses)
 
     # The child never merges. It returns the head that the gate ran on and the verdict of the review, and the round lands every approved head of a pass in one batch (land).
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.

@@ -45,6 +45,42 @@ func TestRunner_RunsGitWithTheHooksOff(t *testing.T) { //nolint:paralleltest // 
 	assert.Equal(t, "-c core.hooksPath=/dev/null worktree add x", calls(t, log))
 }
 
+// envGit puts a fake git first on PATH that appends GIT_ALLOW_PROTOCOL and GIT_NO_LAZY_FETCH, one call per line, to the file that the function returns.
+func envGit(t *testing.T) string {
+	t.Helper()
+
+	bin := t.TempDir()
+	log := filepath.Join(bin, "calls")
+	script := "#!/bin/sh\necho \"allow=${GIT_ALLOW_PROTOCOL-unset} lazy=${GIT_NO_LAZY_FETCH-unset}\" >> " + log + "\n"
+	require.NoError(t, exectest.Write(filepath.Join(bin, "git"), script))
+	t.Setenv("PATH", strings.Join([]string{bin, "/usr/bin", "/bin"}, string(os.PathListSeparator)))
+
+	return log
+}
+
+func TestRunner_EveryLocalCallTakesTheFileTransportOnlyAndFetchesNoMissingObject(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	log := envGit(t)
+
+	gitexec.New(t.TempDir(), 0).Run(t.Context(), []string{"status"})
+
+	widened := gitexec.New(t.TempDir(), 0)
+	widened.Env = []string{"GIT_ALLOW_PROTOCOL=ssh", "GIT_NO_LAZY_FETCH=0"}
+	widened.Run(t.Context(), []string{"status"})
+
+	require.NoError(t, gitexec.Command(t.Context(), t.TempDir(), []string{"status"}, "GIT_ALLOW_PROTOCOL=ssh").Run())
+	gitexec.ReadConfig(t.Context(), t.TempDir(), "user.name")
+
+	assert.Equal(t, strings.Repeat("allow=file lazy=1\n", 4), calls(t, log)+"\n", "no env of the caller widens a local call")
+}
+
+func TestNewRemote_ReachesTheRemoteOverTheTransportOfItsAddress(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	log := envGit(t)
+
+	gitexec.NewRemote(t.TempDir(), 0).Run(t.Context(), []string{"fetch"})
+
+	assert.Equal(t, "allow=unset lazy=unset", calls(t, log))
+}
+
 func TestArgs_PutsTheHooksSettingFirstAndKeepsTheArguments(t *testing.T) {
 	t.Parallel()
 

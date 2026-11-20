@@ -4,6 +4,7 @@ import (
 	"context"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/store"
@@ -19,6 +20,8 @@ const (
 	keyedPage = 1000
 	// recentPage is how many of the newest issues the second lookup of a key reads.
 	recentPage = 100
+	// labelPage is how many labels the lookup of one label name reads. A name matches few labels.
+	labelPage = 100
 )
 
 // ghKeyed is one issue found by a search for a key.
@@ -54,6 +57,12 @@ func (s *Store) Create(ctx context.Context, key string, item store.NewItem) (str
 
 // file runs gh issue create and returns the number of the new issue, which is the end of the URL that gh prints.
 func (s *Store) file(ctx context.Context, key string, item store.NewItem) (string, error) {
+	for _, label := range filedLabels(item) {
+		if err := s.ensureLabel(ctx, label); err != nil {
+			return "", err
+		}
+	}
+
 	done := s.run.Run(ctx, s.createArgs(key, item))
 	if done.ExitCode != 0 {
 		return "", store.Refuse("REFUSE: cannot create an item in %s", s.repo)
@@ -78,15 +87,26 @@ func (s *Store) createArgs(key string, item store.NewItem) []string {
 		args = append(args, "--assignee", item.Assignee)
 	}
 
-	if item.Severity != "" {
-		args = append(args, "--label", item.Severity)
-	}
-
-	if item.Operator {
-		args = append(args, "--label", store.OperatorLabel)
+	for _, label := range filedLabels(item) {
+		args = append(args, "--label", label)
 	}
 
 	return args
+}
+
+// filedLabels are the labels that gh issue create sets on the item: the severity, then the operator label.
+func filedLabels(item store.NewItem) []string {
+	var labels []string
+
+	if item.Severity != "" {
+		labels = append(labels, item.Severity)
+	}
+
+	if item.Operator {
+		labels = append(labels, store.OperatorLabel)
+	}
+
+	return labels
 }
 
 // keyed returns the number of the issue whose body holds the marker line of the key, or empty. A full page of matches is a refusal, as in every list.
@@ -200,10 +220,41 @@ func (s *Store) SetStatus(ctx context.Context, id string, status store.Status) e
 	return s.step(ctx, held, argEdit, id, "--remove-label", holdLabel)
 }
 
-// hold adds the hold label. gh does not create a label, so the refusal keeps the cause and names the label as the likely fix.
+// hold adds the hold label, and creates the label first when the repository has none.
 func (s *Store) hold(ctx context.Context, id string, held bool) error {
-	if err := s.step(ctx, !held, argEdit, id, "--add-label", holdLabel); err != nil {
-		return store.Refuse("REFUSE: cannot put item %s in hold in %s: %v. If the repository has no label named %q, create it first", id, s.repo, err, holdLabel)
+	if held {
+		return nil
+	}
+
+	if err := s.ensureLabel(ctx, holdLabel); err != nil {
+		return store.Refuse("REFUSE: cannot put item %s in hold in %s: %v", id, s.repo, err)
+	}
+
+	if err := s.step(ctx, true, argEdit, id, "--add-label", holdLabel); err != nil {
+		return store.Refuse("REFUSE: cannot put item %s in hold in %s: %v", id, s.repo, err)
+	}
+
+	return nil
+}
+
+// ensureLabel creates the label when the repository has none of that name, because gh refuses to add a label that does not exist. GitHub compares label names without case.
+func (s *Store) ensureLabel(ctx context.Context, name string) error {
+	done := s.run.Run(ctx, []string{"label", argList, argRepo, s.repo, "--search", name, argJSON, "name", argLimit, strconv.Itoa(labelPage)})
+	if done.ExitCode != 0 {
+		return store.Refuse("REFUSE: cannot list the labels of %s", s.repo)
+	}
+
+	labels, err := model.Decode[[]ghLabel]("gh label list", done.Stdout)
+	if err != nil {
+		return store.Unreadable(err)
+	}
+
+	if slices.ContainsFunc(labels, func(l ghLabel) bool { return strings.EqualFold(l.Name, name) }) {
+		return nil
+	}
+
+	if done = s.run.Run(ctx, []string{"label", "create", name, argRepo, s.repo}); done.ExitCode != 0 {
+		return store.Refuse("REFUSE: cannot create the label %q in %s", name, s.repo)
 	}
 
 	return nil

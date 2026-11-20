@@ -85,7 +85,7 @@ func (g Gate) pinsOf(ctx context.Context, request Request) PinCheck {
 		return PinCheck{}
 	}
 
-	pins, err := g.readPins(ctx, request.Dir, request.Project.BaseBranch, request.Project.PinFile)
+	pins, err := g.readPins(ctx, request.Dir, request.pinBase(), request.Project.PinFile)
 	if err != nil {
 		return PinCheck{Void: err.Error()}
 	}

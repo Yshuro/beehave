@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -16,9 +17,10 @@ import (
 )
 
 // sandboxPlan makes the plan for the sandbox of one run, or returns the reason why the step cannot start with it.
-// The shell may read the work folder, the shared git directories of a linked work tree and the read paths of the project, and nothing else under the home folder.
+// The shell may read the work folder, the shared git directories of a linked work tree, the read paths of the project and the data file of the step, and nothing else under the home folder.
+// Outside the work folder, the agent may write only the output file of a step that declares outputs.
 // The credential paths come from the engine list, the project file and the config folder of the runner. The .env files of the work folder, at any depth
-// and whether or not they exist yet, are denied by a pattern that the CLI matches when the file is used.
+// and whether or not they exist yet, are denied by a pattern that the CLI matches when the file is used. The commits carry the git identity of the engine at the work folder.
 func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runner model.Runner, dir string) (agent.SandboxPlan, string) {
 	home, err := a.home()
 	if err != nil {
@@ -29,16 +31,43 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 	deny := credentialPaths(home, runner.ConfigDir, project.SandboxDeny)
 	read := expandAll(project.SandboxRead, home)
 
-	closed := closedPaths(ctx, dir, home)
+	closed, identity, write := closedPaths(ctx, dir, home), a.identity(ctx, dir), outputWrites(request)
 
-	if note := readNote(read, home, deny); note != "" {
+	if note := cmp.Or(readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), identityNote(identity, dir)); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
 	return agent.SandboxPlan{
-		Work: dir, GitDirs: sharedGitDirs(dir), Read: read, Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed), DenyWritePatterns: hookPatterns(dir),
-		Network: request.Sandbox.Network,
+		Work: dir, GitDirs: sharedGitDirs(dir), Read: withData(read, request.DataFile), Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed), DenyWritePatterns: hookPatterns(dir),
+		Write: write, Network: request.Sandbox.Network, Identity: identity,
 	}, ""
+}
+
+// outputWrites returns the output file of a step that declares outputs, the one path of the state folder that the agent writes, or none.
+func outputWrites(request flow.AgentRequest) []string {
+	if len(request.Outputs) == 0 {
+		return nil
+	}
+
+	return []string{request.OutputFile}
+}
+
+// gitIdentity returns the user.name and the user.email that the git of the engine reads at dir.
+func gitIdentity(ctx context.Context, dir string) agent.GitIdentity {
+	return agent.GitIdentity{
+		Name:  strings.TrimSpace(gitexec.ReadConfig(ctx, dir, "user.name").Stdout),
+		Email: strings.TrimSpace(gitexec.ReadConfig(ctx, dir, "user.email").Stdout),
+	}
+}
+
+// identityNote says why the commits of a sandboxed step would have no author, or returns "".
+func identityNote(identity agent.GitIdentity, dir string) string {
+	if identity.Name != "" && identity.Email != "" {
+		return ""
+	}
+
+	return fmt.Sprintf("git has no user.name or no user.email at %s, so a commit in the sandbox has no author. The step did not start. "+
+		"Set them with git config user.email and git config user.name.", dir)
 }
 
 // writeDenies returns the closed paths that the adapter denies for write: the closed paths, less the settings folder of
@@ -134,6 +163,36 @@ func readNote(read []string, home string, deny []string) string {
 			return fmt.Sprintf("The project lists the sandbox_read path %s, which overlaps the credential path %s. The step did not start. Remove the path.", path, overlap(path, deny))
 		case model.EnvPart(path) != "":
 			return fmt.Sprintf("The project lists the sandbox_read path %s, which reaches %s. The step did not start. Remove the path.", path, model.EnvPart(path))
+		}
+	}
+
+	return ""
+}
+
+// withData returns the read paths with the data file of the step, the one path of the state folder that the shell reads. It joins after the check
+// of the project paths, which refuses every path under the home folder. A step with no data file keeps the paths as they are.
+func withData(read []string, file string) []string {
+	if file == "" {
+		return read
+	}
+
+	return append(read, file)
+}
+
+// globCharacters are the characters that make a path of a sandbox rule a pattern.
+const globCharacters = `*?[\`
+
+// stateNote says why a file of the state folder that the sandbox opens, the data file or the output file, cannot be opened, or returns "".
+// Such a file in a credential path would open that path. The CLI reads its rules as patterns and does not escape them, so a file whose path holds a
+// glob character would open more than that file.
+func stateNote(deny []string, files ...string) string {
+	for _, file := range files {
+		if strings.ContainsAny(file, globCharacters) {
+			return fmt.Sprintf("The file %s of the state folder holds a glob character (one of %s), so the sandbox would read its path as a pattern. The step did not start. Move the state folder of beehave to a path with no glob character.", file, globCharacters)
+		}
+
+		if secret := overlap(file, deny); file != "" && secret != "" {
+			return fmt.Sprintf("The file %s of the state folder overlaps the credential path %s. The step did not start. Move the state folder of beehave out of the credential path.", file, secret)
 		}
 	}
 

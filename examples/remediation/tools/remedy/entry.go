@@ -46,7 +46,7 @@ func Main[F Forge](args []string, out, errOut io.Writer, open func(repo string) 
 	defer stop()
 
 	deps := Deps{
-		Git: gitexec.New(workingFolder, proc.DefaultTimeout), Dir: workingFolder, Forge: OpenForge(open), Now: time.Now, Claims: claims, Book: OpenBook(ledger.Open),
+		Git: gitexec.New(workingFolder, proc.DefaultTimeout), Gh: proc.NewExecRunner("gh", workingFolder), Dir: workingFolder, Forge: OpenForge(open), Now: time.Now, Claims: claims, Book: OpenBook(ledger.Open),
 	}
 
 	return Execute(ctx, args, deps, out, errOut)

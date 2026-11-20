@@ -41,7 +41,7 @@ func resultShape(t *testing.T) []string {
 // (stepmodules.go) and update the shape. A later change re-keys these goldens for each module; until then the key stays star30.
 var goldenShapes = map[string][]string{
 	"star30": {
-		"agent: cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,skills,stop,text,transcript,violations",
+		"agent: committed,cost_estimated,cost_unknown,cost_usd,head_sha,rewrote,session,skills,stop,text,transcript,violations",
 		"command: rc,stderr,stdout",
 		"earlier_calls: count",
 		"facts: base_branch,build_host,forge,gate,gate_steps,repo,runners,source,tracker,vars",
@@ -55,10 +55,12 @@ var goldenShapes = map[string][]string{
 		"item_status: id,status",
 		"merge: deferred,findings,gates,host_loss,host_losses,merged,moved,note,rejected,tip,tree,unproven",
 		"pr_comment: number",
+		"pr_history: pulls",
 		"pr_open: created,number,stack",
 		"pr_state: state",
 		"preflight: code,ok,reason,stop",
-		"queue: free,rows",
+		"push: head",
+		"queue: free,pulls,rows",
 		"spawn: runs",
 		"wait: answer,answers,timed_out",
 		"write: key,rc,skipped,stderr,stdout",
@@ -80,7 +82,7 @@ var goldenKinds = map[string][]string{
 	"star30": {
 		"agent", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
 		"item_comment", "item_create", "item_read", "item_status", "login", "now",
-		"pr_comment", "pr_open", "pr_state", "preflight", "queue", "scope", "spawn", "wait", "write",
+		"pr_comment", "pr_history", "pr_open", "pr_state", "preflight", "push", "queue", "scope", "spawn", "wait", "write",
 	},
 }
 

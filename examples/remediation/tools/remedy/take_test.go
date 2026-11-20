@@ -12,6 +12,7 @@ import (
 	"github.com/tobocop2/beehave/examples/remediation/tools/remedy"
 	"github.com/tobocop2/beehave/internal/claim"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc/proctest"
 )
 
 var takeNow = time.Date(2026, 10, 23, 12, 0, 0, 0, time.UTC)
@@ -107,6 +108,7 @@ func takeDeps(world *takeWorld) remedy.Deps {
 
 	return remedy.Deps{
 		Git:    origin("git@github.com:owner/name.git", nothing),
+		Gh:     ghListing(),
 		Dir:    ".",
 		Forge:  func(string) (remedy.Forge, error) { return world, nil },
 		Now:    func() time.Time { return takeNow },
@@ -463,4 +465,30 @@ func TestTake_ForgeThatCannotOpenIsARefusal(t *testing.T) {
 
 	assert.Equal(t, remedy.ExitRefused, code)
 	assert.Contains(t, errOut, "down")
+}
+
+// ghListing is a scripted gh that lists the pull request #7 of owner/name with the closing issue 12 and accepts every edit.
+func ghListing() *proctest.Scripted {
+	gh := proctest.Always(model.CommandResult{})
+	gh.Plan(`{"url":"https://github.com/owner/name/pull/7","closingIssuesReferences":[{"number":12,"url":"https://github.com/owner/name/issues/12"}]}`, "pr", "view")
+
+	return gh
+}
+
+func TestTake_TheTakeAssignsThroughTheGhOfTheDeps(t *testing.T) {
+	t.Parallel()
+
+	deps := takeDeps(&takeWorld{pr: pullOf("them", 9, 5)})
+	gh, ok := deps.Gh.(*proctest.Scripted)
+	require.True(t, ok)
+
+	code, out, _ := run(t, deps, takeArgs("--take")...)
+
+	assert.Equal(t, remedy.ExitPass, code)
+	assert.Equal(t, [][]string{
+		{"pr", "view", "7", "--json", "url,closingIssuesReferences"},
+		{"pr", "edit", "7", "--add-assignee", "me"},
+		{"issue", "edit", "12", "--add-assignee", "me"},
+	}, gh.Calls)
+	assert.Contains(t, out, "assigned #7 and the issues 12 to me.")
 }

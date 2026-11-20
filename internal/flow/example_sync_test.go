@@ -41,6 +41,7 @@ type syncScript struct {
 	tip    string // the round base tip that a synced line names
 	review string // the verdict of the sync review
 	rc     int    // the exit code of each check call
+	idle   bool   // the agent that resolves a conflict makes no commit, as one that fails before it merges
 }
 
 // syncedLine is the line of a clean sync that the fake tool prints.
@@ -61,19 +62,29 @@ func isSync(request CommandRequest) (bool, bool) {
 type syncGate struct {
 	gate
 
-	mu    sync.Mutex
-	bases []string
-	red   bool
+	mu       sync.Mutex
+	bases    []string
+	pinBases []string
+	red      bool
 }
 
-func (g *syncGate) Submit(ctx context.Context, project, item, host, base string) (GateJob, error) {
+func (g *syncGate) Submit(ctx context.Context, project, item, host, base, pinBase string) (GateJob, error) {
 	if item == testItem {
 		g.mu.Lock()
 		g.bases = append(g.bases, base)
+		g.pinBases = append(g.pinBases, pinBase)
 		g.mu.Unlock()
 	}
 
-	return g.gate.Submit(ctx, project, item, host, base)
+	return g.gate.Submit(ctx, project, item, host, base, pinBase)
+}
+
+// roundPinBases returns the pin base of each gate of the round itself, in order.
+func (g *syncGate) roundPinBases() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return slices.Clone(g.pinBases)
 }
 
 func (g *syncGate) Run(ctx context.Context, project, item, host string, job GateJob) (GateResult, error) {
@@ -130,6 +141,12 @@ func withSync(t *testing.T, rig *roundRig, script *syncScript) {
 	rig.h.agents.result = func(request AgentRequest) agent.Result {
 		if strings.Contains(request.Prompt, syncReviewMarker) {
 			require.NoError(t, os.WriteFile(request.OutputFile, []byte(`{"verdict":"`+script.review+`"}`), 0o600))
+		}
+
+		if strings.Contains(request.Prompt, syncResolveMarker) && !script.idle {
+			dir, err := rig.h.trees.per(t.Context(), testItem)
+			require.NoError(t, err)
+			commitIn(t, dir, "sync-merge.txt")
 		}
 
 		return inner(request)
@@ -235,6 +252,20 @@ func TestRoundSync_AMovedTrunkLandsThroughTheSyncPullRequestWhoseGateRunsOnTheMe
 	assert.Equal(t, []string{"remedy sync land --pr 7 --head " + script.head + " --base-tip " + script.tip}, syncLands(rig))
 	require.NotEmpty(t, recorder.roundBases())
 	assert.Empty(t, recorder.roundBases()[0], "the gate of the sync head runs the gate command only, with no base")
+}
+
+func TestRoundSync_TheSyncGateReadsThePinFileAtTheRoundBaseAndRunsNoCandidateCheck(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "1")
+	script := &syncScript{lines: []string{"synced", "state=current"}}
+	withSync(t, rig, script)
+
+	_, recorder, err := runSync(t, rig, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{syncRoundBase}, recorder.roundPinBases()[:1], "the pin base of the sync gate is the round base, not the trunk")
+	assert.Equal(t, []string{""}, recorder.roundBases()[:1], "the sync gate has no base, so no new-tests check")
 }
 
 func TestRoundSync_ASyncedLineLandsWhateverTheOrderOfItsFieldsAndKeepsAnEqualSignInAValue(t *testing.T) {
@@ -505,17 +536,35 @@ func TestRoundSync_AConflictThatTheAgentResolvesIsGatedReviewedAndLandedInTheSam
 	require.NoError(t, err)
 
 	names := stepNames(t, rig.last)
-	order := []string{"command:sync-1#", "agent:sync-resolve-1#", "command:sync-again-1#", "gate:sync-gate-1#", "agent:sync-review-1#", "command:sync-land-1#", "agent:queue-audit-1#"}
+	order := []string{"command:sync-1#", "agent:sync-resolve-1#", "push:push-sync-1#", "command:sync-again-1#", "gate:sync-gate-1#", "agent:sync-review-1#", "command:sync-land-1#", "agent:queue-audit-1#"}
 
 	for i := 1; i < len(order); i++ {
 		require.GreaterOrEqual(t, at(names, order[i]), 0, "the step %s ran: %v", order[i], names)
 		assert.Less(t, at(names, order[i-1]), at(names, order[i]), "%s comes before %s", order[i-1], order[i])
 	}
 
+	require.Len(t, rig.h.forge.pushed, 1, "the engine pushes the head of the resolve once")
+	assert.Contains(t, rig.h.forge.pushed[0], "|"+syncBranch+"|", "the push goes to the sync branch that the line names")
+	assert.True(t, strings.HasSuffix(rig.h.forge.pushed[0], "|"), "the first push of the sync branch leases the head that the clone saw")
+
 	assert.Equal(t, []string{"remedy sync land --pr 7 --head " + script.head + " --base-tip " + script.tip}, syncLands(rig))
 	assert.Equal(t, []string{""}, recorder.roundBases())
 	require.Len(t, rig.questions, 1)
 	assert.NotContains(t, rig.questions[0], "sync-")
+}
+
+func TestRoundSync_AResolveThatMadeNoCommitPushesNothingToTheSyncBranch(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	conflict := "state=conflict branch=" + syncBranch + " source=main base_tip=abc"
+	withSync(t, rig, &syncScript{idle: true, lines: []string{conflict, conflict}})
+
+	_, _, err := runSync(t, rig, false)
+	require.NoError(t, err)
+
+	assert.Empty(t, rig.h.forge.pushed, "a resolve that left the head where it started has nothing to push, and a push of that head would move the sync branch off its commits")
+	assert.Empty(t, syncLands(rig))
 }
 
 func TestRoundSync_TheReviewOfTheSyncReadsOnlyAndRunsOnTheGatedHeadOnly(t *testing.T) {

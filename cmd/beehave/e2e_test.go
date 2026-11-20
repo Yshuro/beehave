@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -47,12 +45,18 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// The test binary acts as the upload-pack helper of the push, as beehave does in main.
+	std := helperIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}
+	if code, helper := runUploadPack(context.Background(), os.Args, config.ProcessEnv(), machineTools(), std); helper {
+		os.Exit(code)
+	}
+
 	// The test binary also acts as the Landlock helper, as beehave does in main, for the test that runs a gate under the real enforcer.
 	if code, helper := landlock.RunHelper(os.Args, os.Stderr); helper {
 		os.Exit(code)
 	}
 
-	testscript.Main(m, map[string]func(){"beehave": e2eBeehave, "beehavereal": e2eReal, "beehaveswarm": e2eSwarm})
+	testscript.Main(m, map[string]func(){"beehave": e2eBeehave, "beehavereal": e2eReal, "beehaveswarm": e2eSwarm, "beehaveround": e2eRound})
 }
 
 // e2eBeehave is the beehave command of the scripts. It matches main, with the fake collaborators.
@@ -160,6 +164,10 @@ func (e2eFiles) Open(context.Context, string, string, flow.OpenRequest) (flow.Op
 	return flow.OpenResult{}, nil
 }
 
+func (e2eFiles) Push(context.Context, string, string, string, string, string) error { return nil }
+
+func (e2eFiles) History(context.Context, string, string) ([]model.PriorPull, error) { return nil, nil }
+
 func (f e2eFiles) Release(_ context.Context, _, item, _ string) error {
 	return f.event("release", item)
 }
@@ -176,8 +184,11 @@ func (e2eFiles) WithTree(_ context.Context, _, _ string, fn func(string)) error 
 	return nil
 }
 
+// Heads is never read: WithTree gives no worktree.
+func (e2eFiles) Heads(context.Context, string) (string, error) { return "", nil }
+
 // Ensure gives the git folder that e2eSetup makes. The gate reads the commit of that folder.
-func (f e2eFiles) Ensure(context.Context, string, string, string) (string, error) {
+func (f e2eFiles) Ensure(context.Context, string, string, string, string) (string, error) {
 	return filepath.Join(f.dir, "tree"), nil
 }
 
@@ -209,7 +220,7 @@ func e2eHeadOf(ctx context.Context, dir string) (string, error) {
 // and a revert run in which the new test fails on the base code.
 type e2eGate struct{ dir string }
 
-func (e2eGate) Submit(_ context.Context, _, _, _, base string) (flow.GateJob, error) {
+func (e2eGate) Submit(_ context.Context, _, _, _, base, _ string) (flow.GateJob, error) {
 	return flow.GateJob{Plan: gate.Plan{Base: base}}, nil
 }
 
@@ -224,7 +235,7 @@ func (g e2eGate) Run(ctx context.Context, _, _, _ string, job flow.GateJob) (flo
 	return result, err
 }
 
-func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, error) {
+func (g e2eGate) Key(context.Context, string, string, string, string, string) (flow.GateKey, error) {
 	return flow.GateKey{}, nil
 }
 
@@ -495,9 +506,13 @@ const e2eProject = `project(
     vars = {
         "round": {"base": "integration", "owner": "owner", "lane_cap": 1, "fix_rounds": 5, "source_checkout": "/own/checkout", "label": "round"},
         "mutation_command": ["sh", "mutation.sh"],
+        "review_skill": "` + e2eSkill + `",
     },
 )
 `
+
+// e2eSkill is the skill that the project of the scripts names in vars.review_skill and that the fake claude calls.
+const e2eSkill = "the-review-skill"
 
 // exampleMain is the one entry of the example that the scripts replace.
 const exampleMain = "def main(item):"
@@ -510,19 +525,6 @@ func oneItemCopy(example string) (string, error) {
 	}
 
 	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
-}
-
-// exampleSkillCheck matches the check of the example that the implement step called a skill: "name" not in implement.skills.
-var exampleSkillCheck = regexp.MustCompile(`"([^"]+)" not in implement\.skills`)
-
-// exampleSkill is the skill that the implement step of the example text must call. The example is the one place that names it.
-func exampleSkill(example string) (string, error) {
-	match := exampleSkillCheck.FindStringSubmatch(example)
-	if match == nil {
-		return "", errors.New("the example holds no check of the skills of the implement step")
-	}
-
-	return match[1], nil
 }
 
 // e2eFile is a file of the work folder of a script; a program is a file that the script starts.
@@ -564,14 +566,9 @@ func e2eSetup(env *testscript.Env) error {
 		return err
 	}
 
-	skill, err := exampleSkill(string(example))
-	if err != nil {
-		return err
-	}
-
 	// The fake claude keeps a transcript where the adapter looks for it: the agent of the scripts runs in the work folder with the work folder as its login folder.
 	transcripts := filepath.Dir(newAdapters(nil, nil, nil).agent(claude.Name).TranscriptPath(work, work, "session"))
-	fake := strings.NewReplacer("%SKILL%", skill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
+	fake := strings.NewReplacer("%SKILL%", e2eSkill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
 
 	files := map[string]e2eFile{
 		"bin/claude":                {fake, true},

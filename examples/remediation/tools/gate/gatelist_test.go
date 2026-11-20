@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	gateHead = "# Gate list: owner/name\n\n## Gate steps\nDerived from: `.github/workflows/ci.yaml`, jobs `lint` and `test`, at 1a2b3c4d.\n\n"
+	gateHead = "# Gate list: owner/name\n\n## Gate steps\n\n"
 	gatePath = "gate-steps.md"
 	jobDir   = "/job"
 )
@@ -158,17 +158,15 @@ func TestGateJob_Steps(t *testing.T) {
 func TestGateJob_RefusesAGateListThatCannotBeRead(t *testing.T) {
 	t.Parallel()
 
-	derived := "## Gate steps\nDerived from: ci.yaml at 1a2b3c4d\n| name | command |\n|---|---|\n"
+	derived := "## Gate steps\n| name | command |\n|---|---|\n"
 
 	tests := []struct {
 		name, list, message string
 	}{
 		{"no_gate_section", "# Gate list\n\n## Build host\n| fmt | cargo fmt |\n", `no "## Gate steps" section`},
-		{"no_derived_from_line", strings.Replace(gateList, "Derived from:", "Source:", 1), "Derived from:"},
 		{"listed_twice", "\n" + derived + "| fmt | a |\n| fmt | b |\n| lint | |\n", "fmt is listed twice"},
 		{"no_command", "\n" + derived + "| fmt | a |\n| fmt | b |\n| lint | |\n", "lint has no command"},
-		{"source_names_no_commit", strings.Replace(gateList, ", at 1a2b3c4d.", ".", 1), "names no commit"},
-		{"two_sections", gateList + "\n## Gate steps\nDerived from: x at 1a2b3c4\n| a | b |\n", `2 "## Gate steps"`},
+		{"two_sections", gateList + "\n## Gate steps\n| a | b |\n", `2 "## Gate steps"`},
 		{"three_columns", strings.Replace(gateList, "| fmt | `cargo fmt --all -- --check` |", "| fmt | a | b |", 1), "has 3 columns"},
 		{"bad_name", strings.Replace(gateList, "| fmt |", "| f m |", 1), `"f m" is not a step name`},
 		{"no_rows", derived, "has no rows"},
@@ -194,7 +192,7 @@ const failPrefixText = "FAIL: "
 func refusalOf(t *testing.T, list string) *check.Refusal {
 	t.Helper()
 
-	_, err := gate.Steps(list, gatePath)
+	_, err := gate.Job("", list, gatePath, jobDir, nil)
 
 	var refusal *check.Refusal
 
@@ -214,26 +212,16 @@ func TestGateJob_RefusalKeepsTheJobDefectsFoundFirst(t *testing.T) {
 	assert.Equal(t, []string{"FAIL: GATE-SKIP fmt has no reason. Write GATE-SKIP fmt: <reason>"}, refusal.Lines)
 }
 
-func TestGateSteps_ListsOneNameAndCommandForEachStep(t *testing.T) {
+func TestGateJob_ReadsAnEscapedPipeAndAlignedSeparatorsOfAGateList(t *testing.T) {
 	t.Parallel()
 
-	steps, err := gate.Steps(gateList, gatePath)
+	list := "## Gate steps\n| name | command |\n|:--|--:|\n| pipe | `a \\| b` |\n"
 
-	require.NoError(t, err)
-	require.Len(t, steps, 5)
-	assert.Equal(t, gate.Step{Name: "fmt", Command: "cargo fmt --all -- --check"}, steps[0])
-	assert.Equal(t, gate.Step{Name: "docs", Command: "command: see .github/workflows/ci-docs.yaml"}, steps[4])
-}
+	run := gateWith(t, "a | b\n", list, nil)
+	other := gateWith(t, "a\n", list, nil)
 
-func TestGateSteps_ReadsAnEscapedPipeAndAlignedSeparators(t *testing.T) {
-	t.Parallel()
-
-	list := "## Gate steps\nDerived from: ci.yaml at 1a2b3c4d\n| name | command |\n|:--|--:|\n| pipe | `a \\| b` |\n"
-
-	steps, err := gate.Steps(list, gatePath)
-
-	require.NoError(t, err)
-	assert.Equal(t, []gate.Step{{Name: "pipe", Command: "a | b"}}, steps)
+	assert.Equal(t, "check-job: OK (steps 1, run 1, declared skips 0, unstated 0)", run.Summary())
+	assert.False(t, other.OK(), "the command of the row is the whole pipe, not its first word")
 }
 
 func TestGateJob_ASlotAtTheEdgeOfACommandMatchesAnyText(t *testing.T) {

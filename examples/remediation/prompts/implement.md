@@ -20,9 +20,11 @@ table must change, stop and report it: a wider rule is the owner's decision.
 
 ## Before you write
 
-**Check for an existing pull request, at the start and again before you push.**
-**Repeat-offender check:** `git log -S` and `gh pr list --state all --search`, reading the CLOSING comment
-rather than the commits. A closed pull request is not a record of work that landed.
+**Check for an existing pull request, at the start and again before your last commit.** The pull requests of this item in every
+state are the list `pulls` in the data file {{ .data_file }}, which the engine read before the plan started. Read it with the
+shell (`cat` or `jq`). If the data file is missing or cannot be read, stop and refuse: say so, and do not guess the pull requests.
+**Repeat-offender check:** `git log -S` in your folder, and the earlier pull requests of this item in {{ .data_file }}, reading
+the CLOSING comment (`closing_comment`) rather than the commits. A closed pull request is not a record of work that landed.
 **Re-derive every cited site at the tip you branch from.** Line numbers move.
 **Build-versus-buy search.** Before you write a new mechanism, search the project, its dependencies and the standard
 library for one that already does the job. Name what you found, or write that you found none.
@@ -67,7 +69,7 @@ never "10 of 10". A run with 0 tests is not a pass.
 **A `while read` loop gives its stdin to every command inside it.** Read the list on fd 3 (`while read -r x <&3; do ...; done 3< list`) or put `</dev/null` on the inner command, and assert the loop count against the input count.
 **A regeneration is evidence for its own tree only.** Compare the output with a fresh tree of the same commit. A regeneration that wrote nothing looks the same as one that wrote identical bytes.
 **A gate that covers only the diff becomes a full run in two cases**: the diff touches a shared foundation (the workflow files, a lockfile, the schema, a widely used helper), or a red has no explanation. Name the trigger in the report. An unfinished full run never blocks a verdict: report it as a named gap.
-**Before each push, search the diff for `TODO` and `FIXME`.** Each one that the change adds names its author, as `TODO(name)`.
+**Before each commit, search the diff for `TODO` and `FIXME`.** Each one that the change adds names its author, as `TODO(name)`.
 
 ## Evidence rules that are not optional
 
@@ -142,6 +144,7 @@ subset of the union of the two parents' versions of that file; the control is th
 parent alone, which must be nonzero.
 Restore a mutated file from a snapshot and **assert the blob**; `git checkout -- <file>` resets to HEAD and
 silently discards other uncommitted edits.
+**A claim that two changes are disjoint carries the SHA it was measured at.** A list of changed paths from one tip is stale after two merges: measure again at the tip you merge to.
 
 ## Brief rules
 
@@ -152,11 +155,27 @@ silently discards other uncommitted edits.
 
 ## Merge rules
 
-{{ if .facts.forge }}**Push at the first checkpoint.** Push the branch when the first commit is green. Push every later commit to it at once; a commit that stays local is lost with the lane. Do not open the pull request, set its body or link a stack: the engine does these after this step.
+{{ if .facts.forge }}**Commit at the first checkpoint.** Make the first commit when the change is green, and commit every later change at once; a change that is not committed is lost with the lane. Do not push: the engine pushes the head of the branch after this step. Do not open the pull request, set its body or link a stack: the engine does these after the push.
 {{ else }}This project has no forge: commit on the branch and push nothing.
 {{ end }}
 **Never use the merge queue of GitHub.** The orchestrator merges a pinned head with `gh pr merge`. Never run `gh pr merge --auto` and never add a pull request to a queue.
-**Known base reds are in one file.** The run names the file. Read it, and re-derive each red at the tip you branch from. Never copy the list into a report or a brief.
+**Known base reds are in one file.** The known base reds are the list `base_reds` in the data file {{ .data_file }}, which the engine wrote for this step. Read it with the shell (`cat` or `jq`), and re-derive each red at the tip you branch from. Never copy the list into a report or a brief. If the data file is missing or cannot be read, stop and refuse: say so, and do not guess the base reds.
+**A base-red entry names the command that CI runs, not the test target.** The same target under another runner is another measurement. Follow the CI task to its command before you record a red.
+**The exclusion list of a guard is a decision that expires.** State what a guard covers, not only that it passed. When the defect recurs inside an exclusion, justify the exclusion again before you add a case.
+**Do not edit a branch that a pending merge depends on.** That is a branch with an approved head that waits to merge, or the parent of an open stack. File the finding that survives as an issue first, and fix it in a later pull request.
+
+## Lane boundaries
+
+**Each lane has one item, one worktree, one branch and one pull request.** Never take a second item into the tree you were given, however related it looks. Two items in one tree cannot be reviewed, reverted or merged alone. Never touch the worktree of another lane.
+**An item is the scope of one pull request, not one issue.** **The scope of the item is fixed at the first review.** Until then, fix a defect of the same class that you find on the way on this branch. After it, name the defect in your report so that it becomes a later item.
+**Never merge, never comment on the forge, and never file an issue.** The engine and the orchestrator do these. Name a finding that you will not fix in your report, so that an issue is filed for it.
+
+## Skills
+
+**Invoke each skill that the rules name with the Skill tool, by name.** Reading the file of a skill instead is a skipped step, and a report with no Skill call goes back unread. If the Skill tool answers `unknown skill`, read the skill file and follow it: that answer is about the registry and is never permission to skip the step.
+**Run the skills in order.** `plan-vs-conventions` for a change past one file, `cross-cutting-api-change` for a new variant, field or entry point, then `blast-radius-review` iterated to zero before the gate, with the round count in the report.
+**`blast-radius-review` is the floor of every lane, never the whole answer.** Choose the other skills from what the item is, not from habit: a change of output, of a dependency floor or of a harness each asks for more.
+**A ruling of the owner binds the item.** Read the rulings file that the run names. Never reverse a ruling: if you think that it is wrong, stop and report it with your evidence.
 
 ## Project rules
 
@@ -203,7 +222,7 @@ control, every arm you discarded. That file is the record and it is read.
 **The report carries four tables.** A report that lacks one goes back to you unread.
 
 - `## Claims`: every claim in the title, body, commit messages, changelog entry, new comments, assertion
-  messages and closing keywords, with its evidence and the head it was verified at. Every push makes the
+  messages and closing keywords, with its evidence and the head it was verified at. Every commit makes the
   table stale, so re-verify it at the new head.
 - `## Hunks`: every changed production hunk, the arm that removes it, and the red line a test printed.
 - `## Inputs`: every input class the changed code accepts or refuses, what the base does, what the head does,

@@ -121,7 +121,7 @@ func (e Enforcer) Run(ctx context.Context, plan sandbox.Plan, proxyPort int, cmd
 
 	child := proc.GroupCommand(ctx, e.program, arguments(plan, proxyPort, program, cmd.Argv[1:]), cmd.Dir)
 	child.Env = append([]string{}, cmd.Env...)
-	child.Stdout, child.Stderr = sandbox.OrDiscard(cmd.Stdout), sandbox.OrDiscard(cmd.Stderr)
+	child.Stdin, child.Stdout, child.Stderr = cmd.Stdin, sandbox.OrDiscard(cmd.Stdout), sandbox.OrDiscard(cmd.Stderr)
 
 	return codeOf(child.Run())
 }

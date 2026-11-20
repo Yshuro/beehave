@@ -25,11 +25,13 @@ type Plan struct {
 	Domains []string `json:"domains"`
 }
 
-// Command is one program to run: its words, its folder, its whole environment and where its output goes.
+// Command is one program to run: its words, its folder, its whole environment, what it reads on its standard input and where its output goes.
+// A nil Stdin gives the command an empty input.
 type Command struct {
 	Argv   []string
 	Dir    string
 	Env    []string
+	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
 }

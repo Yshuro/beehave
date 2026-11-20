@@ -23,11 +23,11 @@ type sshGate struct {
 	machine *sshtest.Machine
 }
 
-func (*sshGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (*sshGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (g *sshGate) Submit(ctx context.Context, _, _, _, _ string) (GateJob, error) {
+func (g *sshGate) Submit(ctx context.Context, _, _, _, _, _ string) (GateJob, error) {
 	id, err := g.host.Submit(ctx, model.JobSpec{Name: "gate", Command: hosttest.PassingCommand})
 	if err != nil {
 		return GateJob{}, err

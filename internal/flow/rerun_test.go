@@ -154,6 +154,13 @@ func (f *crashForge) Open(ctx context.Context, project, item string, req OpenReq
 	return opened, err
 }
 
+func (f *crashForge) Push(ctx context.Context, project, item, branch, head, expect string) error {
+	err := f.forge.Push(ctx, project, item, branch, head, expect)
+	f.stop("push")
+
+	return err
+}
+
 func (f *crashForge) stop(method string) {
 	if method == f.on {
 		f.crash.after()

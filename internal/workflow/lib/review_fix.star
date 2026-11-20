@@ -288,8 +288,8 @@ def with_violations(findings, *violations):
             findings = lines + "\n\n" + findings
     return findings
 
-def review_args(loop, head, violations, scope, outputs):
-    """The arguments of a fresh read-only review of the head, other than its name. scope tells the review what it judges."""
+def review_args(loop, head, violations, scope, outputs, since):
+    """The arguments of a fresh read-only review of the head, other than its name. scope tells the review what it judges, and since...head is the diff range of that scope."""
     return dict(
         label = labelled(loop, "review", loop.review_cap),
         prompt = loop.review_prompt,
@@ -301,7 +301,8 @@ def review_args(loop, head, violations, scope, outputs):
         protect_paths = loop.protect,
         output_tries = 2,
         edits = False,
-        inputs = {"item": loop.item, "violations": violations, "facts": loop.facts, "scope": scope},
+        inputs = {"item": loop.item, "violations": violations, "facts": loop.facts, "scope": scope, "since": since, "head": head},
+        data = loop.data,
     )
 
 def mechanism_of(loop, review):
@@ -314,7 +315,7 @@ def check_review(loop, check, inner, outer):
     if stopped_before(loop.item, "before-review-%d" % outer, check.head, loop.guard) != None:
         return struct(end = ended(loop, check.head, stopped = True, gate = check))
 
-    review = agent(name = "candidate-review", **review_args(loop, check.head, lane.violations, "the whole pull request", loop.review_outputs))
+    review = agent(name = "candidate-review", **review_args(loop, check.head, lane.violations, "the whole pull request", loop.review_outputs, "origin/" + loop.base))
     capped(review, "review", loop.item)
 
     # A reject ends the loop with no fix round. The caller holds the item with the text of the review as the reason.
@@ -416,10 +417,15 @@ def scoped_fix(loop, pending, fixes, decided, outer, inner, lane):
         forbid_commands = FORBID + loop.extra,
         protect_paths = loop.protect,
         inputs = {"item": loop.item, "round": round, "findings": pending.findings, "facts": loop.facts},
+        data = loop.data,
         **loop.scope
     )
     capped(fix, "fix", loop.item)
     kept_history(fix, "fix", loop.item)
+
+    # The engine pushes the head of the fix. The lease is the head of the lane before it, which the caller or the last fix pushed.
+    if loop.push_branch != "":
+        push(name = "push-fix-%d" % inner, branch = loop.push_branch, head = fix.head_sha, expect = lane.head_sha)
 
     if pending.mechanism != "":
         fixes[pending.mechanism] = fixes.get(pending.mechanism, 0) + 1
@@ -432,6 +438,7 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     for inner in range(1, MAX_INNER + 1):
         # Only the first candidate after a clean implementer has no findings due. Its first review judges the diff of the implementer, as no fix ran.
         first = not pending.due
+        before = lane.head_sha
         if pending.due:
             fixed = scoped_fix(loop, pending, fixes, decided, outer, inner, lane)
             if fixed.end != None:
@@ -443,7 +450,8 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
 
         name = FIRST_REVIEW if first else "scoped-review-%d" % inner
         scope = "the diff of the implementer" if first else "the diff of the last fix"
-        review = agent(name = name, **review_args(loop, lane.head_sha, lane.violations, scope, []))
+        since = "origin/" + loop.base if first else before
+        review = agent(name = name, **review_args(loop, lane.head_sha, lane.violations, scope, [], since))
         capped(review, "review", loop.item)
         if review.verdict == "reject":
             return struct(end = ended(loop, lane.head_sha, rejected = True, gate = pending.gate, review = review))
@@ -456,7 +464,7 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     # The last scoped review asked for changes. Its findings go to the full checks, and its violations keep the full review from a clean approve.
     return struct(end = None, lane = lane, open = pending.findings, breach = review.violations)
 
-def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = None, review_outputs = [], facts = {}, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER):
+def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = None, review_outputs = [], facts = {}, data = None, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER, push_branch = ""):
     """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, verdict, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
 
     steps is a dict from a step name to {"model": text, "runner": text}. The entries implement, review and fix are required, design is required with a design_prompt, and fix_late is optional.
@@ -468,7 +476,9 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
     guard holds the settings of the preflight call before every agent of the loop: base, hold and own. A stop ends the loop with stopped set.
     protect lists the directories that no command of a review or a fix may write in. allow lists the globs that a fix may change, and None is no scope. A list that before_review refuses stops the item before the first step of the loop.
     design_prompt turns on the design round: each review then writes the output `mechanism`. review_outputs lists more outputs of the full review.
+    push_branch is the branch that the caller pushed the head of impl to. Each fix then pushes its head there, with the head before the fix as the lease. Empty pushes nothing.
     facts is the value of the facts() builtin, passed to each agent.
+    data is the data keyword of each review and each fix: a dict that the engine writes to the data file that the prompt names. None gives no data file.
     follow_ups is "allow" or "forbid". With "forbid", each review writes the output `open`, one text with a line for each open finding and an empty text for none,
     and a review with an open finding has the verdict changes unless its verdict is reject. The result field verdict holds the verdict of the last full review with that rule applied.
     """
@@ -498,8 +508,10 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
         guard = guard,
         review_outputs = review_outputs,
         facts = facts,
+        data = data,
         review_check = review_check,
         checks = checks,
+        push_branch = push_branch,
         host = {"losses": 0, "lost": False},
         calls = {"fix": 0, "review": 0},
         review_cap = rounds * (MAX_INNER + 1),

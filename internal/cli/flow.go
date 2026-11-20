@@ -1184,6 +1184,7 @@ func (f flowCommands) cancelCommand() *cobra.Command {
 		Short: "Stop the open run of an item, or one run by its id",
 		Long: "Stop the open run of an item. With --run, stop the one run with that id, even when it is not the latest run of its item. " +
 			"Use --run for the pass run of a round: beehave status lists the run ids. " +
+			"A failed run ends as canceled in one store write: no step runs, the workflow file is not read, and its error and steps stay, so a run recorded on another build can be closed. " +
 			"A canceled run whose phases an earlier cancel left running is canceled again, and the phases it stops are named.",
 		Args: func(cmd *cobra.Command, args []string) error { return cancelArgs(cmd, args, runID) },
 		RunE: func(cmd *cobra.Command, args []string) error {

@@ -70,6 +70,16 @@ func indexOf(t *testing.T, defines []string, value string) string {
 	return ""
 }
 
+// The plan names what the command reads: the profile adds the frameworks of macOS that every program loads, and no folder such as /opt or /etc that can
+// hold what a project denies.
+func TestProfile_ReadsOnlyThePlanAndTheFrameworksOfMacOS(t *testing.T) {
+	t.Parallel()
+
+	_, defines := seatbelt.Profile(sandbox.Plan{Read: []string{"/c"}}, 0)
+
+	assert.Equal(t, []string{"/System", "/Library/Apple", "/private/var/db/dyld", "/private/var/db/timezone", "/private/var/select", "/c"}, readsOf(defines))
+}
+
 func TestProfile_AFileIsAllowedByItselfAndAFolderWithWhatLiesBelowIt(t *testing.T) {
 	t.Parallel()
 
@@ -97,4 +107,17 @@ func TestProfile_ASymbolicLinkIsFollowedBecauseSeatbeltComparesTheRealPath(t *te
 
 	assert.Contains(t, defines, "W0="+dir)
 	assert.Contains(t, defines, "W1="+filepath.Join(dir, "absent"), "a path that does not exist is kept as it is")
+}
+
+// readsOf returns the paths of the read rules among the -D arguments of a profile.
+func readsOf(defines []string) []string {
+	var reads []string
+
+	for _, define := range defines {
+		if name, value, _ := strings.Cut(define, "="); strings.HasPrefix(name, "R") {
+			reads = append(reads, value)
+		}
+	}
+
+	return reads
 }

@@ -113,7 +113,7 @@ func TestRound_TheSettingsGiveEveryKeyAndTheDefaultsOfTheKeysTheFileLeavesOut(t 
 	require.NoError(t, err)
 	for _, want := range []string{
 		`"base": "integration/s1"`, `"owner": "tobocop2"`, `"lane_cap": 4`, `"fix_rounds": 5`, `"label": "beehave-round"`,
-		`"lane_kind": "impl"`, `"base_reds_file": "base-reds.md"`, `"wait_hours": 24`, `"integration_pr": 0`, `"merge": False`, `"hand_off": False`, `"items": []`,
+		`"lane_kind": "impl"`, `"base_reds_file": "../base-reds-integration_2Fs1.md"`, `"wait_hours": 24`, `"integration_pr": 0`, `"merge": False`, `"hand_off": False`, `"items": []`,
 	} {
 		assert.Contains(t, shown, want)
 	}
@@ -191,6 +191,53 @@ func TestRound_BadValuesAreRefusedWithTheKeyAndTheFix(t *testing.T) {
 		"a blank owner":           {map[string]any{"owner": ""}, "vars.round.owner is blank"},
 	} {
 		assert.Contains(t, refusalOf(t, roundVars(with(roundSettings(), test.change))), test.want, name)
+	}
+}
+
+func TestRound_TheDefaultRecordOfTheBaseRedsIsNamedByTheBaseOfTheRound(t *testing.T) {
+	t.Parallel()
+
+	one, err := settingsOf(t, roundVars(with(roundSettings(), map[string]any{"base": "integration/r1"})))
+	require.NoError(t, err)
+
+	two, err := settingsOf(t, roundVars(with(roundSettings(), map[string]any{"base": "integration/r2"})))
+	require.NoError(t, err)
+
+	assert.Contains(t, one, `"base_reds_file": "../base-reds-integration_2Fr1.md"`)
+	assert.Contains(t, two, `"base_reds_file": "../base-reds-integration_2Fr2.md"`)
+}
+
+// The file is a path from the folder of the round, and the project folder is its parent: the clean form of an allowed path has at most one leading "..".
+func TestRound_ABaseRedsFileThatLeavesTheProjectFolderIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for name, file := range map[string]string{
+		"two levels up":                     "../../reds.md",
+		"down, then up past the project":    "a/../../../reds.md",
+		"up past the project and back down": "../../project/reds.md",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			refusal := refusalOf(t, roundVars(with(roundSettings(), map[string]any{"base_reds_file": file})))
+			assert.Contains(t, refusal, "vars.round.base_reds_file is "+strconv.Quote(file)+", which leaves the folder of the project")
+		})
+	}
+
+	for name, file := range map[string]string{
+		"the project folder":             "../reds.md",
+		"the round folder":               "reds.md",
+		"up and down inside the project": "../a/../reds.md",
+		"a dot part":                     "./x/../../reds.md",
+		"an absolute path":               "/srv/reds.md",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			shown, err := settingsOf(t, roundVars(with(roundSettings(), map[string]any{"base_reds_file": file})))
+			require.NoError(t, err)
+			assert.Contains(t, shown, `"base_reds_file": `+strconv.Quote(file))
+		})
 	}
 }
 

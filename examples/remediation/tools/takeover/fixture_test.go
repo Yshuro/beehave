@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/tobocop2/beehave/examples/remediation/tools/takeover"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc/proctest"
 )
 
 var (
@@ -49,11 +51,14 @@ type setup struct {
 	postErr error
 	freeErr error
 	calls   []string
-	posted  []string
-	asked   []string
-	fields  [][]string
-	idle    time.Duration
-	grace   time.Duration
+
+	// gh is the scripted gh of the take. A test replaces it to list closing issues or to fail a call.
+	gh     *proctest.Scripted
+	posted []string
+	asked  []string
+	fields [][]string
+	idle   time.Duration
+	grace  time.Duration
 
 	// beforeSecondView runs before the second read of the pull request, and secondViewErr fails it.
 	beforeSecondView func()
@@ -86,7 +91,7 @@ func newSetup(s spec) *setup {
 	}
 
 	return &setup{
-		idle: time.Hour, grace: time.Hour,
+		idle: time.Hour, grace: time.Hour, gh: listing(),
 		pr: obj{
 			"number": 7, "state": "OPEN", "author": login(author), "assignees": assignees, "headRefOid": "aaa",
 			"commits": s.commits, "comments": comments,
@@ -138,7 +143,28 @@ func (s *setup) context() takeover.Context {
 	return takeover.Context{
 		Me: "me", Idle: s.idle, Grace: s.grace, Now: now,
 		Free: func(context.Context) error { s.calls = append(s.calls, "free"); return s.freeErr },
+		Gh:   s.gh,
 	}
+}
+
+// listing is a scripted gh that answers gh pr view with the pull request #7 of o/n and the closing issues at the urls, and accepts every edit.
+func listing(urls ...string) *proctest.Scripted {
+	refs := []string{}
+
+	for _, url := range urls {
+		_, number, _ := strings.Cut(url, "/issues/")
+		refs = append(refs, fmt.Sprintf(`{"number":%s,"url":%q}`, number, url))
+	}
+
+	gh := proctest.Always(model.CommandResult{})
+	gh.Plan(`{"url":"https://github.com/o/n/pull/7","closingIssuesReferences":[`+strings.Join(refs, ",")+`]}`, "pr", "view")
+
+	return gh
+}
+
+// edit is the gh call that adds the login to a pull request or an issue.
+func edit(noun, number string) []string {
+	return []string{noun, "edit", number, "--add-assignee", "me"}
 }
 
 func (s *setup) run(t *testing.T, mode takeover.Mode, mutate ...func(*takeover.Request)) takeover.Result {

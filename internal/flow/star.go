@@ -159,8 +159,9 @@ func (s *script) hasRepository() bool {
 }
 
 // tree returns the worktree of the item and makes it when it is missing. A round item gets it at the commit that the recorded step made it at.
+// A child item of a round gets it cut at the base of the round.
 func (s *script) tree(ctx context.Context) (string, error) {
-	return s.e.deps.Trees.Ensure(ctx, s.in.Project, s.in.Item, s.treeStart)
+	return s.e.deps.Trees.Ensure(ctx, s.in.Project, s.in.Item, s.treeStart, s.in.Base)
 }
 
 // hasRepository reports whether the project has a repository. A nil Deps.Repository means every project has one.

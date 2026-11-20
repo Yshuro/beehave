@@ -91,7 +91,7 @@ func (s *script) landBatch(call batchCall) (starlark.Value, error) { //nolint:ir
 	}
 
 	losses := &callLosses{}
-	deps := batch.Deps{Git: git, Gate: batchGate{s: s, run: call.gateRun, losses: losses}, Base: &batchBase{s: s, call: call}, Steps: stepRecorder{s: s, call: call.name}, Name: call.name}
+	deps := batch.Deps{Git: git, Gate: batchGate{s: s, run: call.gateRun, pinBase: call.settings.Base, losses: losses}, Base: &batchBase{s: s, call: call}, Steps: stepRecorder{s: s, call: call.name}, Name: call.name}
 
 	done, err := batch.Run(s.ctx, deps, call.members)
 	if err != nil {
@@ -381,11 +381,12 @@ func (r stepRecorder) Step(_ context.Context, name string, run func() ([]byte, e
 }
 
 // batchGate gates a union commit: it puts the commit in the worktree of the item, then runs the project gate or the program of gate_run.
-// losses holds the proven losses of the whole call, over every gate of it.
+// pinBase is the base of the merge call: the project gate reads its pin file there. losses holds the proven losses of the whole call, over every gate of it.
 type batchGate struct {
-	s      *script
-	run    []string
-	losses *callLosses
+	s       *script
+	run     []string
+	pinBase string
+	losses  *callLosses
 }
 
 // callLosses holds each lost gate job of one merge call that has a proof, in order, and its record for the result of merge.
@@ -401,7 +402,7 @@ type callLosses struct {
 // is replaced and the batch counts one gate. A second proven loss in one call, on this gate or on an earlier gate of the call, is a void outcome
 // on the tree of the union: the runner ends the call with ErrGateVoid and blames no member.
 func (g batchGate) Run(ctx context.Context, in batch.GateInput) (batch.GateOutcome, error) {
-	queued := ExclusiveInput{Kind: kindBatchGate, Project: g.s.in.Project, Item: g.s.in.Item, BuildHost: g.s.hostChosen, Commit: in.Commit, GateRun: g.run}
+	queued := ExclusiveInput{Kind: kindBatchGate, Project: g.s.in.Project, Item: g.s.in.Item, BuildHost: g.s.hostChosen, Commit: in.Commit, GateRun: g.run, PinBase: g.pinBase}
 
 	for run := 1; ; run++ {
 		ran, err := g.s.e.queueExclusive(ctx, queued)
@@ -507,7 +508,7 @@ func (e *Engine) startBatchGate(ctx context.Context, in ExclusiveInput) (batchSt
 		return batchStart{}, err
 	}
 
-	job, err := e.deps.Gate.Submit(ctx, in.Project, in.Item, in.BuildHost, "")
+	job, err := e.deps.Gate.Submit(ctx, in.Project, in.Item, in.BuildHost, "", in.PinBase)
 
 	return batchStart{Tree: tree, Job: job}, err
 }
@@ -651,7 +652,7 @@ func (b *batchBase) mergeReads(ctx context.Context, m batch.Member, settings Mer
 
 // mergeRead runs one merge of the member as a child run on the exclusive queue.
 func (b *batchBase) mergeRead(ctx context.Context, m batch.Member, settings MergeSettings) (merge.Result, error) {
-	ran, err := b.s.e.queueExclusive(ctx, ExclusiveInput{Kind: kindMerge, Project: b.s.in.Project, Item: m.Item, Head: m.Head, Settings: settings})
+	ran, err := b.s.e.queueExclusive(ctx, ExclusiveInput{Kind: kindMerge, Run: workflowID(b.s.ctx), RunItem: b.s.in.Item, Project: b.s.in.Project, Item: m.Item, Head: m.Head, Settings: settings})
 	if err != nil {
 		return ran.Merge, err
 	}

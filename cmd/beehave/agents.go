@@ -59,6 +59,8 @@ type agents struct {
 	prices agent.Prices
 	// home returns the home folder of the owner, which a sandboxed step cannot read.
 	home func() (string, error)
+	// identity returns the git identity of the engine at a worktree, which the commits of a sandboxed step carry.
+	identity func(ctx context.Context, dir string) agent.GitIdentity
 }
 
 // newAgents runs the agent CLIs with the environment of the process.
@@ -72,6 +74,7 @@ func newAgents(cfg config.Config, opts flow.Options, trees treeFinder, table ada
 		run:      func(ctx context.Context, spec agent.Spec) agent.Result { return agent.Runner{}.Run(ctx, spec) },
 		guard:    guardCommand(os.Executable),
 		home:     os.UserHomeDir,
+		identity: gitIdentity,
 
 		maxTurns: cfg.Agents.MaxTurns, maxBudget: cfg.Agents.MaxBudgetUSD, maxRunBudget: cfg.Agents.MaxRunBudgetUSD, maxTreeBudget: cfg.Agents.MaxTreeBudgetUSD,
 		prices: agent.DefaultPrices(),
@@ -423,7 +426,17 @@ func describe(adapter agent.Adapter, runner model.Runner, dir string, tap *sessi
 		result.Violations = violations(tap.shellCalls(), forbid, protect, notesOf(tap, result))
 	}
 
+	result.Denials = tap.deniedCalls()
+
 	return result, nil
+}
+
+// deniedCalls returns the tool calls that the permission check of the CLI refused.
+func (t *sessionTap) deniedCalls() []agent.Denial {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	return slices.Clone(t.denials)
 }
 
 // notesOf returns the violation lines that say the check did not see the whole run: the gaps in the output, and a guard that did not load.
@@ -476,6 +489,8 @@ type sessionTap struct {
 	shell   []agent.Call
 	skills  []string
 	refused map[string]bool
+	// denials are the tool calls that the permission check of the CLI refused, from the result line.
+	denials []agent.Denial
 	// dropped counts the lines that the runner cut for length. invalid counts the lines that the adapter cannot read. ended is true after the line that ends the run.
 	dropped, invalid int
 	ended            bool
@@ -558,10 +573,11 @@ func (t *sessionTap) see(line string) {
 	}
 }
 
-// addEnd records how one line says the run ended: the result line, its cap, its error, the first provider limit, and the first refusal that no wait cures.
-// The caller holds the lock.
+// addEnd records how one line says the run ended: the result line, its cap, its error, the tool calls that the permission check refused, the first
+// provider limit, and the first refusal that no wait cures. The caller holds the lock.
 func (t *sessionTap) addEnd(seen agent.Seen) {
 	t.ended = t.ended || seen.Result
+	t.denials = append(t.denials, seen.Denials...)
 	t.stop, t.failed = cmp.Or(seen.Stop, t.stop), cmp.Or(seen.Failed, t.failed)
 	t.denied = cmp.Or(t.denied, seen.Denied)
 

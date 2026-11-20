@@ -20,6 +20,8 @@ import (
 // a file that does not exist yet is covered too. DenyWrite lists absolute paths that stay readable but that the adapter denies for write, in the
 // sandbox and in the file tools. DenyWritePatterns lists absolute glob patterns that stay readable and that the adapter denies for write in the same
 // way as DenyWrite, so that the CLI matches them when a file is used and a path that does not exist yet is covered too.
+// Write lists the files outside the work folder that the shell and the file tools may write, each by its exact path.
+// Identity is the git identity of the engine at the work folder, which the commits of the shell carry.
 type SandboxPlan struct {
 	Work              string
 	GitDirs           []string
@@ -28,7 +30,15 @@ type SandboxPlan struct {
 	DenyPatterns      []string
 	DenyWrite         []string
 	DenyWritePatterns []string
+	Write             []string
 	Network           []string
+	Identity          GitIdentity
+}
+
+// GitIdentity is the user.name and the user.email of a git commit.
+type GitIdentity struct {
+	Name  string
+	Email string
 }
 
 // versionOf reads the version that the CLI prints for --version.

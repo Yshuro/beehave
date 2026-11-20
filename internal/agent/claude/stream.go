@@ -59,9 +59,36 @@ func (Adapter) Calls(line string) agent.Seen {
 
 	return agent.Seen{
 		Cost: costOf(value), Stop: stopOf(value), Failed: failedOf(value), Result: lineType(value) == resultType,
-		Shell: toolCalls(value, bashTool, bashKey, false), Skills: skillNames(value), Refused: refusedIDs(value),
+		Shell: toolCalls(value, bashTool, bashKey, false), Skills: skillNames(value), Refused: refusedIDs(value), Denials: denialsOf(value),
 		Limit: limit, Denied: denied,
 	}
+}
+
+// denialsOf returns the permission_denials of a result line: the tool of each refused call and its file_path, notebook_path or command.
+func denialsOf(value any) []agent.Denial {
+	if lineType(value) != resultType {
+		return nil
+	}
+
+	line, _ := value.(map[string]any)             //nolint:errcheck // lineType found an object
+	list, _ := line["permission_denials"].([]any) //nolint:errcheck // a missing or ill-typed list holds no denial
+
+	var denials []agent.Denial
+
+	for _, entry := range list {
+		item, _ := entry.(map[string]any)     //nolint:errcheck // an entry that is not an object reads as empty
+		tool, _ := item["tool_name"].(string) //nolint:errcheck // a missing name reads as ""
+		input := object(item, "tool_input")
+		path, _ := input["file_path"].(string)         //nolint:errcheck // a missing path reads as ""
+		notebook, _ := input["notebook_path"].(string) //nolint:errcheck // a missing path reads as ""
+		command, _ := input[bashKey].(string)          //nolint:errcheck // a missing command reads as ""
+
+		if tool != "" {
+			denials = append(denials, agent.Denial{Tool: tool, Target: cmp.Or(path, notebook, command)})
+		}
+	}
+
+	return denials
 }
 
 // refusalOf returns how a line says the provider refused more work: the limit that a wait cures, or the reason of a refusal that no wait cures.

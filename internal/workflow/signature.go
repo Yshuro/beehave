@@ -257,6 +257,13 @@ func inputsRule(v starlark.Value) error {
 	return err
 }
 
+// dataRule is the rule of the data keyword of agent.
+func dataRule(v starlark.Value) error {
+	_, err := DataRecord(v)
+
+	return err
+}
+
 // pathsOutsideRule is the rule of the allow keyword of paths_outside.
 func pathsOutsideRule(v starlark.Value) error {
 	_, err := PathsOutsideAllow(v)
@@ -303,11 +310,15 @@ func agentParams() []Param {
 		ruled("allow_paths", KindList, allowRule), words("protect_paths"), ruled("output_tries", KindInt, triesRule),
 		opt("edits", KindBool), opt(LabelKeyword, KindText), ruled("timeout", KindText, durationRule("timeout")),
 		ruled("idle_timeout", KindText, durationRule("idle_timeout")), ruled(budgetKeyword, KindAny, budgetRule(budgetKeyword)), opt(sandboxKeyword, KindAny), opt(nameKeyword, KindText),
+		ruled(dataKeyword, KindDict, dataRule),
 	}
 }
 
 // LabelKeyword is the keyword of the agent builtin that names the call in the ledger and the status line. It is free text and never picks behavior.
 const LabelKeyword = "label"
+
+// dataKeyword is the keyword of the agent builtin whose dict the engine writes to the data file that the prompt names as data_file.
+const dataKeyword = "data"
 
 // writeParams holds the keywords of the write builtin: the keywords of command that make sense for a program on this machine, and its read-back and undo.
 func writeParams() []Param {
@@ -360,7 +371,7 @@ func stepSignatures() map[string][]Param {
 		},
 		writeName: writeParams(),
 		gateName: {
-			words(runWord), opt("host", KindText), ruled("timeout", KindText, durationRule("timeout")), opt("head", KindText), opt("base", KindText), label,
+			words(runWord), opt("host", KindText), ruled("timeout", KindText, durationRule("timeout")), opt("head", KindText), opt("base", KindText), opt("pin_base", KindText), label,
 		},
 		waitName:         waitParams(),
 		earlierCallsName: {req("call", KindText), label},
@@ -381,7 +392,7 @@ func swarmSignatures() map[string][]Param {
 			{Name: nameKeyword, Kind: KindText, Required: true, Why: "The name makes the step names of the call unique, so use one for each call of the run."},
 		},
 		gatherName: {req("runs", KindAny), one(failKeyword, FailModes()), one(untilKeyword, UntilModes()), label},
-		spawnName:  {{Name: "items", Kind: KindList, Required: true, Rule: wordsRule("items")}, opt(entryKeyword, KindText), label},
+		spawnName:  {{Name: "items", Kind: KindList, Required: true, Rule: wordsRule("items")}, opt(entryKeyword, KindText), opt("base", KindText), label},
 		queueName:  {label, opt("hold", KindText), opt("label", KindText)},
 	}
 }
@@ -389,8 +400,9 @@ func swarmSignatures() map[string][]Param {
 // readSignatures holds the builtins that read the tracker, the forge or the item folder.
 func readSignatures() map[string][]Param {
 	return map[string][]Param{
-		itemReadName: {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
-		prStateName:  {req("pr", KindInt), opt(nameKeyword, KindText)},
+		itemReadName:  {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
+		prStateName:   {req("pr", KindInt), opt(nameKeyword, KindText)},
+		prHistoryName: {opt(nameKeyword, KindText)},
 	}
 }
 
@@ -407,6 +419,7 @@ func itemSignatures() map[string][]Param {
 		prCommentName:  {filled("text"), filled("key"), forbidText(), opt("integration", KindBool), label},
 		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), opt("integration", KindBool), label},
 		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), label},
+		pushName:       {filled("branch"), filled("head"), opt("expect", KindText), label},
 	}
 }
 

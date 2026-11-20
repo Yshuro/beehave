@@ -45,11 +45,12 @@ type Claims interface {
 }
 
 // Deps holds what the subcommands read from outside. The binary builds them, and a test passes fakes.
-// Git runs git in Dir, the working folder. Forge opens the forge of the repository that the origin remote of Dir names. Now gives the time.
+// Git runs git in Dir, the working folder. Gh runs gh in the same folder for a take, which assigns the pull request and its closing issues. Forge opens the forge of the repository that the origin remote of Dir names. Now gives the time.
 // Claims opens the claim store of the project that owns the repository. A step opens it only when it reads the claim, after the guards that need no store.
 // Book opens the lane ledger in the state folder that the --state flag of a subcommand names.
 type Deps struct {
 	Git    proc.Runner
+	Gh     proc.Runner
 	Dir    string
 	Forge  func(repo string) (Forge, error)
 	Now    func() time.Time
