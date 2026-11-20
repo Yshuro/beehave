@@ -175,15 +175,22 @@ func (e *Engine) forgetAttempt(id, owner string) {
 }
 
 // markRunCancel writes the cancel marker of a run with the token of the claim that the run holds now. A run that recorded no claim gets a marker with no token.
+// It reads the token and writes the marker under the owners lock, so a give-back that compares a marker and removes it never removes this one.
 func markRunCancel(client dbos.Client, dir, id string, in ItemInput) (cancelMark, error) {
-	owner, err := currentOwner(client, dir, id)
-	if err != nil && !errors.Is(err, errNoOwner) {
-		return cancelMark{}, fmt.Errorf("mark the cancel of run %s: %w", id, err)
-	}
+	mark := cancelMark{ItemInput: in}
 
-	mark := cancelMark{ItemInput: in, Owner: owner}
+	err := underOwners(dir, func() error {
+		owner, err := currentOwner(client, dir, id)
+		if err != nil && !errors.Is(err, errNoOwner) {
+			return fmt.Errorf("mark the cancel of run %s: %w", id, err)
+		}
 
-	return mark, markCancel(dir, id, mark)
+		mark.Owner = owner
+
+		return markCancel(dir, id, mark)
+	})
+
+	return mark, err
 }
 
 // warnOn logs a failure to remove a file of a run.

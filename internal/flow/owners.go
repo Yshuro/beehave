@@ -18,7 +18,7 @@ const (
 	ownersDir  = "owners"
 	ownersMode = 0o700
 	ownerMode  = 0o600
-	// ownersLockName names the lock that every process holds while it writes a token file, or compares a token file or a cancel marker with a token and removes it.
+	// ownersLockName names the lock that every process holds while it writes a token file or a cancel marker, or compares a token file or a cancel marker with a token and removes it.
 	ownersLockName = "owners.lock"
 )
 
