@@ -41,16 +41,21 @@ func (s *session) linked(ctx context.Context) ([]int, error) {
 		return nil, err
 	}
 
-	home := repoOf(found.URL, "/pull/")
+	return found.own(), nil
+}
+
+// own gives the numbers of the closing issues in the repository of the pull request.
+func (c closing) own() []int {
+	home := repoOf(c.URL, "/pull/")
 	issues := []int{}
 
-	for _, issue := range found.Issues {
+	for _, issue := range c.Issues {
 		if repoOf(issue.URL, "/issues/") == home {
 			issues = append(issues, issue.Number)
 		}
 	}
 
-	return issues, nil
+	return issues
 }
 
 // assign adds the acting login to the pull request and to every issue that it closes. The issues are read first, so a failed read leaves nothing assigned.
@@ -67,25 +72,29 @@ func (s *session) assign(ctx context.Context) error {
 		return err
 	}
 
-	names := make([]string, len(issues))
-
-	for i, issue := range issues {
+	for _, issue := range issues {
 		if err = s.assignOne(ctx, "issue", issue); err != nil {
 			return err
 		}
+	}
 
+	s.say(s.assigned(issues))
+
+	return nil
+}
+
+// assigned is the line that says what a take assigned.
+func (s *session) assigned(issues []int) string {
+	if len(issues) == 0 {
+		return fmt.Sprintf("assigned #%d to %s.", s.request.PR, s.c.Me)
+	}
+
+	names := make([]string, len(issues))
+	for i, issue := range issues {
 		names[i] = strconv.Itoa(issue)
 	}
 
-	if len(names) == 0 {
-		s.say(fmt.Sprintf("assigned #%d to %s.", number, s.c.Me))
-
-		return nil
-	}
-
-	s.say(fmt.Sprintf("assigned #%d and the issues %s to %s.", number, strings.Join(names, ", "), s.c.Me))
-
-	return nil
+	return fmt.Sprintf("assigned #%d and the issues %s to %s.", s.request.PR, strings.Join(names, ", "), s.c.Me)
 }
 
 // assignOne runs gh pr edit or gh issue edit with --add-assignee.

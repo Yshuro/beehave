@@ -59,9 +59,9 @@ func TestTake_ARefusedTakeAndTheOtherStepsRunNoGh(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
-			_, _ = c.s.try(c.mode)
+			got, err := c.s.try(c.mode)
 
-			assert.Empty(t, c.s.gh.Calls)
+			assert.Empty(t, c.s.gh.Calls, "result %v, error %v", got, err)
 		})
 	}
 }
@@ -83,8 +83,7 @@ func TestTake_AFailedReadOfTheClosingIssuesAssignsNothing(t *testing.T) {
 			s.gh = proctest.Always(answer)
 			_, err := s.try(takeover.ModeTake)
 
-			require.Error(t, err)
-			assert.ErrorContains(t, err, "cannot read the issues that #7 closes")
+			require.ErrorContains(t, err, "cannot read the issues that #7 closes")
 			assert.Len(t, s.gh.Calls, 1)
 		})
 	}
@@ -98,9 +97,8 @@ func TestTake_AFailedAssignOfThePullRequestIsAnErrorAndAssignsNoIssue(t *testing
 	s.gh.PlanFail("no access\n", "pr", "edit")
 	_, err := s.try(takeover.ModeTake)
 
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "cannot assign pr 7 to me.")
-	assert.ErrorContains(t, err, "gh pr edit 7: no access")
+	require.ErrorContains(t, err, "cannot assign pr 7 to me.")
+	require.ErrorContains(t, err, "gh pr edit 7: no access")
 	assert.Equal(t, [][]string{viewCall, edit("pr", "7")}, s.gh.Calls)
 }
 
@@ -112,7 +110,6 @@ func TestTake_AFailedAssignOfAnIssueIsAnErrorAndStopsThere(t *testing.T) {
 	s.gh.PlanFail("no access\n", "issue", "edit", "12")
 	_, err := s.try(takeover.ModeTake)
 
-	require.Error(t, err)
-	assert.ErrorContains(t, err, "cannot assign issue 12 to me.")
+	require.ErrorContains(t, err, "cannot assign issue 12 to me.")
 	assert.Equal(t, [][]string{viewCall, edit("pr", "7"), edit("issue", "12")}, s.gh.Calls)
 }
