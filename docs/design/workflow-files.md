@@ -162,13 +162,13 @@ The `key` is required, and the engine joins it to the run id. `item_create` with
 
 | Tracker | `severity` | `operator` |
 | --- | --- | --- |
-| GitHub | Filed as the label of that name. | Files the label `operator`. |
+| GitHub | Filed as the label of that name. The adapter creates the label when the repository has none. | Files the label `operator`. The adapter creates the label when the repository has none. |
 | beads | Filed as the priority. | Files the label `operator`. |
 | `local` | Refused, because it keeps no severity. | Refused, because it keeps no labels. |
 
 #### `item_status`
 
-A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `hold` in the repository.
+A status is `open`, `closed` or `hold`. On GitHub, `hold` is the label `hold`. The adapter creates the label in the repository when it does not exist.
 
 #### `item_read`
 
