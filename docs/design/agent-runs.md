@@ -310,6 +310,17 @@ Not seen:
 - an untracked file inside a submodule;
 - a write outside the tree through a symbolic link inside the globs; git cannot see that write.
 
+### The setting data
+
+The setting `data` of an `agent` step is a dict of values that the agent reads from a file, not from the prompt. A large record, such as a list of reds or of pull requests, then costs no prompt text.
+
+- The call encodes the dict once to JSON, with the encoder of the Starlark JSON library. The `/render` step records the text and the path `<state>/inputs/<item>.<step>.json`, beside the output files.
+- The phase writes the file, mode 0600, from the recorded text before each start of the agent. A replay writes the same bytes to the same path. The value is as fresh as the step that read it, never a read at the start of the agent.
+- The prompt names the file as `{{ .data_file }}`. A step with no `data` gets no file and an empty `data_file`.
+- A value that is not a dict is refused, by the run and by `beehave check workflow`.
+
+The prompt tells the agent to read the file with the shell and to refuse when the file is missing. The sandbox reads this one file: see [the sandbox](sandbox.md#the-data-file).
+
 ## Shell rules and the job check
 
 ### check/shell
@@ -361,7 +372,7 @@ The engine has one check package: `check/shell`, for the shell scan. The other c
 
 | Check | Run by |
 |---|---|
-| The gate list check | `remedy gatelist` |
+| The gate list derive | `remedy gatelist` |
 | The job check | `remedy job` |
 | The report check | `remedy report` |
 | The papers check | `remedy papers` |
@@ -416,7 +427,44 @@ The author check compares the address of a commit with the address of the accoun
 
 ### The gate list
 
-The gate list is a Markdown file. Its `## Gate steps` section holds one row for each step, with a `Derived from:` line that ends in a commit.
+The gate list is a Markdown file. Its `## Gate steps` section holds one row for each step.
+
+`remedy gatelist [--steps <name>]... [--map <json>] <workflow-file>...` derives the steps from the CI workflow files: one step for each run step of each job, named `<job>:<step name>`, in file order. The round runs it from the project var `gate_files` before its first pass, with each name of `gate_steps` as `--steps` and the project var `gate_map` as `--map`.
+
+#### The guard is the gate, not the label
+
+The gate of a round runs only the commands of `gate_steps`, which the owner writes. No derived CI command runs. A gate step runs the code of the candidate head, so no read of the CI text can stop a network write by the gate. The build host of the gate holds no credential of the repository, so a publish that a CI step names cannot sign in there. The label below decides only which CI commands the round must account for.
+
+The host still holds the cloud identity of the machine, which any gate step can reach. Issue #717 tracks it.
+
+#### The label
+
+The command labels each run step `step` or `refused`, and names a refused one in the output as `refused <name>: <reason>`. When the label cannot tell, it refuses. It never reads the step name, and it holds no list of tools. The command parses each file once and puts the node of each YAML alias in its place, so every check below reads a value given through an alias or a merge key where it is used. An alias inside the node it names makes the file not a workflow. A file whose tree, with each alias expanded, holds more than 100000 nodes is not a workflow either, and the error names the file and the bound. The command leaves out:
+
+- A job that calls a reusable workflow.
+- A job whose token of the run can write. The job `permissions` key wins over the file key. With no key at the job or the file, the token takes the default of the repository, which can write. Read only is `read-all`, `{}`, or a mapping of `read` and `none` values only. Any other value, an expression or a merge key included, can write.
+- A job that names a secret or the token of the run anywhere in the job, any of its steps included, or in the file `env` or `defaults`. A later step can read what an earlier step writes to `GITHUB_ENV`, `GITHUB_OUTPUT` or a file, so a secret in one step leaves out the whole job. A secret is any text that names `secrets`. The token is an expression that reads `github.token`, or the `github` context as a whole: an index such as `github['token']`, the filter `github.*`, or a function of it such as `toJSON(github)` or `join(github.*, ',')`. A field such as `github.ref` is not the token. CI reads each `if` of a job or a step as an expression, with or without `${{ }}`, so the command reads the whole text of each `if` for a secret and for the token. A checkout action takes the token of the job, which the permissions rule above governs.
+- A step that uses an action other than a checkout or a setup action (so a lint action is left out).
+- A step whose shell is not exactly `bash` or `sh`. The shell comes from the step, then the job `defaults.run.shell`, then the file `defaults.run.shell`. A custom shell string such as `bash -e {0}` is refused.
+- A step whose run text the shell reader of `check/shell` finds one of its kinds `git-write`, `opaque-command` or `unparsed` in. No other kind of the reader is judged.
+
+Files that give no step are exit code 2.
+
+#### The command of a step
+
+The command of a derived step is its whole record: the run text, then each part of the context that CI runs it in, when set: `[shell <shell>]`, `[working-directory <folder>]`, `[env <names>]`, `[container <container>]`, `[continue-on-error <value>]` and `[if <condition>]`, the `if` of the step, which decides whether the step runs. The shell and the folder come from the step, then the job defaults, then the file defaults. The env names are the sorted names of the file, job and step `env`, with the names that a merge key merges, without values. The run text keeps each blank inside quotes as CI has it; outside quotes, a run of blanks is one space. The record holds no other part: a change to `runs-on`, `timeout-minutes`, the matrix, `services`, the `if` of the job or an env value leaves the key as it is.
+
+#### The hold
+
+`gate_map` maps each exact derived command, the whole record as the step line prints it, to a list of `gate_steps` names. A change in CI to the run text or to any part of the record stops the round. An empty list says that the command is not a check, such as an install. `--map` is one JSON object, given once. A command given twice, a null list, a blank command or name, and any other form are exit code 2. With `--steps` or `--map`, the command is exit code 2 with one line for each defect, and the round stops before its first pass:
+
+- `unmapped <step name>: <command>`: a derived step whose command is no key. The match is exact: no trim, no substring.
+- `stale <command>`: a key that no derived step has.
+- `unknown-step <name>`: a name in the map that is not a gate step.
+
+A `--map` with no `--steps` is exit code 2, and the message names `gate_steps`. The round refuses a project with `gate_files` and no `gate_steps` before it runs the command. A refused step needs no key, because it never runs. Add a refused step, such as the lint action, to `gate_steps` by hand.
+
+#### The job check
 
 When a step passes:
 

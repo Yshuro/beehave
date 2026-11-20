@@ -78,7 +78,7 @@ func TestExampleProfile_AProjectWithABuildHostSendsEveryBuildThereAndNeverToThis
 
 	require.Contains(t, text, "Run every build, test and lint on the build host. Never run one on this machine.")
 	require.Contains(t, text, "Build host: `rig-1`.")
-	require.Contains(t, text, "Push the branch when the first commit is green")
+	require.Contains(t, text, "Make the first commit when the change is green")
 	require.NotContains(t, text, "has no build host")
 }
 

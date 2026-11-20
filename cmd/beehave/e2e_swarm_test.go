@@ -49,6 +49,11 @@ var swarmLock sync.Mutex
 
 // e2eSwarm is the beehaveswarm command of the scripts: the real composition root, with the stand-in forge in place of the GitHub adapter.
 func e2eSwarm() {
+	e2eStandIn(func(cfg config.Config) config.Config { return cfg }, func(_ config.Config, deps flow.Deps) flow.Deps { return deps })
+}
+
+// e2eStandIn runs the swarm composition. The engine builds its dependencies over the config that build gives, and adjust then changes them. It gets the config as the files wrote it.
+func e2eStandIn(build func(config.Config) config.Config, adjust func(config.Config, flow.Deps) flow.Deps) {
 	syscall.Umask(0)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -62,10 +67,10 @@ func e2eSwarm() {
 		}
 		table.forges[forgegithub.Name] = swarmForge
 
-		deps := depsOn(cfg, opts, loginsReading(cfg, idle), table)
+		deps := depsOn(build(cfg), opts, loginsReading(cfg, idle), table)
 		deps.Clock.Poll = swarmPoll
 
-		return flow.NewEngine(ctx, withModules(opts), deps)
+		return flow.NewEngine(ctx, withModules(opts), adjust(cfg, deps))
 	})
 	e2eRecordRun(os.Args[1:])
 
@@ -94,11 +99,34 @@ func (f swarmForgeAt) git(ctx context.Context, args ...string) (string, error) {
 
 func (f swarmForgeAt) path(name string) string { return filepath.Join(f.dir, name) }
 
+// base is the branch that every pull request targets: the first line of the file base in the forge folder, or main when the script made none.
+func (f swarmForgeAt) base() string {
+	text, err := os.ReadFile(f.path("base"))
+	if err != nil || strings.TrimSpace(string(text)) == "" {
+		return "main"
+	}
+
+	return strings.TrimSpace(string(text))
+}
+
+// opensOnCreate is true when the script made the file open-on-create in the forge folder. A pushed branch is then no pull request until a CreatePR call names it.
+func (f swarmForgeAt) opensOnCreate() bool {
+	_, err := os.Stat(f.path("open-on-create"))
+
+	return err == nil
+}
+
 // branches lists the branches of the pull requests in the order of their numbers, and adds each branch that the remote has and the file lacks.
+// With the file open-on-create it adds none: only CreatePR makes a pull request.
 func (f swarmForgeAt) branches(ctx context.Context) ([]string, error) {
 	swarmLock.Lock()
 	defer swarmLock.Unlock()
 
+	return f.branchesLocked(ctx)
+}
+
+// branchesLocked is branches for a caller that holds swarmLock.
+func (f swarmForgeAt) branchesLocked(ctx context.Context) ([]string, error) {
 	text, err := os.ReadFile(f.path("prs"))
 	if err != nil && !os.IsNotExist(err) {
 		return nil, err
@@ -112,12 +140,16 @@ func (f swarmForgeAt) branches(ctx context.Context) ([]string, error) {
 	}
 
 	for _, name := range strings.Fields(listed) {
-		if name != "main" && !slices.Contains(known, name) {
+		if name != "main" && !slices.Contains(known, name) && !f.opensOnCreate() {
 			known = append(known, name)
 		}
 	}
 
-	return known, os.WriteFile(f.path("prs"), []byte(strings.Join(known, "\n")+"\n"), e2eFileMode) //nolint:gosec // a test writes into its own temporary folder
+	return known, f.writeBranches(known)
+}
+
+func (f swarmForgeAt) writeBranches(known []string) error {
+	return os.WriteFile(f.path("prs"), []byte(strings.Join(known, "\n")+"\n"), e2eFileMode) //nolint:gosec // a test writes into its own temporary folder
 }
 
 func (f swarmForgeAt) mergedAt(pr int) (string, bool) {
@@ -138,7 +170,7 @@ func (f swarmForgeAt) view(ctx context.Context, branches []string, pr int) (mode
 		return model.PullRequest{}, err
 	}
 
-	names, err := f.git(ctx, "diff", "--name-only", "refs/heads/main...refs/heads/"+branch)
+	names, err := f.git(ctx, "diff", "--name-only", "refs/heads/"+f.base()+"...refs/heads/"+branch)
 	if err != nil {
 		return model.PullRequest{}, err
 	}
@@ -149,9 +181,9 @@ func (f swarmForgeAt) view(ctx context.Context, branches []string, pr int) (mode
 	}
 
 	row := map[string]any{
-		"number": pr, "state": "OPEN", "isDraft": false, "baseRefName": "main", "headRefName": branch,
+		"number": pr, "state": "OPEN", "isDraft": false, "baseRefName": f.base(), "headRefName": branch,
 		"headRefOid": head, "mergeable": "MERGEABLE", "body": "text", "author": map[string]any{"login": swarmAgentLogin},
-		"files":   files,
+		"files": files, "labels": []any{}, "assignees": []any{},
 		"commits": []any{map[string]any{"oid": head, "messageHeadline": "task", "messageBody": "", "authors": []any{map[string]any{"email": swarmAgentEmail, "login": swarmAgentLogin}}}},
 	}
 
@@ -231,6 +263,87 @@ func (swarmForgeAt) UnresolvedThreads(context.Context, int) ([]model.ReviewThrea
 	return nil, nil
 }
 
+// CreatePR finds the number of the pushed branch of the pull request, and with the file open-on-create it first makes the branch a pull request.
+// It records the base that the call asked for in the file opened-<number> of the forge folder, so a script can check it. The pull request itself keeps the base of the file base.
+func (f swarmForgeAt) CreatePR(ctx context.Context, req model.NewPull) (int, error) {
+	swarmLock.Lock()
+	defer swarmLock.Unlock()
+
+	branches, err := f.branchesLocked(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	number := slices.Index(branches, req.Head)
+	if number < 0 && f.opensOnCreate() {
+		if _, err = f.git(ctx, "rev-parse", "--verify", "refs/heads/"+req.Head); err != nil {
+			return 0, err
+		}
+
+		branches = append(branches, req.Head)
+		number = len(branches) - 1
+
+		if err = f.writeBranches(branches); err != nil {
+			return 0, err
+		}
+	}
+
+	if number < 0 {
+		return 0, fmt.Errorf("no branch %s", req.Head)
+	}
+
+	return number + 1, os.WriteFile(f.path("opened-"+strconv.Itoa(number+1)), []byte(req.Base+"\n"), e2eFileMode)
+}
+
+// Comments reads the comments of a pull request from the files <number>-<n> of the folder comments in the forge folder, in the order of n.
+func (f swarmForgeAt) Comments(_ context.Context, pr int) ([]model.Comment, error) {
+	swarmLock.Lock()
+	defer swarmLock.Unlock()
+
+	names, err := filepath.Glob(f.path(filepath.Join("comments", strconv.Itoa(pr)+"-*")))
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]model.Comment, 0, len(names))
+
+	for _, name := range names {
+		text, err := os.ReadFile(name) //nolint:gosec // G304: a test reads a file of the folder of its own script
+		if err != nil {
+			return nil, err
+		}
+
+		rows = append(rows, model.Comment{Body: string(text)})
+	}
+
+	return rows, nil
+}
+
+// PostComment writes the comment to the next file of the pull request in the folder comments.
+func (f swarmForgeAt) PostComment(_ context.Context, pr int, body string) error {
+	swarmLock.Lock()
+	defer swarmLock.Unlock()
+
+	if err := os.MkdirAll(f.path("comments"), e2eFolderMode); err != nil {
+		return err
+	}
+
+	names, err := filepath.Glob(f.path(filepath.Join("comments", strconv.Itoa(pr)+"-*")))
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(f.path(filepath.Join("comments", strconv.Itoa(pr)+"-"+strconv.Itoa(len(names)+1))), []byte(body), e2eFileMode)
+}
+
+func (swarmForgeAt) LinkStack(context.Context, int, int, string) error { return nil }
+
+func (swarmForgeAt) Unstack(context.Context, int) error { return nil }
+
+func (swarmForgeAt) PRBody(context.Context, int) (string, error) { return "text", nil }
+
+func (swarmForgeAt) SetBody(context.Context, int, string) error { return nil }
+
 func (swarmForgeAt) StackID(context.Context, int) (string, error) { return "", nil }
 
 func (swarmForgeAt) TokenScopes(context.Context) ([]string, error) { return []string{"repo"}, nil }
@@ -243,8 +356,13 @@ func (swarmForgeAt) Reviews(context.Context, int) ([]model.Review, error) { retu
 
 func (f swarmForgeAt) IssueState(context.Context, int) (string, error) { return "", errFake }
 
+// ClosingRefs fails, unless the file closing-ok exists in the forge folder: then no pull request closes an issue, and the base is the base of the forge.
 func (f swarmForgeAt) ClosingRefs(context.Context, int) (model.ClosingRefs, error) {
-	return model.ClosingRefs{}, errFake
+	if _, err := os.Stat(f.path("closing-ok")); err != nil {
+		return model.ClosingRefs{}, errFake
+	}
+
+	return model.ClosingRefs{BaseBranch: f.base(), DefaultBranch: "main"}, nil
 }
 
 func (f swarmForgeAt) BranchRef(ctx context.Context, branch string) (string, bool, error) {
@@ -284,7 +402,7 @@ func (f swarmForgeAt) MergePR(ctx context.Context, pr int, sha string) error {
 		return errFake
 	}
 
-	base, err := f.git(ctx, "rev-parse", "refs/heads/main")
+	base, err := f.git(ctx, "rev-parse", "refs/heads/"+f.base())
 	if err != nil {
 		return err
 	}
@@ -301,7 +419,7 @@ func (f swarmForgeAt) MergePR(ctx context.Context, pr int, sha string) error {
 		return err
 	}
 
-	if _, err := f.git(ctx, "update-ref", "refs/heads/main", commit); err != nil {
+	if _, err := f.git(ctx, "update-ref", "refs/heads/"+f.base(), commit); err != nil {
 		return err
 	}
 

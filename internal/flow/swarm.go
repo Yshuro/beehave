@@ -34,6 +34,7 @@ const (
 	hostKeyword    = "host"
 	headKeyword    = "head"
 	baseKeyword    = "base"
+	pinBaseKeyword = "pin_base"
 	bodyKeyword    = "body"
 	titleKeyword   = "title"
 	severityField  = "severity"
@@ -85,7 +86,7 @@ func (s *script) spawn(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 	call := spawnCall{entry: defaultEntry}
 
 	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{
-		"items": &call.items, "entry": &call.entry, nameKeyword: &call.label,
+		"items": &call.items, "entry": &call.entry, baseKeyword: &call.base, nameKeyword: &call.label,
 	}); err != nil {
 		return nil, err
 	}
@@ -95,7 +96,7 @@ func (s *script) spawn(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 		return nil, err
 	}
 
-	if err := s.startRuns(plan, call.entry); err != nil {
+	if err := s.startRuns(plan, call.entry, s.childBase(call.base)); err != nil {
 		return nil, err
 	}
 
@@ -104,14 +105,38 @@ func (s *script) spawn(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 
 // spawnCall is the arguments of a spawn call.
 type spawnCall struct {
-	items        starlark.Value
+	items starlark.Value
+	// base is the round base that the settings of the workflow name. Empty means that the call names none, and nothing is checked.
+	base         string
 	entry, label string
+}
+
+// checkBase refuses a spawn whose base is not the base of the round item that calls it. The children are cut at the base of the round item, so another base would cut them at one branch and merge them into another.
+// An item that is no round item has no base of its own to compare, so the base of the call is the base of its children.
+func (s *script) checkBase(base string) error {
+	round, isRound := model.RoundBase(s.in.Item)
+	if base == "" || !isRound || round == base {
+		return nil
+	}
+
+	return fmt.Errorf("the round item %s has the base %s, and the base given to spawn is %s. Start the round with the item round/%s, or change the round base setting to %s", s.in.Item, round, base, base, round)
+}
+
+// childBase is the base that the worktree of each child is cut at, and the workflow passes the same text to the gate of the child: the base of the call, else the base of the round item, else none.
+func (s *script) childBase(base string) string {
+	round, _ := model.RoundBase(s.in.Item)
+
+	return cmp.Or(base, round)
 }
 
 // planRuns checks the arguments of a spawn call, then records the plan of the runs as one step.
 func (s *script) planRuns(call spawnCall) ([]spawnedRun, error) {
 	ids, err := s.spawnIDs(call.items)
 	if err != nil {
+		return nil, err
+	}
+
+	if err := s.checkBase(call.base); err != nil {
 		return nil, err
 	}
 
@@ -217,7 +242,7 @@ func (e *Engine) startOf(ctx context.Context, in ItemInput, id, run string, take
 	return spawnedRun{Item: id, Run: run, Login: login, Start: true, Priority: place}, nil
 }
 
-// itemsPlace is the place of the run of an item in the items queue. It comes from the severity that the tracker gives the item: no standing is at hand.
+// itemsPlace is the place of the run of an item in the items queue. It comes from the severity in the item fields, and a round item has no severity: no standing is at hand.
 func (e *Engine) itemsPlace(ctx context.Context, project, id string) (uint, error) {
 	fields, err := e.itemFields(ctx, project, id)
 	if err != nil {
@@ -243,13 +268,13 @@ func openRunError(open run, item, project string) error {
 
 // startRuns starts the runs of the plan as child workflows of this run, on the items queue. The call is outside a step, so the library records each child.
 // A replay starts nothing that the first run started: the library returns the recorded child.
-func (s *script) startRuns(plan []spawnedRun, entry string) error {
+func (s *script) startRuns(plan []spawnedRun, entry, base string) error {
 	for _, one := range plan {
 		if !one.Start {
 			continue
 		}
 
-		in := ItemInput{Item: one.Item, Project: s.in.Project, File: s.in.File, Files: s.in.Files, Login: one.Login, Entry: entry}
+		in := ItemInput{Item: one.Item, Project: s.in.Project, File: s.in.File, Files: s.in.Files, Login: one.Login, Entry: entry, Base: base}
 
 		if _, err := dbos.RunWorkflow(s.ctx, s.e.item, in, dbos.WithQueue(s.e.itemQueue), dbos.WithWorkflowID(one.Run), dbos.WithPriority(one.Priority)); err != nil {
 			return fmt.Errorf("start the run of item %s: %w", one.Item, err)

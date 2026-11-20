@@ -439,7 +439,7 @@ func TestOwnerToken_IsAValidOwnerAndDiffersEachTime(t *testing.T) {
 func TestNewLife_BuildsTheLifecycleOverTheTableOfTheConfig(t *testing.T) {
 	t.Parallel()
 
-	life := newLife(config.Config{Projects: map[string]config.Project{"p": {}}}, newAdapters(nil, nil, nil))
+	life := newLife(config.Config{Projects: map[string]config.Project{"p": {}}}, newAdapters(nil, nil, nil), worktrees{})
 
 	_, err := life.Pull(t.Context(), "zzz", "bb-1")
 	require.ErrorIs(t, err, errUnknownProject)

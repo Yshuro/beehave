@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -165,6 +166,11 @@ type fakeGate struct {
 	hosts []string
 	// bases are the base branches that Submit was given, in order.
 	bases []string
+	// keyBases are the base branches that Key was given, in order.
+	keyBases []string
+	// pinBases and keyPinBases are the pin bases that Submit and Key were given, in order.
+	pinBases    []string
+	keyPinBases []string
 	// checks is the check record that Run gives a passed result with none, or nil for no record.
 	checks *GateChecks
 }
@@ -178,11 +184,13 @@ func (g *fakeGate) gatedOn() []string {
 }
 
 // Key answers from keys in order, the last repeating. With no keys it gives an empty key, so no gate reuses a pass.
-func (g *fakeGate) Key(_ context.Context, _, _, host string) (GateKey, error) {
+func (g *fakeGate) Key(_ context.Context, _, _, host, base, pinBase string) (GateKey, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	g.hosts = append(g.hosts, host)
+	g.keyBases = append(g.keyBases, base)
+	g.keyPinBases = append(g.keyPinBases, pinBase)
 
 	if len(g.keys) == 0 {
 		return GateKey{}, g.keyErr
@@ -196,31 +204,36 @@ func (g *fakeGate) Key(_ context.Context, _, _, host string) (GateKey, error) {
 
 // The gates below run a tree of their own and give no key, so the engine never reuses a pass for them.
 
-func (*treeGate) Key(context.Context, string, string, string) (GateKey, error) { return GateKey{}, nil }
-
-func (packageGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (*treeGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (hostDiedGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (packageGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (zeroTestGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (hostDiedGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (deadlineGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (zeroTestGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (slowGate) Key(context.Context, string, string, string) (GateKey, error) { return GateKey{}, nil }
+func (deadlineGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
+	return GateKey{}, nil
+}
+
+func (slowGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
+	return GateKey{}, nil
+}
 
 // Submit counts the host jobs that it started and gives each one an id.
-func (g *fakeGate) Submit(_ context.Context, _, _, host, base string) (GateJob, error) {
+func (g *fakeGate) Submit(_ context.Context, _, _, host, base, pinBase string) (GateJob, error) {
 	g.mu.Lock()
 	g.hosts = append(g.hosts, host)
 	g.bases = append(g.bases, base)
+	g.pinBases = append(g.pinBases, pinBase)
 	g.mu.Unlock()
 
 	return GateJob{ID: fmt.Sprintf("job-%d", g.submits.Add(1)), Head: gatedHead}, nil
@@ -1181,6 +1194,33 @@ type fakeForge struct {
 	notes    []string
 	opened   []string // each Open call as project|item|title|body|issue|base|parent
 	writeErr error
+	// pushed holds each Push call as project|item|branch|head|expect. pushErr fails it.
+	pushed  []string
+	pushErr error
+	// history is what History answers; historyErr fails it. historyAsked holds each History call as project|item.
+	history      []model.PriorPull
+	historyErr   error
+	historyAsked []string
+}
+
+// Push records the call.
+func (f *fakeForge) Push(_ context.Context, project, item, branch, head, expect string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.pushed = append(f.pushed, strings.Join([]string{project, item, branch, head, expect}, "|"))
+
+	return f.pushErr
+}
+
+// History records the call and answers with history.
+func (f *fakeForge) History(_ context.Context, project, item string) ([]model.PriorPull, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.historyAsked = append(f.historyAsked, project+"|"+item)
+
+	return f.history, f.historyErr
 }
 
 // Comment records the call and answers with the number of the standing.
@@ -1253,13 +1293,17 @@ type fakeTrees struct {
 	err error
 	// ensureErr fails Ensure only.
 	ensureErr error
-	late      *lateFolder
+	// headsErr fails Heads only, and Heads still returns the branches it read, so a release that ignores the error sees the tip.
+	headsErr error
+	late     *lateFolder
 	// per, when set, gives the folder of each item and wins over dir and late.
 	per func(ctx context.Context, item string) (string, error)
 	// ensured records the item of each Ensure call when a test sets it.
 	ensured *ensureLog
 	// starts records the start of each Ensure call when a test sets it.
 	starts *ensureLog
+	// bases records the base of each Ensure call when a test sets it.
+	bases *ensureLog
 }
 
 // ensureLog is the items that Ensure was called for, in order.
@@ -1332,9 +1376,40 @@ func (f fakeTrees) WithTree(ctx context.Context, project, item string, fn func(d
 	return nil
 }
 
-func (f fakeTrees) Ensure(ctx context.Context, _, item, start string) (string, error) {
+// Heads reads the branches of the origin remote of the one folder that the fake gives. A fake that gives a folder for each item has no one remote.
+func (f fakeTrees) Heads(ctx context.Context, _ string) (string, error) {
+	dir := f.dir
+	if f.late != nil {
+		dir = f.late.path()
+	}
+
+	if dir == "" {
+		return "", errFake
+	}
+
+	// The read of the branches reaches the remote, so it runs with plain git and not with the local git calls of the release.
+	cmd := proc.GroupCommand(ctx, "git", []string{"ls-remote", "--heads", remoteName}, dir)
+	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
+
+	var stderr bytes.Buffer
+
+	cmd.Stderr = &stderr
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	return string(out), f.headsErr
+}
+
+func (f fakeTrees) Ensure(ctx context.Context, _, item, start, base string) (string, error) {
 	if f.ensured != nil {
 		f.ensured.add(item)
+	}
+
+	if f.bases != nil {
+		f.bases.add(base)
 	}
 
 	if f.starts != nil {

@@ -171,6 +171,13 @@ Every agent call returns `rewrote`. It is true when the commit of the item folde
 - `beehave status <run id>` shows `rewrote=yes` on the line of such a step.
 - A record made before the render step kept the commit gives false.
 
+### The `committed` output
+
+Every agent call returns `committed`. It is true when the commit of the item folder after the run is not the commit it had before the agent started. A call that made no commit returns false.
+
+- The push of the sync branch in the example workflow reads it: a resolve that made no commit ends on the head it started on, which is not a commit of the sync branch, so the workflow pushes nothing.
+- A record made before the render step kept the commit gives false.
+
 ### Cost budgets
 
 #### The cost of an agent call
@@ -516,6 +523,10 @@ The phase asks before it renders its prompt. The prompt is keyed by the run id, 
 
 A phase that `beehave resume` reopened waits for its run to take the claim again. It waits while the run is open, and for 3 seconds when the run is not open yet. A phase whose run ended stops after those 3 seconds. So no second `beehave run` can reclaim the item while the first run still works on it.
 
+#### The check before a write
+
+A write that the engine makes for an item happens only while the run that ordered it holds a trusted claim. The writes are a pull request comment, the opening of a pull request, a push, the ready mark of a hand-off, the tracker writes (create, status and comment), a merge, and the start of the program of a `command` or a `write` step. A program can write to the forge, so its start counts as a write. Each write reads the claim once, at the call, and runs under a context that the loss of the claim ends. The read checks the wall clock as well as the monotonic clock, so it also refuses a write after a sleep of the machine, before any tick has marked the claim lost. Two callers make this read. An item run makes it for each of its writes, through one write handle for the run. A child that a run queued (the merge of a member, or the host job of a command with a slot class) makes it when its call starts. The child names the run and its item in its input, and it waits for that run, as a phase does, when `beehave resume` reopens the child before the run. A child that names no run is refused. The writes that reduce what a lost run exposes run with no claim: the return of a pull request to draft, the disarm of a queued merge, the notice to the owner, and the release of the claim. The undo of a `write` step runs only while the context of the run is live. After a loss that a renewal found, it does not run. After a lease that lapsed before any renewal noticed, it runs with no claim. A gate writes nothing, and its program needs no claim. A program that is already running when the claim is lost, and that ignores the end of its context, can still write until the lease ends.
+
 ### Process control
 
 #### The file `agents.pgid`
@@ -602,7 +613,7 @@ The release steps run on every exit of the item except a cancel, while the claim
 The worktree step removes the worktree only when all of these are true:
 
 - The tree is clean.
-- `git ls-remote --heads origin` lists a branch tip.
+- `git ls-remote --heads` lists a branch tip. It reads the address of the project in the push repository, never the remote that the clone config names.
 - HEAD equals that tip.
 
 In every other case the tree stays, and the log says why. One timeout covers all the git calls. The claim release runs last.
@@ -630,7 +641,7 @@ The command refuses in these cases:
 |---|---|
 | The claim lease of the run in the store has not ended, because the build that holds the run still renews it. | Names the holder and when the lease ends. |
 | The workflow file or a pinned file changed since the run started. | Names the file and lists the scripts outside the repository, which are not pinned. |
-| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core6.agent10.tracker2.forge4.land8.gate6.host1.round2`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A recorded receive of the answer of the owner counts as a step of the core module, so a run that only waited is refused when the core version differs. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
+| The run recorded a step of a step module whose version differs from the version in this build. The application version ends in one version for each module, such as `+core7.agent12.tracker2.forge6.land9.gate6.host1.round3`. The kind at the start of each step name (`gate:g#1`) names the module of that step. A recorded receive of the answer of the owner counts as a step of the core module, so a run that only waited is refused when the core version differs. A module that the run recorded no step of may differ. | Names the module and both versions, and says to start the item again. |
 | The run recorded a step that this build does not record. The steps of the engine (the claim, the worktree, a step that DBOS records) are recorded by every build. A kind that only an older build recorded keeps its module in the table: `merge:<label>#<n>` of the single merge (land), `scope-check:<label>#<n>` (round) and the `watch` read of the owner merge wait (core). The replay cannot reach such a step, so the move fails closed, even when the stored list equals the list of this build. | Names the step and the module of the older build, or says that no module records it, and says to start the item again. |
 | The run is a run of a round item, and the version of the round module differs from the version in this build. The version of the round module covers the step that makes the worktree at the start of every round item, so every round run uses the module, even a run that an older build recorded with no such step. | Names the step that makes the worktree, and says to finish the run on the build that started it or to start the item again. |
 | The run was recorded under an older single version of the steps (the `+star<N>` part of the stored version), other than `star30`. Its recorded steps have another format, so it is not moved. | Names both versions and says to start the item again. |
@@ -793,6 +804,7 @@ The line shows no next due time. The library counts the first tick of a fixed de
 
 - If an engine runs, it does the release on its next tick, after the agent groups of the run are dead. This holds also for a run that the engine does not execute, such as a run that `beehave resume --on-this-build` moved to another build: the engine reads the cancel markers on each tick.
 - If no engine runs, `beehave cancel` does the release itself.
+- A failed run is cancelled too, in one store write: the DBOS cancel takes an option that also ends a failed run, so the run goes from failed to cancelled with no state between. No step runs and no workflow file is read, so a run that another build recorded, or whose workflow file changed, can be closed. The recorded error and steps stay. A failed child stays failed. If the store refuses the write, the run stays failed and a second `beehave cancel` ends it. A done run has nothing to cancel, and a cancelled run with no open child has nothing to cancel.
 
 #### `beehave resume <item>`
 
@@ -820,7 +832,7 @@ The shutdown of the engine and the start of a run do not overlap. The shutdown w
 
 `beehave run <item>` starts a new run only after a finished or a cancelled run. If the last run failed, `beehave run` refuses, names the step that failed, and tells the owner to run `beehave resume <item>`.
 
-A resume replays the recorded steps of the run. If the run failed in the workflow file on a recorded result, for example a missing skill call, the run fails again at the same point. To start a failed item again from the first step, run `beehave resume <item>`, then `beehave cancel <item>`, then `beehave run <item>`. `beehave cancel` refuses a failed run, so the resume comes first.
+A resume replays the recorded steps of the run. If the run failed in the workflow file on a recorded result, for example a missing skill call, the run fails again at the same point. To start a failed item again from the first step, run `beehave cancel <item>`, then `beehave run <item>`. `beehave cancel` ends a failed run (see below), so no resume comes first.
 
 ### One engine for each state folder
 

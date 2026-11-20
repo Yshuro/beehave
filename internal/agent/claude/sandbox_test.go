@@ -2,6 +2,10 @@ package claude_test
 
 import (
 	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -44,7 +48,70 @@ func TestSandbox_AsksTheCLIToScrubCredentialsFromTheEnvironmentOfItsSubprocesses
 
 	launch := claude.New(nil).Sandbox(plan(), "", "/run")
 
-	assert.Equal(t, map[string]string{"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1"}, launch.Env)
+	assert.Equal(t, map[string]string{"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB": "1", "CLAUDE_ENV_FILE": "/run/sandbox-env.sh"}, launch.Env)
+}
+
+func TestSandbox_TheShellReadsTheGitVariablesOfTheEngineFromAnEnvFile(t *testing.T) {
+	t.Parallel()
+
+	p := plan()
+	p.Identity = agent.GitIdentity{Name: "Ann O'Brien $HOME", Email: "ann@example.com"}
+	runDir := t.TempDir()
+
+	launch := claude.New(nil).Sandbox(p, "", runDir)
+
+	envFile := filepath.Join(runDir, "sandbox-env.sh")
+	require.Equal(t, envFile, launch.Env["CLAUDE_ENV_FILE"], "the CLI sources the file in its shell")
+	require.Contains(t, launch.Files, "sandbox-env.sh")
+	require.NoError(t, os.WriteFile(envFile, []byte(launch.Files["sandbox-env.sh"]), 0o600))
+
+	// A POSIX shell that sources the file holds each git variable of the engine with its value unchanged.
+	shell := exec.CommandContext(t.Context(), "sh", "-c", `. "$1" && env`, "sh", envFile) //nolint:gosec // a test sources its own temporary file
+	shell.Env = []string{"PATH=/usr/bin:/bin"}
+	out, err := shell.Output()
+	require.NoError(t, err)
+
+	lines := strings.Split(string(out), "\n")
+	for name, value := range map[string]string{
+		"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME": "Ann O'Brien $HOME", "GIT_AUTHOR_EMAIL": "ann@example.com",
+		"GIT_COMMITTER_NAME": "Ann O'Brien $HOME", "GIT_COMMITTER_EMAIL": "ann@example.com",
+	} {
+		assert.Contains(t, lines, name+"="+value)
+	}
+}
+
+func TestSandbox_TheEnvFileExportsTheSixGitVariablesAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	p := plan()
+	p.Identity = agent.GitIdentity{Name: "Ann", Email: "ann@example.com"}
+
+	launch := claude.New(nil).Sandbox(p, "", "/run")
+
+	assert.Equal(t, map[string]string{"sandbox-env.sh": "export GIT_AUTHOR_EMAIL=ann@example.com\n" +
+		"export GIT_AUTHOR_NAME=Ann\n" +
+		"export GIT_COMMITTER_EMAIL=ann@example.com\n" +
+		"export GIT_COMMITTER_NAME=Ann\n" +
+		"export GIT_CONFIG_GLOBAL=/dev/null\n" +
+		"export GIT_CONFIG_NOSYSTEM=1\n"}, launch.Files, "the run folder holds only the env file, and the env file holds no other variable")
+}
+
+func TestSandbox_TheSettingsAllowReadingTheEnvFileAndNotTheRunFolder(t *testing.T) {
+	t.Parallel()
+
+	args := claude.New(nil).Sandbox(plan(), "/bin/beehave check command", "/run/folder").Args
+
+	assert.Equal(t, 1, strings.Count(args[len(args)-1], "/run/folder"), "the settings name the run folder once")
+
+	_, settings := settingsOf(t, args)
+	box, ok := settings["sandbox"].(map[string]any)
+	require.True(t, ok)
+
+	files, ok := box["filesystem"].(map[string]any)
+	require.True(t, ok)
+	assert.Contains(t, files["allowRead"], "/run/folder/sandbox-env.sh")
+	assert.NotContains(t, files["allowRead"], "/run/folder")
 }
 
 func TestSandbox_WritesTheDenyByDefaultBaseTheCredentialLayerAndTheNetworkList(t *testing.T) {
@@ -59,7 +126,7 @@ func TestSandbox_WritesTheDenyByDefaultBaseTheCredentialLayerAndTheNetworkList(t
 	    "allowUnsandboxedCommands": false,
 	    "filesystem": {
 	      "denyRead": ["~/", "/home/o/.ssh", "/home/o/.aws"],
-	      "allowRead": ["/work/tree", "/repo/.git", "/opt/tools"],
+	      "allowRead": ["/work/tree", "/repo/.git", "/opt/tools", "/run/sandbox-env.sh"],
 	      "denyWrite": ["/home/o/.ssh", "/home/o/.aws"]
 	    },
 	    "network": {"allowedDomains": ["api.example.org"], "strictAllowlist": true}
@@ -129,6 +196,25 @@ func TestSandbox_DeniesWritesToTheClosedPathsInTheSandboxAndTheEditRules(t *test
 	assert.NotContains(t, parsed.Permissions.Deny, "Read(//work/tree/.husky/**)")
 }
 
+func TestSandbox_OpensEachWriteFileByOneEditAllowRuleOfItsExactPath(t *testing.T) {
+	t.Parallel()
+
+	p := plan()
+	p.Write = []string{"/state/outputs/1.review.json"}
+
+	args := claude.New(nil).Sandbox(p, "", "/run").Args
+
+	var parsed struct {
+		Permissions struct{ Allow, Deny []string }
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(args[len(args)-1]), &parsed))
+
+	assert.NotContains(t, args[len(args)-1], "allowWrite", "the Edit allow rule alone opens the file to the shell")
+	assert.Equal(t, []string{"Edit(//state/outputs/1.review.json)"}, parsed.Permissions.Allow, "the exact file, with no /** tail")
+	assert.Contains(t, parsed.Permissions.Deny, "Edit(//home/o/.ssh/**)", "the deny rules stay")
+}
+
 func TestSandbox_AnEmptyPlanWritesEmptyListsAndNeverNull(t *testing.T) {
 	t.Parallel()
 
@@ -150,7 +236,8 @@ func TestSandbox_NeverSetsTheKeysThatWidenTheSandbox(t *testing.T) {
 		assert.NotContains(t, text, key)
 	}
 
-	// The shared git directory is readable, and no explicit entry makes it writable: the settings carry no allowWrite key.
+	// The shared git directory is readable, and no explicit entry makes it writable: the settings carry no allowWrite key, and a plan with no write
+	// file carries no allow rule.
 	_, settings := settingsOf(t, args)
 	box, ok := settings["sandbox"].(map[string]any)
 	require.True(t, ok)
@@ -158,6 +245,10 @@ func TestSandbox_NeverSetsTheKeysThatWidenTheSandbox(t *testing.T) {
 	files, ok := box["filesystem"].(map[string]any)
 	require.True(t, ok)
 	assert.NotContains(t, files, "allowWrite")
+
+	rules, ok := settings["permissions"].(map[string]any)
+	require.True(t, ok)
+	assert.NotContains(t, rules, "allow")
 }
 
 func TestSandbox_CarriesTheHookOfTheGuardInTheSameSettings(t *testing.T) {

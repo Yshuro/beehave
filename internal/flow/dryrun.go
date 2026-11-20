@@ -139,6 +139,12 @@ func dryPrepare(ctx context.Context, root, item, file string, chosen dryChoice) 
 
 	chosen.skills = workflow.RequiredSkills(file)
 
+	for _, key := range workflow.RequiredSkillVars(file) {
+		if name, named := chosen.vars[key].(string); named {
+			chosen.skills = append(chosen.skills, name)
+		}
+	}
+
 	return dryDeps(tree, head, item, chosen), nil
 }
 
@@ -385,11 +391,13 @@ func newDryGate(dir, head string, red bool) dryGate {
 	return dryGate{dir: dir, head: head, red: red, runs: new(atomic.Int32)}
 }
 
-func (dryGate) Key(context.Context, string, string, string) (GateKey, error) { return GateKey{}, nil }
+func (dryGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
+	return GateKey{}, nil
+}
 
 // Submit records the base in the plan of the job, as the host gate does. As a fetch of the base would, it points the remote branch of the base
 // at the parent of the head, so the checks before review find a head that descends from the base.
-func (g dryGate) Submit(ctx context.Context, _, _, _, base string) (GateJob, error) {
+func (g dryGate) Submit(ctx context.Context, _, _, _, base, _ string) (GateJob, error) {
 	if base != "" {
 		if _, err := dryGit(ctx, g.dir, []string{"update-ref", "refs/remotes/" + remoteName + "/" + base, g.head + "^"}); err != nil {
 			return GateJob{}, err
@@ -457,6 +465,14 @@ func (dryForge) Open(context.Context, string, string, OpenRequest) (OpenResult, 
 	return OpenResult{Number: dryPull}, nil
 }
 
+// Push shows the head as pushed and writes nothing to the remote.
+func (dryForge) Push(context.Context, string, string, string, string, string) error { return nil }
+
+// History shows an item with no earlier pull request.
+func (dryForge) History(context.Context, string, string) ([]model.PriorPull, error) {
+	return nil, nil
+}
+
 type dryTrees struct{ dir string }
 
 func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {
@@ -465,7 +481,14 @@ func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) erro
 	return nil
 }
 
-func (t dryTrees) Ensure(context.Context, string, string, string) (string, error) { return t.dir, nil }
+// Heads reads the branches of the bare remote that the dry run made, with no global or system git config.
+func (t dryTrees) Heads(ctx context.Context, _ string) (string, error) {
+	return dryGit(ctx, t.dir, []string{"ls-remote", "--heads", remoteName})
+}
+
+func (t dryTrees) Ensure(context.Context, string, string, string, string) (string, error) {
+	return t.dir, nil
+}
 
 // dryCommands runs no program: each command call exits with code 0 and prints nothing.
 type dryCommands struct{}

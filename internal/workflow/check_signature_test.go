@@ -195,17 +195,23 @@ func TestUnpack_BindsEachDestinationByItsKeywordNotByItsPlace(t *testing.T) {
 	t.Parallel()
 
 	var (
-		run                          starlark.Value
-		host, timeout, head, base, n string
+		run                                   starlark.Value
+		host, timeout, head, base, pinBase, n string
 	)
 
-	kwargs := []starlark.Tuple{{starlark.String("timeout"), starlark.String("5m")}, {starlark.String("head"), starlark.String("abc")}, {starlark.String("base"), starlark.String("main")}}
-	err := workflow.Unpack("gate", nil, kwargs, map[string]any{"head": &head, "base": &base, "name": &n, "timeout": &timeout, "host": &host, "run": &run})
+	kwargs := []starlark.Tuple{
+		{starlark.String("timeout"), starlark.String("5m")},
+		{starlark.String("head"), starlark.String("abc")},
+		{starlark.String("base"), starlark.String("main")},
+		{starlark.String("pin_base"), starlark.String("integration")},
+	}
+	err := workflow.Unpack("gate", nil, kwargs, map[string]any{"head": &head, "base": &base, "pin_base": &pinBase, "name": &n, "timeout": &timeout, "host": &host, "run": &run})
 
 	require.NoError(t, err)
 	assert.Equal(t, "5m", timeout)
 	assert.Equal(t, "abc", head)
 	assert.Equal(t, "main", base)
+	assert.Equal(t, "integration", pinBase, "the pin base binds by its keyword and not into the base next to it")
 }
 
 func TestUnpack_RefusesDestinationsThatDifferFromTheSignature(t *testing.T) {
@@ -232,17 +238,23 @@ func TestUnpack_RefusesADestinationOfAnotherTypeThanTheKindOfItsKeyword(t *testi
 
 	const want = "destinations that differ from the keywords of its signature"
 
+	params, ok := workflow.Signature("agent")
+	require.True(t, ok)
+
+	// The destination of each keyword comes from the signature by the rule of Param: a Go text, number or flag for a typed keyword, else a Starlark value.
+	typed := map[workflow.Kind]any{workflow.KindText: &text, workflow.KindInt: &tries, workflow.KindBool: &edits}
+
 	agent := func(overrides map[string]any) error {
 		into := map[string]any{}
-		for _, name := range []string{"prompt", "model", "runner", "pin", "resume", "label", "timeout", "idle_timeout", "name"} {
-			into[name] = &text
-		}
 
-		for _, name := range []string{"inputs", "outputs", "forbid_commands", "allow_paths", "protect_paths", "max_budget_usd", "sandbox"} {
-			into[name] = &value
-		}
+		for _, param := range params {
+			dest, found := typed[param.Kind]
+			if !found || param.AsValue {
+				dest = &value
+			}
 
-		into["output_tries"], into["edits"] = &tries, &edits
+			into[param.Name] = dest
+		}
 
 		for name, dest := range overrides {
 			into[name] = dest

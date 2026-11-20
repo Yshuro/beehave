@@ -33,15 +33,18 @@ func stopsTheEngine(t *testing.T, engine func() *Engine, ran *atomic.Int32) func
 func TestExclusiveStop_ARunWhoseCallFailsWhileTheEngineStopsStaysOpenAndRunsTheCallAgainAtTheNextStart(t *testing.T) {
 	t.Parallel()
 
+	// The call is queued by a run of the test item that holds its claim. The next start recovers that run, which holds its claim again before the call runs.
+	call := ExclusiveInput{Kind: kindCommand, Run: runID(testItem, 1), RunItem: testItem, Project: testProject, Item: testItem, Request: CommandRequest{Project: testProject, Item: testItem, Run: []string{"call"}}}
+
 	for name, run := range map[string]struct {
 		workflow string
 		start    func(*Engine) (dbos.WorkflowHandle[ExclusiveOutput], error)
 	}{
 		"the exclusive run": {exclusiveName, func(e *Engine) (dbos.WorkflowHandle[ExclusiveOutput], error) {
-			return dbos.RunWorkflow(e.ctx, e.exclusive, ExclusiveInput{Kind: kindCommand, Project: testProject, Item: testItem})
+			return dbos.RunWorkflow(e.ctx, e.exclusive, call)
 		}},
 		"the host job": {hostJobName, func(e *Engine) (dbos.WorkflowHandle[ExclusiveOutput], error) {
-			return dbos.RunWorkflow(e.ctx, e.hostJob, ExclusiveInput{Kind: kindCommand, Project: testProject, Item: testItem})
+			return dbos.RunWorkflow(e.ctx, e.hostJob, call)
 		}},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -54,21 +57,23 @@ func TestExclusiveStop_ARunWhoseCallFailsWhileTheEngineStopsStaysOpenAndRunsTheC
 				first atomic.Pointer[Engine]
 			)
 
-			h.commands.before = stopsTheEngine(t, first.Load, &ran)
-
 			engine, err := NewEngine(t.Context(), h.opts, h.deps())
 			require.NoError(t, err)
 
 			first.Store(engine)
 			require.NoError(t, engine.Launch())
 
+			held := holdRun(t, h, engine, stopsTheEngine(t, first.Load, &ran))
+
 			_, err = run.start(engine)
 			require.NoError(t, err)
 
 			// The call fails while the engine stops. Shutdown returns once the run has unwound.
+			require.Error(t, receive(t, held.done), "the run of the item ends its wait with the stop of the engine")
 			require.NoError(t, engine.Shutdown())
 
 			next := h.engine(t)
+			t.Cleanup(func() { held.once.Do(func() { close(held.release) }) })
 
 			var rows []dbos.WorkflowStatus
 

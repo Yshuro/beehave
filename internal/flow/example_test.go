@@ -19,7 +19,6 @@ import (
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/review"
-	"github.com/tobocop2/beehave/internal/workflow"
 )
 
 func mustRead(t *testing.T, path string) []byte {
@@ -40,10 +39,10 @@ const fullReview = "The scope of this review: the whole pull request"
 func exampleProject() model.Project {
 	return model.Project{
 		Name: testProject, Repo: "o/r", BaseBranch: "main",
-		Vars: roundVars(map[string]any{
+		Vars: with(roundVars(map[string]any{
 			"base": "integration", "owner": "owner", "owner_email": "owner@example.com", "source_checkout": "/own/checkout",
 			"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round", "steps": exampleSteps(),
-		}),
+		}), map[string]any{"review_skill": exampleSkill}),
 	}
 }
 
@@ -154,7 +153,7 @@ func exampleRigLimited(t *testing.T, verdicts, findings, mechanisms func(review 
 	folder := t.TempDir()
 	require.NoError(t, os.CopyFS(folder, os.DirFS(filepath.Join("..", "..", "examples", "remediation"))))
 
-	skill := exampleSkill(t)
+	skill := exampleSkill
 
 	rig := newAgentRig(t)
 	rig.h.mutation = exampleMutationCommand
@@ -234,15 +233,8 @@ func putNoParked(rig *agentRig, request AgentRequest) {
 	}
 }
 
-// exampleSkill is the one skill that the implement step of the example must call. The test reads it from the workflow file, which is the one place that names it.
-func exampleSkill(t *testing.T) string {
-	t.Helper()
-
-	skills := workflow.RequiredSkills(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	require.Len(t, skills, 1, "the example checks for one skill")
-
-	return skills[0]
-}
+// exampleSkill is the skill that the project of the example rig names in vars.review_skill, and that the fake agent reports.
+const exampleSkill = "the-review-skill"
 
 // openOf is the output open that a review writes for a list of findings: empty for none, else a line.
 func openOf(findings string) string {
@@ -589,7 +581,7 @@ type packageGate struct {
 	runs       *int
 }
 
-func (packageGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (packageGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 
@@ -646,7 +638,7 @@ type hostDiedGate struct {
 	waits      *int
 }
 
-func (hostDiedGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (hostDiedGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 
@@ -677,7 +669,7 @@ type zeroTestGate struct {
 	runs            *int
 }
 
-func (zeroTestGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (zeroTestGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 

@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_history`, `pr_open`, `pr_state`, `preflight`, `push`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -55,6 +55,7 @@ Four cases are not safe today, and a later change fixes each of them.
 | `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
 | `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
+| `push` | Safe. | Git exits 0 when the branch is already at the head, and checks no lease then. A replay of a push that landed passes. |
 | `merge`: each member | Safe. | The step `batch:<name>.intent#<item>` is recorded before the merge of the member. The forge shows the pull request as merged at the gated head, so the step counts it as done. |
 | `spawn` | Safe. It rests on the library. | The child run has a fixed workflow id, and DBOS returns the recorded child for it. A test stops the parent while it waits in `gather`, after `spawn` returned, and shows one child run with the same id after the resume. No test reaches the window inside the start call, between the child row and the record of it in the parent. |
 | `wait` | Safe. It rests on the library, and no test in this table stops a wait. | The deadline is the output of a recorded DBOS sleep, and the answer is a durable receive. A resume waits for the same answer. |
@@ -162,13 +163,13 @@ The `key` is required, and the engine joins it to the run id. `item_create` with
 
 | Tracker | `severity` | `operator` |
 | --- | --- | --- |
-| GitHub | Filed as the label of that name. | Files the label `operator`. |
+| GitHub | Filed as the label of that name. The adapter creates the label when the repository has none. | Files the label `operator`. The adapter creates the label when the repository has none. |
 | beads | Filed as the priority. | Files the label `operator`. |
 | `local` | Refused, because it keeps no severity. | Refused, because it keeps no labels. |
 
 #### `item_status`
 
-A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `hold` in the repository.
+A status is `open`, `closed` or `hold`. On GitHub, `hold` is the label `hold`. The adapter creates the label in the repository when it does not exist.
 
 #### `item_read`
 
@@ -179,6 +180,7 @@ A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `h
 - `comments` is the list of the comment texts, oldest first, with no `beehave-key:` line.
 - `parent` is the id of the parent of the item read, or an empty text.
 - With `of = "parent"` and an item that has no parent, `found` is false and the other values are empty.
+- A round item has no tracker issue, so `found` is false and the other values are empty, with no tracker read.
 - The read is a recorded step, so a replay returns what the first start read and does not read the tracker again.
 - The comments and the parent come from the tracker through the optional reader contract. The `local` tracker and beads serve both. GitHub serves both through the REST endpoints for comments and for the parent issue; an issue with no parent gives an empty `parent`.
 - A tracker with no reader fails the call with an error that names the tracker.
@@ -228,6 +230,38 @@ The `parent` argument:
 - The read is a recorded step, so a resumed run replays the first state.
 - A read that fails ends the step with an error. A project with no forge cannot show a state, which is an error too.
 - A build with no queue reader fails the call. A dry run does not fake the read: it reports the step as not run and ends there.
+
+#### `push`
+
+`push(branch, head, expect, name)` pushes the commit `head` of the clone of the project to `branch` on the remote and returns `head`. The engine process runs the push, so an agent step in a sandbox needs no credential: the workflow calls `push` after each agent step that commits.
+
+- The push runs no setting that an agent can write. An agent whose worktree shares the clone can write the git config of the clone, so the push never runs in the clone. It runs in the push repository of the project, a bare repository that the engine makes on the first push and keeps, at `push/<project>.git` in an owner-only folder of the state folder. That repository has no template and no hooks.
+- The push carries only objects of the clone folder. The engine copies `head` into the push repository with `git fetch --upload-pack`, and git runs `beehave` as upload-pack. That program runs `git upload-pack` under the sandbox enforcer of the project (`sandbox_enforcer`). It reads the clone folder and what git needs to start, and nothing else: the git program, its exec path (`git --exec-path`) and the libraries that it loads, each with its links resolved. On macOS the libraries come from the load commands of the program, and the frameworks and the shared cache of the system are read too. On Linux the dynamic linker that git names lists them (`--list`, what `ldd` runs), by its path, so no search path plays a part; the file in which the linker finds its library folders (`/etc/ld.so.cache` for glibc, `/etc/ld-musl-<arch>.path` for musl) is read too. A linker named by a link is read as its file, and one named by a relative path is refused. A static git reads no library. No system folder such as `/usr`, `/etc` or `/opt` is read whole. The copy writes the null device only, reads no system git config, and opens no network. A head that needs an object from outside the clone folder, through a list of other object stores, a link, or a git folder that the agent replaced, fails the copy, and nothing is pushed. The copy runs under the lock of the clone, and a later push fetches only the new objects.
+- When no sandbox enforcer can run on the machine, or the read set of git cannot be found, every push is refused, and the error names the reason. On macOS, the git that the push finds must not be the Apple shim in `/usr/bin`, which the enforcer refuses, and it must load no library by a name relative to a program (`@rpath`).
+- The remote is the address that the engine read: the `source` of the project, or else the clone address of its forge. It is never a remote name, so no remote, push address, address rewrite, ssh command or credential helper in the clone config applies.
+- Every other git call that reaches the remote runs the same way, in the push repository and to the same address. The refresh of a worktree fetches the base there. The tip of a batch fetches every branch there, and the tags that point into them. Each then copies what it fetched into the clone. The release reads the branches of the remote there before it removes a worktree.
+- Every other git call of the engine in the clone or a worktree is local: it allows the file transport only (`GIT_ALLOW_PROTOCOL=file`) and fetches no missing object from a promisor remote (`GIT_NO_LAZY_FETCH=1`). Git 2.45 and later and the 2024-05 security releases from 2.39.4 on honor the second variable. No git config overrides either, so no remote, transport or promisor in the clone config can make a local call fetch or push. Only the first clone and the calls in the push repository reach the remote.
+- On an unpatched git older than 2.45, a file promisor in the clone config still fetches lazily, so an upload-pack program that the clone config names can run as the owner (the class of #727); no promisor reaches the network.
+- The push runs `git push --no-verify --force-with-lease=refs/heads/<branch>:<expect> <remote> <head>:refs/heads/<branch>` with the hooks off and no terminal prompt. With an empty `expect`, the push has no lease and git takes only a new branch or a fast forward.
+- The run must hold a trusted claim on the item. A run that lost its claim pushes nothing and stops with the loss, and a loss during the push stops the push.
+- A branch already at `head` is no error. A replay after a crash between the push and its step record therefore passes, whatever its lease. A resume after the step record reads the record and pushes nothing.
+- A branch that moved since the lease is refused with an error that names the branch, and the item stops.
+- An empty `branch` or `head` is refused before the push. So is a project with no clone, and a project with no forge, which pushes nothing.
+- In a dry run the push writes nothing and returns `head`.
+
+#### `pr_history`
+
+`pr_history(name)` reads the pull requests of the item of the run in every state and returns `pulls`. Each has `number`, `title`, `state`, `branch`, `base`, `merged_at` and `closing_comment`.
+
+- The forge lists the pull requests on the branch of the item. For an item that is an issue number, it also lists the pull requests whose title or body names `#N`, and keeps those that name it as a whole word. The two lists join by number.
+- `closing_comment` is the body of the last comment made at or before the close of a closed or merged pull request. A comment after the close does not count. It is empty for an open one and for one with no comment until its close.
+- A closed or merged pull request with no valid close time, or a comment with no valid time, fails the read: the call does not guess which comment explains the close.
+- A list that reaches its limit is refused, so the call never returns a cut list. A project with no forge has none. A project with no repository is refused.
+- The read is a recorded step, so a resumed run replays the first list.
+- A read that fails ends the run with an error: no later step works from a guess.
+- A dry run shows an item with no pull request.
+
+A sandboxed agent holds no forge tool and no credential. The workflow passes `pulls` to the agent through the `data` keyword, and the prompt reads the data file.
 
 #### Closing keywords in posted text
 
@@ -357,11 +391,11 @@ Both builtins match text. They run no command, record no step and need no reposi
 
 ### `queue`
 
-`queue(name, hold, label)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows` and `free`.
+`queue(name, hold, label)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows`, `free` and `pulls`.
 
-`label` keeps the items that carry that tracker label. A call with no `label` keeps every open item. The engine reads no project setting for the choice: the workflow passes it. The rows hold no labels, so only the engine can choose by label. A workflow that needs a list of item ids keeps the rows whose `item` is in the list.
+`label` keeps the items that carry that tracker label. A call with no `label` keeps every open item. The engine reads no project setting for the choice: the workflow passes it. A workflow that needs a list of item ids keeps the rows whose `item` is in the list.
 
-Each row has `item`, `state`, `severity` and `pr`. The state:
+Each row has `item`, `state`, `severity`, `pr`, `parent`, `author`, `changes_requested` and `labels`, the tracker labels of the item. The state:
 
 | State | When |
 | --- | --- |
@@ -375,6 +409,7 @@ Each row has `item`, `state`, `severity` and `pr`. The state:
 - The rows sort by severity, then by item id as byte strings.
 - `pr` is the number of the lowest open pull request whose head branch is the item id, or 0.
 - `free` is the cap of the `items` queue less the runs that the library lists on it as pending or enqueued, so the engine keeps no count.
+- `pulls` lists every open pull request of the forge, each with `number`, `branch`, `base`, `author`, `draft`, `title` and `item`. `item` is the open item that the head branch names, or empty. `label` does not filter `pulls`, and an item that `label` leaves out of the rows still joins its pull request.
 - A read of the tracker or the forge that fails ends the step with an error.
 - A project with no forge has no pull requests.
 - A build with no queue reader fails the call.
@@ -463,9 +498,10 @@ Nobody merges their own work, and our pull requests merge only on a verdict that
 
 #### `spawn`
 
-`spawn(items, entry="main", name="")` starts each item as its own run of the same workflow file, and returns `runs`, a list of structs with the fields `item` and `run`.
+`spawn(items, entry="main", base="", name="")` starts each item as its own run of the same workflow file, and returns `runs`, a list of structs with the fields `item` and `run`.
 
 - Each child run executes the function `entry(item)` on the bytes that the parent pinned, as a child workflow of the parent on the `items` queue. The queue holds at most `agents.max_concurrent` runs.
+- A child of a round item is cut at the base of the round item, `round/<base>`. A workflow that has a round base setting passes it as `base`, and `spawn` checks that it equals the base of the round item.
 - A child run that finished with success is reused and does not run again.
 - A cancelled run, or no run, starts the next attempt.
 
@@ -476,6 +512,7 @@ Nobody merges their own work, and our pull requests merge only on a verdict that
 - The parent itself.
 - An item that is in `items` twice.
 - A call from a run that `spawn` started.
+- A `base` that differs from the base of the round item that calls `spawn`. The error names both bases. An item that is no round item has no base to compare, so `spawn` cuts each child at the `base` of the call. The gate of the child reads the pin file at the same branch.
 
 #### `gather`
 
@@ -647,6 +684,7 @@ No undo runs:
 - The result of the call has the field `skills`: the list of the skills that the agent called, in the order of the calls. A workflow that needs a skill tests it, for example `"lint-pass" not in implement.skills`, and stops the item itself.
 - In a dry run, the fake agent reports each skill that the workflow requires. The dry run reads the syntax tree of the workflow file and of the files it loads, and runs no code. It parses these files again for this: it does not reuse the parse of `beehave check workflow`.
 - A skill is required when an `if` tests a text literal with `in` or `not in` against `<expression>.skills`, and the branch that runs when the skill is missing has a call of `fail(...)` as one of its own statements. Either quote style, `not`, `not not` and parentheses around the test count. The two usual forms are `"x" not in r.skills` with `fail` in the `if` branch, and `"x" in r.skills` with `fail` in the `else` branch. A name that the same function binds only from `<expression>.skills` (`called = r.skills`) counts in place of `<expression>.skills`. Each function is its own scope: a name from another function, a parameter, a loop variable and a name that the function binds again to something else do not count. A test inside a helper function counts.
+- The tested name can also be `<expression>.vars["key"]` with a text literal as the key. The dry run then reports the text that the key holds in the vars of the dry run, and no skill when the key is missing or holds no text.
 - A forbid check does not count: `if "x" in r.skills: fail(...)` requires nothing, so the fake agent does not report `x`.
 - The dry run does not follow these forms, and a workflow that needs the skill through one of them stops the dry run with its own refusal: a bool bound to the membership (`ok = "x" in r.skills`), `r.skills.count("x")`, a comprehension over the skills, an index such as `r["skills"]`, a skill name held in a constant (`n = "x"`), two tests joined with `and` or `or`, a `fail` that is not a statement of the branch itself (for example inside a deeper `if`), and a helper that takes the name as an argument (`def need(r, name)`). Write the literal in the test of the `if`: `"lint-pass" not in r.skills`.
 - A check under `if False` still counts. A check in a loaded function that the step never calls still counts. The dry run reads the text of the functions and does not follow calls.
@@ -694,6 +732,14 @@ One workflow written in this form, with five prompt files. The method lives in t
 4. A wait for the owner.
 5. A settle step.
 6. A merge step.
+
+#### The review skill of the implement step of `examples/remediation/`
+
+The workflow names no skill. The project names it.
+
+- The project file sets `vars.review_skill`: the name of a skill, such as `"your-review-skill"`. A run with no such key, or a value that is not a text that is not blank, is refused before the first agent starts. The message names the key.
+- After the implement step, the example refuses the item when the agent did not call that skill. The message names the skill and the key.
+- The test is `if project.vars["review_skill"] not in implement.skills:` with a `fail` call in its branch, so a dry run reads the key from the vars of the project and reports that skill from its fake agent.
 
 #### The mutation step of `examples/remediation/`
 

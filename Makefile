@@ -165,8 +165,9 @@ $(FLOW_RUN_TARGETS): test-run-flow-%:
 coverage:  ## Enforce the coverage gate on coverage.out and the flow profiles (run make test first)
 	go-test-coverage --config=.go-test-coverage.yml --profile=$(FLOW_PROFILES)
 
-smoke: build  ## Run the built binary: --version prints and exits 0
+smoke: build  ## Run the built binary: --version prints and exits 0, and the upload-pack helper of the push answers
 	$(BIN) --version | grep -q '^beehave '
+	$(BIN) --beehave-upload-pack nope / / 2>&1 | grep -q '^beehave upload-pack: '
 	$(REMEDY) --help | grep -q '^usage: remedy '
 
 smoke-agent: build  ## Run examples/local once with the real claude CLI (costs an agent run; not part of check)

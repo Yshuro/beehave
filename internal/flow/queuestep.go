@@ -47,20 +47,34 @@ type queueReader interface {
 
 // queueRow is one open item of the queue, as the queue step records it. PR is 0 when the item has no open pull request.
 // Parent is the container of the item, empty for loose work. Author and ChangesRequested come from the open pull request of the item's branch with the lowest number; Author is empty when there is none.
+// Labels are the tracker labels of the item.
 type queueRow struct {
-	Item             string `json:"item"`
-	State            string `json:"state"`
-	Severity         string `json:"severity"`
-	PR               int    `json:"pr"`
-	Parent           string `json:"parent"`
-	Author           string `json:"author"`
-	ChangesRequested bool   `json:"changes_requested"`
+	Item             string   `json:"item"`
+	State            string   `json:"state"`
+	Severity         string   `json:"severity"`
+	PR               int      `json:"pr"`
+	Parent           string   `json:"parent"`
+	Author           string   `json:"author"`
+	ChangesRequested bool     `json:"changes_requested"`
+	Labels           []string `json:"labels"`
 }
 
-// queued is the output of the queue step: the rows in the order of the queue, and the number of free slots of the items queue.
+// openPull is one open pull request of the forge, as the queue step records it. Item is the open item that its head branch names, or empty when it names none.
+type openPull struct {
+	Number int    `json:"number"`
+	Branch string `json:"branch"`
+	Base   string `json:"base"`
+	Author string `json:"author"`
+	Draft  bool   `json:"draft"`
+	Title  string `json:"title"`
+	Item   string `json:"item"`
+}
+
+// queued is the output of the queue step: the rows in the order of the queue, the number of free slots of the items queue, and every open pull request.
 type queued struct {
-	Rows []queueRow `json:"rows"`
-	Free int        `json:"free"`
+	Rows  []queueRow `json:"rows"`
+	Free  int        `json:"free"`
+	Pulls []openPull `json:"pulls"`
 }
 
 // joinedPull is what the open pull requests of one branch say about the item of that branch.
@@ -95,14 +109,12 @@ func (s *script) queue(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 }
 
 // readQueue reads the tracker and the forge, then the runs of each item, and sorts the rows by severity and item id.
-// A tracked label other than "" keeps only the items that carry that tracker label. The rows hold no labels, so a workflow cannot make this choice itself.
+// A tracked label other than "" keeps only the items that carry that tracker label. The open pull requests are all kept, also those of an item that the label leaves out.
 func (e *Engine) readQueue(ctx context.Context, project, holdLabel, tracked string) (queued, error) {
 	items, err := e.deps.Queue.OpenItems(ctx, project)
 	if err != nil {
 		return queued{}, fmt.Errorf("read the open items of project %s: %w", project, err)
 	}
-
-	items = withLabel(items, tracked)
 
 	pulls, err := e.deps.Queue.OpenPulls(ctx, project)
 	if err != nil {
@@ -116,9 +128,30 @@ func (e *Engine) readQueue(ctx context.Context, project, holdLabel, tracked stri
 		return queued{}, err
 	}
 
-	rows, err := e.queueRows(ctx, items, joinPulls(pulls, holdLabel))
+	rows, err := e.queueRows(ctx, withLabel(items, tracked), joinPulls(pulls, holdLabel))
 
-	return queued{Rows: rows, Free: free}, err
+	return queued{Rows: rows, Free: free, Pulls: openPulls(pulls, items)}, err
+}
+
+// openPulls keeps every open pull request, with the open item that its head branch names. The items are all the open items, before the tracked label.
+func openPulls(pulls []model.PullRequest, items []model.Item) []openPull {
+	kept := make([]openPull, 0, len(pulls))
+
+	for _, pull := range pulls {
+		branch := model.Deref(pull.HeadRefName)
+		named := ""
+
+		if slices.ContainsFunc(items, func(item model.Item) bool { return item.ID == branch }) {
+			named = branch
+		}
+
+		kept = append(kept, openPull{
+			Number: pull.Number, Branch: branch, Base: model.Deref(pull.BaseRefName), Author: pull.Author.Login,
+			Draft: pull.IsDraft != nil && *pull.IsDraft, Title: pull.Title, Item: named,
+		})
+	}
+
+	return kept
 }
 
 // withLabel returns the items that carry the tracker label. An empty label keeps every item.
@@ -281,7 +314,7 @@ func foreignRecordOf(last run) (foreignRecord, bool) {
 func rowWith(item model.Item, pull joinedPull, state string) queueRow {
 	return queueRow{
 		Item: item.ID, State: state, Severity: string(item.Severity), PR: pull.number,
-		Parent: item.Parent, Author: pull.author, ChangesRequested: pull.changesRequested,
+		Parent: item.Parent, Author: pull.author, ChangesRequested: pull.changesRequested, Labels: append([]string{}, item.Labels...),
 	}
 }
 
@@ -295,7 +328,8 @@ func (e *Engine) freeSlots() (int, error) {
 	return max(0, e.maxConcurrent-len(open)), nil
 }
 
-// queuedValue makes the struct that queue returns: rows, a list of structs with the fields item, state, severity, pr, parent, author and changes_requested, and free.
+// queuedValue makes the struct that queue returns: rows, a list of structs with the fields item, state, severity, pr, parent, author, changes_requested and labels;
+// free; and pulls, a list of structs with the fields number, branch, base, author, draft, title and item.
 func queuedValue(got queued) *starlarkstruct.Struct {
 	rows := make([]starlark.Value, len(got.Rows))
 
@@ -303,10 +337,27 @@ func queuedValue(got queued) *starlarkstruct.Struct {
 		rows[i] = starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
 			itemName: starlark.String(row.Item), stateField: starlark.String(row.State), severityField: starlark.String(row.Severity), "pr": starlark.MakeInt(row.PR),
 			parentKeyword: starlark.String(row.Parent), "author": starlark.String(row.Author), "changes_requested": starlark.Bool(row.ChangesRequested),
+			"labels": textList(row.Labels),
 		})
 	}
 
-	return starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{"rows": starlark.NewList(rows), "free": starlark.MakeInt(got.Free)})
+	return starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
+		"rows": starlark.NewList(rows), "free": starlark.MakeInt(got.Free), pullsField: openPullsValue(got.Pulls),
+	})
+}
+
+// openPullsValue makes the list of open pull requests that queue returns.
+func openPullsValue(pulls []openPull) *starlark.List {
+	values := make([]starlark.Value, len(pulls))
+
+	for i, pull := range pulls {
+		values[i] = starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
+			numberField: starlark.MakeInt(pull.Number), "branch": starlark.String(pull.Branch), baseKeyword: starlark.String(pull.Base),
+			"author": starlark.String(pull.Author), "draft": starlark.Bool(pull.Draft), titleKeyword: starlark.String(pull.Title), itemName: starlark.String(pull.Item),
+		})
+	}
+
+	return starlark.NewList(values)
 }
 
 // holdAtStart stops a run that spawn started when its item is on hold in the tracker now. The tracker can change between the queue call and the start of the run.

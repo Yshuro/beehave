@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,6 +32,53 @@ func TestQueue_ARowCarriesItsContainerAndTheAuthorAndReviewStateOfItsPullRequest
 	require.NoError(t, err)
 	assert.Equal(t, []string{"21:9::False", "22::someone:False", "23::owner:True"}, seenBy(t, h),
 		"the parent comes from the item, the author and the change request from its pull request")
+}
+
+// pullsFlow prints the labels of each row and each open pull request of the queue, field by field.
+const pullsFlow = `def main(item):
+    q = queue(name = "q", label = "tracked")
+    rows = [r.item + "=" + ",".join(r.labels) for r in q.rows]
+    pulls = ["%d|%s|%s|%s|%s|%s|%s" % (p.number, p.branch, p.base, p.author, p.draft, p.title, p.item) for p in q.pulls]
+    command(name = "seen", run = ["seen"] + rows + pulls)
+`
+
+// openPullOf is an open pull request with every field that the queue keeps of it.
+func openPullOf(t *testing.T, number int, branch, base, author, title string, draft bool) model.PullRequest {
+	t.Helper()
+
+	text, err := json.Marshal(map[string]any{"number": number, "headRefName": branch, "baseRefName": base, "author": map[string]string{"login": author}, "title": title, "isDraft": draft})
+	require.NoError(t, err)
+
+	var pull model.PullRequest
+	require.NoError(t, json.Unmarshal(text, &pull))
+
+	return pull
+}
+
+func TestQueue_TheResultHoldsTheOpenPullRequestsAndTheLabelsOfEachRow(t *testing.T) {
+	t.Parallel()
+
+	tracked := queueItem("22", model.SeverityP1)
+	tracked.Labels = []string{"tracked", "blocked"}
+	untracked := queueItem("23", model.SeverityP1)
+	untracked.Labels = []string{"other"}
+
+	h, _ := queueHarness(t,
+		[]model.Item{tracked, untracked},
+		openPullOf(t, 5, "22", "main", "someone", "fix-22", false),
+		openPullOf(t, 6, "23", "main", "owner", "fix-23", true),
+		openPullOf(t, 7, "loose", "dev", "owner", "no-issue", true),
+	)
+
+	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, pullsFlow))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"22=tracked,blocked",
+		"5|22|main|someone|False|fix-22|22",
+		"6|23|main|owner|True|fix-23|23",
+		"7|loose|dev|owner|True|no-issue|",
+	}, seenBy(t, h), "each row carries its tracker labels; every open pull request comes back, with the open item its branch joins, also one the label leaves out of the rows")
 }
 
 func TestQueue_ARowTakesTheAuthorOfTheLowestPullRequestOfItsBranch(t *testing.T) {

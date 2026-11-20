@@ -3,6 +3,7 @@ package remediation_test
 import (
 	"io/fs"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -41,7 +42,7 @@ func acceptanceRules() []rule {
 		{"acceptance_rules", "its `## Expected behavior` table is the acceptance", workLanes()},
 		{"acceptance_rules", "take the one that changes fewer cells", workLanes()},
 		{"acceptance_rules", "stop and report it: a wider rule is the owner's decision", workLanes()},
-		{"before_write_rules", "Check for an existing pull request, at the start and again before you push", []string{implement, fix, plan}},
+		{"before_write_rules", "Check for an existing pull request, at the start and again before", []string{implement, fix, plan}},
 		{"before_write_rules", "Repeat-offender check", []string{implement, fix, plan}},
 		{"before_write_rules", "Re-derive every cited site at the tip you branch from", []string{implement, fix, plan}},
 		{"before_write_rules", "Build-versus-buy search. Before you write a new mechanism", []string{implement, fix, plan}},
@@ -215,20 +216,20 @@ func briefRules() []rule {
 
 func mergeRules() []rule {
 	return []rule{
-		{"merge_rules", "Push the branch when the first commit is green", []string{implement}},
-		{"merge_rules", "the engine does these after this step", []string{implement}},
+		{"merge_rules", "Make the first commit when the change is green", []string{implement}},
+		{"merge_rules", "the engine does these after the push", []string{implement}},
 		{"merge_rules", "the engine owns both", []string{fix}},
 		{"merge_rules", "Never use the merge queue of GitHub", []string{implement, fix, review}},
 		{"merge_rules", "Known base reds are in one file", workAndReview()},
 		{"merge_rules", "A finding that survives the review is filed before the merge", []string{review}},
-		{"merge_rules", "a commit that stays local is lost with the lane", workLanes()},
+		{"merge_rules", "a change that is not committed is lost with the lane", workLanes()},
 	}
 }
 
 func laneLayoutRules() []rule {
 	return []rule{
 		{"lane_layout", "A fix lane is not a proof lane and not a review lane", workLanes()},
-		{"lane_layout", "Run the scoped tests, not the full gate. Before you push, run the red test of each finding and the tests of the packages that your diff reaches", []string{fix}},
+		{"lane_layout", "Run the scoped tests, not the full gate. Before your last commit, run the red test of each finding and the tests of the packages that your diff reaches", []string{fix}},
 		{"lane_layout", "One reviewer judges one pull request", []string{review}},
 		{"lane_layout", "A rise in the regression count blocks the lane", workAndReview()},
 		{"lane_layout", "Patch rounds are bounded for each pull request", workLanes()},
@@ -248,6 +249,167 @@ func reviewFramingRules() []rule {
 	}
 }
 
+const (
+	queue      = "queue"
+	takeReview = "take_review"
+)
+
+func laneBoundaryRules() []rule {
+	return []rule{
+		{"lane_boundaries", "Each lane has one item, one worktree, one branch and one pull request", workLanes()},
+		{"lane_boundaries", "Never merge, never comment on the forge, and never file an issue", workLanes()},
+		{"lane_boundaries", "Run every build, test and lint on the build host", workLanes()},
+		{"lane_boundaries", "Never touch the worktree of another lane", workLanes()},
+	}
+}
+
+func skillOrderRules() []rule {
+	return []rule{
+		{"skill_rules", "Invoke each skill that the rules name with the Skill tool, by name", everyLane()},
+		{"skill_rules", "is never permission to skip the step", everyLane()},
+		{"skill_rules", "`plan-vs-conventions` for a change past one file, `cross-cutting-api-change` for a new variant, field or entry point", workLanes()},
+		{"skill_rules", "then `blast-radius-review` iterated to zero before the gate", workLanes()},
+	}
+}
+
+func briefChoiceRules() []rule {
+	return []rule{
+		{"brief_choice_rules", "A ruling of the owner binds the item", everyLane()},
+		{"brief_choice_rules", "Never reverse a ruling", everyLane()},
+		{"brief_choice_rules", "is the floor of every lane, never the whole answer", everyLane()},
+		{"brief_choice_rules", "Choose the other skills from what the item is", everyLane()},
+		{"acceptance_rules", "take the one that changes fewer cells", workLanes()},
+	}
+}
+
+func baseRedRules() []rule {
+	return []rule{
+		{"base_red_rules", "A base-red entry names the command that CI runs, not the test target", workAndReview()},
+		{"base_red_rules", "The exclusion list of a guard is a decision that expires", workAndReview()},
+		{"base_red_rules", "justify the exclusion again before you add a case", workAndReview()},
+	}
+}
+
+func disjointnessRules() []rule {
+	return []rule{
+		{"disjointness_rules", "A claim that two changes are disjoint carries the SHA it was measured at", workAndReview()},
+		{"disjointness_rules", "measure again at the tip you merge to", workAndReview()},
+	}
+}
+
+func queueScopeRules() []rule {
+	return []rule{
+		{"queue_scope_rules", "An item is the scope of one pull request, not one issue", []string{queue}},
+		{"queue_scope_rules", "share a mechanism, a code area or a fix", []string{queue}},
+		{"queue_scope_rules", "Batch by mechanism, not by the number of the issue", []string{queue}},
+		{"queue_scope_rules", "The scope of the item is fixed at the first review", workLanes()},
+	}
+}
+
+func overtakenRules() []rule {
+	both := []string{queue, takeReview}
+
+	return []rule{
+		{"triage_rules", "has overtaken a pull request before you ask how to resolve it", both},
+		{"triage_rules", "never from the titles", both},
+		{"triage_rules", "what the close loses", both},
+		{"triage_rules", "what a wrong resolution costs", both},
+	}
+}
+
+func stackedBranchRules() []rule {
+	return []rule{
+		{"stacked_branch_rules", "Do not edit a branch that a pending merge depends on", workLanes()},
+		{"stacked_branch_rules", "File the finding that survives as an issue first", workLanes()},
+	}
+}
+
+// loadPrompts reads the named prompts and squashes each one.
+func loadPrompts(t *testing.T, names ...string) map[string]string {
+	t.Helper()
+
+	texts := map[string]string{}
+	folder := os.DirFS("prompts")
+
+	for _, name := range names {
+		raw, err := fs.ReadFile(folder, name+".md")
+		require.NoError(t, err)
+
+		texts[name] = squash(string(raw))
+	}
+
+	return texts
+}
+
+// checkRules fails for each phrase that a prompt of the rule lost, and returns the number of prompt checks it made.
+func checkRules(t *testing.T, texts map[string]string, group []rule) int {
+	t.Helper()
+
+	held := 0
+
+	for _, lost := range group {
+		for _, name := range lost.prompts {
+			held++
+
+			// A plain check: a failed assert.Contains would print the whole prompt.
+			if !strings.Contains(texts[name], lost.phrase) {
+				t.Errorf("prompts/%s.md lost the phrase %q of the rule in %s", name, lost.phrase, lost.from)
+			}
+		}
+	}
+
+	return held
+}
+
+// holdGroup checks one group of rules against every prompt that the group names.
+func holdGroup(t *testing.T, group []rule) {
+	t.Helper()
+
+	texts := loadPrompts(t, append(everyLane(), takeReview, queue)...)
+
+	assert.Positive(t, checkRules(t, texts, group))
+}
+
+func TestPrompts_HoldTheLaneBoundaries(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, laneBoundaryRules())
+}
+
+func TestPrompts_HoldTheSkillOrder(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, skillOrderRules())
+}
+
+func TestPrompts_HoldTheBriefChoiceRules(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, briefChoiceRules())
+}
+
+func TestPrompts_HoldTheBaseRedRules(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, baseRedRules())
+}
+
+func TestPrompts_HoldTheDisjointnessShaRule(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, disjointnessRules())
+}
+
+func TestPrompts_HoldTheQueueScopeRule(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, queueScopeRules())
+}
+
+func TestPrompts_HoldTheOvertakenJudgment(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, overtakenRules())
+}
+
+func TestPrompts_HoldTheStackedBranchRule(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, stackedBranchRules())
+}
+
 // squash drops the bold marks and joins the words of a text with one space, so that a phrase matches across the line breaks and the bold spans of a prompt.
 func squash(text string) string {
 	return strings.Join(strings.Fields(strings.ReplaceAll(text, "**", "")), " ")
@@ -256,37 +418,19 @@ func squash(text string) string {
 func TestPrompts_HoldEveryRuleOfTheBriefText(t *testing.T) {
 	t.Parallel()
 
-	texts := map[string]string{}
-	folder := os.DirFS("prompts")
+	texts := loadPrompts(t, append(everyLane(), takeReview, queue)...)
 
-	for _, name := range append(everyLane(), "take_review") {
-		raw, err := fs.ReadFile(folder, name+".md")
-		require.NoError(t, err)
-
-		texts[name] = squash(string(raw))
-	}
-
-	groups := [][]rule{acceptanceRules(), reportRules(), evidenceRules(), designRules(), shellRules(), compiledAndUnionRules(), reviewRules(), gateEvidenceRules(), hostAndDiskRules(), reviewFormatRules(), briefRules(), mergeRules(), laneLayoutRules(), reviewFramingRules()}
+	groups := [][]rule{acceptanceRules(), reportRules(), evidenceRules(), designRules(), shellRules(), compiledAndUnionRules(), reviewRules(), gateEvidenceRules(), hostAndDiskRules(), reviewFormatRules(), briefRules(), mergeRules(), laneLayoutRules(), reviewFramingRules(), laneBoundaryRules(), skillOrderRules(), briefChoiceRules(), baseRedRules(), disjointnessRules(), queueScopeRules(), overtakenRules(), stackedBranchRules()}
 
 	held, counted := 0, 0
 
 	for _, group := range groups {
 		counted += len(group)
-
-		for _, lost := range group {
-			for _, name := range lost.prompts {
-				held++
-
-				// A plain check: a failed assert.Contains would print the whole prompt.
-				if !strings.Contains(texts[name], lost.phrase) {
-					t.Errorf("prompts/%s.md lost the phrase %q of the rule in %s", name, lost.phrase, lost.from)
-				}
-			}
-		}
+		held += checkRules(t, texts, group)
 	}
 
 	// One phrase for each mapped or added row of the proof table that has a phrase of its own: a dropped phrase fails here.
-	assert.Equal(t, 143, counted)
+	assert.Equal(t, 171, counted)
 	assert.Positive(t, held)
 }
 
@@ -302,6 +446,25 @@ func TestPrompts_TheWorkLanesLeaveThePullRequestToTheEngine(t *testing.T) {
 
 		for _, gone := range []string{"Addresses #N", "Closes #N", "gh stack link", "native stack", "Open a draft pull request"} {
 			assert.NotContains(t, text, gone, name)
+		}
+	}
+}
+
+// The agent of a sandboxed step has no credential, and the engine pushes after each step that commits (push in workflow.star and review_fix.star).
+// So no prompt of such a step tells the agent to push. The control is the text of the base, which each pattern finds.
+func TestPrompts_NoPromptOfAStepThatCommitsTellsTheAgentToPush(t *testing.T) {
+	t.Parallel()
+
+	tells := regexp.MustCompile(`git push|(^|[*] *|[.] )Push (the branch|every|at the first)|before you push|Before each push`)
+	control := "**Push at the first checkpoint.** Push the branch when the first commit is green. Run `git push origin HEAD`. Before each push, search the diff."
+	require.Len(t, tells.FindAllString(control, -1), 4, "the patterns find each push line of the base")
+
+	for _, name := range []string{implement, fix, "sync"} {
+		raw, err := fs.ReadFile(os.DirFS("prompts"), name+".md")
+		require.NoError(t, err)
+
+		for line := range strings.Lines(string(raw)) {
+			assert.False(t, tells.MatchString(line), "prompts/%s.md tells the agent to push: %s", name, line)
 		}
 	}
 }

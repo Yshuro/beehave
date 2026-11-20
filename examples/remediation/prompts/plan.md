@@ -28,9 +28,11 @@ orchestrator dispatches a fix lane.
 
 ## Before you write
 
-**Check for an existing pull request, at the start and again before you push.**
-**Repeat-offender check:** `git log -S` and `gh pr list --state all --search`, reading the CLOSING comment
-rather than the commits. A closed pull request is not a record of work that landed.
+**Check for an existing pull request, at the start and again before you write the plan.** The pull requests of this item in every
+state are the list `pulls` in the data file {{ .data_file }}, which the engine read before this step started. Read it with the
+shell (`cat` or `jq`). If the data file is missing or cannot be read, stop and refuse: say so, and do not guess the pull requests.
+**Repeat-offender check:** `git log -S` in your folder, and the earlier pull requests of this item in {{ .data_file }}, reading
+the CLOSING comment (`closing_comment`) rather than the commits. A closed pull request is not a record of work that landed.
 **Re-derive every cited site at the tip you branch from.** Line numbers move.
 **Build-versus-buy search.** Before you write a new mechanism, search the project, its dependencies and the standard
 library for one that already does the job. Name what you found, or write that you found none.
@@ -61,6 +63,12 @@ When a claim depends on a branch, find where its variable is SET and not only wh
 
 **Read an issue or pull request thread from the thread file that the brief names.** Dump a thread into a file and name the file; never paste a thread into a prompt.
 **A reproduction is self-contained.** A stranger must run it from the issue alone, with no round path, no lane name and no scratch file.
+
+## Skills
+
+**Invoke each skill that the rules name with the Skill tool, by name.** Reading the file of a skill instead is a skipped step, and a report with no Skill call goes back unread. If the Skill tool answers `unknown skill`, read the skill file and follow it: that answer is about the registry and is never permission to skip the step.
+**`blast-radius-review` is the floor of every lane, never the whole answer.** Choose the other skills from what the item is, not from habit: a change of output, of a dependency floor or of a harness each asks for more.
+**A ruling of the owner binds the item.** Read the rulings file that the run names. Never reverse a ruling: if you think that it is wrong, stop and report it with your evidence.
 
 ## Project rules
 

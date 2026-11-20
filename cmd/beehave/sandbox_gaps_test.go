@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,6 +38,43 @@ func TestSandboxPlan_AGitFolderThatDoesNotExistYetIsDeniedForWrite(t *testing.T)
 	_, err := r.f.agents.Run(t.Context(), req)
 	require.NoError(t, err)
 	assert.Contains(t, r.f.spec.Sandbox.DenyWrite, filepath.Join(r.work, ".git"))
+}
+
+func TestSandboxPlan_ASandboxedStepHasNoDenyOnTheObjectFolderOfTheClone(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t)
+
+	for _, item := range []string{"7", roundItem} {
+		t.Run(model.SafeName(item), func(t *testing.T) {
+			t.Parallel()
+
+			dir, err := rig.trees.Ensure(t.Context(), "p", item, "", "")
+			require.NoError(t, err)
+
+			common := gitOut(t, dir, "rev-parse", "--path-format=absolute", "--git-common-dir")
+			require.Equal(t, filepath.Join(rig.clone(), ".git"), common, "the worktree is linked to the clone")
+
+			r := newSandboxRig(t)
+			r.f.agents.trees = rig.trees
+			req := request()
+			req.Item, req.Sandbox = item, &model.Sandbox{}
+
+			_, err = r.f.agents.Run(t.Context(), req)
+			require.NoError(t, err)
+
+			plan := r.f.spec.Sandbox
+			assert.Contains(t, plan.GitDirs, common, "the step writes the shared git directory")
+			assert.Contains(t, plan.DenyWritePatterns, filepath.Join(plan.Work, ".git/hooks"), "control: the plan holds write denies")
+
+			objects := filepath.Join(common, "objects")
+			for _, list := range [][]string{plan.Deny, plan.DenyPatterns, plan.DenyWrite, plan.DenyWritePatterns} {
+				for _, entry := range list {
+					assert.False(t, entry == common || entry == objects || strings.HasPrefix(entry, objects+"/"), "%s denies the object folder, so git gc fails in the step", entry)
+				}
+			}
+		})
+	}
 }
 
 func TestSandboxPlan_HooksAndAgentSettingsAreDeniedForWriteByPatternAtAnyDepth(t *testing.T) {

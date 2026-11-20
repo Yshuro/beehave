@@ -328,3 +328,99 @@ func TestRoundTree_AProjectGateWhoseRemovedWorktreeCannotBeMadeAgainStopsBeforeT
 	assert.Empty(t, key)
 	assert.Empty(t, gate.jobs, "the gate does not run in a folder that is missing")
 }
+
+const childAgentFlow = "def worker(item):\n    agent(name = \"a\", prompt = \"prompts/a.md\", model = \"m\")\n\ndef main(item):\n    gather(spawn(items = [\"21\"], entry = \"worker\", name = \"fan\"), name = \"fan\")\n"
+
+func TestRoundTree_AChildItemOfARoundMakesItsWorktreeAtTheBaseOfTheRound(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	made, bases := &ensureLog{}, &ensureLog{}
+	rig.h.trees = &fakeTrees{dir: rig.dir, ensured: made, bases: bases}
+
+	_, err := rig.h.engine(t).RunFile(testRound, testProject, flowFile(t, childAgentFlow, "Probe.\n"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{testRound, "21"}, made.all(), "the round made its own tree, then the child made its tree")
+	assert.Equal(t, []string{"", "integration/s1"}, bases.all(), "the round item names no base, and its child names the base of the round")
+}
+
+func TestRoundTree_AChildItemOfARunThatIsNoRoundMakesItsWorktreeAtTheBaseOfTheProject(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	made, bases := &ensureLog{}, &ensureLog{}
+	rig.h.trees = &fakeTrees{dir: rig.dir, ensured: made, bases: bases}
+
+	_, err := rig.h.engine(t).RunFile(testItem, testProject, flowFile(t, childAgentFlow, "Probe.\n"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"21"}, made.all(), "only the child made a tree")
+	assert.Equal(t, []string{""}, bases.all(), "a parent with no round gives the child no base")
+}
+
+func TestRoundTree_ThePhaseOfAChildItemCarriesTheBaseOfItsRound(t *testing.T) {
+	t.Parallel()
+
+	got := agentArgs{}.phase(ItemInput{Item: "21", Project: testProject, Base: "integration/s1"}, "login", "prompt", "")
+
+	assert.Equal(t, "integration/s1", got.Base)
+}
+
+func TestRoundTree_TheLostFolderOfAChildItemIsMadeAtTheBaseOfItsRound(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	bases := &ensureLog{}
+	tree, _ := gitTree(t)
+	harness.trees = &fakeTrees{dir: tree, bases: bases}
+
+	_, _, err := harness.engine(t).lostFolder(t.Context(), PhaseInput{Item: "21", Project: testProject, Base: "integration/s1"})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"integration/s1"}, bases.all())
+}
+
+// childFlowOnBase is childAgentFlow with the round base that the settings name passed to spawn.
+func childFlowOnBase(base string) string {
+	return "def worker(item):\n    agent(name = \"a\", prompt = \"prompts/a.md\", model = \"m\")\n\ndef main(item):\n    gather(spawn(items = [\"21\"], entry = \"worker\", base = \"" + base + "\", name = \"fan\"), name = \"fan\")\n"
+}
+
+func TestRoundTree_ASpawnWhoseBaseIsTheBaseOfTheRoundItemStartsItsChild(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	made, bases := &ensureLog{}, &ensureLog{}
+	rig.h.trees = &fakeTrees{dir: rig.dir, ensured: made, bases: bases}
+
+	_, err := rig.h.engine(t).RunFile(testRound, testProject, flowFile(t, childFlowOnBase("integration/s1"), "Probe.\n"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"", "integration/s1"}, bases.all())
+}
+
+func TestRoundTree_ASpawnWhoseBaseDiffersFromTheBaseOfTheRoundItemStartsNoChildAndNamesBothBases(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	made := &ensureLog{}
+	rig.h.trees = &fakeTrees{dir: rig.dir, ensured: made}
+
+	_, err := rig.h.engine(t).RunFile(testRound, testProject, flowFile(t, childFlowOnBase("integration/s2"), "Probe.\n"))
+
+	require.ErrorContains(t, err, "the round item "+testRound+" has the base integration/s1, and the base given to spawn is integration/s2")
+	assert.Equal(t, []string{testRound}, made.all(), "no child made a tree")
+}
+
+func TestRoundTree_ASpawnThatNamesABaseUnderAnItemThatIsNoRoundCutsItsChildAtThatBase(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	made, bases := &ensureLog{}, &ensureLog{}
+	rig.h.trees = &fakeTrees{dir: rig.dir, ensured: made, bases: bases}
+
+	_, err := rig.h.engine(t).RunFile(testItem, testProject, flowFile(t, childFlowOnBase("integration/s1"), "Probe.\n"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"integration/s1"}, bases.all(), "the child is cut at the base that its gate reads, though no round item named it")
+}

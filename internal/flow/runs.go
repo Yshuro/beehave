@@ -59,9 +59,9 @@ func (r run) terminal() bool {
 	return false
 }
 
-// cancelable reports whether a cancel reaches the run: an open run, or a canceled one, whose children a cancel that stopped between two levels of the tree left open.
+// cancelable reports whether a cancel reaches the run: an open run, a failed one, or a canceled one, whose children a cancel that stopped between two levels of the tree left open.
 func (r run) cancelable() bool {
-	return !r.terminal() || r.Status.Status == dbos.WorkflowStatusCancelled
+	return !r.terminal() || r.Status.Status == dbos.WorkflowStatusCancelled || r.failed()
 }
 
 // failed reports whether the attempt ended with an error. Only beehave resume continues it.

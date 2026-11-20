@@ -28,6 +28,9 @@ import (
 const (
 	outputsFolder = "outputs"
 	outputsMode   = 0o700
+	// inputsFolder holds the data files of the agent calls, beside the output files. dataMode is the mode of a data file.
+	inputsFolder = "inputs"
+	dataMode     = 0o600
 )
 
 // agentArgs are the arguments of an agent call, and the folder and output file of its step.
@@ -61,6 +64,9 @@ type agentArgs struct {
 	// sandbox is the sandbox keyword as written. box is the sandbox the step runs with, which the render step records, or nil for no sandbox.
 	sandbox sandboxChoice
 	box     *model.Sandbox
+	// record is the JSON text of the data keyword, and dataFile the file that the phase writes it to. Both are empty for a call with no data.
+	record   string
+	dataFile string
 }
 
 // agentCall unpacks the arguments of the agent builtin. The second result is the label of the call.
@@ -72,6 +78,7 @@ func agentCall(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple
 		"prompt": &a.prompt, "model": &a.model, "runner": &a.runner, "inputs": &raw.inputs, "outputs": &raw.outputs, "pin": &a.pin,
 		"resume": &a.resume, "forbid_commands": &raw.kinds, "allow_paths": &raw.allow, "protect_paths": &raw.protect, "output_tries": &a.tries,
 		"edits": &a.edits, workflow.LabelKeyword: &a.label, timeoutKeyword: &raw.timeout, "idle_timeout": &raw.idle, "max_budget_usd": &raw.budget, "sandbox": &raw.sandbox, nameKeyword: &raw.name,
+		"data": &raw.data,
 	})
 	if err == nil && a.model == "" {
 		err = errors.New("an agent call needs a model. Add model = \"sonnet\" or the name of another model")
@@ -89,6 +96,7 @@ type agentRaw struct {
 	name, timeout, idle             string
 	inputs, outputs, kinds          starlark.Value
 	allow, protect, sandbox, budget starlark.Value
+	data                            starlark.Value
 }
 
 // read checks the raw arguments of an agent call and keeps the result in a.
@@ -101,7 +109,7 @@ func (a *agentArgs) read(raw agentRaw) (err error) {
 		return err
 	}
 
-	if a.data, err = workflow.InputMap(raw.inputs); err != nil {
+	if err = a.values(raw); err != nil {
 		return err
 	}
 
@@ -110,6 +118,17 @@ func (a *agentArgs) read(raw agentRaw) (err error) {
 	}
 
 	return a.lists(raw)
+}
+
+// values reads the inputs of the prompt and the data of the data file of an agent call.
+func (a *agentArgs) values(raw agentRaw) (err error) {
+	if a.data, err = workflow.InputMap(raw.inputs); err != nil {
+		return err
+	}
+
+	a.record, err = workflow.DataRecord(raw.data)
+
+	return err
 }
 
 // limits reads the timeout, the idle timeout and the dollar cap of an agent call.
@@ -184,7 +203,26 @@ func protectPaths(v starlark.Value, forbid []model.FindingKind) ([]string, error
 // outputFile is the path where the agent of a step writes its declared outputs. It is in the state folder of the engine, named by item and step,
 // so the file never dirties the worktree of the item. A dot or a separator in a name is escaped, so two pairs of item and step never share a file.
 func outputFile(state, item, step string) string {
-	return filepath.Join(state, outputsFolder, model.SafeName(item)+"."+model.SafeName(step)+".json")
+	return stepFile(state, outputsFolder, item, step)
+}
+
+// dataFile is the path where the phase of a step writes the data of the call, in the inputs folder of the state folder.
+func dataFile(state, item, step string) string {
+	return stepFile(state, inputsFolder, item, step)
+}
+
+// dataFileOf is the data file of the call, or "" for a call with no data.
+func (a agentArgs) dataFileOf(state, item, step string) string {
+	if a.record == "" {
+		return ""
+	}
+
+	return dataFile(state, item, step)
+}
+
+// stepFile is the JSON file of one item and step in a folder of the state folder.
+func stepFile(state, folder, item, step string) string {
+	return filepath.Join(state, folder, model.SafeName(item)+"."+model.SafeName(step)+".json")
 }
 
 // agent runs an agent call. The prompt is rendered once and recorded as the note of the first step, so a replay never reads the prompt file again.
@@ -247,6 +285,12 @@ func (s *script) promptOf(a *agentArgs, name, login string) (string, error) {
 func (a *agentArgs) recall(outputs map[string]any) (err error) {
 	a.file = recalledOutputFile(outputs, a.file)
 	a.startHead, _ = outputs[recordedStartHead].(string) //nolint:errcheck // a record made before the start head was kept has none
+	given, err := recalledData(outputs)
+	if err != nil {
+		return err
+	}
+
+	a.dataFile, a.record = given.File, given.Text
 
 	if err = os.MkdirAll(filepath.Dir(a.file), outputsMode); err != nil {
 		return fmt.Errorf("make the folder of the output file: %w", err)
@@ -274,7 +318,7 @@ func (s *script) renderStep(a agentArgs, login string) func(context.Context) (st
 	}
 }
 
-// recordOutputs is the record of the render step: the output file, the start commit, the login, the label and model when set, and the sandbox.
+// recordOutputs is the record of the render step: the output file, the start commit, the login, the label and model when set, the sandbox, and the data and its file.
 func (a agentArgs) recordOutputs(head, login string, sandboxDefault bool) map[string]any {
 	outputs := map[string]any{recordedOutputFile: a.file, recordedStartHead: head, recordedLogin: login}
 	if a.label != "" {
@@ -286,6 +330,7 @@ func (a agentArgs) recordOutputs(head, login string, sandboxDefault bool) map[st
 	}
 
 	maps.Copy(outputs, recordSandbox(a.sandbox.effective(sandboxDefault)))
+	maps.Copy(outputs, recordData(promptData{File: a.dataFile, Text: a.record}))
 
 	return outputs
 }
@@ -305,7 +350,7 @@ func (s *script) prepare(a *agentArgs, name string) (err error) {
 		return err
 	}
 
-	a.file = outputFile(s.e.dir, s.in.Item, name)
+	a.file, a.dataFile = outputFile(s.e.dir, s.in.Item, name), a.dataFileOf(s.e.dir, s.in.Item, name)
 
 	if err = os.MkdirAll(filepath.Dir(a.file), outputsMode); err != nil {
 		return fmt.Errorf("make the folder of the output file: %w", err)
@@ -335,11 +380,12 @@ func (a agentArgs) phase(in ItemInput, login, prompt, treeStart string) PhaseInp
 	return PhaseInput{
 		Item: in.Item, Project: in.Project, Login: login, Prompt: prompt,
 		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, MaxBudget: a.maxBudget,
-		NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart,
+		NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart, Base: in.Base,
+		DataFile: a.dataFile, Data: a.record,
 	}
 }
 
-// render checks the pin, reads the prompt file and fills it. The data are the inputs and output_file.
+// render checks the pin, reads the prompt file and fills it. The data are the inputs, output_file and data_file.
 func (s *script) render(ctx context.Context, a agentArgs) (string, error) {
 	if err := checkPin(ctx, a.dir, a.pin); err != nil {
 		return "", err
@@ -352,6 +398,7 @@ func (s *script) render(ctx context.Context, a agentArgs) (string, error) {
 
 	data := maps.Clone(a.data)
 	data["output_file"] = a.file
+	data["data_file"] = a.dataFile
 
 	filled, err := fill(string(text), data)
 	if err != nil {
@@ -531,10 +578,10 @@ func readAgent(ctx context.Context, a agentArgs, ended PhaseOutput) (stepResult,
 		return stepResult{}, err
 	}
 
-	outputs := agentOutputs(ended.Text, ended.Session, ended.Transcript, head, strings.Join(violations, "\n"), capOf(ended.Outcome), ended.Spend, rewrote, ended.Skills)
+	outputs := agentOutputs(ended.Text, ended.Session, ended.Transcript, head, strings.Join(violations, "\n"), capOf(ended.Outcome), ended.Spend, rewrote, a.startHead != "" && head != a.startHead, ended.Skills)
 
 	// A run that left a bad output file still cost money, so its outputs stay in the result and the run cap counts them.
-	if problem := a.readOutputs(outputs); problem != "" {
+	if problem := a.readOutputs(outputs, ended.Denials); problem != "" {
 		return stepResult{Note: problem, Outputs: spendOutputs(ended.Spend)}, nil
 	}
 
@@ -555,13 +602,14 @@ func capOf(outcome agent.Outcome) string {
 }
 
 // readOutputs reads the output file when the call declares outputs and adds them to outputs. It returns what is wrong with the file, or an empty text.
-func (a agentArgs) readOutputs(outputs map[string]any) string {
+// A missing file names each call to it that the permission check of the agent CLI refused.
+func (a agentArgs) readOutputs(outputs map[string]any, denials []agent.Denial) string {
 	// A run that a cap stopped returns its stop with no declared outputs: the workflow guard names the cap, and a missing output file would hide it.
 	if len(a.declared) == 0 || outputs["stop"] != "" {
 		return ""
 	}
 
-	written, problem := writtenObject(a.file)
+	written, problem := writtenObject(a.file, denials)
 	if problem != "" {
 		return problem
 	}
@@ -583,11 +631,12 @@ func addDeclared(outputs map[string]any, names []string, written map[string]any)
 	return ""
 }
 
-// writtenObject reads the JSON object in the output file. The second result says what is wrong with the file.
-func writtenObject(file string) (map[string]any, string) {
+// writtenObject reads the JSON object in the output file. The second result says what is wrong with the file. A missing file names the tools whose
+// calls to write it the permission check of the agent CLI refused.
+func writtenObject(file string, denials []agent.Denial) (map[string]any, string) {
 	raw, err := fs.ReadFile(os.DirFS(filepath.Dir(file)), filepath.Base(file))
 	if err != nil {
-		return nil, "the agent wrote no output file at " + file
+		return nil, "the agent wrote no output file at " + file + refusedWrites(file, denials)
 	}
 
 	var written map[string]any
@@ -596,6 +645,25 @@ func writtenObject(file string) (map[string]any, string) {
 	}
 
 	return written, ""
+}
+
+// refusedWrites says which tools the permission check of the agent CLI refused when they called to write file, or returns "".
+func refusedWrites(file string, denials []agent.Denial) string {
+	var tools []string
+
+	for _, denial := range denials {
+		if denial.Target == file {
+			tools = append(tools, denial.Tool)
+		}
+	}
+
+	if len(tools) == 0 {
+		return ""
+	}
+
+	slices.Sort(tools)
+
+	return fmt.Sprintf(": the permission check of the agent CLI refused the %s call that writes it", strings.Join(slices.Compact(tools), " and "))
 }
 
 // stringOutput returns one declared output of the output file. The second result says what is wrong with it.

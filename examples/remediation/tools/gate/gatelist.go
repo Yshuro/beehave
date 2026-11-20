@@ -25,8 +25,6 @@ const (
 
 var (
 	gateHeading   = regexp.MustCompile(`^## Gate steps[ \t]*$`)
-	derivedLine   = regexp.MustCompile(`Derived from: *[^ ]`)
-	pinnedLine    = regexp.MustCompile(` at [0-9a-f]{7}`)
 	separatorCell = regexp.MustCompile(`^:?-+:?$`)
 	stepName      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9:_.-]*$`)
 	seeCommand    = regexp.MustCompile(`^(?:command: *)?see `)
@@ -98,9 +96,8 @@ func (g *gateList) addStep(step, command, name string) {
 
 // gateScan follows the walk over the lines of the gate list: which section it is in and what that section holds.
 type gateScan struct {
-	on              bool
-	sections        int
-	derived, pinned bool
+	on       bool
+	sections int
 }
 
 func (s *gateScan) read(list *gateList, line, name string) {
@@ -117,30 +114,17 @@ func (s *gateScan) read(list *gateList, line, name string) {
 		return
 	}
 
-	s.derive(line)
-
 	if tableLine.MatchString(line) {
 		list.addRow(line, name)
-	}
-}
-
-func (s *gateScan) derive(line string) {
-	if derivedLine.MatchString(line) {
-		s.derived = true
-		s.pinned = s.pinned || pinnedLine.MatchString(line)
 	}
 }
 
 func (s *gateScan) errors(g *gateList, name string) []string {
 	switch {
 	case s.sections == 0:
-		return []string{name + ` has no "## Gate steps" section. Add it: one "| name | command |" row for each step, derived from the CI workflow of the repository`}
+		return []string{name + ` has no "## Gate steps" section. Add it: one "| name | command |" row for each step. "remedy gatelist" prints the steps of the CI workflow files`}
 	case s.sections > 1:
 		return []string{fmt.Sprintf(`%s has %d "## Gate steps" sections. The gate list has one home`, name, s.sections)}
-	case !s.derived:
-		return []string{name + `: the "## Gate steps" section has no "Derived from: <workflow file and jobs>, at <commit>" line`}
-	case !s.pinned:
-		return []string{name + `: the "Derived from:" line names no commit. End it with "at <commit>", the base tip the workflow files were read at`}
 	case len(g.steps) == 0:
 		return []string{name + `: the "## Gate steps" section has no rows`}
 	}
@@ -158,16 +142,6 @@ func readGateList(text, name string) *gateList {
 	list.errors = append(list.errors, scan.errors(list, name)...)
 
 	return list
-}
-
-// Steps returns the steps of the gate list, or a refusal that names each reason the list cannot be read.
-func Steps(text, name string) ([]Step, error) {
-	list := readGateList(text, name)
-	if len(list.errors) > 0 {
-		return nil, listRefusal(list.errors, nil)
-	}
-
-	return list.steps, nil
 }
 
 func listRefusal(errors, lines []string) *check.Refusal {
