@@ -126,7 +126,7 @@ func TestGateSandbox_APlanForARefusedCloneRunsNoGate(t *testing.T) {
 func TestSandboxPlan_ALinkedWorktreeGetsTheCommonFolderThatItsCloneRecords(t *testing.T) {
 	t.Parallel()
 
-	r := newSandboxRig(t)
+	r := newFolderRig(t)
 	main := filepath.Join(filepath.Dir(r.work), "main")
 	require.NoError(t, os.Mkdir(main, 0o700))
 	runGit(t, main, "init", "-q", "-b", "main")
@@ -142,7 +142,6 @@ func TestSandboxPlan_ALinkedWorktreeGetsTheCommonFolderThatItsCloneRecords(t *te
 	assert.Equal(t, []string{filepath.Join(main, ".git")}, r.f.spec.Sandbox.GitDirs, "the common folder comes from the records of the clones")
 
 	plain := newSandboxRig(t)
-	require.NoError(t, os.Mkdir(filepath.Join(plain.work, ".git"), 0o700))
 
 	_, err = plain.f.agents.Run(t.Context(), req)
 	require.NoError(t, err)

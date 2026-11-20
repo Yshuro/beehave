@@ -3,7 +3,6 @@ package main
 import (
 	"cmp"
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -155,13 +154,12 @@ func closedPaths(ctx context.Context, git gitexec.Runner, dir, home string) ([]s
 }
 
 // hooksPath returns the hooks folder that core.hooksPath names for the repository of git, as an absolute path against dir, or "" when it is not set.
-// A clone whose config holds a setting outside the allow list is an error: its hooks folder cannot be read, so no plan can deny it.
+// A clone whose git config cannot be read, or holds a setting outside the allow list, is an error: its hooks folder cannot be read, so no plan can deny it.
 func hooksPath(ctx context.Context, git gitexec.Runner, dir, home string) (string, error) {
 	result := git.ReadConfig(ctx, "core.hooksPath")
 
-	var refused *gitexec.SettingError
-	if errors.As(result.SetupErr, &refused) {
-		return "", refused
+	if result.SetupErr != nil {
+		return "", result.SetupErr
 	}
 
 	text := strings.TrimSpace(result.Stdout)
