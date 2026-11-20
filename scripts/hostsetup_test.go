@@ -133,7 +133,7 @@ func newFakeHost(t *testing.T) *fakeHost {
 	return h
 }
 
-// gnuRealpath finds the GNU realpath, which knows -m. On macOS that is grealpath only: the realpath of macOS has no -m.
+// gnuRealpath finds a realpath that knows -m: realpath on Linux (GNU or uutils), grealpath on macOS, whose realpath has no -m.
 func gnuRealpath(t *testing.T) string {
 	t.Helper()
 

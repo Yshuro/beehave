@@ -245,16 +245,8 @@ check_root_paths() {
 	top=${sysroot:-/}
 	for start in "$root" "$sysroot/usr/local/go" "$sysroot/usr/local/bin"; do
 		[ -e "$start" ] || [ -L "$start" ] || continue
-		real=$(realpath -m -- "$start") || fail "the path $start cannot be read"
-		found=$(changeable tree "$real")
-		dir=$start
-		while [ -z "$found" ] && [ "$dir" != / ] && [ "$dir" != "$top" ]; do
-			dir=$(dirname "$dir")
-			found=$(changeable_up "$dir")
-			# A folder that is its own real path has no link above it either, so changeable_up judged everything above it.
-			[ "$(realpath -m -- "$dir")" != "$dir" ] || break
-		done
-		# Each link of a chain, and its folder. realpath -m accepts a loop of links, so the count of links stops it.
+		# Each link of a chain, and its folder. The count runs before realpath, because realpath -m fails on a loop in some coreutils.
+		found=
 		hop=$start
 		hops=0
 		while [ -z "$found" ] && [ -L "$hop" ]; do
@@ -267,7 +259,18 @@ check_root_paths() {
 			*) hop=$(dirname "$hop")/$target ;;
 			esac
 		done
-		[ -n "$found" ] || [ "$real" = "$start" ] || found=$(changeable_up "$(dirname "$real")")
+		if [ -z "$found" ]; then
+			real=$(realpath -m -- "$start") || fail "the path $start cannot be read"
+			found=$(changeable tree "$real")
+			dir=$start
+			while [ -z "$found" ] && [ "$dir" != / ] && [ "$dir" != "$top" ]; do
+				dir=$(dirname "$dir")
+				found=$(changeable_up "$dir")
+				# A folder that is its own real path has no link above it either, so changeable_up judged everything above it.
+				[ "$(realpath -m -- "$dir")" != "$dir" ] || break
+			done
+			[ -n "$found" ] || [ "$real" = "$start" ] || found=$(changeable_up "$(dirname "$real")")
+		fi
 		[ -z "$found" ] || fail "$found can be written by a user other than root and the admin, so that user could change code that root runs here. Remove the write access of other users, and run the root stage from a clone that only root or the admin can write"
 	done
 }
