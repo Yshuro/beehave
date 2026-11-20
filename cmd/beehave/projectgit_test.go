@@ -66,7 +66,7 @@ func TestProjectGit_AProjectThatTheConfigDoesNotHoldRunsNoGitInAFolderNoCloneKno
 func TestSandboxPlan_AStepOfAProjectThatTheConfigDoesNotHoldDoesNotStartInAFolderNoCloneKnows(t *testing.T) { //nolint:paralleltest // t.Setenv changes the git config of the process
 	ownerGlobal(t, "[user]\n\tname = Global Owner\n\temail = global@example.com\n")
 
-	r := newSandboxRig(t)
+	r := newFolderRig(t)
 	r.f.agents.projects = nil
 	r.f.agents.identity = gitIdentity
 
@@ -76,6 +76,7 @@ func TestSandboxPlan_AStepOfAProjectThatTheConfigDoesNotHoldDoesNotStartInAFolde
 
 	require.NoError(t, err)
 	assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, "a project the config does not hold counts as one with a repository")
+	assert.Contains(t, got.Note, gitexec.ErrUnknownRepository.Error(), "the note names the folder that no clone knows, not the missing identity")
 	assert.Nil(t, r.f.spec.Sandbox)
 }
 

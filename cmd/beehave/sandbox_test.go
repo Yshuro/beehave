@@ -25,7 +25,18 @@ type sandboxRig struct {
 	work string
 }
 
+// newSandboxRig is a rig whose work folder is a git clone that the engine records, so the hooks read of a step finds a repository.
 func newSandboxRig(t *testing.T) *sandboxRig {
+	t.Helper()
+
+	r := newFolderRig(t)
+	runGit(t, r.work, "init", "-q")
+
+	return r
+}
+
+// newFolderRig is a rig whose work folder is an empty folder of the clones: no clone and no worktree record names it.
+func newFolderRig(t *testing.T) *sandboxRig {
 	t.Helper()
 
 	home, work := t.TempDir(), filepath.Join(t.TempDir(), "repos", "p")
@@ -251,11 +262,37 @@ func TestSandboxPlan_ACloneWhoseConfigNamesAHooksFolderStartsNoStep(t *testing.T
 	assert.Nil(t, r.f.spec.Sandbox)
 }
 
-func TestSandboxPlan_AGitFileOfALinkedWorkTreeIsNotInTheWriteDenyList(t *testing.T) {
+func TestSandboxPlan_ACloneWhoseGitConfigCannotBeReadStartsNoStepAndTheNoteNamesTheRead(t *testing.T) {
 	t.Parallel()
 
 	r := newSandboxRig(t)
-	r.touch(t, filepath.Join(r.work, ".git"))
+	require.NoError(t, os.Chmod(filepath.Join(r.work, ".git", "config"), 0))
+
+	resolved, err := filepath.EvalSymlinks(r.work)
+	require.NoError(t, err)
+
+	req := request()
+	req.Sandbox = &model.Sandbox{}
+
+	got, err := r.f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeNotStarted, got.Outcome)
+	assert.Contains(t, got.Note, "read the git settings of "+resolved)
+	assert.Contains(t, got.Note, "The step did not start.")
+	assert.Nil(t, r.f.spec.Sandbox)
+}
+
+func TestSandboxPlan_AGitFileOfALinkedWorkTreeIsNotInTheWriteDenyList(t *testing.T) {
+	t.Parallel()
+
+	r := newFolderRig(t)
+	main := filepath.Join(filepath.Dir(r.work), "main")
+	require.NoError(t, os.Mkdir(main, 0o700))
+	runGit(t, main, "init", "-q", "-b", "main")
+	commitIn(t, main, "start")
+	runGit(t, main, "worktree", "add", "-q", "--detach", r.work, "HEAD")
+	require.FileExists(t, filepath.Join(r.work, ".git"), "a linked work tree has a .git file")
 
 	req := request()
 	req.Sandbox = &model.Sandbox{}
@@ -270,7 +307,6 @@ func TestSandboxPlan_APathIsComparedWithoutCaseAndAfterSymlinksAreResolved(t *te
 	t.Parallel()
 
 	r := newSandboxRig(t)
-	require.NoError(t, os.Mkdir(filepath.Join(r.work, ".git"), 0o700))
 	require.NoError(t, os.Mkdir(filepath.Join(r.home, ".ssh"), 0o700))
 	require.NoError(t, os.Symlink(filepath.Join(r.work, ".git"), filepath.Join(r.work, "lnk")))
 	require.NoError(t, os.Symlink(filepath.Join(r.home, ".ssh"), filepath.Join(r.work, "sshlnk")))
