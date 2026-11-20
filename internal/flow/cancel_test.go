@@ -217,8 +217,8 @@ func TestCancels_EndedIDsListTheFinishedRunsAndForgetDropsThem(t *testing.T) {
 	runs.add("item-12-r1", openRun{ended: finished})
 	runs.add("item-13-r1", openRun{ended: make(chan struct{})})
 
-	ended := runs.endedIDs()
-	assert.Equal(t, []string{"item-12-r1"}, ended, "a running run is not ended")
+	ended := runs.endedAttempts()
+	assert.Equal(t, []attempt{{id: "item-12-r1", ended: finished}}, ended, "a running run is not ended")
 
 	runs.forget(ended)
 

@@ -153,13 +153,13 @@ func TestCancels_BeginRefusesARunThatThisProcessExecutesOrReleases(t *testing.T)
 
 	assert.True(t, list.begin("stray"))
 
-	cut := list.cancel([]string{"local"})
+	cut := list.cancel([]attempt{{id: "local"}})
 
 	require.Len(t, cut, 1)
 	assert.False(t, list.begin("local"), "a cut run is released until its give-back ends")
 
 	list.add("gate", openRun{id: "gate", cancel: func() {}, gate: true})
-	require.Len(t, list.cancel([]string{"gate"}), 1)
+	require.Len(t, list.cancel([]attempt{{id: "gate"}}), 1)
 	assert.True(t, list.begin("gate"), "a gate has no give-back, so a cut gate is not held")
 }
 
