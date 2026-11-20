@@ -739,10 +739,13 @@ const pullListLimit = 5
 const namedListLimit = 50
 
 // pulls reads and changes the pull request of an item. The pull request is the one on the branch that is named for the item.
+// trees finds the clone that a push copies the head from, and copier runs the copy.
 type pulls struct {
 	projects map[string]config.Project
 	forge    func(model.Project) (forge.Forge, error)
 	runners  []string
+	trees    worktrees
+	copier   headCopy
 }
 
 // opened is the forge of one project. It passes the optional reads of the merge (trees and failed logs) to the forge when the forge has them:

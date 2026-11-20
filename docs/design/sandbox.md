@@ -173,7 +173,7 @@ The project file keeps two lists for the gate, and `beehave` records them. The e
 
 ### Choice of the enforcer
 
-The project key `sandbox_enforcer` names the enforcer. It holds for the enforcer of the gate, not for the sandbox of Claude Code in an agent step.
+The project key `sandbox_enforcer` names the enforcer. It holds for the enforcer of the gate and of the copy of the head that the engine push makes (see [push](workflow-files.md#push)), not for the sandbox of Claude Code in an agent step.
 
 | Value | Meaning |
 |---|---|
@@ -275,7 +275,7 @@ Removal:
 
 ### When no enforcer can run
 
-When no enforcer can run here, `beehave` runs no gate command outside a sandbox that the project asked for, and the gate does not run. The refusal text ends with the reason of the enforcer.
+When no enforcer can run here, `beehave` runs no gate command outside a sandbox that the project asked for, and the gate does not run. The refusal text ends with the reason of the enforcer. The engine push is refused too, in every project, because its copy of the head always runs under an enforcer.
 
 The same holds, even in a project that builds on a host, for:
 

@@ -457,6 +457,9 @@ func (dryForge) Open(context.Context, string, string, OpenRequest) (OpenResult, 
 	return OpenResult{Number: dryPull}, nil
 }
 
+// Push shows the head as pushed and writes nothing to the remote.
+func (dryForge) Push(context.Context, string, string, string, string, string) error { return nil }
+
 type dryTrees struct{ dir string }
 
 func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {

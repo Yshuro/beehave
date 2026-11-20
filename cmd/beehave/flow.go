@@ -119,7 +119,7 @@ func flowFactoryFrom(build func(context.Context, config.Config, flow.Options) (*
 			// The client never reads usage, so the table needs no environment.
 			table := newAdapters(proc.NewExecRunner("bd", ""), stateFolder(opts.StateDir), nil)
 
-			client, err := flow.OpenClient(ctx, opts, releaseDeps(newLife(cfg, table), cfg.Projects, opts))
+			client, err := flow.OpenClient(ctx, opts, releaseDeps(newLife(cfg, table, newWorktrees(cfg.Projects, opts, nil)), cfg.Projects, opts))
 			if err != nil {
 				return nil, err
 			}
@@ -169,7 +169,7 @@ func newEngineOn(ctx context.Context, cfg config.Config, opts flow.Options, read
 // depsOn builds the deps of the engine over a pool pick and a table of adapters.
 func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) flow.Deps {
 	trees := newWorktrees(cfg.Projects, opts, table.forge)
-	life := newLife(cfg, table)
+	life := newLife(cfg, table, trees)
 	commands := newPrograms(cfg, trees, cloneLock{repos: trees.repos}, table)
 
 	return flow.Deps{
@@ -236,8 +236,8 @@ func releaseDeps(life itemLife, projects map[string]config.Project, opts flow.Op
 }
 
 // newLife builds the claim, the renewal and the forge calls of the merge step. The pull request of an item is on the branch named for the item.
-// The same value is the merger of a merge step with `merge = true`. The runners of the config count as own identities there.
-func newLife(cfg config.Config, table adapters) itemLife {
+// The same value is the merger of a merge step with `merge = true`. The runners of the config count as own identities there. A push runs in a worktree of trees.
+func newLife(cfg config.Config, table adapters, trees worktrees) itemLife {
 	runners := make([]string, len(cfg.Runners))
 	for i, runner := range cfg.Runners {
 		runners[i] = runner.Name
@@ -245,7 +245,7 @@ func newLife(cfg config.Config, table adapters) itemLife {
 
 	return itemLife{
 		leases: leases{projects: cfg.Projects, rows: table.leases, owner: ownerToken},
-		pulls:  pulls{projects: cfg.Projects, forge: table.forge, runners: runners},
+		pulls:  pulls{projects: cfg.Projects, forge: table.forge, runners: runners, trees: trees, copier: newHeadCopy()},
 	}
 }
 

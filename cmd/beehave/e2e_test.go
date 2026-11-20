@@ -47,6 +47,12 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// The test binary acts as the upload-pack helper of the push, as beehave does in main.
+	std := helperIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}
+	if code, helper := runUploadPack(context.Background(), os.Args, config.ProcessEnv(), chooseEnforcer, std); helper {
+		os.Exit(code)
+	}
+
 	// The test binary also acts as the Landlock helper, as beehave does in main, for the test that runs a gate under the real enforcer.
 	if code, helper := landlock.RunHelper(os.Args, os.Stderr); helper {
 		os.Exit(code)
@@ -159,6 +165,8 @@ func (e2eFiles) Comment(context.Context, string, string, string, string) (int, e
 func (e2eFiles) Open(context.Context, string, string, flow.OpenRequest) (flow.OpenResult, error) {
 	return flow.OpenResult{}, nil
 }
+
+func (e2eFiles) Push(context.Context, string, string, string, string, string) error { return nil }
 
 func (f e2eFiles) Release(_ context.Context, _, item, _ string) error {
 	return f.event("release", item)

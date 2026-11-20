@@ -20,7 +20,6 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/sandbox"
-	"github.com/tobocop2/beehave/internal/sandbox/enforcers"
 )
 
 // sandboxFailed is the exit code of a gate that the sandbox could not start. The gate command ran no code.
@@ -39,18 +38,7 @@ type gateSandbox struct {
 }
 
 func newGateSandbox(projects map[string]config.Project, clones cloneLock) gateSandbox {
-	choose := func(name string) (sandbox.Enforcer, error) {
-		table := enforcers.Table()
-
-		key, err := sandbox.Choose(table, enforcers.Order(), name)
-		if err != nil {
-			return nil, err
-		}
-
-		return table[key], nil
-	}
-
-	return gateSandbox{projects: projects, enforcer: choose, home: os.UserHomeDir, environ: model.EnvPairs(config.ProcessEnv()), clones: clones}
+	return gateSandbox{projects: projects, enforcer: chooseEnforcer, home: os.UserHomeDir, environ: model.EnvPairs(config.ProcessEnv()), clones: clones}
 }
 
 // applies says whether a gate of the project runs under the sandbox on this machine: the project has the sandbox on and the gate runs here.
@@ -186,7 +174,8 @@ func trusted(root string, info fs.FileInfo, uid int) error {
 	return nil
 }
 
-// reclaim removes the folders in root that belong to a process which is gone. A folder that stays is tried again by the next gate.
+// reclaim removes the folders in root that belong to a process which is gone. A folder that stays is tried again by the next caller. Each path is built from
+// root and the name of one entry that root lists, and is removed only when its folder is root itself, so the removal never leaves root.
 func reclaim(root string) error {
 	entries, err := os.ReadDir(root)
 	if err != nil {
@@ -194,9 +183,12 @@ func reclaim(root string) error {
 	}
 
 	for _, entry := range entries {
-		if !ownerAlive(entry.Name()) {
-			_ = removeTree(filepath.Join(root, entry.Name())) //nolint:errcheck // best effort; the next gate tries again
+		path := filepath.Join(root, entry.Name())
+		if filepath.Dir(path) != filepath.Clean(root) || ownerAlive(entry.Name()) {
+			continue
 		}
+
+		_ = removeTree(path) //nolint:errcheck // best effort; the next caller tries again
 	}
 
 	return nil

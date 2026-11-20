@@ -20,7 +20,7 @@ table must change, stop and report it: a wider rule is the owner's decision.
 
 ## Before you write
 
-**Check for an existing pull request, at the start and again before you push.**
+**Check for an existing pull request, at the start and again before your last commit.**
 **Repeat-offender check:** `git log -S` and `gh pr list --state all --search`, reading the CLOSING comment
 rather than the commits. A closed pull request is not a record of work that landed.
 **Re-derive every cited site at the tip you branch from.** Line numbers move.
@@ -67,7 +67,7 @@ never "10 of 10". A run with 0 tests is not a pass.
 **A `while read` loop gives its stdin to every command inside it.** Read the list on fd 3 (`while read -r x <&3; do ...; done 3< list`) or put `</dev/null` on the inner command, and assert the loop count against the input count.
 **A regeneration is evidence for its own tree only.** Compare the output with a fresh tree of the same commit. A regeneration that wrote nothing looks the same as one that wrote identical bytes.
 **A gate that covers only the diff becomes a full run in two cases**: the diff touches a shared foundation (the workflow files, a lockfile, the schema, a widely used helper), or a red has no explanation. Name the trigger in the report. An unfinished full run never blocks a verdict: report it as a named gap.
-**Before each push, search the diff for `TODO` and `FIXME`.** Each one that the change adds names its author, as `TODO(name)`.
+**Before each commit, search the diff for `TODO` and `FIXME`.** Each one that the change adds names its author, as `TODO(name)`.
 
 ## Evidence rules that are not optional
 
@@ -152,7 +152,7 @@ silently discards other uncommitted edits.
 
 ## Merge rules
 
-{{ if .facts.forge }}**Push at the first checkpoint.** Push the branch when the first commit is green. Push every later commit to it at once; a commit that stays local is lost with the lane. Do not open the pull request, set its body or link a stack: the engine does these after this step.
+{{ if .facts.forge }}**Commit at the first checkpoint.** Make the first commit when the change is green, and commit every later change at once; a change that is not committed is lost with the lane. Do not push: the engine pushes the head of the branch after this step. Do not open the pull request, set its body or link a stack: the engine does these after the push.
 {{ else }}This project has no forge: commit on the branch and push nothing.
 {{ end }}
 **Never use the merge queue of GitHub.** The orchestrator merges a pinned head with `gh pr merge`. Never run `gh pr merge --auto` and never add a pull request to a queue.
@@ -203,7 +203,7 @@ control, every arm you discarded. That file is the record and it is read.
 **The report carries four tables.** A report that lacks one goes back to you unread.
 
 - `## Claims`: every claim in the title, body, commit messages, changelog entry, new comments, assertion
-  messages and closing keywords, with its evidence and the head it was verified at. Every push makes the
+  messages and closing keywords, with its evidence and the head it was verified at. Every commit makes the
   table stale, so re-verify it at the new head.
 - `## Hunks`: every changed production hunk, the arm that removes it, and the red line a test printed.
 - `## Inputs`: every input class the changed code accepts or refuses, what the base does, what the head does,

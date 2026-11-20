@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `push`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -55,6 +55,7 @@ Four cases are not safe today, and a later change fixes each of them.
 | `item_status` | Safe. | GitHub and beads read the state and the labels first and run only the commands that change them. The `local` tracker sets the state, and the same state again changes nothing. |
 | `pr_comment` | Safe. | The forge reads the comments of the pull request first and finds the key. |
 | `pr_open` | Safe. It opens no second pull request, and `created` is false. | The forge looks for an open pull request on the branch first. |
+| `push` | Safe. | Git exits 0 when the branch is already at the head, and checks no lease then. A replay of a push that landed passes. |
 | `merge`: each member | Safe. | The step `batch:<name>.intent#<item>` is recorded before the merge of the member. The forge shows the pull request as merged at the gated head, so the step counts it as done. |
 | `spawn` | Safe. It rests on the library. | The child run has a fixed workflow id, and DBOS returns the recorded child for it. A test stops the parent while it waits in `gather`, after `spawn` returned, and shows one child run with the same id after the resume. No test reaches the window inside the start call, between the child row and the record of it in the parent. |
 | `wait` | Safe. It rests on the library, and no test in this table stops a wait. | The deadline is the output of a recorded DBOS sleep, and the answer is a durable receive. A resume waits for the same answer. |
@@ -229,6 +230,21 @@ The `parent` argument:
 - The read is a recorded step, so a resumed run replays the first state.
 - A read that fails ends the step with an error. A project with no forge cannot show a state, which is an error too.
 - A build with no queue reader fails the call. A dry run does not fake the read: it reports the step as not run and ends there.
+
+#### `push`
+
+`push(branch, head, expect, name)` pushes the commit `head` of the clone of the project to `branch` on the remote and returns `head`. The engine process runs the push, so an agent step in a sandbox needs no credential: the workflow calls `push` after each agent step that commits.
+
+- The push runs no setting that an agent can write. An agent whose worktree shares the clone can write the git config of the clone, so the push never runs in the clone. It runs in the push repository of the project, a bare repository that the engine makes on the first push and keeps, at `push/<project>.git` in an owner-only folder of the state folder. That repository has no template and no hooks.
+- The push carries only objects that a reader with the rights of a sandboxed agent can read in the clone. The engine copies `head` into the push repository with `git fetch --upload-pack`, and git runs `beehave` as upload-pack. That program runs `git upload-pack` under the sandbox enforcer of the project (`sandbox_enforcer`), with read on the clone folder and the system folders only, no write and no network. A head that needs an object from outside the clone, through a list of other object stores, a link, or a git folder that the agent replaced, fails the copy, and nothing is pushed. The copy runs under the lock of the clone, and a later push fetches only the new objects.
+- When no sandbox enforcer can run on the machine, every push is refused, and the error names the reason and `sandbox_enforcer`. On macOS, the git that the push finds must not be the Apple shim in `/usr/bin`, which the enforcer refuses.
+- The remote is the address that the engine read: the `source` of the project, or else the clone address of its forge. It is never a remote name, so no remote, push address, address rewrite, ssh command or credential helper in the clone config applies.
+- The push runs `git push --no-verify --force-with-lease=refs/heads/<branch>:<expect> <remote> <head>:refs/heads/<branch>` with the hooks off and no terminal prompt. With an empty `expect`, the push has no lease and git takes only a new branch or a fast forward.
+- The run must hold a trusted claim on the item. A run that lost its claim pushes nothing and stops with the loss, and a loss during the push stops the push.
+- A branch already at `head` is no error. A replay after a crash between the push and its step record therefore passes, whatever its lease. A resume after the step record reads the record and pushes nothing.
+- A branch that moved since the lease is refused with an error that names the branch, and the item stops.
+- An empty `branch` or `head` is refused before the push. So is a project with no clone, and a project with no forge, which pushes nothing.
+- In a dry run the push writes nothing and returns `head`.
 
 #### Closing keywords in posted text
 
