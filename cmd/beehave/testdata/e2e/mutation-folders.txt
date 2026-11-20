@@ -126,11 +126,12 @@ exec sh repo/scripts/mutation-pr.sh main
 grep -count=2 '^START;' starts-half
 stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
 
-# No start wrote a report: the run fails.
+# No start wrote a report: the run fails and the message names the folder of each start.
 env GREMLINS_CASE=none
 ! exec sh repo/scripts/mutation-pr.sh main
 grep -count=2 '^START;' starts-none
-stdout '^mutation-pr: gremlins wrote no report: it found no mutant in the module$'
+stdout '^mutation-pr: gremlins wrote no report: it found no mutant in internal/config, internal/store$'
+! stdout 'in the module'
 
 # A report that is not JSON fails the run.
 env GREMLINS_CASE=bad
