@@ -193,7 +193,7 @@ Platform support:
 The `seatbelt` enforcer runs the command under `sandbox-exec` with a Seatbelt profile that beehave generates from the plan. The profile:
 
 - denies everything by default;
-- allows reads and writes by path;
+- allows reads and writes by the paths of the plan, and reads of the folders of macOS that every program loads from (`/System`, `/Library/Apple` and the shared cache of the libraries). It adds no other folder: a plan that needs `/usr`, `/etc` or `/opt` names them, as the plan of a gate does;
 - allows TCP connect to the port of the proxy on localhost only;
 - grants no unix socket;
 - allows a Mach service lookup by name only, for the few services that the system libraries need (user and group names, logging, preferences, notifications). A command cannot reach launchd or any other service to start a job.

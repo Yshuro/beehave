@@ -70,6 +70,24 @@ func indexOf(t *testing.T, defines []string, value string) string {
 	return ""
 }
 
+// The plan names what the command reads: the profile adds the frameworks of macOS that every program loads, and no folder such as /opt or /etc that can
+// hold what a project denies.
+func TestProfile_ReadsOnlyThePlanAndTheFrameworksOfMacOS(t *testing.T) {
+	t.Parallel()
+
+	_, defines := seatbelt.Profile(sandbox.Plan{Read: []string{"/c"}}, 0)
+
+	var reads []string
+
+	for _, define := range defines {
+		if name, value, _ := strings.Cut(define, "="); strings.HasPrefix(name, "R") {
+			reads = append(reads, value)
+		}
+	}
+
+	assert.Equal(t, []string{"/System", "/Library/Apple", "/private/var/db/dyld", "/private/var/db/timezone", "/private/var/select", "/c"}, reads)
+}
+
 func TestProfile_AFileIsAllowedByItselfAndAFolderWithWhatLiesBelowIt(t *testing.T) {
 	t.Parallel()
 
