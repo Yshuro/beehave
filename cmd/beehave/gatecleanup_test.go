@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/exectest"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
 // ownTemp points the temporary folder at a new folder and returns the folder that beehave owns for gate copies in it.
@@ -64,7 +65,7 @@ func TestGateSandbox_AGateThatLeavesAReadOnlyFolderStillLosesItsCopy(t *testing.
 	repo := repoWithCommit(t)
 	fake := &fakeEnforcer{during: func(dir string) { readOnlyFolder(t, filepath.Join(dir, "cache")) }}
 
-	out, code := sandboxFor(t, fake, nil).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
+	out, code := sandboxFor(t, fake, nil).cloneOf(repo).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
 
 	assert.Zero(t, code)
 	assert.NotContains(t, out, "stays at")
@@ -82,7 +83,7 @@ func TestGateSandbox_ACopyThatCannotBeRemovedIsNamedInTheOutput(t *testing.T) { 
 	// The gate takes the write right of the folder that holds the copy, so the copy cannot go.
 	fake := &fakeEnforcer{during: func(string) { require.NoError(t, exectest.ChmodFolder(root, 0o500)) }}
 
-	out, code := sandboxFor(t, fake, nil).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
+	out, code := sandboxFor(t, fake, nil).cloneOf(repo).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
 
 	assert.Zero(t, code)
 	assert.Contains(t, out, "the copy of the gate stays at "+root)
@@ -107,7 +108,7 @@ func TestGateSandbox_TheNextGateReclaimsTheCopyOfAGateThatWasKilled(t *testing.T
 	require.NoError(t, os.Mkdir(live, 0o700))
 	require.NoError(t, os.Mkdir(filepath.Join(root, "stray"), 0o700))
 
-	_, code := sandboxFor(t, &fakeEnforcer{}, nil).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
+	_, code := sandboxFor(t, &fakeEnforcer{}, nil).cloneOf(repo).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
 	require.Zero(t, code)
 
 	assert.Equal(t, []string{filepath.Base(live)}, entriesOf(t, root))
@@ -133,7 +134,7 @@ func TestGateSandbox_AGateKeepsTheRecordOfAnOwnerWorktreeWhoseFolderIsAway(t *te
 	runGit(t, repo, "worktree", "add", "--detach", "--quiet", away, "HEAD")
 	require.NoError(t, os.RemoveAll(away))
 
-	_, code := sandboxFor(t, &fakeEnforcer{}, nil).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
+	_, code := sandboxFor(t, &fakeEnforcer{}, nil).cloneOf(repo).run(t.Context(), "p", repo, []string{"true"}, nil, 0)
 	require.Zero(t, code)
 
 	assert.ElementsMatch(t, []string{evaluated(t, repo), evaluated(t, filepath.Dir(away)) + "/away"}, worktreesOf(t, repo), "only the record of the gate copy goes")
@@ -218,7 +219,7 @@ func TestForgetCopies_AListThatFailsRemovesNoRecord(t *testing.T) { //nolint:par
 	// The failed listing still prints the path of a gate copy that is gone. A listing that failed is not trusted, so no record goes.
 	putGitOnPath(t, "#!/bin/sh\necho \"$*\" >> '"+calls+"'\necho 'worktree "+filepath.Join(root, "gone")+"'\necho 'fatal: not a git repository' >&2\nexit 128\n")
 
-	forgetCopies(t.Context(), t.TempDir(), root)
+	forgetCopies(t.Context(), gitexec.New(t.TempDir(), 0), root)
 
 	text, err := os.ReadFile(calls) //nolint:gosec // a file of the test
 	require.NoError(t, err)

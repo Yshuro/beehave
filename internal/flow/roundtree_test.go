@@ -238,7 +238,7 @@ func TestRoundTree_TheLostDiffOfARoundItemWithNoFolderClaimsNothing(t *testing.T
 func commitOf(t *testing.T, dir string) string {
 	t.Helper()
 
-	head, err := folderHead(t.Context(), dir)
+	head, err := folderHead(t.Context(), engineGit(dir))
 	require.NoError(t, err)
 
 	return head

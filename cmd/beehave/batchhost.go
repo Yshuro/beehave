@@ -69,7 +69,7 @@ func (h batchHost) Git(ctx context.Context, project, item string) (batch.Git, er
 		return nil, err
 	}
 
-	return batch.GitCLI{Exec: signed{run: h.programs.local("git", dir, batchGitTimeout).Run}}, nil
+	return batch.GitCLI{Exec: signed{run: h.programs.local(project, "git", dir, batchGitTimeout).Run}}, nil
 }
 
 // Checkout puts the commit in the worktree of the item, without a branch, and returns its tree id.
@@ -79,16 +79,16 @@ func (h batchHost) Checkout(ctx context.Context, project, item, commit string) (
 		return "", err
 	}
 
-	if _, err := h.programs.git(ctx, dir, batchGitTimeout, "git checkout of the union "+commit, "checkout", "-q", "--detach", commit); err != nil {
+	if _, err := h.programs.git(ctx, project, dir, batchGitTimeout, "git checkout of the union "+commit, "checkout", "-q", "--detach", commit); err != nil {
 		return "", err
 	}
 
-	return h.tree(ctx, dir, commit)
+	return h.tree(ctx, project, dir, commit)
 }
 
-// tree reads the tree id of a commit in dir.
-func (h batchHost) tree(ctx context.Context, dir, commit string) (string, error) {
-	return h.programs.git(ctx, dir, batchGitTimeout, "git rev-parse of "+commit, "rev-parse", commit+"^{tree}")
+// tree reads the tree id of a commit in dir of the project.
+func (h batchHost) tree(ctx context.Context, project, dir, commit string) (string, error) {
+	return h.programs.git(ctx, project, dir, batchGitTimeout, "git rev-parse of "+commit, "rev-parse", commit+"^{tree}")
 }
 
 // Tip reads the tip of the base on the forge, fetches the branches of the remote into the clone, and returns the tip with its tree id.
@@ -103,7 +103,7 @@ func (h batchHost) Tip(ctx context.Context, project, item, base string) (batch.T
 		return batch.Tip{}, err
 	}
 
-	tree, err := h.tree(ctx, dir, commit)
+	tree, err := h.tree(ctx, project, dir, commit)
 
 	return batch.Tip{Commit: commit, Tree: tree}, err
 }

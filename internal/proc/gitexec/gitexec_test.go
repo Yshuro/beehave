@@ -67,10 +67,9 @@ func TestRunner_EveryLocalCallTakesTheFileTransportOnlyAndFetchesNoMissingObject
 	widened.Env = []string{"GIT_ALLOW_PROTOCOL=ssh", "GIT_NO_LAZY_FETCH=0"}
 	widened.Run(t.Context(), []string{"status"})
 
-	require.NoError(t, gitexec.Command(t.Context(), t.TempDir(), []string{"status"}, "GIT_ALLOW_PROTOCOL=ssh").Run())
-	gitexec.ReadConfig(t.Context(), t.TempDir(), "user.name")
+	cloneRunner(t).ReadConfig(t.Context(), "user.name")
 
-	assert.Equal(t, strings.Repeat("allow=file lazy=1\n", 4), calls(t, log)+"\n", "no env of the caller widens a local call")
+	assert.Equal(t, strings.Repeat("allow=file lazy=1\n", 4), calls(t, log)+"\n", "no env of the caller widens a local call, the read of the settings included")
 }
 
 func TestNewRemote_ReachesTheRemoteOverTheTransportOfItsAddress(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
@@ -90,9 +89,10 @@ func TestArgs_PutsTheHooksSettingFirstAndKeepsTheArguments(t *testing.T) {
 func TestReadConfig_DoesNotSetTheHooksPathItReads(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	log := logGit(t)
 
-	gitexec.ReadConfig(t.Context(), t.TempDir(), "core.hooksPath")
+	cloneRunner(t).ReadConfig(t.Context(), "core.hooksPath")
 
-	assert.Equal(t, "config --get core.hooksPath", calls(t, log))
+	lines := strings.Split(calls(t, log), "\n")
+	assert.Equal(t, "config --get core.hooksPath", lines[len(lines)-1])
 }
 
 // runnerPattern matches the code that makes a runner or a command for the git program.

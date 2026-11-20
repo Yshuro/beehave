@@ -12,7 +12,13 @@ import (
 
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/exectest"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
+
+// gateCloneOf is the clone of a gate whose repository is dir, as a clone in the repos folder of the engine, with the lock hold.
+func gateCloneOf(dir string, hold underLock) gateClone {
+	return gateClone{hold: hold, git: gitOf(repositoryProject(), "p", gitexec.NewRepositories(filepath.Dir(dir)))}
+}
 
 // repoWithCommit makes a git repository with one commit and returns its folder.
 func repoWithCommit(t *testing.T) string {
@@ -55,7 +61,7 @@ func TestGateSandbox_AGitWorkTreeRunsInADisposableWorktreeAndTheRealFolderIsOuts
 	dir := repoWithCommit(t)
 	fake := &fakeEnforcer{}
 
-	_, code := sandboxFor(t, fake, nil).run(t.Context(), "p", dir, []string{"true"}, nil, 0)
+	_, code := sandboxFor(t, fake, nil).cloneOf(dir).run(t.Context(), "p", dir, []string{"true"}, nil, 0)
 	require.Zero(t, code)
 
 	assert.NotEqual(t, dir, fake.dir, "the command works in a copy")
@@ -77,7 +83,7 @@ func TestGateSandbox_ALinkedWorkTreeKeepsItsSharedGitFolderReadOnlyInThePlan(t *
 
 	fake := &fakeEnforcer{}
 
-	_, code := sandboxFor(t, fake, nil).run(t.Context(), "p", linked, []string{"true"}, nil, 0)
+	_, code := sandboxFor(t, fake, nil).cloneOf(main).run(t.Context(), "p", linked, []string{"true"}, nil, 0)
 	require.Zero(t, code)
 
 	shared := filepath.Join(evaluated(t, main), ".git")
@@ -98,33 +104,26 @@ func evaluated(t *testing.T, path string) string {
 func TestGateSandbox_AGateAllowWritePathInTheRealHooksFoldersIsRefused(t *testing.T) {
 	t.Parallel()
 
-	// The git folder is kept apart under a name that is not .git, so only the shared git folder of the linked work tree can protect its hooks.
-	store := filepath.Join(t.TempDir(), "store")
-	main := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(main, "README"), []byte("hi\n"), 0o600))
-	runGit(t, main, "init", "-q", "-b", "main", "--separate-git-dir", store)
-	runGit(t, main, "add", "README")
-	runGit(t, main, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "start")
-
+	// The gate runs in a linked worktree, so only the shared git folder of the clone can protect its hooks.
+	main := repoWithCommit(t)
 	linked := filepath.Join(t.TempDir(), "item")
 	runGit(t, main, "worktree", "add", "-q", "--detach", linked, "HEAD")
 
-	hooksTarget := t.TempDir()
-	runGit(t, main, "config", "core.hooksPath", hooksTarget)
+	box := sandboxFor(t, &fakeEnforcer{}, nil).cloneOf(main)
+	found := box.projects["p"]
+	found.GateAllowWrite = []string{filepath.Join(main, ".git", "hooks")}
+	box.projects["p"] = found
 
-	for name, path := range map[string]string{
-		"the hooks of the shared git folder": filepath.Join(store, "hooks"),
-		"the folder core.hooksPath names":    hooksTarget,
-	} {
-		box := sandboxFor(t, &fakeEnforcer{}, nil)
-		found := box.projects["p"]
-		found.GateAllowWrite = []string{path}
-		box.projects["p"] = found
+	out, code := box.run(t.Context(), "p", linked, []string{"true"}, nil, 0)
+	assert.Equal(t, sandboxFailed, code)
+	assert.Contains(t, out, "which reaches .git", "the hooks of the shared git folder")
 
-		out, code := box.run(t.Context(), "p", linked, []string{"true"}, nil, 0)
-		assert.Equal(t, sandboxFailed, code, name)
-		assert.Contains(t, out, "overlaps the protected path", name)
-	}
+	// A hooks folder that the clone config names is a setting outside the allow list, so the gate does not run at all.
+	runGit(t, main, "config", "core.hooksPath", t.TempDir())
+
+	out, code = box.run(t.Context(), "p", linked, []string{"true"}, nil, 0)
+	assert.Equal(t, sandboxFailed, code)
+	assert.Contains(t, out, "holds core.hookspath, which beehave does not allow", "the folder core.hooksPath names")
 }
 
 func TestGateSandbox_AWorkTreeWithNoCommitRunsNoCommand(t *testing.T) {
@@ -133,7 +132,7 @@ func TestGateSandbox_AWorkTreeWithNoCommitRunsNoCommand(t *testing.T) {
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-q", "-b", "main")
 
-	out, code := sandboxFor(t, &fakeEnforcer{}, nil).run(t.Context(), "p", dir, []string{"true"}, nil, 0)
+	out, code := sandboxFor(t, &fakeEnforcer{}, nil).cloneOf(dir).run(t.Context(), "p", dir, []string{"true"}, nil, 0)
 
 	assert.Equal(t, sandboxFailed, code)
 	assert.Contains(t, out, "make the worktree for the gate")
@@ -142,15 +141,16 @@ func TestGateSandbox_AWorkTreeWithNoCommitRunsNoCommand(t *testing.T) {
 func TestGateSandbox_AGitThatCannotNameTheRecordOfTheWorktreeRunsNoCommand(t *testing.T) {
 	bin := t.TempDir()
 	calls := filepath.Join(bin, "calls")
-	// A git that logs the worktree calls, makes the worktree and then fails on every other call.
-	script := "#!/bin/sh\ncase \"$*\" in *worktree*) echo \"$@\" >> " + calls + "; exit 0;; esac\necho boom\nexit 1\n"
+	// A git that lists no clone setting, logs the worktree calls and says it made the worktree, and fails on every other call. No clone holds a record of
+	// the copy, so the gate cannot name the record.
+	script := "#!/bin/sh\ncase \"$*\" in config*) exit 0;; *worktree*) echo \"$@\" >> " + calls + "; exit 0;; esac\necho boom\nexit 1\n"
 	require.NoError(t, exectest.Write(filepath.Join(bin, "git"), script))
 	t.Setenv("PATH", bin+string(os.PathListSeparator)+config.ProcessEnv()["PATH"])
 
 	dir := t.TempDir()
 	require.NoError(t, os.Mkdir(filepath.Join(dir, ".git"), 0o700))
 
-	out, code := sandboxFor(t, &fakeEnforcer{}, nil).run(t.Context(), "p", dir, []string{"true"}, nil, 0)
+	out, code := sandboxFor(t, &fakeEnforcer{}, nil).cloneOf(dir).run(t.Context(), "p", dir, []string{"true"}, nil, 0)
 
 	assert.Equal(t, sandboxFailed, code)
 	assert.Contains(t, out, "find the git record of the worktree for the gate")

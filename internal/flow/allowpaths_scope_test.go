@@ -47,7 +47,7 @@ func TestScope_ARenameIntoTheGlobsStillNamesTheSourceItRemoved(t *testing.T) {
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "papers"), 0o750))
 	gitIn(t, dir, "mv", "src/a.go", "papers/a.go")
 
-	bad, err := scopeOf(t, "papers/**").outside(t.Context(), dir, start)
+	bad, err := scopeOf(t, "papers/**").outside(t.Context(), engineGit(dir), start)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"src/a.go"}, bad)
@@ -146,7 +146,7 @@ func TestScope_AnIgnoredNewFileOutsideTheGlobsIsNamed(t *testing.T) {
 	putUnder(t, dir, "build/o", "x")
 	putUnder(t, dir, "papers/a.md", "x")
 
-	bad, err := scopeOf(t, "papers/**").outside(t.Context(), dir, start)
+	bad, err := scopeOf(t, "papers/**").outside(t.Context(), engineGit(dir), start)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"build/", "x.log"}, bad)
@@ -165,7 +165,7 @@ func TestScope_EveryPathIsRelativeToTheRootWhenTheItemFolderIsASubdirectory(t *t
 	putUnder(t, root, "papers/new.go", "x")
 	putUnder(t, root, "src/n.go", "x")
 
-	bad, err := scopeOf(t, "papers/**/*.md").outside(t.Context(), filepath.Join(root, "papers"), start)
+	bad, err := scopeOf(t, "papers/**/*.md").outside(t.Context(), engineGit(root), start)
 
 	require.NoError(t, err)
 	assert.Equal(t, []string{"papers/new.go", "src/n.go"}, bad)

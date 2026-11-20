@@ -20,6 +20,7 @@ import (
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/preflight"
+	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/step"
@@ -261,9 +262,7 @@ func dryRepoSteps(dir, remote string) []dryGitStep {
 // dryGit runs one git command in a folder and returns its output.
 // The command ignores the global and system git config of the user, so a hook path, a template or a signing setting cannot run or fail.
 func dryGit(ctx context.Context, dir string, args []string) (string, error) {
-	runner := gitexec.New(dir, 0)
-	runner.Env = []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"}
-	result := runner.Run(ctx, args)
+	result := dryRunner(dir).Run(ctx, args)
 	out := strings.TrimSpace(result.Stdout + result.Stderr)
 
 	if result.ExitCode != 0 {
@@ -488,6 +487,19 @@ func (t dryTrees) Heads(ctx context.Context, _ string) (string, error) {
 
 func (t dryTrees) Ensure(context.Context, string, string, string, string) (string, error) {
 	return t.dir, nil
+}
+
+// Git runs git in the folder of the dry run with no global or system git config.
+func (dryTrees) Git(dir string) proc.Runner { //nolint:ireturn // the trees contract returns the interface
+	return dryRunner(dir)
+}
+
+// dryRunner is the git runner of the dry run: the folder is a temporary one that the dry run made, and no global or system git config is read.
+func dryRunner(dir string) gitexec.Runner {
+	runner := gitexec.New(dir, 0)
+	runner.Env = []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"}
+
+	return runner
 }
 
 // dryCommands runs no program: each command call exits with code 0 and prints nothing.

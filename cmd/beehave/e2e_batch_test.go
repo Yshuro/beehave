@@ -60,7 +60,7 @@ func e2eBatch(dir string, cfg config.Config) (pulls, batchHost, programs, bool) 
 	p := pulls{projects: cfg.Projects, forge: func(model.Project) (forge.Forge, error) { return fileForge{dir: dir}, nil }}
 	commands := programs{
 		trees: workTree{dir: dir},
-		local: func(binary, folder string, timeout time.Duration) proc.Runner {
+		local: func(_, binary, folder string, timeout time.Duration) proc.Runner {
 			return proc.ExecRunner{Binary: binary, Dir: folder, Timeout: timeout}
 		},
 		exec: func(spec proc.ExecRunner) proc.Runner { return spec },

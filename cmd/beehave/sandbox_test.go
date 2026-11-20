@@ -15,6 +15,7 @@ import (
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
 // sandboxRig is an agents value over a real home folder and a real work folder.
@@ -27,11 +28,14 @@ type sandboxRig struct {
 func newSandboxRig(t *testing.T) *sandboxRig {
 	t.Helper()
 
-	home, work := t.TempDir(), t.TempDir()
+	home, work := t.TempDir(), filepath.Join(t.TempDir(), "repos", "p")
+	require.NoError(t, os.MkdirAll(work, 0o700))
 	f := newAgentFixture("session=s1\n", agent.Result{Outcome: agent.OutcomeExited})
 	f.agents.trees = treeAt(work)
+	f.agents.repos = gitexec.NewRepositories(filepath.Dir(work))
 	f.agents.home = func() (string, error) { return home, nil }
-	f.agents.identity = func(context.Context, string) agent.GitIdentity { return rigIdentity() }
+	f.agents.identity = func(context.Context, gitexec.Runner) agent.GitIdentity { return rigIdentity() }
+	f.agents.projects = repositoryProject()
 	f.agents.runners = []model.Runner{{Name: "main", Agent: model.Agent("fake"), ConfigDir: filepath.Join(home, "login")}}
 
 	return &sandboxRig{f: f, home: home, work: work}
@@ -48,7 +52,7 @@ func TestSandboxPlan_TheIdentityIsTheGitIdentityOfTheEngineAtTheWorktree(t *test
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 
 	r := newSandboxRig(t)
-	r.f.agents.identity = newAgents(config.Config{}, flow.Options{}, treeAt(r.work), newAdapters(nil, nil, nil)).identity
+	r.f.agents.identity = newAgents(config.Config{}, flow.Options{StateDir: filepath.Dir(filepath.Dir(r.work))}, treeAt(r.work), newAdapters(nil, nil, nil)).identity
 	runGit(t, r.work, "init", "-q")
 	runGit(t, r.work, "config", "user.email", "worktree@example.com")
 
@@ -72,7 +76,7 @@ func TestSandboxPlan_AStepWithNoGitIdentityDoesNotStartAndNamesTheGitConfigComma
 			t.Parallel()
 
 			r := newSandboxRig(t)
-			r.f.agents.identity = func(context.Context, string) agent.GitIdentity { return identity }
+			r.f.agents.identity = func(context.Context, gitexec.Runner) agent.GitIdentity { return identity }
 			req := request()
 			req.Sandbox = &model.Sandbox{}
 
@@ -98,7 +102,8 @@ func (r *sandboxRig) writeNote(t *testing.T, paths ...string) ([]string, string)
 	t.Helper()
 
 	deny := credentialPaths(r.home, filepath.Join(r.home, "login"), nil)
-	closed := closedPaths(t.Context(), r.work, r.home)
+	closed, err := closedPaths(t.Context(), r.git(), r.work, r.home)
+	require.NoError(t, err)
 
 	return writablePaths(paths, r.home, r.work, slices.Concat(deny, closed))
 }
@@ -181,11 +186,14 @@ func TestMatching_ABadPatternMatchesNothing(t *testing.T) {
 }
 
 func TestSandboxPlan_AnAllowWritePathMayNotReopenGitTheAgentSettingsOrAHooksFolder(t *testing.T) {
-	t.Parallel()
+	// The hooks folder comes from the global config: a core.hooksPath in the clone config is a setting that the engine refuses.
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 
 	r := newSandboxRig(t)
 	runGit(t, r.work, "init", "-q")
-	runGit(t, r.work, "config", "core.hooksPath", "ci/hooks")
+	runGit(t, r.work, "config", "--file", global, "core.hooksPath", "ci/hooks")
 
 	for _, bad := range []string{
 		".git", ".git/hooks", ".git/config", ".claude", ".claude/settings.json", ".husky", ".husky/pre-commit", ".githooks", "ci/hooks", "ci/hooks/pre-push",
@@ -202,11 +210,14 @@ func TestSandboxPlan_AnAllowWritePathMayNotReopenGitTheAgentSettingsOrAHooksFold
 }
 
 func TestSandboxPlan_TheClosedPathsOfTheWorkFolderAreDeniedForWriteAndKeepTheirFilesReadable(t *testing.T) {
-	t.Parallel()
+	// The hooks folder comes from the global config: a core.hooksPath in the clone config is a setting that the engine refuses.
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 
 	r := newSandboxRig(t)
 	runGit(t, r.work, "init", "-q")
-	runGit(t, r.work, "config", "core.hooksPath", "ci/hooks")
+	runGit(t, r.work, "config", "--file", global, "core.hooksPath", "ci/hooks")
 
 	req := request()
 	req.Sandbox = &model.Sandbox{}
@@ -219,6 +230,25 @@ func TestSandboxPlan_TheClosedPathsOfTheWorkFolderAreDeniedForWriteAndKeepTheirF
 	}
 	assert.ElementsMatch(t, want, r.f.spec.Sandbox.DenyWrite)
 	assert.NotContains(t, r.f.spec.Sandbox.DenyWrite, filepath.Join(r.work, ".claude"), "the CLI writes its own state there")
+}
+
+func TestSandboxPlan_ACloneWhoseConfigNamesAHooksFolderStartsNoStep(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	runGit(t, r.work, "init", "-q")
+	runGit(t, r.work, "config", "core.hooksPath", "ci/hooks")
+
+	req := request()
+	req.Sandbox = &model.Sandbox{}
+
+	got, err := r.f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, "a plan without the deny of the hooks folder never starts")
+	assert.Contains(t, got.Note, "holds core.hookspath, which beehave does not allow")
+	assert.Contains(t, got.Note, "The step did not start.")
+	assert.Nil(t, r.f.spec.Sandbox)
 }
 
 func TestSandboxPlan_AGitFileOfALinkedWorkTreeIsNotInTheWriteDenyList(t *testing.T) {
@@ -270,26 +300,39 @@ func TestSandboxPlan_APathIsComparedWithoutCaseAndAfterSymlinksAreResolved(t *te
 	assert.Empty(t, note)
 }
 
+// git returns the runner of the engine for the clone at the work folder of the rig.
+func (r *sandboxRig) git() gitexec.Runner {
+	return r.f.agents.repos.Runner(r.work, 0)
+}
+
 func TestHooksPath_ReadsTheFolderThatCoreHooksPathNames(t *testing.T) {
-	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "gitconfig"))
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 
 	r := newSandboxRig(t)
 	runGit(t, r.work, "init", "-q")
 
-	assert.Empty(t, hooksPath(t.Context(), r.work, r.home), "not set")
+	hooks := func() string {
+		path, err := hooksPath(t.Context(), r.git(), r.work, r.home)
+		require.NoError(t, err)
 
-	runGit(t, r.work, "config", "core.hooksPath", "")
-	assert.Empty(t, hooksPath(t.Context(), r.work, r.home), "set empty")
+		return path
+	}
 
-	runGit(t, r.work, "config", "core.hooksPath", "tools/hooks")
-	assert.Equal(t, filepath.Join(r.work, "tools", "hooks"), hooksPath(t.Context(), r.work, r.home))
+	assert.Empty(t, hooks(), "not set")
 
-	runGit(t, r.work, "config", "core.hooksPath", "~/shared-hooks")
-	assert.Equal(t, filepath.Join(r.home, "shared-hooks"), hooksPath(t.Context(), r.work, r.home))
+	runGit(t, r.work, "config", "--file", global, "core.hooksPath", "")
+	assert.Empty(t, hooks(), "set empty")
 
-	runGit(t, r.work, "config", "core.hooksPath", "/opt/hooks")
-	assert.Equal(t, "/opt/hooks", hooksPath(t.Context(), r.work, r.home))
+	runGit(t, r.work, "config", "--file", global, "core.hooksPath", "tools/hooks")
+	assert.Equal(t, filepath.Join(r.work, "tools", "hooks"), hooks())
+
+	runGit(t, r.work, "config", "--file", global, "core.hooksPath", "~/shared-hooks")
+	assert.Equal(t, filepath.Join(r.home, "shared-hooks"), hooks())
+
+	runGit(t, r.work, "config", "--file", global, "core.hooksPath", "/opt/hooks")
+	assert.Equal(t, "/opt/hooks", hooks())
 }
 
 func TestSandboxPlan_ASandboxReadPathMayNotOpenTheHomeFolderTheFileSystemOrACredentialPath(t *testing.T) {
@@ -397,49 +440,6 @@ func TestSandboxPlan_AnAllowWritePathStartsAtTheWorkFolderAndMayNotTouchACredent
 
 		assert.Contains(t, badNote, "The step did not start", bad)
 	}
-}
-
-func TestSandboxPlan_ALinkedWorkTreeGetsItsSharedGitDirectoryAndAPlainCheckoutGetsNone(t *testing.T) {
-	t.Parallel()
-
-	r := newSandboxRig(t)
-	common := filepath.Join(t.TempDir(), "main", ".git")
-	gitdir := filepath.Join(common, "worktrees", "w")
-
-	require.NoError(t, os.MkdirAll(gitdir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(gitdir, "commondir"), []byte("../..\n"), 0o600))
-	require.NoError(t, os.WriteFile(filepath.Join(r.work, ".git"), []byte("gitdir: "+gitdir+"\n"), 0o600))
-
-	req := request()
-	req.Sandbox = &model.Sandbox{}
-
-	_, err := r.f.agents.Run(t.Context(), req)
-	require.NoError(t, err)
-	assert.Equal(t, []string{common}, r.f.spec.Sandbox.GitDirs)
-
-	plain := newSandboxRig(t)
-	require.NoError(t, os.Mkdir(filepath.Join(plain.work, ".git"), 0o700))
-
-	_, err = plain.f.agents.Run(t.Context(), req)
-	require.NoError(t, err)
-	assert.Empty(t, plain.f.spec.Sandbox.GitDirs)
-}
-
-func TestSandboxPlan_ARelativeGitFileAndAGitDirectoryWithoutCommondirAreRead(t *testing.T) {
-	t.Parallel()
-
-	work := t.TempDir()
-	gitdir := filepath.Join(work, "..", "elsewhere")
-	require.NoError(t, os.MkdirAll(gitdir, 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(work, ".git"), []byte("gitdir: ../elsewhere"), 0o600))
-
-	assert.Equal(t, []string{filepath.Clean(gitdir)}, sharedGitDirs(work))
-
-	assert.Empty(t, sharedGitDirs(t.TempDir()), "no .git")
-
-	other := t.TempDir()
-	require.NoError(t, os.WriteFile(filepath.Join(other, ".git"), []byte("not a pointer"), 0o600))
-	assert.Empty(t, sharedGitDirs(other))
 }
 
 func TestSandboxPlan_AStepWithASandboxDoesNotStartWhenTheHomeFolderIsUnknown(t *testing.T) {

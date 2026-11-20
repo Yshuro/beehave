@@ -17,6 +17,7 @@ import (
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/forge"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
 // fetchRig is a push rig whose remote has a commit on main that the clone has not fetched, and a decoy remote with another commit on main.
@@ -48,6 +49,8 @@ func newFetchRig(t *testing.T) fetchRig {
 type fetchHostile struct {
 	// plant writes the setting into the config of the clone. marker is a script that records that it ran.
 	plant func(t *testing.T, rig fetchRig, marker string)
+	// allowed says whether the key is on the allow list of the clone config. The engine refuses a clone that holds any other key and runs no git there.
+	allowed bool
 	// steers says whether a fetch takes its objects from the decoy rather than running the marker.
 	steers bool
 }
@@ -99,7 +102,8 @@ var fetchHostiles = map[string]fetchHostile{
 
 			rig.plant(t, "remote.origin.url", rig.decoy)
 		},
-		steers: true,
+		steers:  true,
+		allowed: true,
 	},
 	"an include file that rewrites the address": {
 		plant: func(t *testing.T, rig fetchRig, _ string) {
@@ -150,9 +154,14 @@ func TestWorktrees_FetchRunsNoSettingThatTheCloneConfigHolds(t *testing.T) {
 				hostile.plant(t, rig, marker)
 
 				tree, err := fetch(t, rig)
-				require.NoError(t, err, "the engine fetch reads the remote that the engine read")
-				assert.Equal(t, rig.tip, gitOut(t, tree, "rev-parse", "HEAD"), "the worktree starts at the tip of the remote that the engine read")
 				assert.NoFileExists(t, ran, "the setting in the clone config runs no program in the engine fetch")
+
+				if hostile.allowed {
+					require.NoError(t, err, "the engine fetch reads the remote that the engine read")
+					assert.Equal(t, rig.tip, gitOut(t, tree, "rev-parse", "HEAD"), "the worktree starts at the tip of the remote that the engine read")
+				} else {
+					require.ErrorContains(t, err, "which beehave does not allow", "the engine refuses a clone whose config holds a key outside the allow list")
+				}
 
 				control := exec.CommandContext(t.Context(), "git", "fetch", "-q", "origin", "main:refs/control/main")
 				control.Dir = rig.tree
@@ -224,14 +233,19 @@ func TestBatchHost_TipFetchesNoSettingThatTheCloneConfigHolds(t *testing.T) {
 
 			host := batchHost{
 				pulls:    pulls{projects: rig.pulls.projects, forge: func(model.Project) (forge.Forge, error) { return hostForge{tip: rig.tip, found: true}, nil }},
-				programs: programs{trees: rig.pulls.trees, local: localRunner},
+				programs: programs{trees: rig.pulls.trees, local: localRunner(repositoryProject(), gitexec.NewRepositories(rig.pulls.trees.repos))},
 				base:     rig.pulls.trees,
 			}
 
 			tip, err := host.Tip(t.Context(), "p", pushItem, "main")
-			require.NoError(t, err, "the tip fetches the remote that the engine read")
-			assert.Equal(t, gitOut(t, rig.remote, "rev-parse", rig.tip+"^{tree}"), tip.Tree, "the clone holds the tip of the remote that the engine read")
 			assert.NoFileExists(t, ran, "the setting in the clone config runs no program in the fetch of the tip")
+
+			if hostile.allowed {
+				require.NoError(t, err, "the tip fetches the remote that the engine read")
+				assert.Equal(t, gitOut(t, rig.remote, "rev-parse", rig.tip+"^{tree}"), tip.Tree, "the clone holds the tip of the remote that the engine read")
+			} else {
+				require.ErrorContains(t, err, "which beehave does not allow", "the tip refuses a clone whose config holds a key outside the allow list")
+			}
 
 			out := plainGit(t, rig.tree, "fetch", "-q", "origin", "main:refs/control/main")
 
@@ -258,7 +272,7 @@ func TestBatchHost_TipFetchesEveryBranchAndTheTagsOfTheRemote(t *testing.T) {
 
 	host := batchHost{
 		pulls:    pulls{projects: rig.pulls.projects, forge: func(model.Project) (forge.Forge, error) { return hostForge{tip: rig.tip, found: true}, nil }},
-		programs: programs{trees: rig.pulls.trees, local: localRunner},
+		programs: programs{trees: rig.pulls.trees, local: localRunner(repositoryProject(), gitexec.NewRepositories(rig.pulls.trees.repos))},
 		base:     rig.pulls.trees,
 	}
 

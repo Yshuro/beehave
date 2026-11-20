@@ -106,9 +106,9 @@ func TestScope_ChecksReportAFolderGitCannotListAgainstTheStartCommit(t *testing.
 	only, err := readScope(starlark.NewList([]starlark.Value{starlark.String("papers/**")}))
 	require.NoError(t, err)
 
-	_, err = only.outside(t.Context(), dir, startMark{Head: "not-a-commit"})
+	_, err = only.outside(t.Context(), engineGit(dir), startMark{Head: "not-a-commit"})
 	require.ErrorContains(t, err, "list the changed paths of the item folder with git diff")
 
-	err = only.check(t.Context(), dir, startMark{Head: "not-a-commit"})
+	err = only.check(t.Context(), engineGit(dir), startMark{Head: "not-a-commit"})
 	require.ErrorContains(t, err, "with git diff")
 }
