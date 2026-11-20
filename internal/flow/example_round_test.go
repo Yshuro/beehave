@@ -152,7 +152,6 @@ func TestRound_TheBaseRedsAreOneRecordWithTheTimeAndTheTip(t *testing.T) {
 
 	rig := newRoundRig(t, "")
 	rig.setRound("base_reds", []any{"lint-a", "test-b"})
-	rig.setRound("base_reds_file", "base-reds.md")
 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
@@ -176,7 +175,7 @@ func TestRound_TheBaseRedsAreOneRecordWithTheTimeAndTheTip(t *testing.T) {
 
 	require.NotEmpty(t, written.Run, "the record is written by one program")
 	assert.Equal(t, []string{"sh", "-c", `umask 022 && exec tee -- "$BASE_REDS_FILE"`}, written.Run)
-	assert.Contains(t, written.Env, "BASE_REDS_FILE=base-reds.md", "the path goes in the environment of the program")
+	assert.Contains(t, written.Env, "BASE_REDS_FILE=../base-reds.md", "the default path lies outside the folder of the round, and goes in the environment of the program")
 	assert.Equal(t, time.Minute, written.Timeout)
 	assert.Contains(t, written.Stdin, "tip abc123 of main")
 	assert.Contains(t, written.Stdin, "Measured at 20")

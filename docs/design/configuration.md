@@ -96,7 +96,7 @@ The engine has no round settings. The remediation example keeps its own under th
 | `merge` | Optional bool. The default is false. |
 | `hand_off` | Optional bool. The default is false. Set it when the owner merges the approved pull requests: the round calls `merge` with `hand_off`, which marks them ready and waits for the owner, and lands none itself. An item whose pull request is closed, whose head moves after the ready mark, or that gets a change request, a conflict or an unresolved thread holds with the reason. It takes effect only when `merge` is true. |
 | `base_reds`, `allow_paths` | Optional lists. The globs of `allow_paths` follow [the setting `allow_paths`](agent-runs.md#the-setting-allow_paths) of an `agent` step, which lists the patterns that it refuses. |
-| `base_reds_file` | Optional. The default is `base-reds.md`. |
+| `base_reds_file` | Optional. A path from the folder of the round. The default is `../base-reds.md`, in the folder of the project and outside every item folder. A file in the folder of the round is a change that is not committed, and the gate refuses the folder. |
 | `lane_kind` | Optional: `impl` (the default), `papers` or `design`. A `papers` or `design` round needs a non-empty `allow_paths`. |
 | `steps` | Optional dict from a step name to `{"model": text, "runner": text}`. The steps are `plan`, `implement`, `review`, `fix`, `fix_late`, `design`, `take_review`, `sync_review`, `sync_resolve`, `queue_audit` and `settle`. A step that the dict leaves out keeps its default model and the pool pick. A review on the model of the implementer is refused when two or more models are in use. See "The steps and the limits" in `durable-loop.md`. |
 | `design_after` | Optional. A whole number from 1 to 100. The default is 2. |

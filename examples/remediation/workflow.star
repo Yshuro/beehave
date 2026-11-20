@@ -129,7 +129,7 @@ ROUND_DEFAULTS = {
     "union_gate": [],
     "base_result": "",
     "base_reds": [],
-    "base_reds_file": "base-reds.md",
+    "base_reds_file": "../base-reds.md",
     "lane_kind": "impl",
     "allow_paths": [],
     "wait_hours": 24,
@@ -297,7 +297,7 @@ def settings(project):
         _round_refuse("base", "is %r. Write a branch name such as integration/r2: letters, digits, `.`, `_` and `-`, with `/` between parts." % got["base"])
 
     if got["base_reds_file"].strip() == "":
-        _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for base-reds.md.")
+        _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for ../base-reds.md.")
 
     _round_numbers(got)
     got["steps"] = _round_steps(got["steps"])
@@ -879,7 +879,8 @@ def next_round(project, round_settings, pr):
 
 def record_base_reds(round_settings):
     """Writes the one record of the known base reds: the reds of vars.round.base_reds, the time and the tip of the base. Each new write replaces the file, so the file holds one record.
-    vars.round.base_reds_file names the file. The prompts tell each lane to read this file and not to copy the list."""
+    vars.round.base_reds_file names the file, as a path from the folder of the round. The default lies in the folder of the project, outside every item folder, so the gate sees a clean folder and each lane reads the same path from its own item folder.
+    The prompts tell each lane to read this file and not to copy the list."""
     base = round_settings["base"]
     tip = command(name = "base-tip", run = ["git", "rev-parse", "origin/" + base], stop_on_rc = [2]).stdout.strip()
     text = "# Known base reds\n\nMeasured at %s on the tip %s of %s.\n\n%s\n" % (now(), tip, base, "\n".join(["- " + red for red in round_settings["base_reds"]]))
