@@ -138,7 +138,12 @@ func (s *script) slotCommand(request CommandRequest, stops []int, label string) 
 }
 
 // runCommand runs the program of a command call and records its output. A code in stops adds the stop to the record.
+// A program can write to the forge, so a run that lost its claim starts none.
 func (s *script) runCommand(ctx context.Context, name string, request CommandRequest, stops []int) (stepResult, error) {
+	if err := s.holdsClaim(); err != nil {
+		return stepResult{}, err
+	}
+
 	out, err := s.e.deps.Commands.Run(ctx, request)
 	if err != nil {
 		return stepResult{}, err

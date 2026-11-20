@@ -132,16 +132,14 @@ func (s *script) remember(step string, plan writePlan, outputs map[string]any) {
 }
 
 // runWrite runs the read-back, then the write when the read-back did not report it done, and records the output with the key.
+// A run that lost its claim starts neither program.
 func (s *script) runWrite(ctx context.Context, plan writePlan) (stepResult, error) {
-	if len(plan.readBack.Run) > 0 {
-		found, err := s.e.deps.Commands.Run(ctx, plan.readBack)
-		if err != nil {
-			return stepResult{}, err
-		}
+	if err := s.holdsClaim(); err != nil {
+		return stepResult{}, err
+	}
 
-		if found.RC == 0 {
-			return stepResult{Outputs: writeOutputs(found.Stdout, found.Stderr, 0, plan.key, true)}, nil
-		}
+	if done, found, err := s.readBack(ctx, plan); err != nil || done {
+		return found, err
 	}
 
 	out, err := s.e.deps.Commands.Run(ctx, plan.run)
@@ -150,6 +148,20 @@ func (s *script) runWrite(ctx context.Context, plan writePlan) (stepResult, erro
 	}
 
 	return stepResult{Outputs: writeOutputs(out.Stdout, out.Stderr, out.RC, plan.key, false)}, nil
+}
+
+// readBack runs the read-back of a write, if it has one. done is true when the read-back found the write already made, and found is then the record of the step.
+func (s *script) readBack(ctx context.Context, plan writePlan) (done bool, found stepResult, err error) {
+	if len(plan.readBack.Run) == 0 {
+		return false, stepResult{}, nil
+	}
+
+	out, err := s.e.deps.Commands.Run(ctx, plan.readBack)
+	if err != nil || out.RC != 0 {
+		return false, stepResult{}, err
+	}
+
+	return true, stepResult{Outputs: writeOutputs(out.Stdout, out.Stderr, 0, plan.key, true)}, nil
 }
 
 // undoAll runs the undo of each finished write, last write first. Each undo is a recorded step named after its write, so a replay after a

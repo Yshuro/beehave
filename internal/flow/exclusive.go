@@ -40,7 +40,7 @@ const (
 
 // ExclusiveInput is one gate or one merge of a repository, or the host job of a command call with a slot class. Kind is "gate", "merge", "batch_gate" or "command".
 // Request belongs to a command call. Request and Head belong to a gate. Run, Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
-// Run is the id of the run that queued the merge: the merge asks for the claim of that run, and a merge with no Run is refused.
+// Run is the id of the run that queued the merge or the command: the call asks for the claim of that run, and a call with no Run is refused.
 type ExclusiveInput struct {
 	Kind    string `json:"kind"`
 	Run     string `json:"run,omitempty"`
@@ -166,27 +166,39 @@ func (e *Engine) reuseBeforeHost(ctx dbos.Context, in ExclusiveInput, out *Exclu
 	return true, nil
 }
 
+// claimedMerge merges under the claim of the run that queued the merge. The child can wait behind a gate for a long time, so the claim is read again here.
+// beehave resume can reopen the child before its run, so a run with no first trust yet is waited for, as an agent phase waits.
+// The merge runs under the claim context, so a loss while it runs cancels it.
+func (e *Engine) claimedMerge(ctx context.Context, in ExclusiveInput) (merge.Result, error) {
+	claimed, err := e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.Item})
+	if err != nil {
+		return merge.Result{}, err
+	}
+
+	return e.deps.Merge.Merge(claimed, in.Project, in.Item, in.Head, in.Settings)
+}
+
+// claimedCommand runs the program of a command job under the claim of its run. The job waits in the queue of its class, so the claim is asked again when the program starts.
+func (e *Engine) claimedCommand(ctx context.Context, in ExclusiveInput) (CommandOutput, error) {
+	claimed, err := e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.Item})
+	if err != nil {
+		return CommandOutput{}, err
+	}
+
+	return e.deps.Commands.Run(claimed, in.Request)
+}
+
 // runCall runs the call of one kind as recorded steps and stores its result in out.
 func (e *Engine) runCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) (err error) {
 	switch in.Kind {
 	case kindGate:
 		out.Outputs, err = e.gateCall(ctx, in, out)
 	case kindMerge:
-		out.Merge, err = runStep(e, ctx, mergeStep, func(c context.Context) (merge.Result, error) {
-			// The child can wait behind a gate for a long time, so the claim of the run that queued it is read again at the merge.
-			// beehave resume can reopen the child before its run, so a run with no first trust yet is waited for, as an agent phase waits.
-			// The merge runs under the claim context, so a loss while it runs cancels it.
-			claimed, err := e.awaitClaim(c, PhaseInput{Run: in.Run, Item: in.Item})
-			if err != nil {
-				return merge.Result{}, err
-			}
-
-			return e.deps.Merge.Merge(claimed, in.Project, in.Item, in.Head, in.Settings)
-		})
+		out.Merge, err = runStep(e, ctx, mergeStep, func(c context.Context) (merge.Result, error) { return e.claimedMerge(c, in) })
 	case kindBatchGate:
 		out.Batch, err = e.batchGateCall(ctx, in, out)
 	case kindCommand:
-		out.Command, err = runStep(e, ctx, kindCommand, func(c context.Context) (CommandOutput, error) { return e.deps.Commands.Run(c, in.Request) })
+		out.Command, err = runStep(e, ctx, kindCommand, func(c context.Context) (CommandOutput, error) { return e.claimedCommand(c, in) })
 	default:
 		err = fmt.Errorf("an exclusive run has no kind %q", in.Kind) //nolint:err113 // a fault of the engine, not a state that a caller tests
 	}

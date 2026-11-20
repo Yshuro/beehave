@@ -129,6 +129,7 @@ type heldRun struct {
 	engine   *Engine
 	release  chan struct{}
 	done     chan error
+	waiting  chan struct{} // closed when the command starts to wait
 	canceled chan struct{} // closed when the context of the waiting command ends
 	once     sync.Once
 }
@@ -142,11 +143,13 @@ func startHeldRun(t *testing.T, h *harness, deps Deps) *heldRun {
 	require.NoError(t, engine.Launch())
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
-	r := &heldRun{engine: engine, release: make(chan struct{}), done: make(chan error, 1), canceled: make(chan struct{})}
+	r := &heldRun{engine: engine, release: make(chan struct{}), done: make(chan error, 1), canceled: make(chan struct{}), waiting: make(chan struct{})}
 	h.commands.before = func(ctx context.Context, request CommandRequest) error {
 		if request.Run[0] != "wait" {
 			return nil
 		}
+
+		close(r.waiting)
 
 		select {
 		case <-r.release:
@@ -166,6 +169,12 @@ func startHeldRun(t *testing.T, h *harness, deps Deps) *heldRun {
 	}()
 
 	require.Eventually(t, func() bool { return len(engine.holds.snapshot()) == 1 }, 10*time.Second, 10*time.Millisecond)
+
+	select {
+	case <-r.waiting:
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "the command of the run never started")
+	}
 
 	return r
 }
@@ -238,6 +247,84 @@ func TestClaimWrites_ACommandStepIsCancelledWhenTheRunLosesItsClaim(t *testing.T
 	}
 
 	require.ErrorIs(t, run.finish(), errClaimLost)
+}
+
+// markCommand is the program of a step that must not run after the loss.
+const markCommand = "mark"
+
+func TestClaimWrites_AStepThatRunsAProgramAfterTheLossNeverRunsIt(t *testing.T) {
+	t.Parallel()
+
+	for _, builtin := range []string{"command", "write"} {
+		call := builtin + `(name = "after", run = ["` + markCommand + `"])`
+
+		t.Run(builtin, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			loser := &claimLoser{}
+			loseWhenAsked(h, loser)
+			loser.engine = launchedWith(t, h, func(*Deps) {})
+
+			_, err := loser.engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(`command(name = "before", run = ["`+loseCommand+`"])`+"\n"+call)))
+
+			require.ErrorIs(t, err, errClaimLost)
+			assert.Equal(t, []string{loseCommand}, h.commands.ran(), "the program of the step that starts after the loss never runs: a command can write to the forge")
+		})
+	}
+}
+
+func TestClaimWrites_ACommandChildOfARunThatLostItsClaimNeverRunsItsProgram(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	run := startHeldRun(t, h, h.deps())
+
+	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+
+	handle, err := dbos.RunWorkflow(run.engine.ctx, run.engine.exclusive, ExclusiveInput{Kind: kindCommand, Run: runID(testItem, 1), Project: testProject, Item: testItem, Request: CommandRequest{Project: testProject, Item: testItem, Run: []string{markCommand}}},
+		dbos.WithQueue(run.engine.exclusiveQueue), dbos.WithQueuePartitionKey(testProject))
+	require.NoError(t, err)
+
+	out, err := handle.GetResult()
+	require.NoError(t, err)
+	require.Error(t, run.finish())
+
+	require.NotNil(t, out.Failure)
+	assert.Contains(t, out.Failure.Text, errClaimLost.Error())
+	assert.NotContains(t, h.commands.ran(), markCommand)
+}
+
+func TestClaimWrites_ALossWhileTheMergeRunsCancelsTheContextOfTheMerge(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	rig.merger.hold = make(chan context.Context, 1)
+	run := startHeldRun(t, rig.h, rig.deps())
+
+	handle, err := dbos.RunWorkflow(run.engine.ctx, run.engine.exclusive, ExclusiveInput{Kind: kindMerge, Run: runID(testItem, 1), Project: testProject, Item: "1", Head: rig.heads["1"]},
+		dbos.WithQueue(run.engine.exclusiveQueue), dbos.WithQueuePartitionKey(testProject))
+	require.NoError(t, err)
+
+	var mergeCtx context.Context
+
+	select {
+	case mergeCtx = <-rig.merger.hold:
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "the merge never started")
+	}
+
+	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+
+	select {
+	case <-mergeCtx.Done():
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "the merge kept running after the claim was lost: it runs under a context that the claim does not own")
+	}
+
+	_, err = handle.GetResult()
+	require.NoError(t, err)
+	require.Error(t, run.finish())
 }
 
 func TestClaimWrites_AMergeWhileTheRunHoldsItsClaimLands(t *testing.T) {

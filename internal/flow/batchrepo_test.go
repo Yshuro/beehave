@@ -407,6 +407,8 @@ type landMerger struct {
 	given  []MergeSettings
 	script map[string][]merge.Result
 	err    error
+	// hold, when set, makes Merge hand its context to the channel and wait until that context ends, as a merge that a loss of the claim must cancel.
+	hold chan context.Context
 	// after runs once a member has landed.
 	after func(item string)
 	// onceOnly makes a second call for a member that already landed return Done with no second landing, as merge.Run does with the intent.
@@ -427,6 +429,14 @@ func (m *landMerger) Disarm(context.Context, string, string, string, MergeSettin
 }
 
 func (m *landMerger) Merge(ctx context.Context, _, item, head string, settings MergeSettings) (merge.Result, error) {
+	if m.hold != nil {
+		m.hold <- ctx
+
+		<-ctx.Done()
+
+		return merge.Result{}, ctx.Err()
+	}
+
 	m.mu.Lock()
 	m.asked = append(m.asked, item)
 	m.pins = append(m.pins, head)
