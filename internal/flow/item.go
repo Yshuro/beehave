@@ -172,7 +172,7 @@ func (e *Engine) firstRenewal(ctx context.Context, id string, in ItemInput, owne
 
 		text, err := e.beatOne(ctx, claimHold{project: in.Project, owner: owner}, trustLimit-e.deps.Clock.age(first))
 		if err == nil || text != "" {
-			e.settle(id, start, text, err)
+			e.settle(id, e.holds.claimOf(id), start, text, err)
 
 			return nil
 		}

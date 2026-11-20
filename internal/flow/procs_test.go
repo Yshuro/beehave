@@ -338,7 +338,7 @@ func TestRunAgent_ALostClaimKillsTheGroupWhileTheRunStaysOpen(t *testing.T) {
 	pid := receive(t, agents.pid)
 
 	// The run is not dropped and the phase does not end: only the loss ends the context of the claim.
-	engine.holds.fail(procRun, "the claim is lost")
+	engine.holds.fail(procRun, engine.holds.claimOf(procRun), "the claim is lost")
 	requireDies(t, pid)
 
 	close(agents.proceed)

@@ -31,39 +31,52 @@ type openRun struct {
 type cancels struct {
 	mu   sync.Mutex
 	runs map[string]openRun
-	// releasing holds the runs whose give-back is under way, so no second give-back starts for one run.
-	releasing map[string]bool
+	// releasing holds the attempts whose give-back is under way, so no second give-back starts for one run.
+	// A resumed run reuses the run id, so the record names the attempt: the end of an earlier give-back leaves the record of a later one.
+	releasing map[attempt]bool
 }
 
 // begin marks a canceled run that this process neither executes nor releases, and reports whether the caller must release it.
+// The mark names no channel: the run is not an attempt of this process.
 func (c *cancels) begin(id string) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, local := c.runs[id]; local || c.releasing[id] {
+	if _, local := c.runs[id]; local || c.releases(id) {
 		return false
 	}
 
-	c.markReleasing(id)
+	c.markReleasing(attempt{id: id})
 
 	return true
 }
 
-// markReleasing records a give-back under way. The caller holds the lock.
-func (c *cancels) markReleasing(id string) {
-	if c.releasing == nil {
-		c.releasing = map[string]bool{}
+// releases reports whether a give-back of any attempt of the run is under way. The caller holds the lock.
+func (c *cancels) releases(id string) bool {
+	for a := range c.releasing {
+		if a.id == id {
+			return true
+		}
 	}
 
-	c.releasing[id] = true
+	return false
 }
 
-// finish ends the record of the give-back of a run.
-func (c *cancels) finish(id string) {
+// markReleasing records a give-back under way. The caller holds the lock.
+func (c *cancels) markReleasing(a attempt) {
+	if c.releasing == nil {
+		c.releasing = map[attempt]bool{}
+	}
+
+	c.releasing[a] = true
+}
+
+// finish ends the record of the give-back of an attempt and leaves the record of any other.
+func (c *cancels) finish(a attempt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	delete(c.releasing, id)
+	delete(c.releasing, a)
 }
 
 func (c *cancels) add(id string, open openRun) {
@@ -168,7 +181,7 @@ func (c *cancels) cut(id string) openRun {
 	delete(c.runs, id)
 
 	if !open.gate {
-		c.markReleasing(id)
+		c.markReleasing(attempt{id: id, ended: open.ended})
 	}
 
 	return open
@@ -266,7 +279,7 @@ func (e *Engine) giveBackStrayCancels() {
 // giveBackStray gives back one canceled run. It leaves the marker of a run that is open and not canceled yet, because beehave cancel writes the marker first.
 // It drops the marker of a run that ended without a cancel or has a newer run.
 func (e *Engine) giveBackStray(open openRun) {
-	defer e.cancels.finish(open.id)
+	defer e.cancels.finish(attempt{id: open.id})
 
 	ctx, cancel := ReleaseDeps{Clock: e.deps.Clock}.limit(context.WithoutCancel(e.ctx))
 	defer cancel()
@@ -320,7 +333,7 @@ func (e *Engine) canceledRows(local []attempt) (map[string]bool, error) {
 // giveBackWhenEnded waits until the workflow function of the run has returned, then gives the item back. A stop of the tick ends the wait.
 // A run that is canceled and not released at the stop keeps its cancel marker, and the next start gives it back.
 func (e *Engine) giveBackWhenEnded(open openRun, stop <-chan struct{}) {
-	defer e.cancels.finish(open.id)
+	defer e.cancels.finish(attempt{id: open.id, ended: open.ended})
 
 	select {
 	case <-open.ended:

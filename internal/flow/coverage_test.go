@@ -109,8 +109,14 @@ func TestHolds_FailKeepsTheReasonAndASnapshotDropsTheLostClaim(t *testing.T) {
 	claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
 	require.NoError(t, claim.Err(), "a claim that is trusted has a live context")
 
-	held.fail("run-1", "the tracker said no")
-	held.fail("run-2", "no such run")
+	assert.Nil(t, held.claimOf("run-2"), "a run that holds no claim names none")
+	assert.Equal(t, claim.Done(), held.claimOf("run-1"))
+	assert.False(t, held.fail("run-1", make(chan struct{}), "an earlier attempt"), "a claim that is not the one in the row is left alone")
+	require.NoError(t, claim.Err())
+	assert.Empty(t, held.rows["run-1"].lost)
+
+	assert.True(t, held.fail("run-1", claim.Done(), "the tracker said no"))
+	assert.False(t, held.fail("run-2", claim.Done(), "no such run"))
 
 	require.ErrorIs(t, claim.Err(), context.Canceled, "a loss ends the context of the claim")
 	assert.Len(t, held.snapshot(), 1)

@@ -144,15 +144,29 @@ func (h *holds) snapshot() map[string]claimHold {
 	return rows
 }
 
-// fail marks the claim of a run lost and ends its context. A start under the context after this call finds it done,
-// and an agent that started before it dies with its process group. drop ends the same context when the run ends.
-func (h *holds) fail(id, reason string) {
+// claimOf returns the done channel of the context of the claim that the run holds now, or nil when it holds none. It names the attempt that took the claim.
+func (h *holds) claimOf(id string) <-chan struct{} {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	row, found := h.rows[id]
 	if !found {
-		return
+		return nil
+	}
+
+	return row.ctx.Done()
+}
+
+// fail marks the claim of a run lost and ends its context, when claim is the done channel of the context of its row, and reports whether it did.
+// A start under the context after this call finds it done, and an agent that started before it dies with its process group. drop ends the same context when the run ends.
+// A run that resumed under the same id holds a newer row, and a read of the earlier attempt leaves it alone.
+func (h *holds) fail(id string, claim <-chan struct{}, reason string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	row, found := h.rows[id]
+	if !found || row.ctx.Done() != claim {
+		return false
 	}
 
 	if row.stop != nil {
@@ -163,6 +177,8 @@ func (h *holds) fail(id, reason string) {
 
 	row.lost = reason
 	h.rows[id] = row
+
+	return true
 }
 
 // renew records that a renewal which began at start worked, and swaps the timer of the trust for stop. It reports false, and keeps nothing, for a run that is gone or lost.
@@ -267,21 +283,22 @@ func (e *Engine) beatClaims() {
 
 		left := trustLimit - e.deps.Clock.age(row.renewed)
 		if left <= 0 {
-			e.lose(id, lapse(row))
+			e.lose(id, row.ctx.Done(), lapse(row))
 
 			continue
 		}
 
 		text, err := e.beatOne(e.ctx, row, left)
-		e.settle(id, now, text, err)
+		e.settle(id, row.ctx.Done(), now, text, err)
 	}
 }
 
-// settle applies the answer of a renewal that began at start: the tracker says the claim is gone, the renewal worked, or it failed and the next tick tries again.
-func (e *Engine) settle(id string, start time.Time, text string, err error) {
+// settle applies the answer of a renewal that began at start, for the claim that claim names: the tracker says the claim is gone, the renewal worked,
+// or it failed and the next tick tries again.
+func (e *Engine) settle(id string, claim <-chan struct{}, start time.Time, text string, err error) {
 	switch {
 	case text != "":
-		e.lose(id, text)
+		e.lose(id, claim, text)
 	case err == nil:
 		e.trust(id, start)
 	default:
@@ -302,15 +319,17 @@ func (e *Engine) trust(id string, start time.Time) {
 // deadline ends the trust in a claim whose last good renewal began at stamp, when no later renewal worked.
 func (e *Engine) deadline(id string, stamp time.Time) {
 	if row, expired := e.holds.expired(id, stamp); expired {
-		e.lose(id, lapse(row))
+		e.lose(id, row.ctx.Done(), lapse(row))
 	}
 }
 
-// lose marks the claim of a run lost and cancels the run. Ending the claim ends the context of every agent of the run, so the agent step in flight stops.
+// lose marks the claim that claim names lost and cancels the run. Ending the claim ends the context of every agent of the run, so the agent step in flight stops.
+// A claim that a resumed run replaced is left alone, and so is the run: the answer was for the attempt that held the earlier claim.
 // The worktree and the claim stay as they are: another run may hold the item now.
-func (e *Engine) lose(id, reason string) {
-	e.holds.fail(id, reason)
-	e.cancels.stop(id)
+func (e *Engine) lose(id string, claim <-chan struct{}, reason string) {
+	if e.holds.fail(id, claim, reason) {
+		e.cancels.stop(id)
+	}
 }
 
 // beatOne renews one claim under its own timeout, so a tracker call that hangs delays no other claim and no cancel scan for longer than the timeout.

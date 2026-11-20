@@ -149,7 +149,7 @@ func TestCancels_BeginRefusesARunThatThisProcessExecutesOrReleases(t *testing.T)
 	assert.True(t, list.begin("stray"))
 	assert.False(t, list.begin("stray"), "a release under way is not started twice")
 
-	list.finish("stray")
+	list.finish(attempt{id: "stray"})
 
 	assert.True(t, list.begin("stray"))
 

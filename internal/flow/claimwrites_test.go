@@ -18,7 +18,9 @@ import (
 // claimLoser loses the claim of the run of the test item, as the renewal does when the tracker says that the claim is gone.
 type claimLoser struct{ engine *Engine }
 
-func (l *claimLoser) lose() { l.engine.lose(runID(testItem, 1), "a test lost the claim") }
+func (l *claimLoser) lose() {
+	l.engine.lose(runID(testItem, 1), l.engine.holds.claimOf(runID(testItem, 1)), "a test lost the claim")
+}
 
 // loseCommand is the program name that makes the fake command runner lose the claim, at the point of the flow where the test wants the loss.
 const loseCommand = "lose"
@@ -220,7 +222,7 @@ func TestClaimWrites_AMergeOfARunThatHeldItsClaimAndLostItLandsNothing(t *testin
 	rig := newBatchRig(t)
 	run := startHeldRun(t, rig.h, rig.deps())
 
-	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+	run.engine.lose(runID(testItem, 1), run.engine.holds.claimOf(runID(testItem, 1)), "a test lost the claim")
 	failure := queueMerge(t, run.engine, runID(testItem, 1), "1", rig.heads["1"])
 	require.Error(t, run.finish(), "the run ends on the loss")
 
@@ -252,7 +254,7 @@ func TestClaimWrites_ACommandStepIsCancelledWhenTheRunLosesItsClaim(t *testing.T
 	h := newHarness(t)
 	run := startHeldRun(t, h, h.deps())
 
-	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+	run.engine.lose(runID(testItem, 1), run.engine.holds.claimOf(runID(testItem, 1)), "a test lost the claim")
 
 	select {
 	case <-run.canceled:
@@ -351,7 +353,7 @@ func TestClaimWrites_ACommandChildOfARunThatLostItsClaimNeverRunsItsProgram(t *t
 	h := newHarness(t)
 	run := startHeldRun(t, h, h.deps())
 
-	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+	run.engine.lose(runID(testItem, 1), run.engine.holds.claimOf(runID(testItem, 1)), "a test lost the claim")
 
 	handle, err := dbos.RunWorkflow(run.engine.ctx, run.engine.exclusive, ExclusiveInput{Kind: kindCommand, Run: runID(testItem, 1), RunItem: testItem, Project: testProject, Item: testItem, Request: CommandRequest{Project: testProject, Item: testItem, Run: []string{markCommand}}},
 		dbos.WithQueue(run.engine.exclusiveQueue), dbos.WithQueuePartitionKey(testProject))
@@ -385,7 +387,7 @@ func TestClaimWrites_ALossWhileTheMergeRunsCancelsTheContextOfTheMerge(t *testin
 		require.Fail(t, "the merge never started")
 	}
 
-	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+	run.engine.lose(runID(testItem, 1), run.engine.holds.claimOf(runID(testItem, 1)), "a test lost the claim")
 
 	select {
 	case <-mergeCtx.Done():
@@ -570,7 +572,7 @@ func TestClaimWrites_TheLostClaimOfAMergeChildNamesTheItemOfTheRun(t *testing.T)
 	rig := newBatchRig(t)
 	run := startHeldRun(t, rig.h, rig.deps())
 
-	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+	run.engine.lose(runID(testItem, 1), run.engine.holds.claimOf(runID(testItem, 1)), "a test lost the claim")
 	failure := queueMerge(t, run.engine, runID(testItem, 1), "1", rig.heads["1"])
 	require.Error(t, run.finish())
 
