@@ -165,7 +165,7 @@ func (s *script) handLook(call batchCall, pending []batch.Member, round int, out
 
 	for _, m := range pending {
 		read, err := runStep(s.e, s.ctx, handStepName(call.name, m.Item, round), func(c context.Context) (handRead, error) {
-			return s.e.handRead(c, s.in.Project, call.settings.Repo, m, round == 0)
+			return s.e.handRead(c, s.in.Project, call.settings.Repo, m, round == 0, s.holdsClaim)
 		}, dbos.WithStepMaxRetries(stepRetries))
 		if err != nil {
 			return nil, fmt.Errorf("merge %q: %w", call.name, err)
@@ -214,7 +214,8 @@ func (r *handResult) add(m batch.Member, read handRead) bool {
 // handRead reads the pull request of a member once, through the standing review. A merged pull request ends the member. A pull request that is closed ends it with a reason.
 // A head that is not the head of the member, and has another tree, puts the pull request back to draft. A head with the same tree is a rewrite and no move.
 // With ready set, a draft at the head of the member is marked ready, unless a change request, a conflict or an unresolved thread holds it back.
-func (e *Engine) handRead(ctx context.Context, project, repo string, m batch.Member, ready bool) (handRead, error) {
+// The ready mark is a write, so it asks holds for the claim of the run first.
+func (e *Engine) handRead(ctx context.Context, project, repo string, m batch.Member, ready bool, holds func() error) (handRead, error) {
 	standing, err := e.deps.Batch.Pull(ctx, project, m.Item, repo, m.Head)
 	if err != nil {
 		return handRead{}, fmt.Errorf("read the pull request of item %s: %w", m.Item, err)
@@ -232,7 +233,7 @@ func (e *Engine) handRead(ctx context.Context, project, repo string, m batch.Mem
 		return e.handMoved(ctx, project, repo, m, standing)
 	}
 
-	return e.handStanding(ctx, project, repo, m, standing, ready)
+	return e.handStanding(ctx, project, repo, m, standing, ready, holds)
 }
 
 // unreadText says why the standing of a pull request is not whole: the reads that failed, or the head that the forge did not give.
@@ -259,7 +260,7 @@ func handEnded(standing review.Standing) (read handRead, over bool) {
 // handStanding acts on a pull request at the head of the member. A draft about to be marked ready, and a ready pull request,
 // are held back by a change request or a conflict: the draft stays a draft and the ready one goes back to draft. An unresolved thread holds back the ready mark only.
 // A pull request that is a draft during the watch ends the member, whatever made it a draft, and the result says why.
-func (e *Engine) handStanding(ctx context.Context, project, repo string, m batch.Member, standing review.Standing, ready bool) (handRead, error) {
+func (e *Engine) handStanding(ctx context.Context, project, repo string, m batch.Member, standing review.Standing, ready bool, holds func() error) (handRead, error) {
 	marking := ready && standing.Draft
 	if !marking {
 		standing.UnresolvedThreads = 0
@@ -273,12 +274,23 @@ func (e *Engine) handStanding(ctx context.Context, project, repo string, m batch
 	case reasons != "":
 		return e.handHold(ctx, project, repo, m, standing, reasons)
 	case marking:
-		if err := e.deps.Batch.SetDraft(ctx, project, m.Item, repo, false); err != nil {
-			return handRead{}, fmt.Errorf("mark the pull request of item %s ready: %w", m.Item, err)
-		}
+		return handRead{State: handWaiting}, e.markReady(ctx, project, repo, m.Item, holds)
 	}
 
 	return handRead{State: handWaiting}, nil
+}
+
+// markReady marks the pull request of an item ready, unless the run lost its claim.
+func (e *Engine) markReady(ctx context.Context, project, repo, item string, holds func() error) error {
+	if err := holds(); err != nil {
+		return err
+	}
+
+	if err := e.deps.Batch.SetDraft(ctx, project, item, repo, false); err != nil {
+		return fmt.Errorf("mark the pull request of item %s ready: %w", item, err)
+	}
+
+	return nil
 }
 
 // handHold ends the member because of a reason to wait. A draft that was about to be marked ready stays a draft. A ready pull request goes back to draft.

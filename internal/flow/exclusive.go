@@ -39,9 +39,11 @@ const (
 )
 
 // ExclusiveInput is one gate or one merge of a repository, or the host job of a command call with a slot class. Kind is "gate", "merge", "batch_gate" or "command".
-// Request belongs to a command call. Request and Head belong to a gate. Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
+// Request belongs to a command call. Request and Head belong to a gate. Run, Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
+// Run is the id of the run that queued the merge: the merge asks for the claim of that run, and a merge with no Run is refused.
 type ExclusiveInput struct {
 	Kind    string `json:"kind"`
+	Run     string `json:"run,omitempty"`
 	Project string `json:"project"`
 	Item    string `json:"item"`
 	// BuildHost is the build host that the run recorded in host_up, for a batch gate. A gate carries it in Request.
@@ -171,6 +173,12 @@ func (e *Engine) runCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutp
 		out.Outputs, err = e.gateCall(ctx, in, out)
 	case kindMerge:
 		out.Merge, err = runStep(e, ctx, mergeStep, func(c context.Context) (merge.Result, error) {
+			// The child can wait behind a gate for a long time, so the claim of the run that queued it is read again at the merge.
+			// beehave resume can reopen the child before its run, so a run with no first trust yet is waited for, as an agent phase waits.
+			if _, err := e.awaitClaim(c, PhaseInput{Run: in.Run, Item: in.Item}); err != nil {
+				return merge.Result{}, err
+			}
+
 			return e.deps.Merge.Merge(c, in.Project, in.Item, in.Head, in.Settings)
 		})
 	case kindBatchGate:
