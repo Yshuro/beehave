@@ -4,6 +4,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -11,8 +12,12 @@ import (
 	"github.com/tobocop2/beehave/examples/remediation/tools/gate"
 )
 
-// keptJob is a job that reads no secret, so that a file whose other jobs are left out still gives a step.
-const keptJob = "  k:\n    steps:\n      - run: make test\n"
+const (
+	// keptJob is a job that reads no secret, so that a file whose other jobs are left out still gives a step.
+	keptJob = "  k:\n    steps:\n      - run: make test\n"
+	// aliasBoundRefusal is the refusal of a file that holds too many nodes with its aliases expanded.
+	aliasBoundRefusal = "ci.yaml: not a workflow file: with its YAML aliases expanded, it holds more than 100000 nodes"
+)
 
 func commands(got gate.Derived) []string {
 	out := make([]string, len(got.Steps))
@@ -207,9 +212,27 @@ func nestedAliases(levels, width int) string {
 func TestDerive_AFileWhoseAliasesExpandPastTheBoundIsRefused(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, refusedDerive(t, nestedAliases(6, 10)), "ci.yaml: not a workflow file: with its YAML aliases expanded, it holds more than 100000 nodes")
-	assert.Contains(t, refusedDerive(t, nestedAliases(5, 11)), "ci.yaml: not a workflow file: with its YAML aliases expanded, it holds more than 100000 nodes")
+	assert.Contains(t, refusedDerive(t, nestedAliases(6, 10)), aliasBoundRefusal)
+	assert.Contains(t, refusedDerive(t, nestedAliases(5, 11)), aliasBoundRefusal)
 
 	got := derivedAll(t, nestedAliases(4, 10))
 	assert.Equal(t, []string{"j:run-1"}, stepNames(got), "the control: an expansion under the bound is read")
+}
+
+func TestDerive_AFileOfTwelveAliasLevelsIsRefusedWithinASecond(t *testing.T) {
+	t.Parallel()
+
+	refused := make(chan error, 1)
+
+	go func() {
+		_, err := gate.Derive([]gate.File{{Path: "ci.yaml", Text: nestedAliases(12, 10)}})
+		refused <- err
+	}()
+
+	select {
+	case err := <-refused:
+		require.ErrorContains(t, err, aliasBoundRefusal)
+	case <-time.After(time.Second):
+		require.Fail(t, "no refusal within a second: a node shared by aliases is read once for each alias")
+	}
 }
