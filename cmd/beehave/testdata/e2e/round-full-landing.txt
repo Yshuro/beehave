@@ -33,6 +33,10 @@ mkdir home
 env SWARM_REMOTE=$WORK/remote.git
 env SWARM_FORGE=$WORK/forge
 env HOME=$WORK/home
+
+# The user of a project has a global git identity. The sandbox of an agent step refuses to start without one, and the worktree has no config of its own.
+exec git config --file home/.gitconfig user.name e2e
+exec git config --file home/.gitconfig user.email e2e@example.com
 cp base forge/base
 cp base forge/closing-ok
 cp base forge/open-on-create
