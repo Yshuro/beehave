@@ -47,7 +47,7 @@ func promptData(facts map[string]any) map[string]any {
 		"item": map[string]any{"id": "1", "title": "t", "body": "b"}, "plan": "p", "round": 1, "findings": "f", "violations": "", "facts": facts,
 		"output_file": "/out.json", "data_file": "/in.json", "mechanism": "m", "fixes": 1, "pr": "9", "ruling": "r",
 		"base": "integration", "acceptance": "", "base_result": "", "pass": 1, "scope": "the diff of the last fix",
-		"branch": "sync/integration/abcd1234", "source": "main", "head": "abc",
+		"branch": "sync/integration/abcd1234", "source": "main", "head": "abc", "since": "origin/integration",
 	}
 }
 

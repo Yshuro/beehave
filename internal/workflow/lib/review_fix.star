@@ -288,8 +288,8 @@ def with_violations(findings, *violations):
             findings = lines + "\n\n" + findings
     return findings
 
-def review_args(loop, head, violations, scope, outputs):
-    """The arguments of a fresh read-only review of the head, other than its name. scope tells the review what it judges."""
+def review_args(loop, head, violations, scope, outputs, since):
+    """The arguments of a fresh read-only review of the head, other than its name. scope tells the review what it judges, and since...head is the diff range of that scope."""
     return dict(
         label = labelled(loop, "review", loop.review_cap),
         prompt = loop.review_prompt,
@@ -301,7 +301,7 @@ def review_args(loop, head, violations, scope, outputs):
         protect_paths = loop.protect,
         output_tries = 2,
         edits = False,
-        inputs = {"item": loop.item, "violations": violations, "facts": loop.facts, "scope": scope},
+        inputs = {"item": loop.item, "violations": violations, "facts": loop.facts, "scope": scope, "since": since, "head": head},
         data = loop.data,
     )
 
@@ -315,7 +315,7 @@ def check_review(loop, check, inner, outer):
     if stopped_before(loop.item, "before-review-%d" % outer, check.head, loop.guard) != None:
         return struct(end = ended(loop, check.head, stopped = True, gate = check))
 
-    review = agent(name = "candidate-review", **review_args(loop, check.head, lane.violations, "the whole pull request", loop.review_outputs))
+    review = agent(name = "candidate-review", **review_args(loop, check.head, lane.violations, "the whole pull request", loop.review_outputs, "origin/" + loop.base))
     capped(review, "review", loop.item)
 
     # A reject ends the loop with no fix round. The caller holds the item with the text of the review as the reason.
@@ -438,6 +438,7 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     for inner in range(1, MAX_INNER + 1):
         # Only the first candidate after a clean implementer has no findings due. Its first review judges the diff of the implementer, as no fix ran.
         first = not pending.due
+        before = lane.head_sha
         if pending.due:
             fixed = scoped_fix(loop, pending, fixes, decided, outer, inner, lane)
             if fixed.end != None:
@@ -449,7 +450,8 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
 
         name = FIRST_REVIEW if first else "scoped-review-%d" % inner
         scope = "the diff of the implementer" if first else "the diff of the last fix"
-        review = agent(name = name, **review_args(loop, lane.head_sha, lane.violations, scope, []))
+        since = "origin/" + loop.base if first else before
+        review = agent(name = name, **review_args(loop, lane.head_sha, lane.violations, scope, [], since))
         capped(review, "review", loop.item)
         if review.verdict == "reject":
             return struct(end = ended(loop, lane.head_sha, rejected = True, gate = pending.gate, review = review))
