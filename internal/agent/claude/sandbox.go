@@ -60,6 +60,7 @@ type network struct {
 
 type permissions struct {
 	BlockReadsOutsideWorkingDirectories bool     `json:"blockReadsOutsideWorkingDirectories"`
+	Allow                               []string `json:"allow,omitempty"`
 	Deny                                []string `json:"deny"`
 }
 
@@ -75,6 +76,8 @@ type permissions struct {
 // leaves the Read tool open, and the reverse leaves cat open).
 // A permission path is written as //absolute. The settings never set excludedCommands, allowLocalBinding, allowAllUnixSockets or allowAppleEvents,
 // and never put the shared git directory in allowWrite: a linked work tree gets it, and an explicit entry could open hooks and config.
+// The settings set no allowWrite list. Each write file of the plan gets one Edit allow rule by its exact path, and Claude Code merges that path into the
+// write paths of the sandbox too, so the one rule opens the file to the shell and to the file tools.
 // The git variables of the plan reach the shell through the env file, the only file in the run folder. Its allowRead entry keeps it readable when the
 // run folder is under the home folder.
 func (Adapter) Sandbox(plan agent.SandboxPlan, guard, runDir string) agent.Launch {
@@ -124,7 +127,10 @@ func settingsOf(plan agent.SandboxPlan, envPath string) sandboxSettings {
 			},
 			Network: network{AllowedDomains: join(plan.Network), StrictAllowlist: true},
 		},
-		Permissions: permissions{BlockReadsOutsideWorkingDirectories: true, Deny: slices.Concat(webTools(), fileRules(plan.Deny, plan.DenyPatterns), editRules(plan.DenyWrite), patternEditRules(plan.DenyWritePatterns))},
+		Permissions: permissions{
+			BlockReadsOutsideWorkingDirectories: true, Allow: patternEditRules(plan.Write),
+			Deny: slices.Concat(webTools(), fileRules(plan.Deny, plan.DenyPatterns), editRules(plan.DenyWrite), patternEditRules(plan.DenyWritePatterns)),
+		},
 	}
 }
 
@@ -155,7 +161,7 @@ func editRules(paths []string) []string {
 	return rules
 }
 
-// patternEditRules returns the Edit deny rule of each pattern, as //absolute.
+// patternEditRules returns the Edit rule of each pattern or exact file, as //absolute with no tail.
 func patternEditRules(patterns []string) []string {
 	rules := make([]string, 0, len(patterns))
 

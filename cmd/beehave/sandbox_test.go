@@ -380,7 +380,7 @@ func TestSandboxPlan_ADataFileInACredentialPathStopsTheStep(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
-	assert.Contains(t, result.Note, "The data file "+req.DataFile+" overlaps the credential path "+filepath.Join(r.home, ".ssh"))
+	assert.Contains(t, result.Note, "The file "+req.DataFile+" of the state folder overlaps the credential path "+filepath.Join(r.home, ".ssh"))
 }
 
 func TestSandboxPlan_AnAllowWritePathStartsAtTheWorkFolderAndMayNotTouchACredentialPath(t *testing.T) {

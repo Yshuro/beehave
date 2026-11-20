@@ -517,6 +517,24 @@ func TestAgentStep_AMissingOrIllTypedOutputNamesTheStepAndTheOutput(t *testing.T
 	require.ErrorContains(t, err, "the agent wrote no output file")
 }
 
+func TestAgentStep_AMissingOutputFileNamesTheRefusedWriteOfThatFile(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		denied := exited
+		denied.Denials = []agent.Denial{{Tool: "Bash", Target: "rm -rf /"}, {Tool: "Write", Target: request.OutputFile}, {Tool: "Write", Target: request.OutputFile + ".tmp"}}
+
+		return denied
+	}
+
+	_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
+
+	require.Error(t, err)
+	assert.Regexp(t, `the agent wrote no output file at (\S+\.json): the permission check of the agent CLI refused the Write call that writes it`, err.Error())
+	assert.NotContains(t, err.Error(), "Bash", "a refusal of another target is left out")
+}
+
 func TestAgentStep_OutputTriesRunTheAgentThatManyTimesInAllBeforeFailing(t *testing.T) {
 	t.Parallel()
 

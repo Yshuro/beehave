@@ -151,7 +151,15 @@ type Call struct {
 	Text string
 }
 
+// Denial is one tool call that the permission check of the CLI refused, by a rule or by the permission mode: the name of the tool and its target, the file path of a file tool or the
+// command of a shell call.
+type Denial struct {
+	Tool   string `json:"tool"`
+	Target string `json:"target"`
+}
+
 // Seen is what one output line holds.
+// Denials lists the tool calls that the CLI reports on its result line as refused by its permission check, or nil when the line reports none.
 // Refused lists the ids of calls that the CLI refused before they ran, so those calls never ran.
 // Result is true for the line that ends a run. Invalid is true for a line that the adapter cannot read; an empty line is not invalid.
 // Stop is the cap that the CLI reports on its result line: StopTurns, StopBudget, or empty when the line reports no cap.
@@ -177,6 +185,7 @@ type Seen struct {
 	Shell   []Call
 	Skills  []string
 	Refused []string
+	Denials []Denial
 	Result  bool
 	Invalid bool
 	Priced  bool

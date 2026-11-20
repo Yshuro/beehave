@@ -581,7 +581,7 @@ func readAgent(ctx context.Context, a agentArgs, ended PhaseOutput) (stepResult,
 	outputs := agentOutputs(ended.Text, ended.Session, ended.Transcript, head, strings.Join(violations, "\n"), capOf(ended.Outcome), ended.Spend, rewrote, a.startHead != "" && head != a.startHead, ended.Skills)
 
 	// A run that left a bad output file still cost money, so its outputs stay in the result and the run cap counts them.
-	if problem := a.readOutputs(outputs); problem != "" {
+	if problem := a.readOutputs(outputs, ended.Denials); problem != "" {
 		return stepResult{Note: problem, Outputs: spendOutputs(ended.Spend)}, nil
 	}
 
@@ -602,13 +602,14 @@ func capOf(outcome agent.Outcome) string {
 }
 
 // readOutputs reads the output file when the call declares outputs and adds them to outputs. It returns what is wrong with the file, or an empty text.
-func (a agentArgs) readOutputs(outputs map[string]any) string {
+// A missing file names each call to it that the permission check of the agent CLI refused.
+func (a agentArgs) readOutputs(outputs map[string]any, denials []agent.Denial) string {
 	// A run that a cap stopped returns its stop with no declared outputs: the workflow guard names the cap, and a missing output file would hide it.
 	if len(a.declared) == 0 || outputs["stop"] != "" {
 		return ""
 	}
 
-	written, problem := writtenObject(a.file)
+	written, problem := writtenObject(a.file, denials)
 	if problem != "" {
 		return problem
 	}
@@ -630,11 +631,12 @@ func addDeclared(outputs map[string]any, names []string, written map[string]any)
 	return ""
 }
 
-// writtenObject reads the JSON object in the output file. The second result says what is wrong with the file.
-func writtenObject(file string) (map[string]any, string) {
+// writtenObject reads the JSON object in the output file. The second result says what is wrong with the file. A missing file names the tools whose
+// calls to write it the permission check of the agent CLI refused.
+func writtenObject(file string, denials []agent.Denial) (map[string]any, string) {
 	raw, err := fs.ReadFile(os.DirFS(filepath.Dir(file)), filepath.Base(file))
 	if err != nil {
-		return nil, "the agent wrote no output file at " + file
+		return nil, "the agent wrote no output file at " + file + refusedWrites(file, denials)
 	}
 
 	var written map[string]any
@@ -643,6 +645,25 @@ func writtenObject(file string) (map[string]any, string) {
 	}
 
 	return written, ""
+}
+
+// refusedWrites says which tools the permission check of the agent CLI refused when they called to write file, or returns "".
+func refusedWrites(file string, denials []agent.Denial) string {
+	var tools []string
+
+	for _, denial := range denials {
+		if denial.Target == file {
+			tools = append(tools, denial.Tool)
+		}
+	}
+
+	if len(tools) == 0 {
+		return ""
+	}
+
+	slices.Sort(tools)
+
+	return fmt.Sprintf(": the permission check of the agent CLI refused the %s call that writes it", strings.Join(slices.Compact(tools), " and "))
 }
 
 // stringOutput returns one declared output of the output file. The second result says what is wrong with it.

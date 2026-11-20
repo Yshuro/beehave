@@ -196,6 +196,25 @@ func TestSandbox_DeniesWritesToTheClosedPathsInTheSandboxAndTheEditRules(t *test
 	assert.NotContains(t, parsed.Permissions.Deny, "Read(//work/tree/.husky/**)")
 }
 
+func TestSandbox_OpensEachWriteFileByOneEditAllowRuleOfItsExactPath(t *testing.T) {
+	t.Parallel()
+
+	p := plan()
+	p.Write = []string{"/state/outputs/1.review.json"}
+
+	args := claude.New(nil).Sandbox(p, "", "/run").Args
+
+	var parsed struct {
+		Permissions struct{ Allow, Deny []string }
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(args[len(args)-1]), &parsed))
+
+	assert.NotContains(t, args[len(args)-1], "allowWrite", "the Edit allow rule alone opens the file to the shell")
+	assert.Equal(t, []string{"Edit(//state/outputs/1.review.json)"}, parsed.Permissions.Allow, "the exact file, with no /** tail")
+	assert.Contains(t, parsed.Permissions.Deny, "Edit(//home/o/.ssh/**)", "the deny rules stay")
+}
+
 func TestSandbox_AnEmptyPlanWritesEmptyListsAndNeverNull(t *testing.T) {
 	t.Parallel()
 
@@ -217,7 +236,8 @@ func TestSandbox_NeverSetsTheKeysThatWidenTheSandbox(t *testing.T) {
 		assert.NotContains(t, text, key)
 	}
 
-	// The shared git directory is readable, and no explicit entry makes it writable: the settings carry no allowWrite key.
+	// The shared git directory is readable, and no explicit entry makes it writable: the settings carry no allowWrite key, and a plan with no write
+	// file carries no allow rule.
 	_, settings := settingsOf(t, args)
 	box, ok := settings["sandbox"].(map[string]any)
 	require.True(t, ok)
@@ -225,6 +245,10 @@ func TestSandbox_NeverSetsTheKeysThatWidenTheSandbox(t *testing.T) {
 	files, ok := box["filesystem"].(map[string]any)
 	require.True(t, ok)
 	assert.NotContains(t, files, "allowWrite")
+
+	rules, ok := settings["permissions"].(map[string]any)
+	require.True(t, ok)
+	assert.NotContains(t, rules, "allow")
 }
 
 func TestSandbox_CarriesTheHookOfTheGuardInTheSameSettings(t *testing.T) {
