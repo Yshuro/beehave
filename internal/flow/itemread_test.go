@@ -3,12 +3,15 @@ package flow
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // fakeReader plays a tracker reader: the comments and the parent of each item.
@@ -21,6 +24,8 @@ type fakeReader struct {
 	err         error
 	commentsErr error
 	parentErr   error
+	// numbersOnly refuses an id that is not an issue number, as the GitHub store does.
+	numbersOnly bool
 }
 
 func (r *fakeReader) Comments(_ context.Context, project, id string) ([]string, error) {
@@ -29,7 +34,7 @@ func (r *fakeReader) Comments(_ context.Context, project, id string) ([]string, 
 
 	r.calls = append(r.calls, "comments|"+project+"|"+id)
 
-	return r.comments[id], cmp.Or(r.err, r.commentsErr)
+	return r.comments[id], cmp.Or(r.err, r.commentsErr, r.refusal(id))
 }
 
 func (r *fakeReader) Parent(_ context.Context, project, id string) (string, error) {
@@ -38,7 +43,16 @@ func (r *fakeReader) Parent(_ context.Context, project, id string) (string, erro
 
 	r.calls = append(r.calls, "parent|"+project+"|"+id)
 
-	return r.parents[id], cmp.Or(r.err, r.parentErr)
+	return r.parents[id], cmp.Or(r.err, r.parentErr, r.refusal(id))
+}
+
+// refusal is the error of a tracker that takes only issue numbers, when numbersOnly is set and id is not one.
+func (r *fakeReader) refusal(id string) error {
+	if r.numbersOnly && !model.IsDigits(id) {
+		return fmt.Errorf("REFUSE: %q is not an issue number", id)
+	}
+
+	return nil
 }
 
 // reads counts the calls of one kind of read, "comments" or "parent".
