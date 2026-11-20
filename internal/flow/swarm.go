@@ -217,7 +217,7 @@ func (e *Engine) startOf(ctx context.Context, in ItemInput, id, run string, take
 	return spawnedRun{Item: id, Run: run, Login: login, Start: true, Priority: place}, nil
 }
 
-// itemsPlace is the place of the run of an item in the items queue. It comes from the severity that the tracker gives the item: no standing is at hand.
+// itemsPlace is the place of the run of an item in the items queue. It comes from the severity in the item fields, and a round item has no severity: no standing is at hand.
 func (e *Engine) itemsPlace(ctx context.Context, project, id string) (uint, error) {
 	fields, err := e.itemFields(ctx, project, id)
 	if err != nil {
