@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
-	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
@@ -215,8 +214,7 @@ func explain(ctx context.Context, doing string, err error) string {
 
 // git runs one git command in dir and returns its output. A canceled context kills the process group of the call.
 func git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := proc.GroupCommand(ctx, gitexec.Binary, gitexec.Args(args), dir)
-	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd := gitexec.Command(ctx, dir, args, "GIT_TERMINAL_PROMPT=0")
 
 	var stderr bytes.Buffer
 

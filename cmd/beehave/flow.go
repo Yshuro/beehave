@@ -255,25 +255,24 @@ func newLife(cfg config.Config, table adapters, trees worktrees) itemLife {
 
 // newWorktrees finds item worktrees in the trees folder of the state folder. It adds a missing one from the clone of the project in the repos folder.
 // The client of the commands only reads worktrees; it passes the projects so that it knows which have no repository.
-// Every git call sets GIT_TERMINAL_PROMPT=0, so a private repository fails and never waits for a password. A git call in the clone or a worktree
-// allows the file transport only (GIT_ALLOW_PROTOCOL, which no git config overrides), so no setting in the clone config can send it to the network.
+// Every git call sets GIT_TERMINAL_PROMPT=0, so a private repository fails and never waits for a password. A git call in the clone or a worktree is
+// local (see gitexec), so no setting in the clone config can send it to the network.
 func newWorktrees(projects map[string]config.Project, opts flow.Options, forges func(model.Project) (forge.Forge, error)) worktrees {
 	return worktrees{
 		root: filepath.Join(opts.StateDir, "trees"), repos: filepath.Join(opts.StateDir, "repos"), projects: projects, forge: forges,
-		git:    func(dir string) proc.Runner { return gitWith(dir, "GIT_TERMINAL_PROMPT=0", "GIT_ALLOW_PROTOCOL=file") },
-		remote: func(dir string) proc.Runner { return gitWith(dir, "GIT_TERMINAL_PROMPT=0") },
+		git:    func(dir string) proc.Runner { return noPrompt(gitexec.New(dir, proc.DefaultTimeout)) },
+		remote: func(dir string) proc.Runner { return noPrompt(gitexec.NewRemote(dir, proc.DefaultTimeout)) },
 	}
 }
 
-// gitWith runs git in dir, with the hooks off and env on top of the environment of the process.
-func gitWith(dir string, env ...string) proc.Runner { //nolint:ireturn // the worktrees take the runner as the interface
-	runner := gitexec.New(dir, proc.DefaultTimeout)
-	runner.Env = env
+// noPrompt sets GIT_TERMINAL_PROMPT=0 on the runner.
+func noPrompt(runner gitexec.Runner) proc.Runner { //nolint:ireturn // the worktrees take the runner as the interface
+	runner.Env = []string{"GIT_TERMINAL_PROMPT=0"}
 
 	return runner
 }
 
-// localRunner runs a program with the environment of the process. A git call runs with the hooks of the repository off.
+// localRunner runs a program with the environment of the process. A git call runs with the hooks of the repository off, and it is local (see gitexec).
 func localRunner(binary, dir string, timeout time.Duration) proc.Runner { //nolint:ireturn // programs.local is a func field that returns the interface
 	if binary == gitexec.Binary {
 		return gitexec.New(dir, timeout)

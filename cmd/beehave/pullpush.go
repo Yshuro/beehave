@@ -132,9 +132,9 @@ func fetchHead(ctx context.Context, root, dir, folder, program, branch, head str
 }
 
 // pushGit runs git in the push repository dir, with the hooks off and no prompt for a password. GIT_DIR names the repository, so git does not look for
-// one in a parent folder.
+// one in a parent folder. Only the engine writes the push repository, so its runner reaches the remote.
 func pushGit(dir string) proc.Runner { //nolint:ireturn // the runner of the worktrees is the same interface
-	runner := gitexec.New(dir, proc.DefaultTimeout)
+	runner := gitexec.NewRemote(dir, proc.DefaultTimeout)
 	runner.Env = []string{"GIT_TERMINAL_PROMPT=0", "GIT_DIR=" + dir}
 
 	return runner

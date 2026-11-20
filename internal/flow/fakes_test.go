@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"database/sql"
@@ -1384,7 +1385,20 @@ func (f fakeTrees) Heads(ctx context.Context, _ string) (string, error) {
 		return "", errFake
 	}
 
-	return git(ctx, dir, "ls-remote", "--heads", remoteName)
+	// The read of the branches reaches the remote, so it runs with plain git and not with the local git calls of the release.
+	cmd := proc.GroupCommand(ctx, "git", []string{"ls-remote", "--heads", remoteName}, dir)
+	cmd.Env = append(cmd.Environ(), "GIT_TERMINAL_PROMPT=0")
+
+	var stderr bytes.Buffer
+
+	cmd.Stderr = &stderr
+
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
+	}
+
+	return string(out), nil
 }
 
 func (f fakeTrees) Ensure(ctx context.Context, _, item, start, base string) (string, error) {
