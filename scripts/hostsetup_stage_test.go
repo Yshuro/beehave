@@ -5,10 +5,13 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 const (
@@ -50,8 +53,6 @@ func TestHostSetupRoot_PutsTheControllerKeyInTheAuthorizedKeysOfTheJobUser(t *te
 	assert.Equal(t, controllerKey, h.read(h.jobKeyFile()))
 
 	log := h.read(h.log)
-	assert.Contains(t, log, "\ninstall -d -m 0700 -o beehave-jobs -g beehave-jobs "+filepath.Dir(h.jobKeyFile())+"\n")
-	assert.Contains(t, log, "\ninstall -m 0600 -o beehave-jobs -g beehave-jobs "+h.jobKey+" "+h.jobKeyFile()+"\n")
 	assert.NotContains(t, log, "ssh-keys", "the key goes to the authorized_keys file only, never to the instance metadata, where the guest agent would read it and add the user to google-sudoers")
 }
 
@@ -69,6 +70,70 @@ func TestHostSetupRoot_InstallsTheToolsTheGuardAndLingerBeforeItReportsDone(t *t
 	assert.Contains(t, out, "metadata root=200\n", "root keeps the token: the idle watchdog runs as root")
 	assert.NotContains(t, log, "\nmake ", "the root stage runs no code of the clone")
 	assert.NotContains(t, log, "systemd-run", "the root stage starts no job")
+}
+
+// adminGroupWrites makes a folder of the clone writable by its group, and runs the root stage as the admin builder whose primary group
+// that is. It returns the gid. The case sets what the fake getent prints.
+func (h *fakeHost) adminGroupWrites(t *testing.T) string {
+	t.Helper()
+
+	folder := filepath.Join(h.clone, "scripts")
+	require.NoError(t, exectest.ChmodFolder(folder, 0o775))
+
+	info, err := os.Stat(folder)
+	require.NoError(t, err)
+
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	require.True(t, ok, "the test needs the group of a folder")
+
+	gid := strconv.FormatUint(uint64(stat.Gid), 10)
+	h.env = append(h.env, "SUDO_GID="+gid, "SUDO_USER=builder")
+
+	return gid
+}
+
+// adminPasswd is the passwd line of the admin builder, whose primary group is gid.
+func adminPasswd(gid string) string {
+	return "builder:x:" + strconv.Itoa(os.Getuid()) + ":" + gid + "::/home/builder:/bin/sh"
+}
+
+func TestHostSetupRoot_JudgesNoFolderAboveTheSystemRoot(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	require.NoError(t, exectest.ChmodFolder(h.base, 0o777))
+
+	out, err := h.rootSetup()
+	require.NoError(t, err, out)
+	assert.Equal(t, rootDone, lastLine(out), "on a host the walk stops at /, so in a test it stops at the folder that stands for /")
+}
+
+func TestHostSetupRoot_AcceptsAFolderThatOnlyTheGroupOfTheAdminCanWrite(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	gid := h.adminGroupWrites(t)
+	h.env = append(h.env, "FAKE_GETENT_GROUP=builder:x:"+gid+":builder", "FAKE_GETENT_PASSWD=root:x:0:0::/root:/bin/sh\n"+adminPasswd(gid))
+
+	out, err := h.rootSetup()
+	require.NoError(t, err, out)
+	assert.Equal(t, rootDone, lastLine(out), "a umask of 002 makes the clone of the admin writable by the private group of the admin, which holds no other user")
+}
+
+func TestHostSetupRoot_WritesTheKeyAsTheJobUser(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.rootSetup()
+	require.NoError(t, err, out)
+
+	copied := filepath.Join(h.sysroot, "etc/beehave/job-key.pub")
+	log := h.read(h.log)
+	assert.Contains(t, log, "\nsudo install -D -m 0644 "+h.jobKey+" "+copied+"\n", "root copies the key to a root folder")
+	assert.Contains(t, log, "\nsudo -u beehave-jobs install -d -m 0700 "+filepath.Dir(h.jobKeyFile())+"\n")
+	assert.Contains(t, log, "\nsudo -u beehave-jobs install -m 0600 "+copied+" "+h.jobKeyFile()+"\n")
+	assert.NotContains(t, log, "-o beehave-jobs", "root writes nothing in the home of the job user, so a link there does not lead root")
+	assert.Equal(t, controllerKey, h.read(h.jobKeyFile()))
 }
 
 func TestHostSetupRoot_RefusesBeforeAnyChange(t *testing.T) {
@@ -97,7 +162,35 @@ func TestHostSetupRoot_RefusesBeforeAnyChange(t *testing.T) {
 		}},
 		{name: "a_folder_of_the_clone_that_the_group_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
 			t.Helper()
-			require.NoError(t, h.root.Chmod(h.rel(filepath.Join(h.clone, "scripts")), 0o770))
+			require.NoError(t, exectest.ChmodFolder(filepath.Join(h.clone, "scripts"), 0o770))
+		}},
+		{name: "a_folder_of_the_admin_group_that_has_another_member", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			gid := h.adminGroupWrites(t)
+			h.env = append(h.env, "FAKE_GETENT_GROUP=builder:x:"+gid+":builder,alice", "FAKE_GETENT_PASSWD="+adminPasswd(gid))
+		}},
+		{name: "a_folder_of_the_admin_group_that_is_the_primary_group_of_another_user", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			gid := h.adminGroupWrites(t)
+			h.env = append(h.env, "FAKE_GETENT_GROUP=builder:x:"+gid+":", "FAKE_GETENT_PASSWD="+adminPasswd(gid)+"\nalice:x:4321:"+gid+"::/home/alice:/bin/sh")
+		}},
+		{name: "a_folder_of_the_admin_group_that_getent_does_not_know", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			gid := h.adminGroupWrites(t)
+			h.env = append(h.env, "FAKE_GETENT_PASSWD="+adminPasswd(gid))
+		}},
+		{name: "a_folder_of_the_admin_group_whose_users_getent_cannot_list", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			gid := h.adminGroupWrites(t)
+			h.env = append(h.env, "FAKE_GETENT_GROUP=builder:x:"+gid+":")
+		}},
+		{name: "a_go_folder_that_the_group_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			require.NoError(t, exectest.ChmodFolder(filepath.Join(h.sysroot, "usr/local/go"), 0o775))
+		}},
+		{name: "a_local_bin_folder_that_every_user_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			require.NoError(t, exectest.ChmodFolder(filepath.Join(h.sysroot, "usr/local/bin"), 0o777))
 		}},
 		{name: "a_file_of_another_owner", env: "SUDO_UID=" + strconv.Itoa(os.Getuid()+1), message: unsafeClone, prepare: func(t *testing.T, _ *fakeHost) {
 			t.Helper()
@@ -113,7 +206,11 @@ func TestHostSetupRoot_RefusesBeforeAnyChange(t *testing.T) {
 		}},
 		{name: "a_parent_folder_that_the_group_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
 			t.Helper()
-			require.NoError(t, h.root.Chmod(".", 0o775))
+			require.NoError(t, exectest.ChmodFolder(filepath.Dir(h.clone), 0o775))
+		}},
+		{name: "a_system_root_that_the_group_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			require.NoError(t, exectest.ChmodFolder(h.sysroot, 0o775))
 		}},
 		{name: "two_keys", message: "more than one line", prepare: func(t *testing.T, h *fakeHost) {
 			t.Helper()

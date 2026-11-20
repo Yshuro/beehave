@@ -8,6 +8,10 @@ if [ "$1" = -n ]; then
 	exit "${FAKE_SUDO_RC:-1}"
 fi
 case $1 in *=*) shift ;; esac
-export FAKE_AS_ROOT=1
+if [ "$1" = -u ]; then
+	shift 2
+else
+	export FAKE_AS_ROOT=1
+fi
 case $(command -v "$1") in "$FAKE_BIN"/*) exec "$@" ;; esac
 exit 0

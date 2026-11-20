@@ -98,13 +98,13 @@ func newFakeHost(t *testing.T) *fakeHost {
 	require.NoError(t, err)
 
 	h := &fakeHost{
-		t: t, root: openRoot(t, base), source: openRoot(t, "."), base: base, clone: filepath.Join(base, "clone"), home: filepath.Join(base, "home"),
+		t: t, root: openRoot(t, base), source: openRoot(t, "."), base: base, clone: filepath.Join(base, "root/src/clone"), home: filepath.Join(base, "home"),
 		sysroot: filepath.Join(base, "root"), workRoot: filepath.Join(base, "work"), bin: filepath.Join(base, "bin"), log: filepath.Join(base, "log"),
 		down: filepath.Join(base, "dl"), state: filepath.Join(base, "state"),
 	}
 	tmp := filepath.Join(base, "tmp")
 
-	for _, dir := range []string{h.clone + "/scripts", h.home + "/go/bin", h.sysroot + "/usr/local/go/bin", h.workRoot, h.bin, h.down, h.state, tmp} {
+	for _, dir := range []string{h.clone + "/scripts", h.home + "/go/bin", h.sysroot + "/usr/local/go/bin", h.sysroot + "/usr/local/bin", h.workRoot, h.bin, h.down, h.state, tmp} {
 		require.NoError(t, h.root.MkdirAll(h.rel(dir), 0o750))
 	}
 
@@ -762,6 +762,11 @@ func (h *fakeHost) serveGo(version, sha string, broken bool) {
 	zw := gzip.NewWriter(&archive)
 	tw := tar.NewWriter(zw)
 	body := fakeGo(version)
+	// The Go archive of go.dev holds its folders with mode 0755, so the folders do not take the umask of the test.
+	for _, dir := range []string{"go/", "go/bin/"} {
+		require.NoError(h.t, tw.WriteHeader(&tar.Header{Name: dir, Mode: 0o755, Typeflag: tar.TypeDir}))
+	}
+
 	require.NoError(h.t, tw.WriteHeader(&tar.Header{Name: "go/bin/go", Mode: 0o755, Size: int64(len(body)), Typeflag: tar.TypeReg}))
 	_, err := tw.Write([]byte(body))
 	require.NoError(h.t, err)

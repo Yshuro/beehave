@@ -18,7 +18,7 @@
 #
 # Usage: sudo sh scripts/host-setup.sh --stage root --watchdog <systemd unit> --job-key <public key file>
 #        sh scripts/host-setup.sh --stage job --work-root <absolute path> --watchdog <systemd unit>
-# HOST_SETUP_SYSROOT is a folder that stands for / in the tests of the script. It is empty on a host.
+# HOST_SETUP_SYSROOT is a folder that stands for / in the tests of the script, and the top of the walk of the root stage. It is empty on a host.
 set -eu
 
 usage='usage: sudo sh scripts/host-setup.sh --stage root --watchdog <systemd unit> --job-key <public key file>  |  sh scripts/host-setup.sh --stage job --work-root <absolute path> --watchdog <systemd unit>'
@@ -39,6 +39,7 @@ guard_unit=metadata-guard.service
 guard_rules=$sysroot/etc/beehave/metadata-guard.nft
 guard_unit_file=$sysroot/etc/systemd/system/$guard_unit
 key_file=$sysroot$job_home/.ssh/authorized_keys
+job_key_copy=$sysroot/etc/beehave/job-key.pub
 stage=
 work_root=
 watchdog=
@@ -162,7 +163,7 @@ check_no_way_to_root() {
 refuse_root() {
 	[ "$(id -u)" = 0 ] || fail "run the root stage as root: sudo sh scripts/host-setup.sh --stage root. $usage"
 	check_platform
-	check_clone_owners
+	check_root_paths
 	check_watchdog_name
 	check_job_key
 }
@@ -176,18 +177,53 @@ refuse_job() {
 	check_watchdog_name
 }
 
-# check_clone_owners fails when a user other than root and the admin user (the one that ran sudo) can change a file of the clone, or a
-# folder above it. The root stage runs the scripts of the clone as root, so a file that the job user can write is a way to root.
-# A sticky folder, such as /tmp, does not let a user rename the files of others, so it does not count.
-check_clone_owners() {
-	admin=${SUDO_UID:-0}
-	changeable=$(find "$root" -xdev ! -type l \( -perm -020 -o -perm -002 -o \( ! -user 0 ! -user "$admin" \) \) -print 2>/dev/null | head -n 1)
-	dir=$root
-	while [ -z "$changeable" ] && [ "$dir" != / ]; do
-		dir=$(dirname "$dir")
-		changeable=$(find "$dir" -maxdepth 0 \( \( \( -perm -020 -o -perm -002 \) ! -perm -1000 \) -o \( ! -user 0 ! -user "$admin" \) \) -print 2>/dev/null | head -n 1)
+# admin_private_group prints the primary group of the admin user (SUDO_GID) when no user but root and the admin is in it, else nothing.
+# A failed lookup prints nothing, so the group then counts as a group of other users.
+admin_private_group() {
+	gid=${SUDO_GID:-}
+	[ -n "$gid" ] || return 0
+	entry=$(getent group "$gid") || return 0
+	for member in $(printf '%s\n' "${entry##*:}" | tr , ' '); do
+		[ "$member" = root ] || [ "$member" = "${SUDO_USER:-}" ] || return 0
 	done
-	[ -z "$changeable" ] || fail "$changeable can be written by a user other than root and the admin, so the job user could change the code that root runs here. Run the root stage from a clone that root or the admin owns and no other user can write"
+	users=$(getent passwd) || return 0
+	others=$(printf '%s\n' "$users" | awk -F : -v gid="$gid" -v admin="$admin" '$4 == gid && $3 != 0 && $3 != admin')
+	[ -z "$others" ] || return 0
+	printf '%s\n' "$gid"
+}
+
+# changeable <tree|folder> <path>: print the first file or folder of the tree, or the folder itself, that a user other than root and the
+# admin can change: write for the group unless it is the private group of the admin, write for every user, or another owner.
+# A sticky folder above a tree does not let a user rename the files of others, so it does not count.
+changeable() {
+	set -- "$1" "$2" -perm -020
+	[ -z "$admin_group" ] || set -- "$@" ! -group "$admin_group"
+	kind=$1
+	path=$2
+	shift 2
+	case $kind in
+	tree) find "$path" -xdev ! -type l \( \( "$@" \) -o -perm -002 -o \( ! -user 0 ! -user "$admin" \) \) -print 2>/dev/null | head -n 1 ;;
+	folder) find "$path" -maxdepth 0 \( \( \( \( "$@" \) -o -perm -002 \) ! -perm -1000 \) -o \( ! -user 0 ! -user "$admin" \) \) -print 2>/dev/null | head -n 1 ;;
+	esac
+}
+
+# check_root_paths fails when a user other than root and the admin user (the one that ran sudo) can change a file of the clone, of
+# /usr/local/go or of /usr/local/bin, or a folder above one of them up to the top. Root runs the code there, so such a file is a way to root.
+# The top is / on a host and HOST_SETUP_SYSROOT in the tests. A path that does not exist yet is skipped: root makes it.
+check_root_paths() {
+	admin=${SUDO_UID:-0}
+	admin_group=$(admin_private_group)
+	top=${sysroot:-/}
+	for start in "$root" "$sysroot/usr/local/go" "$sysroot/usr/local/bin"; do
+		[ -e "$start" ] || continue
+		found=$(changeable tree "$start")
+		dir=$start
+		while [ -z "$found" ] && [ "$dir" != / ] && [ "$dir" != "$top" ]; do
+			dir=$(dirname "$dir")
+			found=$(changeable folder "$dir")
+		done
+		[ -z "$found" ] || fail "$found can be written by a user other than root and the admin, so that user could change code that root runs here. Remove the write access of other users, and run the root stage from a clone that only root or the admin can write"
+	done
 }
 
 # check_job_key fails unless --job-key names a file of one public key line. A private key must never go to the host.
@@ -495,14 +531,17 @@ make_job_user() {
 }
 
 # install_job_key makes the key of the controller the only key of the job user. A key that is already there is not written again.
+# Root copies the key to a root folder that every user can read, and the job user writes it into its home: the job user owns that home,
+# so a link it puts there leads only to files that it can write itself.
 install_job_key() {
 	if [ -f "$key_file" ] && cmp -s "$job_key" "$key_file"; then
 		say "$key_file is up to date"
 		return 0
 	fi
 	say "writing $key_file"
-	sudo install -d -m 0700 -o "$job_user" -g "$job_user" "$(dirname "$key_file")"
-	sudo install -m 0600 -o "$job_user" -g "$job_user" "$job_key" "$key_file"
+	sudo install -D -m 0644 "$job_key" "$job_key_copy"
+	sudo -u "$job_user" install -d -m 0700 "$(dirname "$key_file")"
+	sudo -u "$job_user" install -m 0600 "$job_key_copy" "$key_file"
 }
 
 # enable_job_linger turns linger on for the job user, so its user manager runs the jobs with no login.
