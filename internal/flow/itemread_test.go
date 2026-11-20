@@ -24,7 +24,7 @@ type fakeReader struct {
 	err         error
 	commentsErr error
 	parentErr   error
-	// numbersOnly refuses an id that is not an issue number, as the GitHub store does.
+	// numbersOnly refuses an id that is not an issue number.
 	numbersOnly bool
 }
 

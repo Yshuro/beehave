@@ -74,7 +74,7 @@ type fakeItems struct {
 	// failFor is an item whose read fails, while the read of every other item works.
 	failFor string
 	err     error
-	// numbersOnly refuses an id that is not an issue number, as the GitHub store does.
+	// numbersOnly refuses an id that is not an issue number.
 	numbersOnly bool
 	// reads counts the calls of Fields.
 	reads atomic.Int32
