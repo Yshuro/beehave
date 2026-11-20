@@ -76,7 +76,8 @@ stdout '^mutation-pr: end count=0 printed=0$'
 exec git -C repo checkout -q cand
 env GREMLINS_REPORT=$WORK/empty.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
-stdout '^mutation-pr: gremlins wrote no report: it found no mutant in the module$'
+stdout '^mutation-pr: gremlins wrote no report: it found no mutant in \.$'
+! stdout 'in the module'
 ! stdout 'no candidate'
 ! stdout '^mutation-pr: end '
 env GREMLINS_REPORT=$WORK/otherpath.json

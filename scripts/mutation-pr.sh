@@ -188,6 +188,7 @@ start_gremlins() {
 printf '%s\n' "$folders" >"$exitdir/folders"
 started=
 reports=0
+noreport=
 while IFS= read -r folder; do
 	now=$(date +%s)
 	[ -n "$started" ] || started=$now
@@ -213,11 +214,13 @@ while IFS= read -r folder; do
 		reports=$((reports + 1))
 		jq --arg folder "$folder" '.files = ((.files // []) | map(.file_name |= (if $folder == "." then . else $folder + "/" + . end)))' "$exitdir/report" >"$exitdir/prefixed.$reports" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
 		: >"$exitdir/report"
+	else
+		noreport="${noreport:+$noreport, }$folder"
 	fi
 done <"$exitdir/folders"
 
 # gremlins writes no report when it finds no mutant in the folder, on a changed line or not.
-[ "$reports" -gt 0 ] || { echo "mutation-pr: gremlins wrote no report: it found no mutant in the module"; exit 1; }
+[ "$reports" -gt 0 ] || { echo "mutation-pr: gremlins wrote no report: it found no mutant in $noreport"; exit 1; }
 jq -s '{files: (map(.files) | add)}' "$exitdir"/prefixed.* >"$report"
 
 # The merged report lists every mutant of the changed folders, and marks "SKIPPED" each one that is not on a changed line.
