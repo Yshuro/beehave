@@ -162,6 +162,19 @@ func TestRemoveTree_KeepsTheTreeWhenTheRemoteDoesNotAnswerInTime(t *testing.T) {
 	assert.DirExists(t, r.tree)
 }
 
+func TestRemoveTree_KeepsTheTreeWhenTheBranchesOfTheRemoteCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	r := newRepos(t)
+	engine := &Engine{deps: Deps{Trees: fakeTrees{dir: r.tree, headsErr: errFake}}}
+
+	kept, err := engine.removeTree(t.Context(), testProject, testItem)
+
+	require.NoError(t, err)
+	assert.Equal(t, "git could not read the branches of the remote: "+errFake.Error(), kept, "a tip that the remote read did not confirm is unknown")
+	assert.DirExists(t, r.tree, "the release keeps the tree, although the branches it got show its head")
+}
+
 func TestRemoveTree_KeepsTheTreeOnAGitError(t *testing.T) {
 	t.Parallel()
 

@@ -1293,7 +1293,9 @@ type fakeTrees struct {
 	err error
 	// ensureErr fails Ensure only.
 	ensureErr error
-	late      *lateFolder
+	// headsErr fails Heads only, and Heads still returns the branches it read, so a release that ignores the error sees the tip.
+	headsErr error
+	late     *lateFolder
 	// per, when set, gives the folder of each item and wins over dir and late.
 	per func(ctx context.Context, item string) (string, error)
 	// ensured records the item of each Ensure call when a test sets it.
@@ -1398,7 +1400,7 @@ func (f fakeTrees) Heads(ctx context.Context, _ string) (string, error) {
 		return "", fmt.Errorf("%w: %s", err, strings.TrimSpace(stderr.String()))
 	}
 
-	return string(out), nil
+	return string(out), f.headsErr
 }
 
 func (f fakeTrees) Ensure(ctx context.Context, _, item, start, base string) (string, error) {
