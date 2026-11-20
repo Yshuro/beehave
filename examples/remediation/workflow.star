@@ -970,7 +970,7 @@ def round(item):
             q = queue(name = "round-queue-%d" % n, hold = "hold", label = round_settings["label"])
             take = ready_items(q, round_settings)
             if len(take) > 0:
-                runs = runs + spawn(items = take, entry = "pipeline", name = "round-spawn-%d" % n).runs
+                runs = runs + spawn(items = take, entry = "pipeline", base = round_settings["base"], name = "round-spawn-%d" % n).runs
 
         if len(runs) > 0:
             ended = gather(runs, until = "any", name = "round-gather-%d" % n).results

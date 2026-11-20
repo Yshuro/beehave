@@ -198,7 +198,7 @@ type lostOnceGate struct {
 	runs    atomic.Int32
 }
 
-func (*lostOnceGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (*lostOnceGate) Key(context.Context, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 

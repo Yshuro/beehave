@@ -330,7 +330,7 @@ func (e *Engine) remakeTree(ctx context.Context, request CommandRequest) error {
 
 // gateKey reads the key of the project gate. A key that cannot be read is an empty key: the gate then runs and reports the same problem.
 func (e *Engine) gateKey(ctx context.Context, request CommandRequest) GateKey {
-	key, err := e.deps.Gate.Key(ctx, request.Project, request.Item, request.BuildHost)
+	key, err := e.deps.Gate.Key(ctx, request.Project, request.Item, request.BuildHost, request.Base)
 	if err != nil {
 		return GateKey{}
 	}

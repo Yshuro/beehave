@@ -464,9 +464,10 @@ Nobody merges their own work, and our pull requests merge only on a verdict that
 
 #### `spawn`
 
-`spawn(items, entry="main", name="")` starts each item as its own run of the same workflow file, and returns `runs`, a list of structs with the fields `item` and `run`.
+`spawn(items, entry="main", base="", name="")` starts each item as its own run of the same workflow file, and returns `runs`, a list of structs with the fields `item` and `run`.
 
 - Each child run executes the function `entry(item)` on the bytes that the parent pinned, as a child workflow of the parent on the `items` queue. The queue holds at most `agents.max_concurrent` runs.
+- A child of a round item is cut at the base of the round item, `round/<base>`. A workflow that has a round base setting passes it as `base`, and `spawn` checks that it equals the base of the round item.
 - A child run that finished with success is reused and does not run again.
 - A cancelled run, or no run, starts the next attempt.
 
@@ -477,6 +478,7 @@ Nobody merges their own work, and our pull requests merge only on a verdict that
 - The parent itself.
 - An item that is in `items` twice.
 - A call from a run that `spawn` started.
+- A `base` that differs from the base of the round item that calls `spawn`. The error names both bases. An item that is no round item has no base to compare, so `spawn` cuts each child at the `base` of the call. The gate of the child reads the pin file at the same branch.
 
 #### `gather`
 

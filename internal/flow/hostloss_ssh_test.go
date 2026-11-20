@@ -23,7 +23,7 @@ type sshGate struct {
 	machine *sshtest.Machine
 }
 
-func (*sshGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (*sshGate) Key(context.Context, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 

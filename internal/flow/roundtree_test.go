@@ -380,3 +380,47 @@ func TestRoundTree_TheLostFolderOfAChildItemIsMadeAtTheBaseOfItsRound(t *testing
 	require.NoError(t, err)
 	assert.Equal(t, []string{"integration/s1"}, bases.all())
 }
+
+// childFlowOnBase is childAgentFlow with the round base that the settings name passed to spawn.
+func childFlowOnBase(base string) string {
+	return "def worker(item):\n    agent(name = \"a\", prompt = \"prompts/a.md\", model = \"m\")\n\ndef main(item):\n    gather(spawn(items = [\"21\"], entry = \"worker\", base = \"" + base + "\", name = \"fan\"), name = \"fan\")\n"
+}
+
+func TestRoundTree_ASpawnWhoseBaseIsTheBaseOfTheRoundItemStartsItsChild(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	made, bases := &ensureLog{}, &ensureLog{}
+	rig.h.trees = &fakeTrees{dir: rig.dir, ensured: made, bases: bases}
+
+	_, err := rig.h.engine(t).RunFile(testRound, testProject, flowFile(t, childFlowOnBase("integration/s1"), "Probe.\n"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"", "integration/s1"}, bases.all())
+}
+
+func TestRoundTree_ASpawnWhoseBaseDiffersFromTheBaseOfTheRoundItemStartsNoChildAndNamesBothBases(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	made := &ensureLog{}
+	rig.h.trees = &fakeTrees{dir: rig.dir, ensured: made}
+
+	_, err := rig.h.engine(t).RunFile(testRound, testProject, flowFile(t, childFlowOnBase("integration/s2"), "Probe.\n"))
+
+	require.ErrorContains(t, err, "the round item "+testRound+" has the base integration/s1, and the base given to spawn is integration/s2")
+	assert.Equal(t, []string{testRound}, made.all(), "no child made a tree")
+}
+
+func TestRoundTree_ASpawnThatNamesABaseUnderAnItemThatIsNoRoundCutsItsChildAtThatBase(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	made, bases := &ensureLog{}, &ensureLog{}
+	rig.h.trees = &fakeTrees{dir: rig.dir, ensured: made, bases: bases}
+
+	_, err := rig.h.engine(t).RunFile(testItem, testProject, flowFile(t, childFlowOnBase("integration/s1"), "Probe.\n"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"integration/s1"}, bases.all(), "the child is cut at the base that its gate reads, though no round item named it")
+}

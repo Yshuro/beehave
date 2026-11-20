@@ -135,12 +135,12 @@ type GateJob struct {
 
 // gate runs the gate of an item. Key reads the key of that gate and starts nothing.
 // Submit starts the host job and returns at once. A base names the base branch of a candidate head: the job then also runs the secret scan and the new-tests check.
-// An empty base is a sync head or a landing gate, and the job runs the gate command only. Run then waits for that job and judges the result; given an empty GateJob it starts the job itself.
+// An empty base is a sync head or a landing gate, and the job runs the gate command only. Key and Submit read the pin file at the base when there is one, and at the base branch of the project otherwise. Run then waits for that job and judges the result; given an empty GateJob it starts the job itself.
 // host is the build host that the run recorded in host_up. An empty host is the default build host of the project.
 type gate interface {
 	Submit(ctx context.Context, project, item, host, base string) (GateJob, error)
 	Run(ctx context.Context, project, item, host string, job GateJob) (GateResult, error)
-	Key(ctx context.Context, project, item, host string) (GateKey, error)
+	Key(ctx context.Context, project, item, host, base string) (GateKey, error)
 }
 
 // logins picks the agent login for an item of a project and returns its runner name.

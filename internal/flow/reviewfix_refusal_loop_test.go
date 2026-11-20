@@ -27,7 +27,7 @@ type headGate struct {
 	runs atomic.Int32
 }
 
-func (*headGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (*headGate) Key(context.Context, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
