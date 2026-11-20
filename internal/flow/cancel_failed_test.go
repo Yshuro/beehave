@@ -141,10 +141,23 @@ func TestCancel_ACancelOfAFailedRunKeepsTheStepsItRecorded(t *testing.T) {
 	require.NotEmpty(t, before, "the failed run recorded steps")
 
 	require.NoError(t, other.Cancel(testItem))
+	require.Equal(t, runCancelled, stateOfRun(t, other, testRun), "the cancel ended the run")
 
 	after, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
 	require.NoError(t, err)
 	assert.Len(t, after, len(before), "the cancel dropped no recorded step, so no replay can start from an earlier one")
+}
+
+func TestCancel_ARunOutOfRecoveryAttemptsIsCancelled(t *testing.T) {
+	t.Parallel()
+
+	harness, _, other := failedOnOtherBuild(t)
+	storeExec(t, harness, `UPDATE workflow_status SET status = '`+string(dbos.WorkflowStatusMaxRecoveryAttemptsExceeded)+`' WHERE workflow_uuid = '`+testRun+`'`)
+	require.Equal(t, runFailed, stateOfRun(t, other, testRun), "beehave status prints a run out of recovery attempts as failed")
+
+	require.NoError(t, other.Cancel(testItem))
+	assert.Equal(t, dbos.WorkflowStatusCancelled, statusIn(t, harness, testRun))
+	require.ErrorContains(t, storedRun(t, other, testRun).Error, "fake failure", "the cancel keeps the recorded error")
 }
 
 func TestCancel_ACancelOfAFailedRunKeepsTheErrorItRecorded(t *testing.T) {
