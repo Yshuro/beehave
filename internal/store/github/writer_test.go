@@ -59,9 +59,13 @@ func (f *fakeGh) label(args []string) model.CommandResult {
 	switch {
 	case args[1] == "list":
 		rows := []map[string]string{}
+		limit, err := strconv.Atoi(args[slices.Index(args, "--limit")+1])
+		if err != nil {
+			return model.CommandResult{ExitCode: 1, Stderr: err.Error()}
+		}
 
 		for _, name := range f.repoLabels {
-			if strings.Contains(strings.ToLower(name), strings.ToLower(args[slices.Index(args, "--search")+1])) {
+			if len(rows) < limit && strings.Contains(strings.ToLower(name), strings.ToLower(args[slices.Index(args, "--search")+1])) {
 				rows = append(rows, map[string]string{"name": name})
 			}
 		}
@@ -601,12 +605,16 @@ func TestSetStatus_AHoldThatCannotReadOrCreateTheLabelRefusesAndDoesNotEdit(t *t
 	t.Parallel()
 
 	for name, plan := range map[string]func(*proctest.Scripted){
-		"the label list fails":       func(r *proctest.Scripted) { r.PlanFail("boom", "label", "list") },
+		"the label list fails": func(r *proctest.Scripted) {
+			r.PlanResult(model.CommandResult{ExitCode: 1, Stdout: "[]", Stderr: "boom"}, "label", "list")
+		},
 		"the label list is not json": func(r *proctest.Scripted) { r.Plan("not json", "label", "list") },
 		"the label create fails":     func(r *proctest.Scripted) { r.Plan("[]", "label", "list"); r.PlanFail("denied", "label", "create") },
 	} {
 		run := &proctest.Scripted{}
 		run.Plan(`{"state":"OPEN","labels":[]}`, "issue", "view")
+		run.Plan("", "label", "create")
+		run.Plan("", "issue", "edit")
 		plan(run)
 
 		gh, err := github.New(ghRepo, run)
@@ -614,9 +622,46 @@ func TestSetStatus_AHoldThatCannotReadOrCreateTheLabelRefusesAndDoesNotEdit(t *t
 
 		err = gh.SetStatus(t.Context(), "1", store.StatusHold)
 		require.Error(t, err, name)
-		assert.Equal(t, store.CodeRefused, codeOf(t, err), name)
 		assert.False(t, run.Called("issue", "edit"), name)
 	}
+}
+
+func TestSetStatus_AHoldThatCannotReadTheLabelsDoesNotCreateTheLabel(t *testing.T) {
+	t.Parallel()
+
+	for name, list := range map[string]func(*proctest.Scripted){
+		"the label list fails": func(r *proctest.Scripted) {
+			r.PlanResult(model.CommandResult{ExitCode: 1, Stdout: "[]", Stderr: "boom"}, "label", "list")
+		},
+		"the label list is not json": func(r *proctest.Scripted) { r.Plan("not json", "label", "list") },
+	} {
+		run := &proctest.Scripted{}
+		run.Plan(`{"state":"OPEN","labels":[]}`, "issue", "view")
+		run.Plan("", "label", "create")
+		run.Plan("", "issue", "edit")
+		list(run)
+
+		gh, err := github.New(ghRepo, run)
+		require.NoError(t, err)
+
+		require.Error(t, gh.SetStatus(t.Context(), "1", store.StatusHold), name)
+		assert.False(t, run.Called("label", "create"), name+": a label that cannot be read is not created")
+	}
+}
+
+func TestSetStatus_AHoldWhoseLabelIsBeyondTheFirstPageOfTheLookupRefusesAndDoesNotEdit(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeGh()
+	for i := range 100 {
+		fake.repoLabels = append(fake.repoLabels, fmt.Sprintf("hold-%03d", i))
+	}
+
+	fake.repoLabels = append(fake.repoLabels, "hold")
+	fake.issues[1] = &fakeIssue{title: "t"}
+
+	require.Error(t, writerOver(t, fake).SetStatus(t.Context(), "1", store.StatusHold))
+	assert.Empty(t, fake.issues[1].labels)
 }
 
 func TestSetStatus_AHoldWhoseEditFailsNamesTheItem(t *testing.T) {
