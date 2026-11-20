@@ -34,6 +34,7 @@ const (
 	hostKeyword    = "host"
 	headKeyword    = "head"
 	baseKeyword    = "base"
+	pinBaseKeyword = "pin_base"
 	bodyKeyword    = "body"
 	titleKeyword   = "title"
 	severityField  = "severity"

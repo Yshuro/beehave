@@ -788,7 +788,7 @@ def sync_check(name, run):
 
 def sync_land(item, project, round_settings, line, n):
     """Puts the folder of the round at the head of a synced line, runs the gate command on it, reviews the sync pull request and lands it pinned to that head.
-    The gate has no base, so it runs the gate command only: no new-tests check and no mutation step.
+    The gate has no base, so it runs the gate command only: no new-tests check and no mutation step. Its pin_base is the round base, so it reads the pin file there.
     A void gate with a host cause runs again as sync-gate-<n>-host-<k>, until the engine counts HOST_LOSS_LIMIT host losses in the tree of the run.
     Returns sync_end with the reason sync-red, sync-review or host-loss when the pass must end, else an empty reason."""
     head = line["head"]
@@ -796,13 +796,13 @@ def sync_land(item, project, round_settings, line, n):
         if command(name = step, run = run).rc != 0:
             fail("REFUSE: the step %s could not put the folder of the round at the head %s of %s. Check the folder of the round. %s" % (step, head, line["branch"], restart_steps(item)))
 
-    check = gate(name = "sync-gate-%d" % n, head = head)
+    check = gate(name = "sync-gate-%d" % n, head = head, pin_base = round_settings["base"])
     losses = check.host_losses
     for k in range(1, HOST_LOSS_LIMIT + 1):
         if not is_host_void(check) or check.host_losses >= HOST_LOSS_LIMIT:
             break
 
-        check = gate(name = "sync-gate-%d-host-%d" % (n, k), head = head)
+        check = gate(name = "sync-gate-%d-host-%d" % (n, k), head = head, pin_base = round_settings["base"])
         losses = max(losses, check.host_losses)
 
     if is_host_void(check):

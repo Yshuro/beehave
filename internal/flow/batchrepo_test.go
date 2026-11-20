@@ -289,13 +289,27 @@ type treeGate struct {
 	// loseAt lists more waits that end as lost, by their number from 1.
 	loseAt []int
 	jobs   []GateJob
+	// submitBases holds the base and the pin base of each Submit.
+	submitBases [][2]string
 	// started, when set, gets one signal from wait number blockAt (the first wait when blockAt is 0), which then blocks until its context ends.
 	started chan struct{}
 	blockAt int
 }
 
-func (g *treeGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (g *treeGate) Submit(_ context.Context, _, _, _, base, pinBase string) (GateJob, error) {
+	g.mu.Lock()
+	g.submitBases = append(g.submitBases, [2]string{base, pinBase})
+	g.mu.Unlock()
+
 	return GateJob{ID: fmt.Sprintf("job-%d", g.submits.Add(1))}, nil
+}
+
+// submittedBases lists the base and the pin base that each Submit was given, in order.
+func (g *treeGate) submittedBases() [][2]string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return slices.Clone(g.submitBases)
 }
 
 // submitted counts the host jobs that the gate started.

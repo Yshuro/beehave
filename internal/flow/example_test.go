@@ -589,7 +589,7 @@ type packageGate struct {
 	runs       *int
 }
 
-func (packageGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (packageGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 
@@ -646,7 +646,7 @@ type hostDiedGate struct {
 	waits      *int
 }
 
-func (hostDiedGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (hostDiedGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 
@@ -677,7 +677,7 @@ type zeroTestGate struct {
 	runs            *int
 }
 
-func (zeroTestGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (zeroTestGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 

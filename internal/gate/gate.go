@@ -116,13 +116,16 @@ type Request struct {
 	// Base is the base branch of a candidate head. A host gate with a Base runs the candidate steps (secret scan, new-tests check) after the head gate.
 	// An empty Base is a sync head or a landing gate: the gate command only. The Plan records the Base with the job.
 	Base string
+	// PinBase is the branch that the pin file is read from, for a sync head or a landing gate. It turns on no candidate check.
+	// When both are set, PinBase wins over Base for the pin file, and Base still turns on the checks.
+	PinBase string
 
 	// pins are the pinned tools that the probe in front of each gate command checks. Run and Submit read them from the pin file at the base commit.
 	pins []Pin
 }
 
-// pinBase is the branch that the pin file is read from: the base of a candidate head, which is the branch that the head merges into, or the base branch of the project.
-func (r Request) pinBase() string { return cmp.Or(r.Base, r.Project.BaseBranch) }
+// pinBase is the branch that the pin file is read from: the PinBase of the request, the base of a candidate head, or the base branch of the project.
+func (r Request) pinBase() string { return cmp.Or(r.PinBase, r.Base, r.Project.BaseBranch) }
 
 // Gate runs gates.
 type Gate struct {

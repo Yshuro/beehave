@@ -129,3 +129,50 @@ func TestKey_EveryReadOfThePinFileOfALocalGateOfARoundChildIsAtTheRoundBase(t *t
 	require.NoError(t, err)
 	assert.Equal(t, []string{"git show origin/integration/s1:.tool-versions", "git show origin/integration/s1:.tool-versions"}, shell.commands, "the key reads the text, and the installed-tool check reads the pinned tools")
 }
+
+func TestKey_APinBaseWithNoBaseReadsThePinFileAtThePinBase(t *testing.T) {
+	t.Parallel()
+
+	shell := roundPins()
+	p := pinnedHostProject()
+	p.BuildHost = "cluster"
+
+	g := gate.New(shell.run, (&fakeTree{states: []gate.State{clean(headA)}}).read, nil)
+	key, err := g.Key(context.Background(), gate.Request{Project: p, Dir: "/w", PinBase: "integration/s1"})
+
+	require.NoError(t, err)
+	require.NotEmpty(t, key.ID)
+	assert.Equal(t, []string{"git show origin/integration/s1:.tool-versions"}, shell.commands)
+	assert.Equal(t, roundKey(t, roundPins(), "integration/s1").ID, key.ID, "the key is the key of a gate with that base: the pin text is the same")
+}
+
+func TestKey_APinBaseWinsOverTheBaseOfACandidateHead(t *testing.T) {
+	t.Parallel()
+
+	shell := &refShell{pins: map[string]string{"main": "gofake 1.27.3\n", "integration/s1": "gofake 1.28.0\n", "integration/s2": "gofake 1.29.0\n"}}
+	p := pinnedHostProject()
+	p.BuildHost = "cluster"
+
+	g := gate.New(shell.run, (&fakeTree{states: []gate.State{clean(headA)}}).read, nil)
+	_, err := g.Key(context.Background(), gate.Request{Project: p, Dir: "/w", Base: "integration/s2", PinBase: "integration/s1"})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"git show origin/integration/s1:.tool-versions"}, shell.commands, "the base alone would read integration/s2")
+}
+
+func TestSubmit_AGateWithAPinBaseAndNoBasePlansThePinnedToolsOfThePinBaseAndRunsNoCandidateCheck(t *testing.T) {
+	t.Parallel()
+
+	remote := &fakeRemote{state: model.JobSucceeded}
+	g := gate.New(roundPins().run, (&fakeTree{states: []gate.State{clean(headA)}}).read, func(model.Project) (gate.Remote, error) { return remote, nil })
+
+	job, err := g.Submit(context.Background(), gate.Request{Project: pinnedHostProject(), Dir: "/w", CloneURL: cloneURL, PinBase: "integration/s1"})
+
+	require.NoError(t, err)
+	require.NotNil(t, job.Plan.Pins)
+	assert.Equal(t, []gate.Pin{{Tool: "gofake", Version: "1.28.0"}}, job.Plan.Pins.Tools)
+	assert.Empty(t, job.Plan.Base, "a pin base is no base: the plan holds none, so the job runs no candidate check")
+	require.Len(t, remote.submitted, 1)
+	assert.Contains(t, remote.submitted[0].Command, "1.28.0")
+	assert.NotContains(t, remote.submitted[0].Command, "1.27.3")
+}

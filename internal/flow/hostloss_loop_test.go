@@ -26,11 +26,11 @@ type lossyGate struct {
 	jobs atomic.Int32
 }
 
-func (*lossyGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (*lossyGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (g *lossyGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (g *lossyGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{ID: "job-" + strconv.Itoa(int(g.jobs.Add(1))), Head: g.head}, nil
 }
 

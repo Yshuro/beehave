@@ -61,19 +61,29 @@ func isSync(request CommandRequest) (bool, bool) {
 type syncGate struct {
 	gate
 
-	mu    sync.Mutex
-	bases []string
-	red   bool
+	mu       sync.Mutex
+	bases    []string
+	pinBases []string
+	red      bool
 }
 
-func (g *syncGate) Submit(ctx context.Context, project, item, host, base string) (GateJob, error) {
+func (g *syncGate) Submit(ctx context.Context, project, item, host, base, pinBase string) (GateJob, error) {
 	if item == testItem {
 		g.mu.Lock()
 		g.bases = append(g.bases, base)
+		g.pinBases = append(g.pinBases, pinBase)
 		g.mu.Unlock()
 	}
 
-	return g.gate.Submit(ctx, project, item, host, base)
+	return g.gate.Submit(ctx, project, item, host, base, pinBase)
+}
+
+// roundPinBases returns the pin base of each gate of the round itself, in order.
+func (g *syncGate) roundPinBases() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	return slices.Clone(g.pinBases)
 }
 
 func (g *syncGate) Run(ctx context.Context, project, item, host string, job GateJob) (GateResult, error) {
@@ -235,6 +245,20 @@ func TestRoundSync_AMovedTrunkLandsThroughTheSyncPullRequestWhoseGateRunsOnTheMe
 	assert.Equal(t, []string{"remedy sync land --pr 7 --head " + script.head + " --base-tip " + script.tip}, syncLands(rig))
 	require.NotEmpty(t, recorder.roundBases())
 	assert.Empty(t, recorder.roundBases()[0], "the gate of the sync head runs the gate command only, with no base")
+}
+
+func TestRoundSync_TheSyncGateReadsThePinFileAtTheRoundBaseAndRunsNoCandidateCheck(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "1")
+	script := &syncScript{lines: []string{"synced", "state=current"}}
+	withSync(t, rig, script)
+
+	_, recorder, err := runSync(t, rig, false)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{syncRoundBase}, recorder.roundPinBases()[:1], "the pin base of the sync gate is the round base, not the trunk")
+	assert.Equal(t, []string{""}, recorder.roundBases()[:1], "the sync gate has no base, so no new-tests check")
 }
 
 func TestRoundSync_ASyncedLineLandsWhateverTheOrderOfItsFieldsAndKeepsAnEqualSignInAValue(t *testing.T) {

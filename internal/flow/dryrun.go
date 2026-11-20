@@ -385,13 +385,13 @@ func newDryGate(dir, head string, red bool) dryGate {
 	return dryGate{dir: dir, head: head, red: red, runs: new(atomic.Int32)}
 }
 
-func (dryGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (dryGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
 // Submit records the base in the plan of the job, as the host gate does. As a fetch of the base would, it points the remote branch of the base
 // at the parent of the head, so the checks before review find a head that descends from the base.
-func (g dryGate) Submit(ctx context.Context, _, _, _, base string) (GateJob, error) {
+func (g dryGate) Submit(ctx context.Context, _, _, _, base, _ string) (GateJob, error) {
 	if base != "" {
 		if _, err := dryGit(ctx, g.dir, []string{"update-ref", "refs/remotes/" + remoteName + "/" + base, g.head + "^"}); err != nil {
 			return GateJob{}, err

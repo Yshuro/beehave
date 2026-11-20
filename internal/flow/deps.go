@@ -135,12 +135,13 @@ type GateJob struct {
 
 // gate runs the gate of an item. Key reads the key of that gate and starts nothing.
 // Submit starts the host job and returns at once. A base names the base branch of a candidate head: the job then also runs the secret scan and the new-tests check.
-// An empty base is a sync head or a landing gate, and the job runs the gate command only. Key and Submit read the pin file at the base when there is one, and at the base branch of the project otherwise. Run then waits for that job and judges the result; given an empty GateJob it starts the job itself.
+// An empty base is a sync head or a landing gate, and the job runs the gate command only. Key and Submit read the pin file at the pinBase, else at the base, else at the base branch of the project.
+// A pinBase turns on no candidate check. Run then waits for that job and judges the result; given an empty GateJob it starts the job itself.
 // host is the build host that the run recorded in host_up. An empty host is the default build host of the project.
 type gate interface {
-	Submit(ctx context.Context, project, item, host, base string) (GateJob, error)
+	Submit(ctx context.Context, project, item, host, base, pinBase string) (GateJob, error)
 	Run(ctx context.Context, project, item, host string, job GateJob) (GateResult, error)
-	Key(ctx context.Context, project, item, host, base string) (GateKey, error)
+	Key(ctx context.Context, project, item, host, base, pinBase string) (GateKey, error)
 }
 
 // logins picks the agent login for an item of a project and returns its runner name.
@@ -283,6 +284,8 @@ type CommandRequest struct {
 	Host    string
 	// Base is the base branch of a gate call that judges a candidate head. It is empty for a sync head, a landing gate and a command call.
 	Base string
+	// PinBase is the branch that a gate call reads the pin file from, with no candidate check: a sync head names the round base. When a gate call has both, PinBase names the pin file branch and Base turns on the checks.
+	PinBase string
 	// BuildHost is the build host that the run recorded in host_up. The gate and a call with Host run there. Empty means the default of the project.
 	BuildHost string
 	Timeout   time.Duration

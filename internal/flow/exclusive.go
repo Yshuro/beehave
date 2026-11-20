@@ -55,7 +55,9 @@ type ExclusiveInput struct {
 	Priority uint `json:"priority,omitempty"`
 	// HostKey is the partition of the host queue that holds the build job of the gate. It is set when the gate is queued, so a replay uses the host that the first
 	// run chose even when the project file changed since. It is empty for a gate that runs on this machine. A reopened job goes back to the same partition.
-	HostKey  string         `json:"host_key,omitempty"`
+	HostKey string `json:"host_key,omitempty"`
+	// PinBase is the base of the merge call, for a batch gate: the pin file is read at that branch. A gate carries it in Request.
+	PinBase  string         `json:"pin_base,omitempty"`
 	Commit   string         `json:"commit,omitempty"`
 	GateRun  []string       `json:"gate_run,omitempty"`
 	Request  CommandRequest `json:"request"`
