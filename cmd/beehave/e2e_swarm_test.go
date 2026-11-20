@@ -140,8 +140,7 @@ func (f swarmForgeAt) branchesLocked(ctx context.Context) ([]string, error) {
 	}
 
 	for _, name := range strings.Fields(listed) {
-		// The branch of an item has the id of the item. A branch with a slash (integration/s1, sync/s1) is a branch of a round, not a pull request.
-		if name != "main" && !strings.Contains(name, "/") && !slices.Contains(known, name) && !f.opensOnCreate() {
+		if name != "main" && !slices.Contains(known, name) && !f.opensOnCreate() {
 			known = append(known, name)
 		}
 	}
