@@ -14,6 +14,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -50,7 +51,8 @@ type reporter interface {
 
 // Run proves the contract of one enforcer: a read under home is refused, a write outside the allowed paths is refused, an unlisted domain is refused,
 // a listed domain works, a direct connection that skips the proxy is refused, a connection to a unix socket outside the plan is refused (a pathname socket,
-// and on Linux an abstract socket), a write folder is writable whole (a new top-level file and folder can be made and removed), and the exit code passes through.
+// and on Linux an abstract socket), a write folder is writable whole (a new top-level file and folder can be made and removed), the exit code passes through,
+// and the command reads its stdin.
 func Run(t *testing.T, e sandbox.Enforcer) {
 	t.Helper()
 
@@ -59,6 +61,7 @@ func Run(t *testing.T, e sandbox.Enforcer) {
 	t.Run("a read under home is refused", func(t *testing.T) { readUnderHome(t, e) })
 	t.Run("a write outside the allowed paths is refused", func(t *testing.T) { writeOutside(t, e) })
 	t.Run("the exit code passes through", func(t *testing.T) { exitCode(t, e) })
+	t.Run("the command reads its stdin", func(t *testing.T) { stdin(t, e) })
 	t.Run("a listed domain works and an unlisted domain is refused", func(t *testing.T) { domains(t, e) })
 	t.Run("a connection that skips the proxy is refused", func(t *testing.T) { direct(t, e) })
 	t.Run("a plan with no network cannot connect", func(t *testing.T) { noNetwork(t, e) })
@@ -102,13 +105,20 @@ func must(r reporter, err error) {
 func run(r reporter, e sandbox.Enforcer, plan sandbox.Plan, line string) result {
 	r.Helper()
 
+	return runWithInput(r, e, plan, line, nil)
+}
+
+// runWithInput is run with stdin as the standard input of the command.
+func runWithInput(r reporter, e sandbox.Enforcer, plan sandbox.Plan, line string, stdin io.Reader) result {
+	r.Helper()
+
 	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
 	defer cancel()
 
 	var out bytes.Buffer
 
 	code, err := sandbox.Execute(ctx, e, plan, sandbox.Command{
-		Argv: []string{"sh", "-c", line}, Dir: r.TempDir(), Env: []string{"PATH=" + commandPath, "HOME=" + r.TempDir()}, Stdout: &out, Stderr: &out,
+		Argv: []string{"sh", "-c", line}, Dir: r.TempDir(), Env: []string{"PATH=" + commandPath, "HOME=" + r.TempDir()}, Stdin: stdin, Stdout: &out, Stderr: &out,
 	})
 	must(r, err)
 
@@ -173,6 +183,17 @@ func exists(path string) bool {
 	_, err := os.Stat(path)
 
 	return err == nil
+}
+
+// stdinLine is the input that the stdin check gives the command.
+const stdinLine = "beehave-contract-stdin\n"
+
+// stdin gives the command a line on its standard input, and the command prints it back among what it prints.
+func stdin(r reporter, e sandbox.Enforcer) {
+	r.Helper()
+
+	got := runWithInput(r, e, base(r), "cat", strings.NewReader(stdinLine))
+	expect(r, got.code == 0 && strings.Contains(got.out, stdinLine), "cat with %q on its stdin exited %d and printed %q", stdinLine, got.code, got.out)
 }
 
 func exitCode(r reporter, e sandbox.Enforcer) {

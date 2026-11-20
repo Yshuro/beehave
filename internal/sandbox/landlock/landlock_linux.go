@@ -168,7 +168,7 @@ func (e Enforcer) helperCommand(ctx context.Context, s spec, cmd sandbox.Command
 
 	child := proc.GroupCommand(ctx, self, []string{helperArg, string(raw)}, cmd.Dir)
 	child.Env = []string{}
-	child.Stdout, child.Stderr = sandbox.OrDiscard(cmd.Stdout), sandbox.OrDiscard(cmd.Stderr)
+	child.Stdin, child.Stdout, child.Stderr = cmd.Stdin, sandbox.OrDiscard(cmd.Stdout), sandbox.OrDiscard(cmd.Stderr)
 
 	return child, nil
 }
