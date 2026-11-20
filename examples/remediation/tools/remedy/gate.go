@@ -10,12 +10,13 @@ import (
 	"strings"
 
 	"github.com/tobocop2/beehave/examples/remediation/tools/brief"
+	"github.com/tobocop2/beehave/examples/remediation/tools/check"
 	"github.com/tobocop2/beehave/examples/remediation/tools/gate"
 	"github.com/tobocop2/beehave/examples/remediation/tools/job"
 )
 
 const (
-	gatelistSyntax = "gatelist <workflow-file>..."
+	gatelistSyntax = "gatelist [--gate <text>] <workflow-file>..."
 	jobSyntax      = "job <script> --list <file> [--job-dir <folder>]"
 	reportSyntax   = "report <file> --head <sha>"
 )
@@ -26,7 +27,7 @@ func gateCommands() []command {
 		{
 			name:    "gatelist",
 			usage:   gatelistSyntax,
-			summary: "derive the gate steps from the run steps of the CI workflow files and refuse a file with no run step and a step that publishes (a release, a push, a package publish or a deploy)",
+			summary: "derive the gate steps from the run steps of the CI workflow files, list the steps and jobs that the list leaves out (a secret, a write permission, an action that is not a setup, a command that writes outside the machine), and with --gate refuse a round whose gate lacks a derived step",
 			run:     gatelistCommand,
 		},
 		{
@@ -54,25 +55,62 @@ func printable(lines []string) []string {
 	return out
 }
 
-// gatelistCommand derives the gate list from the CI workflow files and prints one line for each step. A file that cannot be read, a file with no usable step and a step that publishes are exit code 2.
+// gatelistCommand derives the gate list from the CI workflow files and prints one line for each step, then one line for each step or job that the list leaves out.
+// A file that cannot be read, files with no step to give, and (with --gate) a derived step that the gate of the round does not hold are exit code 2.
 func gatelistCommand(_ context.Context, _ Deps, s streams, args []string) int {
-	if len(args) == 0 {
-		wrongUsage(s.err, gatelistSyntax)
-
+	gateText, paths, ok := gatelistArgs(s, args)
+	if !ok {
 		return ExitRefused
 	}
 
-	files, err := workflowFiles(args)
+	lines, err := gatelistLines(paths, gateText)
 	if err != nil {
 		return refused(s, "gatelist", err)
 	}
 
-	steps, err := gate.Derive(files)
-	if err != nil {
-		return refused(s, "gatelist", err)
+	return showLines(s, printable(lines), false)
+}
+
+// gatelistArgs reads the flag --gate and the workflow files. It shows the usage and gives false for a bad flag or for no file.
+func gatelistArgs(s streams, args []string) (string, []string, bool) {
+	var gateText string
+
+	flags := flag.NewFlagSet("remedy gatelist", flag.ContinueOnError)
+	flags.SetOutput(s.err)
+	flags.StringVar(&gateText, "gate", "", "the gate of the round as text; each derived step must be in it, or the command is exit code 2")
+
+	if flags.Parse(args) != nil {
+		return "", nil, false
 	}
 
-	return showLines(s, printable(stepLines(steps)), false)
+	if flags.NArg() == 0 {
+		wrongUsage(s.err, gatelistSyntax)
+
+		return "", nil, false
+	}
+
+	return gateText, flags.Args(), true
+}
+
+// gatelistLines reads the workflow files and gives the lines of the list. With the gate of the round, a derived step that the gate lacks is a refusal that carries the lines.
+func gatelistLines(paths []string, gateText string) ([]string, error) {
+	files, err := workflowFiles(paths)
+	if err != nil {
+		return nil, err
+	}
+
+	derived, err := gate.Derive(files)
+	if err != nil {
+		return nil, err
+	}
+
+	lines := stepLines(derived)
+
+	if missing := gate.Missing(derived.Steps, gateText); gateText != "" && len(missing) > 0 {
+		return nil, &check.Refusal{Message: "the gate of the round lacks derived steps: " + strings.Join(missing, ", ") + ". Add them to gate_steps", Lines: printable(lines)}
+	}
+
+	return lines, nil
 }
 
 // workflowFiles reads each workflow file.
@@ -90,14 +128,18 @@ func workflowFiles(paths []string) ([]gate.File, error) {
 	return files, nil
 }
 
-// stepLines gives one line for each derived step, then the summary.
-func stepLines(steps []gate.Step) []string {
-	lines := make([]string, 0, len(steps)+1)
-	for _, step := range steps {
+// stepLines gives one line for each derived step, one for each refused step or job, then the summary.
+func stepLines(derived gate.Derived) []string {
+	lines := make([]string, 0, len(derived.Steps)+len(derived.Refused)+1)
+	for _, step := range derived.Steps {
 		lines = append(lines, "step "+step.Name+": "+step.Command)
 	}
 
-	return append(lines, fmt.Sprintf("check-gatelist: OK (steps %d)", len(steps)))
+	for _, r := range derived.Refused {
+		lines = append(lines, "refused "+r.Name+": "+r.Reason)
+	}
+
+	return append(lines, fmt.Sprintf("check-gatelist: OK (steps %d, refused %d)", len(derived.Steps), len(derived.Refused)))
 }
 
 // jobFlags are the values of the flags of job.

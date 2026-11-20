@@ -372,7 +372,7 @@ The engine has one check package: `check/shell`, for the shell scan. The other c
 
 | Check | Run by |
 |---|---|
-| The gate list check | `remedy gatelist` |
+| The gate list derive | `remedy gatelist` |
 | The job check | `remedy job` |
 | The report check | `remedy report` |
 | The papers check | `remedy papers` |
@@ -429,9 +429,17 @@ The author check compares the address of a commit with the address of the accoun
 
 The gate list is a Markdown file. Its `## Gate steps` section holds one row for each step.
 
-`remedy gatelist <workflow-file>...` derives the steps from the CI workflow files: one step for each run step of each job, named `<job>:<step name>`, in file order. The round runs it from the project var `gate_files` before its first pass.
+`remedy gatelist [--gate <text>] <workflow-file>...` derives the steps from the CI workflow files: one step for each run step of each job, named `<job>:<step name>`, in file order. The round runs it from the project var `gate_files` before its first pass, with the gate of the project as `--gate`.
 
-The command refuses a step that publishes. It reads what a step runs and what it uses, never the step name. A publish is a release, a push, a package publish or a deploy: `gh release create`, `git push`, `npm publish`, `kubectl apply`, and the actions that do the same, such as `softprops/action-gh-release` or `actions/deploy-pages`. A run with `--dry-run` publishes nothing. A run step that is not shell is refused, because the command cannot tell what it runs.
+The command leaves out a step or a job that could publish, and names it in the output as `refused <name>: <reason>`. The rule is structural, not a list of publish commands. It never reads the step name. The command leaves out:
+
+- A job that calls a reusable workflow, has a write permission (also from the file), or reads a secret.
+- A step that reads a secret, uses an action other than a checkout or a setup action (so a lint action is left out), or runs in a shell other than bash or sh.
+- A step with a command that the shell reader of `check/shell` finds to write outside the machine, or cannot judge: a variable or an expression as the command word, a line that is not shell, or a script read from a pipe. A `--dry-run` flag makes no difference.
+
+A publish that a script file, a make target or an npm script runs is not seen, because the workflow file does not show it. A job with no `permissions` key is not left out, although the default token of the repository can write.
+
+Files that give no step are exit code 2. With `--gate`, a derived step whose command the gate text does not hold is exit code 2 too, and the round stops before its first pass. Add a step that the list leaves out to `gate_steps` by hand.
 
 When a step passes:
 

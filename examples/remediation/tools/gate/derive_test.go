@@ -10,13 +10,19 @@ import (
 	"github.com/tobocop2/beehave/examples/remediation/tools/gate"
 )
 
+func derivedAll(t *testing.T, text string) gate.Derived {
+	t.Helper()
+
+	got, err := gate.Derive([]gate.File{{Path: "ci.yaml", Text: text}})
+	require.NoError(t, err)
+
+	return got
+}
+
 func derived(t *testing.T, text string) []gate.Step {
 	t.Helper()
 
-	steps, err := gate.Derive([]gate.File{{Path: "ci.yaml", Text: text}})
-	require.NoError(t, err)
-
-	return steps
+	return derivedAll(t, text).Steps
 }
 
 func refusedDerive(t *testing.T, text string) string {
@@ -58,9 +64,10 @@ func TestDerive_ACommandOfSeveralLinesIsOneStepWithoutBlankLinesOrComments(t *te
 func TestDerive_ARunStepWithNoCommandAndAStepWithNoRunAddNoStep(t *testing.T) {
 	t.Parallel()
 
-	steps := derived(t, "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v7\n      - run: \"\"\n      - run: make test\n")
+	got := derivedAll(t, "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v7\n      - run: \"\"\n      - run: make test\n")
 
-	assert.Equal(t, []gate.Step{{Name: "a:run-3", Command: "make test"}}, steps)
+	assert.Equal(t, []gate.Step{{Name: "a:run-3", Command: "make test"}}, got.Steps)
+	assert.Empty(t, got.Refused)
 }
 
 func TestDerive_AnExpressionOfTheWorkflowInACommandDoesNotStopTheRead(t *testing.T) {
@@ -83,27 +90,29 @@ func TestDerive_AFileThatIsNotAWorkflowIsRefusedWithItsPathAndTheReason(t *testi
 	t.Parallel()
 
 	for name, test := range map[string]struct{ text, want string }{
-		"not_yaml":               {"jobs: [unclosed\n", "ci.yaml: not a workflow file"},
-		"jobs_is_a_list":         {"jobs:\n  - a\n", "jobs must be a mapping of job ids to jobs"},
-		"a_job_is_a_text":        {"jobs:\n  a: text\n", "job a:"},
-		"no_run_step":            {"jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v7\n", "hold no run step"},
-		"no_jobs":                {"name: CI\n", "hold no run step"},
-		"a_line_is_not_shell":    {"jobs:\n  a:\n    steps:\n      - name: Bad\n        run: if then fi )\n", "the step a:bad has a line that is not shell (if then fi ))"},
-		"an_action_that_deploys": {"jobs:\n  a:\n    steps:\n      - uses: actions/deploy-pages@v4\n", "ci.yaml: the step a:run-1 publishes (deploy: uses actions/deploy-pages)"},
-		"a_step_that_releases":   {"jobs:\n  a:\n    steps:\n      - name: Ship\n        run: gh release create v1\n", "ci.yaml: the step a:ship publishes (release: gh release create). Take the step out of the gate files"},
+		"not_yaml":            {"jobs: [unclosed\n", "ci.yaml: not a workflow file"},
+		"jobs_is_a_list":      {"jobs:\n  - a\n", "jobs must be a mapping of job ids to jobs"},
+		"a_job_is_a_text":     {"jobs:\n  a: text\n", "job a:"},
+		"a_step_is_a_text":    {"jobs:\n  a:\n    steps:\n      - text\n", "job a:"},
+		"no_run_step":         {"jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v7\n", "give no run step"},
+		"no_jobs":             {"name: CI\n", "give no run step"},
+		"only_a_refused_step": {"jobs:\n  a:\n    steps:\n      - name: Ship\n        run: gh release create v1\n", "step a:ship runs `gh release create v1`"},
 	} {
 		assert.Contains(t, refusedDerive(t, test.text), test.want, name)
 	}
 }
 
-func TestDerive_AStepThatPublishesIsRefusedWhereverItSitsInTheJobAndTheFile(t *testing.T) {
+func TestDerive_AStepThatTheListCannotHoldIsNamedWithItsReasonAndTheOtherStepsStay(t *testing.T) {
 	t.Parallel()
 
-	first := "jobs:\n  a:\n    steps:\n      - run: npm publish\n      - run: make test\n"
-	last := "jobs:\n  a:\n    steps:\n      - run: make test\n  b:\n    steps:\n      - run: |\n          make build\n          make test\n          twine upload dist/*\n"
+	got := derivedAll(t, "jobs:\n  a:\n    steps:\n      - name: Bad\n        run: if then fi )\n      - name: Lint\n        uses: golangci/golangci-lint-action@v8\n      - run: make test\n")
 
-	assert.Contains(t, refusedDerive(t, first), "the step a:run-1 publishes")
-	assert.Contains(t, refusedDerive(t, last), "the step b:run-1 publishes (package publish: twine upload)")
+	assert.Equal(t, []gate.Step{{Name: "a:run-3", Command: "make test"}}, got.Steps)
+	require.Len(t, got.Refused, 2)
+	assert.Equal(t, "step a:bad", got.Refused[0].Name)
+	assert.Contains(t, got.Refused[0].Reason, "the gate cannot read")
+	assert.Equal(t, "step a:lint", got.Refused[1].Name)
+	assert.Contains(t, got.Refused[1].Reason, "uses golangci/golangci-lint-action@v8, an action that is neither a checkout nor a setup")
 }
 
 func TestDerive_EveryFileIsReadAndEveryDefectIsNamed(t *testing.T) {
@@ -111,12 +120,58 @@ func TestDerive_EveryFileIsReadAndEveryDefectIsNamed(t *testing.T) {
 
 	_, err := gate.Derive([]gate.File{
 		{Path: "a.yaml", Text: "jobs: [x\n"},
-		{Path: "b.yaml", Text: "jobs:\n  s:\n    steps:\n      - run: npm publish\n"},
+		{Path: "b.yaml", Text: "jobs: [y\n"},
 	})
 
 	var refusal *check.Refusal
 
 	require.ErrorAs(t, err, &refusal)
 	assert.Contains(t, refusal.Message, "a.yaml: not a workflow file")
-	assert.Contains(t, refusal.Message, "b.yaml: the step s:run-1 publishes (package publish: npm publish)")
+	assert.Contains(t, refusal.Message, "b.yaml: not a workflow file")
+}
+
+func TestDerive_AJobThatCanWriteOrReadsASecretIsLeftOutWhole(t *testing.T) {
+	t.Parallel()
+
+	for name, text := range map[string]string{
+		"job_write":     "jobs:\n  rel:\n    permissions:\n      contents: write\n    steps:\n      - run: make test\n  t:\n    steps:\n      - run: make test\n",
+		"job_write_all": "jobs:\n  rel:\n    permissions: write-all\n    steps:\n      - run: make test\n  t:\n    steps:\n      - run: make test\n",
+		"job_env":       "jobs:\n  rel:\n    env:\n      TOKEN: ${{ secrets.TOKEN }}\n    steps:\n      - run: make test\n  t:\n    steps:\n      - run: make test\n",
+	} {
+		got, err := gate.Derive([]gate.File{{Path: "w.yaml", Text: text}})
+
+		require.NoError(t, err, name)
+		assert.Equal(t, []gate.Step{{Name: "t:run-1", Command: "make test"}}, got.Steps, name)
+		require.Len(t, got.Refused, 1, name)
+		assert.Equal(t, "job w.yaml:rel", got.Refused[0].Name, name)
+	}
+}
+
+func TestDerive_AFileThatCanWriteGivesNoStep(t *testing.T) {
+	t.Parallel()
+
+	message := refusedDerive(t, "permissions:\n  id-token: write\njobs:\n  t:\n    steps:\n      - run: make test\n")
+
+	assert.Contains(t, message, "job ci.yaml:t has a write permission")
+}
+
+func TestDerive_ARepeatedStepNameFromAnotherFileStaysUnique(t *testing.T) {
+	t.Parallel()
+
+	got, err := gate.Derive([]gate.File{
+		{Path: "a.yaml", Text: "jobs:\n  t:\n    steps:\n      - run: one\n"},
+		{Path: "b.yaml", Text: "jobs:\n  t:\n    steps:\n      - run: two\n"},
+	})
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"t:run-1", "t:run-1-2"}, []string{got.Steps[0].Name, got.Steps[1].Name})
+}
+
+func TestMissing_ADerivedStepThatTheGateTextDoesNotHoldIsNamed(t *testing.T) {
+	t.Parallel()
+
+	steps := []gate.Step{{Name: "a:fmt", Command: "make fmt"}, {Name: "a:test", Command: "make test"}}
+
+	assert.Equal(t, []string{"a:test"}, gate.Missing(steps, "fmt: make fmt; lint: make lint"))
+	assert.Empty(t, gate.Missing(steps, "fmt: make fmt; test: make test"))
 }

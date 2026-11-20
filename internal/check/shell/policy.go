@@ -51,6 +51,11 @@ var (
 func (s *scanner) scanRules(cmd *command, remote bool) {
 	s.scanOpaque(cmd)
 	s.scanPolicy(cmd)
+
+	if s.network {
+		s.scanNetwork(cmd)
+	}
+
 	s.scanProtected(cmd)
 	s.scanLaptopCopy(cmd, remote)
 }

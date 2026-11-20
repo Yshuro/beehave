@@ -913,12 +913,13 @@ def record_base_reds(round_settings):
     )
 
 def derive_gate_list(project):
-    """Derives the gate list of the round from the CI workflow files of vars.gate_files, and prints it. A project with no gate_files derives nothing.
-    The tool `remedy gatelist` refuses (exit code 2) a file that holds no run step and a step that publishes, so such a round never starts."""
+    """Derives the gate list of the round from the CI workflow files of vars.gate_files, and holds the gate of the project to it. A project with no gate_files derives nothing.
+    The derived steps are the run steps of the files. A step or a job with a secret or a write permission, an action that is neither a checkout nor a setup, or a command that writes outside the machine is left out, and the output names it.
+    The tool `remedy gatelist --gate` stops the round (exit code 2) when the files give no step, or when the gate of the project (`facts().gate`) lacks a derived step: the owner adds a step that is left out, such as the lint action, to `gate_steps` by hand."""
     files = project.vars.get("gate_files", [])
 
     if len(files) > 0:
-        command(name = "gate-list", run = ["remedy", "gatelist"] + files, stop_on_rc = [2])
+        command(name = "gate-list", run = ["remedy", "gatelist", "--gate", project.gate] + files, stop_on_rc = [2])
 
 # A bound for the loop of the round, because Starlark has no while. A pass ends one run or starts one, so the bound is far above the work of any real round.
 MAX_PASSES = 500

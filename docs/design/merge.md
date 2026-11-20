@@ -514,7 +514,7 @@ A pass is exit code 0. A gate that holds the brief back is exit code 1, with the
 | `remedy handoff <file> [--name <text>] [--transcript <file>] [--cap <tokens>]` | Checks a handoff | A refused handoff | |
 | `remedy authors <file> --email <address> --login <name>` | Checks `<sha> <email> <login>` lines against the identity of the owner | A commit of the owner under another address | A missing identity or an empty file |
 | `remedy spend <transcript> [--hours <n>] [--cap <tokens>]` | Prints the hour table and one row for each lane | A lane over the cap | |
-| `remedy gatelist <workflow-file>...` | Derives the gate steps from the run steps of the CI workflow files | | A file that is not a workflow, a file with no run step, a step that publishes |
+| `remedy gatelist [--gate <text>] <workflow-file>...` | Derives the gate steps from the run steps of the CI workflow files, and names the steps and jobs that it leaves out | `--gate`: the gate of the round | A file that is not a workflow, files that give no step, a derived step that the gate lacks |
 | `remedy job <script> --list <file> [--job-dir <folder>]` | Checks a host job against the gate list | A defect in the job | A gate list that cannot be read |
 | `remedy report <file> --head <sha>` | Checks the four tables of a lane report | A defect | |
 

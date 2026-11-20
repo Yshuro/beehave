@@ -23,10 +23,10 @@ func TestExampleProfile_TheGateListOfTheRoundIsDerivedFromTheGateFiles(t *testin
 	_, err := rig.run(t)
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"remedy gatelist " + ciFile + " " + lintFile}, commandsNamed(rig, "remedy gatelist"))
+	assert.Equal(t, []string{"remedy gatelist --gate " + rig.project.Gate + " " + ciFile + " " + lintFile}, commandsNamed(rig, "remedy gatelist"))
 }
 
-func TestExampleProfile_AGateFileThatPublishesStopsTheRoundBeforeItsFirstPass(t *testing.T) {
+func TestExampleProfile_AGateThatLacksADerivedStepStopsTheRoundBeforeItsFirstPass(t *testing.T) {
 	t.Parallel()
 
 	rig := newRoundRig(t, "")
@@ -35,7 +35,7 @@ func TestExampleProfile_AGateFileThatPublishesStopsTheRoundBeforeItsFirstPass(t 
 	previous := rig.h.commands.reply
 	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
 		if len(request.Run) > 1 && request.Run[1] == "gatelist" {
-			return CommandOutput{RC: 2, Stdout: "FAIL: the step ship:release publishes (release: gh release create)"}, nil
+			return CommandOutput{RC: 2, Stdout: "FAIL: the gate of the round lacks derived steps: ship:test"}, nil
 		}
 
 		return previous(request)
@@ -46,7 +46,7 @@ func TestExampleProfile_AGateFileThatPublishesStopsTheRoundBeforeItsFirstPass(t 
 	require.NoError(t, err)
 	require.NotNil(t, result.Stopped)
 	assert.Equal(t, 2, result.Stopped.RC)
-	assert.Contains(t, result.Stopped.Output, "publishes (release")
+	assert.Contains(t, result.Stopped.Output, "lacks derived steps")
 	assert.Empty(t, commandsNamed(rig, "remedy sync"), "no pass ran after the refusal")
 }
 
