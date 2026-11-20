@@ -1251,14 +1251,6 @@ func TestHostSetup_InstallsTheMetadataGuardBeforeTheNetwork(t *testing.T) {
 	assert.Equal(t, h.readSource("metadata-guard.nft"), h.read(rules))
 	assert.Equal(t, h.readSource("metadata-guard.service"), h.read(unit))
 
-	for _, want := range []string{"Before=network-pre.target systemd-user-sessions.service", "WantedBy=multi-user.target", "ExecStart=/usr/sbin/nft -f /etc/beehave/metadata-guard.nft"} {
-		assert.Contains(t, h.read(unit), want, "the unit loads the rules at every boot, before the network and before any user session")
-	}
-
-	for _, want := range []string{"meta skuid != 0 ip daddr 169.254.169.254 meta l4proto tcp reject", "meta skuid != 0 ip6 daddr fd20:ce::254 meta l4proto tcp reject"} {
-		assert.Contains(t, h.read(rules), want, "root is the only user that reaches the metadata server")
-	}
-
 	log := h.read(h.log)
 	assert.Regexp(t, `\napt-get install [^\n]* nftables\n`, log, "the nft command that the unit runs comes from the nftables package")
 	assert.Contains(t, log, "\nsudo systemctl enable metadata-guard.service\n")
@@ -1271,8 +1263,8 @@ func TestHostSetup_FailsWhenTheLoginUserStillGetsAnAnswerFromTheMetadataServer(t
 	t.Parallel()
 
 	cases := []struct{ name, message string }{
-		{name: "FAKE_METADATA_USER_CODE=200 FAKE_METADATA_USER_RC=0", message: "the login user got HTTP 200 from http://169.254.169.254/"},
-		{name: "FAKE_METADATA_USER6_CODE=403 FAKE_METADATA_USER6_RC=0", message: "the login user got HTTP 403 from http://[fd20:ce::254]/"},
+		{name: "FAKE_METADATA_USER_CODE=200 FAKE_METADATA_USER_RC=0", message: "the login user got HTTP 200 from " + metadataURL4},
+		{name: "FAKE_METADATA_USER6_CODE=403 FAKE_METADATA_USER6_RC=0", message: "the login user got HTTP 403 from " + metadataURL6},
 		{name: "FAKE_METADATA_USER_RC=6", message: "ended with curl exit code 6, which proves nothing"},
 		{name: "FAKE_METADATA_USER6_RC=127", message: "ended with curl exit code 127, which proves nothing"},
 	}
@@ -1295,10 +1287,27 @@ func TestHostSetup_AcceptsATimeoutAsNoAnswerFromTheMetadataServer(t *testing.T) 
 	t.Parallel()
 
 	h := newFakeHost(t)
-	out, err := h.setup("FAKE_METADATA_USER_RC=28", "FAKE_METADATA_ROOT_CODE=000")
+	out, err := h.setup("FAKE_METADATA_USER_RC=28")
 
 	require.NoError(t, err, out)
-	assert.Contains(t, h.record(), "metadata user=refused root=000\n", "a host with no metadata server still passes")
+	assert.Contains(t, h.record(), "metadata user=refused root=200\n")
+}
+
+func TestHostSetup_FailsWhenRootDoesNotGetTheTokenFromTheMetadataServer(t *testing.T) {
+	t.Parallel()
+
+	for _, code := range []string{"000", "403", "404"} {
+		t.Run(code, func(t *testing.T) {
+			t.Parallel()
+
+			h := newFakeHost(t)
+			out, err := h.setup("FAKE_METADATA_ROOT_CODE=" + code)
+
+			require.Error(t, err)
+			assert.Contains(t, out, "root got HTTP "+code+" from "+metadataURL4+", not 200")
+			assert.NotContains(t, out, done)
+		})
+	}
 }
 
 func TestHostSetup_FailsWhenTheMetadataGuardIsNotInPlace(t *testing.T) {
@@ -1355,4 +1364,99 @@ func TestHostSetup_RestartsTheMetadataGuardOnlyWhenItsFilesOrItsStateDiffer(t *t
 		assert.Equal(t, h.readSource("metadata-guard.nft"), h.read(rules), tc.name+": the rules file is the source")
 		assert.Equal(t, h.readSource("metadata-guard.service"), h.read(unit), tc.name+": the unit file is the source")
 	}
+}
+
+const (
+	metadataURL4 = "http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token"
+	metadataURL6 = "http://[fd20:ce::254]/computeMetadata/v1/instance/service-accounts/default/token"
+)
+
+// guardRuleset is the metadata-guard.nft file, read as data: the live lines of the chain and its hook.
+type guardRuleset struct {
+	tables []string
+	chain  string
+	hook   string
+	rules  []string
+}
+
+// parseGuardRuleset reads the nft file. A line that starts with # is a comment and holds no rule. The chain header line gives the hook.
+func parseGuardRuleset(text string) guardRuleset {
+	var set guardRuleset
+
+	for raw := range strings.SplitSeq(text, "\n") {
+		line := strings.TrimSpace(raw)
+		fields := strings.Fields(line)
+
+		switch {
+		case line == "" || strings.HasPrefix(line, "#"):
+		case len(fields) == 3 && fields[0] == "table" && fields[1] == "inet":
+			set.tables = append(set.tables, "make "+fields[2])
+		case len(fields) == 4 && fields[0] == "delete" && fields[1] == "table" && fields[2] == "inet":
+			set.tables = append(set.tables, "delete "+fields[3])
+		case len(fields) == 4 && fields[0] == "table" && fields[1] == "inet" && fields[3] == "{":
+			set.tables = append(set.tables, "define "+fields[2])
+		case len(fields) == 3 && fields[0] == "chain" && fields[2] == "{":
+			set.chain = fields[1]
+		case strings.HasPrefix(line, "type "):
+			set.hook = line
+		case strings.HasPrefix(line, "meta skuid"):
+			set.rules = append(set.rules, line)
+		}
+	}
+
+	return set
+}
+
+func TestMetadataGuard_RulesRejectNonRootTCPPort80ToTheMetadataAddressesOnTheOutputHook(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	set := parseGuardRuleset(h.readSource("metadata-guard.nft"))
+
+	assert.Equal(t, []string{"make beehave_metadata_guard", "delete beehave_metadata_guard", "define beehave_metadata_guard"}, set.tables, "the file makes the table, deletes it and defines it again in one load")
+	assert.Equal(t, "output", set.chain)
+	assert.Equal(t, "type filter hook output priority 0; policy accept;", set.hook)
+	assert.Equal(t, []string{
+		"meta skuid != 0 ip daddr 169.254.169.254 tcp dport 80 reject with tcp reset",
+		"meta skuid != 0 ip6 daddr fd20:ce::254 tcp dport 80 reject with tcp reset",
+	}, set.rules, "one live rule for each address, for TCP port 80 only, so DNS on port 53 is untouched")
+}
+
+// guardUnit is the metadata-guard.service file as sections of key and values.
+func parseGuardUnit(text string) map[string]map[string][]string {
+	unit := map[string]map[string][]string{}
+	section := ""
+
+	for raw := range strings.SplitSeq(text, "\n") {
+		line := strings.TrimSpace(raw)
+
+		switch {
+		case line == "" || strings.HasPrefix(line, "#"):
+		case strings.HasPrefix(line, "["):
+			section = strings.Trim(line, "[]")
+			unit[section] = map[string][]string{}
+		default:
+			key, value, _ := strings.Cut(line, "=")
+			unit[section][key] = append(unit[section][key], strings.Fields(value)...)
+		}
+	}
+
+	return unit
+}
+
+func TestMetadataGuard_UnitLoadsAfterNftablesAndBeforeTheNetworkAndUserSessions(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	unit := parseGuardUnit(h.readSource("metadata-guard.service"))
+
+	assert.Contains(t, unit["Unit"]["After"], "nftables.service", "the flush of the default ruleset runs first, so it cannot drop the table")
+	assert.Contains(t, unit["Unit"]["Wants"], "network-pre.target", "network-pre.target is passive: only a Wants pulls it in")
+	assert.Contains(t, unit["Unit"]["Before"], "network-pre.target")
+	assert.Contains(t, unit["Unit"]["Before"], "systemd-user-sessions.service")
+	assert.Equal(t, []string{"multi-user.target"}, unit["Install"]["WantedBy"], "the rules load at every boot")
+	assert.Equal(t, []string{"/usr/sbin/nft", "-f", "/etc/beehave/metadata-guard.nft"}, unit["Service"]["ExecStart"])
+	assert.Equal(t, []string{"oneshot"}, unit["Service"]["Type"])
+	assert.Equal(t, []string{"yes"}, unit["Service"]["RemainAfterExit"])
+	assert.NotContains(t, unit["Service"], "ExecStop", "a stop that deletes the table opens a window with no rule during a restart")
 }

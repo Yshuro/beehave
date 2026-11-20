@@ -366,19 +366,20 @@ install_guard() {
 	fi
 }
 
-# user_probe <url> and root_probe <url>: print the HTTP status that curl gets, or 000, and return the curl exit code.
+# user_probe <url> and root_probe <url>: print the HTTP status that curl gets for the token path, or 000, and return the curl exit code.
 # Any status, even 403, means the server answered.
-user_probe() { curl -g -s -o /dev/null --max-time 5 -w '%{http_code}' "$1"; }
-root_probe() { sudo curl -g -s -o /dev/null --max-time 5 -w '%{http_code}' "$1"; }
+user_probe() { curl -g -s -o /dev/null --max-time 5 -H 'Metadata-Flavor: Google' -w '%{http_code}' "$1"; }
+root_probe() { sudo curl -g -s -o /dev/null --max-time 5 -H 'Metadata-Flavor: Google' -w '%{http_code}' "$1"; }
 
-# check_guard fails unless the unit runs and is enabled, the rules are loaded, and the login user gets no answer from the metadata server over
-# IPv4 or IPv6. A refused connection (curl 7) and a timeout (28) are no answer. Any other curl failure proves nothing, so it fails the script.
-# It prints the record line, which holds the status that root gets, for a host that has a metadata server.
+# check_guard fails unless the unit runs and is enabled, the rules are loaded, root gets the token, and the login user gets no answer from the
+# metadata server over IPv4 or IPv6. A refused connection (curl 7) and a timeout (28) are no answer. Any other curl failure proves nothing, so
+# it fails the script. Root must get HTTP 200: the idle watchdog runs as root and needs the server. It prints the record line.
 check_guard() {
+	token=/computeMetadata/v1/instance/service-accounts/default/token
 	[ "$(systemctl is-active "$guard_unit" 2>/dev/null || true)" = active ] || fail "$guard_unit is not active"
 	[ "$(systemctl is-enabled "$guard_unit" 2>/dev/null || true)" = enabled ] || fail "$guard_unit is not enabled, so a reboot would drop the rules"
 	sudo nft list table inet beehave_metadata_guard >/dev/null || fail 'the metadata guard rules are not loaded'
-	for url in http://169.254.169.254/ 'http://[fd20:ce::254]/'; do
+	for url in "http://169.254.169.254$token" "http://[fd20:ce::254]$token"; do
 		rc=0
 		code=$(user_probe "$url") || rc=$?
 		case $rc in
@@ -387,7 +388,8 @@ check_guard() {
 		*) fail "the check of $url ended with curl exit code $rc, which proves nothing. Run curl -g --max-time 5 $url" ;;
 		esac
 	done
-	code=$(root_probe http://169.254.169.254/) || true
+	code=$(root_probe "http://169.254.169.254$token") || true
+	[ "$code" = 200 ] || fail "root got HTTP $code from http://169.254.169.254$token, not 200. The idle watchdog runs as root and needs the metadata server. Read $guard_rules"
 	printf 'metadata user=refused root=%s\n' "$code"
 }
 
