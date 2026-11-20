@@ -46,6 +46,7 @@ require (
 	modernc.org/memory v1.13.0 // indirect
 )
 
-// The fork commit 4960747 cancels each level of a workflow before it lists the children of that level, so a child that starts during a cancel
-// with children is cancelled or refused (tobocop2/dbos-transact-golang#2). Drop this line when a DBOS release has the upstream fix.
-replace github.com/dbos-inc/dbos-transact-golang => github.com/tobocop2/dbos-transact-golang v1.7.1-0.20261117044311-4960747d67d6
+// The fork carries two changes. Commit 4960747 cancels each level of a workflow before it lists the children of that level, so a child that
+// starts during a cancel with children is cancelled or refused (tobocop2/dbos-transact-golang#2). Commit e7cfe7c adds WithCancelFailed, a cancel
+// that also ends a failed workflow in the same update, which beehave cancel uses for a failed run. Drop this line when a DBOS release has both.
+replace github.com/dbos-inc/dbos-transact-golang => github.com/tobocop2/dbos-transact-golang v1.7.1-0.20261120141849-e7cfe7c0ecb5
