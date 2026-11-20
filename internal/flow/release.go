@@ -138,7 +138,7 @@ func tryRemove(ctx context.Context, dir string, heads func(context.Context) (str
 // it returns the repository that owns the tree and an empty reason.
 // The remote is read, not the local tracking refs: a tracking ref can show a push that the remote lost.
 func keepReason(ctx context.Context, dir string, heads func(context.Context) (string, error)) (common, reason string) {
-	head, reason := cleanHead(ctx, dir)
+	head, common, reason := cleanHead(ctx, dir)
 	if reason != "" {
 		return "", reason
 	}
@@ -148,32 +148,28 @@ func keepReason(ctx context.Context, dir string, heads func(context.Context) (st
 		return "", explain(ctx, "read the branches of the remote", err)
 	}
 
-	local, reason := readAll(ctx, dir, read{"read the repository of the worktree", []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}})
-	if reason != "" {
-		return "", reason
-	}
-
 	if !isTip(listing, head) {
 		return "", "HEAD is not the tip of a branch on the remote"
 	}
 
-	return strings.TrimSpace(local[0]), ""
+	return common, ""
 }
 
-// cleanHead returns the commit at HEAD of a tree with no changes that are not committed. A dirty tree is a reason to keep it.
-func cleanHead(ctx context.Context, dir string) (head, reason string) {
+// cleanHead returns the commit at HEAD and the repository that owns a tree with no changes that are not committed. A dirty tree is a reason to keep it.
+func cleanHead(ctx context.Context, dir string) (head, common, reason string) {
 	local, reason := readAll(ctx, dir,
 		read{"read the state of the worktree", []string{"status", "--porcelain"}},
-		read{"read HEAD", []string{"rev-parse", "HEAD"}})
+		read{"read HEAD", []string{"rev-parse", "HEAD"}},
+		read{"read the repository of the worktree", []string{"rev-parse", "--path-format=absolute", "--git-common-dir"}})
 	if reason != "" {
-		return "", reason
+		return "", "", reason
 	}
 
 	if strings.TrimSpace(local[0]) != "" {
-		return "", "the worktree has changes that are not committed"
+		return "", "", "the worktree has changes that are not committed"
 	}
 
-	return strings.TrimSpace(local[1]), ""
+	return strings.TrimSpace(local[1]), strings.TrimSpace(local[2]), ""
 }
 
 // isTip reports whether a line of git ls-remote lists sha.
