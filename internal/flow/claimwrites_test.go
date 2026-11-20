@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"encoding/json"
 	"strconv"
 	"sync"
 	"testing"
@@ -577,4 +578,59 @@ func TestClaimWrites_TheLostClaimOfAMergeChildNamesTheItemOfTheRun(t *testing.T)
 	assert.Contains(t, failure.Text, "item "+testItem+":", "the claim is on the item of the run, not on the member")
 	assert.Contains(t, failure.Text, "Run beehave run "+testItem+" again")
 	assert.NotContains(t, failure.Text, "item 1:", "the member holds no claim, so the advice names the item of the run")
+}
+
+func TestClaimWrites_AQueuedMergeAndASlotCommandRecordTheRunAndTheItemOfTheRun(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the_merge_of_member_1", func(t *testing.T) {
+		t.Parallel()
+
+		rig := newBatchRig(t)
+		engine := rig.engine(t)
+
+		_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(rig.call("1", ""))))
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{runID(testItem, 1) + " " + testItem}, recordedRuns(t, engine, kindMerge), "the merge names its run and the item of that run, not the member")
+	})
+
+	t.Run("the_slot_command", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+		h.slots = func(string, string, string) (SlotGrant, error) { return SlotGrant{Host: "box", Count: 1}, nil }
+		engine := h.engine(t)
+
+		_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(`command(name = "mutate", run = ["x"], host = "build", slots = "mutation")`)))
+		require.NoError(t, err)
+
+		assert.Equal(t, []string{runID(testItem, 1) + " " + testItem}, recordedRuns(t, engine, kindCommand), "the host job names its run and the item of that run")
+	})
+}
+
+// recordedRuns lists the run and the run item that each recorded exclusive call of one kind names, as "run item".
+func recordedRuns(t *testing.T, engine *Engine, kind string) []string {
+	t.Helper()
+
+	var runs []string
+
+	for _, name := range []string{exclusiveName, hostJobName} {
+		rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterName(name), dbos.WithFilterLoadInput(true))
+		require.NoError(t, err)
+
+		for _, row := range rows {
+			var in ExclusiveInput
+
+			text, isText := row.Input.(string)
+			require.True(t, isText)
+			require.NoError(t, json.Unmarshal([]byte(text), &in))
+
+			if in.Kind == kind {
+				runs = append(runs, in.Run+" "+in.RunItem)
+			}
+		}
+	}
+
+	return runs
 }
