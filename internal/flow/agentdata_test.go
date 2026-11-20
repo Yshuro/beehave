@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -167,4 +168,49 @@ func TestAgent_AReplayWritesTheDataFileFromTheRecordedValue(t *testing.T) {
 	require.Len(t, requests, 2)
 	assert.Equal(t, recorded, requests[1].DataFile, "the replay writes the path of the record")
 	assert.NoFileExists(t, dataFile(next.dir, testItem, aStep), "the replay does not use the path the name function gives today")
+}
+
+// A replay whose phase never started builds the phase input from the recall: the data file must be the one that the recorded prompt names, not
+// the path that the state folder of the replay gives.
+func TestAgent_TheRecallTakesTheDataFileAndTheTextThatTheRenderStepRecorded(t *testing.T) {
+	t.Parallel()
+
+	recorded := promptData{File: "/old/state/inputs/7.agent_3Aa_231.json", Text: `{"base":"main"}`}
+
+	raw, err := json.Marshal(recordData(recorded))
+	require.NoError(t, err)
+
+	var outputs map[string]any
+	require.NoError(t, json.Unmarshal(raw, &outputs), "the replay reads the record as the store gives it back")
+
+	a := agentArgs{file: filepath.Join(t.TempDir(), "outputs", "out.json"), dataFile: "/new/state/inputs/7.agent_3Aa_231.json", record: "{}"}
+	require.NoError(t, a.recall(outputs))
+	assert.Equal(t, recorded.File, a.dataFile)
+	assert.Equal(t, recorded.Text, a.record)
+
+	none := agentArgs{file: a.file, dataFile: "/computed.json", record: "{}"}
+	require.NoError(t, none.recall(map[string]any{}))
+	assert.Empty(t, none.dataFile, "a record with no data is a call with no data")
+	assert.Empty(t, none.record)
+
+	require.ErrorContains(t, a.recall(map[string]any{recordedPromptData: "{"}), "read the recorded data of the step")
+}
+
+func TestAgent_TheDataFileGetsMode0600AlsoWhenAnOlderFileHasAnotherMode(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "inputs", "7.agent_3Aa_231.json")
+	require.NoError(t, os.MkdirAll(filepath.Dir(file), 0o700))
+	require.NoError(t, os.WriteFile(file, []byte("old"), 0o600))
+	require.NoError(t, os.Chmod(file, 0o200), "an older file that its owner cannot read")
+
+	require.NoError(t, writeData(PhaseInput{DataFile: file, Data: `{"a":1}`}))
+
+	info, err := os.Stat(file)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o600), info.Mode().Perm())
+
+	text, err := os.ReadFile(filepath.Clean(file))
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"a":1}`, string(text))
 }

@@ -155,28 +155,38 @@ func recalledSandbox(outputs map[string]any) (*model.Sandbox, error) {
 	return &box, nil
 }
 
-// recordedPromptData is the output of the render step that holds the data of a call: the file that the recorded prompt names, and the JSON text that
-// the phase writes to it. A call with no data records none. The record sorts after the login and the model, so the clipped line of a dry run still shows both.
-const (
-	recordedPromptData = "prompt_data"
-	recordedDataFile   = "file"
-	recordedDataText   = "text"
-)
+// recordedPromptData is the name of the output of the render step that holds the data of a call. A call with no data records none.
+// The name sorts after the login and the model, so the clipped line of a dry run still shows both.
+const recordedPromptData = "prompt_data"
 
-// recordData writes the data of a call and its file as an output of the render step. A call with no data writes nothing.
-func recordData(file, record string) map[string]any {
-	if file == "" {
+// promptData is the recorded data of a call: the file that the recorded prompt names, and the JSON text that the phase writes to it.
+type promptData struct {
+	File string `json:"file"`
+	Text string `json:"text"`
+}
+
+// recordData writes the data of a call and its file as the output of the render step, in the text a replay reads. A call with no data writes nothing.
+func recordData(data promptData) map[string]any {
+	if data.File == "" {
 		return nil
 	}
 
-	return map[string]any{recordedPromptData: map[string]any{recordedDataFile: file, recordedDataText: record}}
+	raw, _ := json.Marshal(data) //nolint:errcheck // two strings always encode
+
+	return map[string]any{recordedPromptData: string(raw)}
 }
 
-// recalledData reads the data file and the data that the render step recorded. A record without them is a call with no data.
-func recalledData(outputs map[string]any) (file, record string) {
-	data, _ := outputs[recordedPromptData].(map[string]any) //nolint:errcheck // a call with no data records none
-	file, _ = data[recordedDataFile].(string)               //nolint:errcheck // a call with no data records none
-	record, _ = data[recordedDataText].(string)             //nolint:errcheck // a call with no data records none
+// recalledData reads the data that the render step recorded. A record without it is a call with no data.
+func recalledData(outputs map[string]any) (promptData, error) {
+	raw, ok := outputs[recordedPromptData].(string)
+	if !ok {
+		return promptData{}, nil
+	}
 
-	return file, record
+	var data promptData
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return promptData{}, fmt.Errorf("read the recorded data of the step: %w", err)
+	}
+
+	return data, nil
 }

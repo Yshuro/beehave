@@ -285,7 +285,12 @@ func (s *script) promptOf(a *agentArgs, name, login string) (string, error) {
 func (a *agentArgs) recall(outputs map[string]any) (err error) {
 	a.file = recalledOutputFile(outputs, a.file)
 	a.startHead, _ = outputs[recordedStartHead].(string) //nolint:errcheck // a record made before the start head was kept has none
-	a.dataFile, a.record = recalledData(outputs)
+	given, err := recalledData(outputs)
+	if err != nil {
+		return err
+	}
+
+	a.dataFile, a.record = given.File, given.Text
 
 	if err = os.MkdirAll(filepath.Dir(a.file), outputsMode); err != nil {
 		return fmt.Errorf("make the folder of the output file: %w", err)
@@ -325,7 +330,7 @@ func (a agentArgs) recordOutputs(head, login string, sandboxDefault bool) map[st
 	}
 
 	maps.Copy(outputs, recordSandbox(a.sandbox.effective(sandboxDefault)))
-	maps.Copy(outputs, recordData(a.dataFile, a.record))
+	maps.Copy(outputs, recordData(promptData{File: a.dataFile, Text: a.record}))
 
 	return outputs
 }
