@@ -347,15 +347,40 @@ func ToGo[T any](v starlark.Value) (out T, err error) { //nolint:ireturn // T is
 	return out, err
 }
 
-// encodeDecode sends v through the encoder of the Starlark JSON library and decodes the text, with a number kept as a json.Number.
-func encodeDecode(v starlark.Value) (decoded any, err error) {
-	text, err := starlark.Call(&starlark.Thread{Name: "json"}, starjson.Module.Members["encode"], starlark.Tuple{v}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("a value cannot go into a prompt or a request. Use text, numbers, booleans, lists and dicts (%w)", err)
+// DataRecord encodes the data dict of an agent call as the JSON text of its data file. An absent dict and None give "", which is no data file.
+func DataRecord(v starlark.Value) (string, error) {
+	dict, ok := Optional[*starlark.Dict](v)
+	if !ok {
+		return "", fmt.Errorf("data must be a dict, not a %s. Write data = {\"name\": value}", v.Type())
 	}
 
-	encoded, _ := starlark.AsString(text) // json.encode returns a string.
-	decoder := json.NewDecoder(strings.NewReader(encoded))
+	if dict == nil {
+		return "", nil
+	}
+
+	return encoded(dict)
+}
+
+// encoded is the text that the encoder of the Starlark JSON library gives for v.
+func encoded(v starlark.Value) (string, error) {
+	text, err := starlark.Call(&starlark.Thread{Name: "json"}, starjson.Module.Members["encode"], starlark.Tuple{v}, nil)
+	if err != nil {
+		return "", fmt.Errorf("a value cannot go into a prompt or a request. Use text, numbers, booleans, lists and dicts (%w)", err)
+	}
+
+	out, _ := starlark.AsString(text) // json.encode returns a string.
+
+	return out, nil
+}
+
+// encodeDecode sends v through the encoder of the Starlark JSON library and decodes the text, with a number kept as a json.Number.
+func encodeDecode(v starlark.Value) (decoded any, err error) {
+	text, err := encoded(v)
+	if err != nil {
+		return nil, err
+	}
+
+	decoder := json.NewDecoder(strings.NewReader(text))
 	decoder.UseNumber()
 
 	err = decoder.Decode(&decoded) // The text comes from the encoder, so it always decodes.

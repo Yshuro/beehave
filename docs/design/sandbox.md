@@ -33,6 +33,10 @@ The project file also takes these keys. Each path is absolute or starts with `~/
 
 The record of a step stores the sandbox that the step runs with, in the `/render` step beside the prompt. A replay reads the record and never the current default of the project. A record without the value replays as a step with no sandbox.
 
+### The data file
+
+A step with the `data` keyword gets one file in the state folder (see [Agent runs](agent-runs.md#the-setting-data)). The plan adds that one path to the read paths, after the check of the `sandbox_read` paths. It never adds the inputs folder or the state folder, which holds `dbos.db`. The sandbox denies the home folder, so the default state folder under `~/.local/state` stays closed except for this file. A data file inside a credential path stops the step. The Read tool keeps `blockReadsOutsideWorkingDirectories`, so the agent reads the file with the shell. The file holds what the workflow passed and no credential.
+
 ## What the Claude adapter sets
 
 ### Isolation flags
@@ -50,7 +54,7 @@ It passes one `--settings` JSON that holds the sandbox object, the permission ru
 ### The sandbox object and the permission rules
 
 - The sandbox object sets `enabled`, `failIfUnavailable` and `allowUnsandboxedCommands: false`.
-- The base denies the home folder. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory, the `sandbox_read` paths and the env file. Outside the home folder, the sandbox reads every path that is not a credential path.
+- The base denies the home folder. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory, the `sandbox_read` paths, the env file and the data file of the step. Outside the home folder, the sandbox reads every path that is not a credential path.
 - The network list sets `allowedDomains` with `strictAllowlist`.
 - The permission rules set `blockReadsOutsideWorkingDirectories` and deny `WebFetch` and `WebSearch`.
 

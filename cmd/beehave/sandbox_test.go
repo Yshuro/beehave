@@ -341,6 +341,48 @@ func TestSandboxPlan_TheProjectFileExtendsTheReadBaseAndTheCredentialListAndNeve
 	assert.Contains(t, plan.Deny, filepath.Join(r.home, ".ssh"), "the built-in entries stay")
 }
 
+func TestSandboxPlan_TheDataFileIsTheOnlyStateFolderPathTheSandboxReads(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	r.f.agents.projects = map[string]config.Project{"p": {Project: model.Project{SandboxRead: []string{"/opt/tools"}}}}
+	state := filepath.Join(r.home, ".local", "state", "beehave")
+	data := filepath.Join(state, "inputs", "7.agent_3Aimplement_231.json")
+
+	req := request()
+	req.Sandbox = &model.Sandbox{}
+	req.DataFile = data
+
+	_, err := r.f.agents.Run(t.Context(), req)
+	require.NoError(t, err)
+
+	plan := r.f.spec.Sandbox
+	require.NotNil(t, plan, "a data file under the home folder does not stop the step")
+	assert.Equal(t, []string{"/opt/tools", data}, plan.Read, "the one file joins the read paths of the project")
+	assert.NotContains(t, plan.Read, filepath.Dir(data), "never the inputs folder")
+	assert.NotContains(t, plan.Read, state, "never the state folder")
+
+	req.DataFile = ""
+	_, err = r.f.agents.Run(t.Context(), req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{"/opt/tools"}, r.f.spec.Sandbox.Read, "a step with no data file reads no path of the state folder")
+}
+
+func TestSandboxPlan_ADataFileInACredentialPathStopsTheStep(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	req := request()
+	req.Sandbox = &model.Sandbox{}
+	req.DataFile = filepath.Join(r.home, ".ssh", "inputs", "7.json")
+
+	result, err := r.f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
+	assert.Contains(t, result.Note, "The data file "+req.DataFile+" overlaps the credential path "+filepath.Join(r.home, ".ssh"))
+}
+
 func TestSandboxPlan_AnAllowWritePathStartsAtTheWorkFolderAndMayNotTouchACredentialPath(t *testing.T) {
 	t.Parallel()
 

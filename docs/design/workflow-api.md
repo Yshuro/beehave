@@ -44,6 +44,7 @@ The Change column says how the pair differs from the contract that the five piec
 |---|---|---|---|
 | `agent` | `-` | unchanged | 13: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 11 more |
 | `agent` | `allow_paths` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
+| `agent` | `data` | #693: new, a dict that the engine writes to the data file that the prompt names as `data_file` | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
 | `agent` | `edits` | #497: also picks the review queue | 10: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 8 more |
 | `agent` | `forbid_commands` | unchanged | 11: `examples/approvals/workflow.star`, `examples/desk/clerk.star` and 9 more |
 | `agent` | `idle_timeout` | unchanged | 2: `examples/swarm/workflow.star`, `examples/ticket-pipeline/partition.star` |
