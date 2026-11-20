@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Each library line of ldd gives its file with links resolved, the vDSO line names no file, and the cache of the linker comes last when it exists.
+// Each library line of the list gives its file with links resolved, the vDSO line names no file, and the cache of the linker comes last when it exists.
 func TestLddLibraries_GivesTheFileOfEachLibraryWithItsLinksResolvedAndTheCache(t *testing.T) {
 	t.Parallel()
 
@@ -35,12 +35,12 @@ func TestLddLibraries_GivesTheFileOfEachLibraryWithItsLinksResolvedAndTheCache(t
 	assert.Equal(t, []string{evaluated(t, lib), evaluated(t, linker)}, found, "a machine with no cache reads none")
 }
 
-// A library that ldd does not find, or a file that is gone, gives no read set.
+// A library that the linker does not find, or a file that is gone, gives no read set.
 func TestLddLibraries_ALibraryThatCannotBeFoundIsAnError(t *testing.T) {
 	t.Parallel()
 
 	for out, want := range map[string]string{
-		"\tlibpcre2-8.so.0 => not found\n":        "ldd finds no file",
+		"\tlibpcre2-8.so.0 => not found\n":        "the dynamic linker finds no file",
 		"\t/nonexistent/libz.so.1 (0x00007f00)\n": "find the library /nonexistent/libz.so.1",
 	} {
 		_, err := lddLibraries(out, linkerCache)
@@ -90,13 +90,27 @@ func TestLddLibraries_ACacheThatCannotBeStatedIsAnError(t *testing.T) {
 	assert.ErrorContains(t, err, "read the cache of the linker")
 }
 
-// An ldd that cannot run gives no read set.
-func TestGitLibraries_AnLddThatCannotRunIsAnError(t *testing.T) {
+// A dynamic linker that cannot run gives no read set.
+func TestGitLibraries_ALinkerThatCannotRunIsAnError(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	_, err := gitLibraries(ctx, "/bin/sh")
-	assert.ErrorContains(t, err, "run ldd")
+	assert.ErrorContains(t, err, "list the libraries")
+}
+
+// The libraries come from the dynamic linker that the program names, run by its path, so a search path with no ldd, as the one of the engine can be, finds
+// them all the same.
+func TestGitLibraries_ASearchPathWithNoLddFindsTheLibraries(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+
+	found, err := gitLibraries(t.Context(), "/bin/sh")
+	require.NoError(t, err)
+
+	interpreter, err := programInterpreter("/bin/sh")
+	require.NoError(t, err)
+	assert.Contains(t, found, evaluated(t, interpreter), "the dynamic linker is read")
+	assert.Greater(t, len(found), 2, "the linker, a library and the cache")
 }

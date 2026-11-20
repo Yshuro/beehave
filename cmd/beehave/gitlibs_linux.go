@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"debug/elf"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -15,42 +17,48 @@ import (
 // linkerCache is the list of library folders that the dynamic linker reads to find a library by its name.
 const linkerCache = "/etc/ld.so.cache"
 
-// gitLibraries returns the dynamic linker and the libraries that ldd reports for the program at binary, with their links resolved, and the cache of the
-// linker when the machine has one. A static program loads none of them. A file that is no ELF program, a library that ldd cannot find, or no ldd, is an
-// error.
+// gitLibraries returns the dynamic linker that the program at binary names and the libraries that it loads, with their links resolved, and the cache of
+// the linker when the machine has one. The linker lists the libraries itself (--list, what ldd runs), by its path and with no environment, so no search
+// path and no LD_LIBRARY_PATH plays a part. A static program loads none of them. A file that is no ELF program, a library that the linker cannot find,
+// or a linker that cannot run, is an error.
 func gitLibraries(ctx context.Context, binary string) ([]string, error) {
-	dynamic, err := isDynamic(binary)
-	if err != nil || !dynamic {
+	interpreter, err := programInterpreter(binary)
+	if err != nil || interpreter == "" {
 		return nil, err
 	}
 
-	out, err := exec.CommandContext(ctx, "ldd", binary).Output() //nolint:gosec // the git that the search path of the engine names
+	list := exec.CommandContext(ctx, interpreter, "--list", binary) //nolint:gosec // the linker that the git of the engine names
+	list.Env = []string{}
+
+	out, err := list.Output()
 	if err != nil {
-		return nil, fmt.Errorf("run ldd: %w", err)
+		return nil, fmt.Errorf("list the libraries with %s: %w", interpreter, err)
 	}
 
 	return lddLibraries(string(out), linkerCache)
 }
 
-// isDynamic says whether the ELF program at path names a dynamic linker, that is, whether it loads libraries.
-func isDynamic(path string) (bool, error) {
+// programInterpreter returns the dynamic linker that the ELF program at path names, or "" for a static program, which loads no library.
+func programInterpreter(path string) (string, error) {
 	file, err := elf.Open(path)
 	if err != nil {
-		return false, fmt.Errorf("read the program %s: %w", path, err)
+		return "", fmt.Errorf("read the program %s: %w", path, err)
 	}
 	defer file.Close()
 
 	for _, header := range file.Progs {
 		if header.Type == elf.PT_INTERP {
-			return true, nil
+			name, err := io.ReadAll(header.Open())
+
+			return string(bytes.TrimRight(name, "\x00")), err
 		}
 	}
 
-	return false, nil
+	return "", nil
 }
 
-// lddLibraries returns the file of each library in the output of ldd, and cache when it exists. A line with no path, such as the vDSO, names no
-// file.
+// lddLibraries returns the file of each library in a list of the dynamic linker (the lines that ldd prints), and cache when it exists. A line with no
+// path, such as the vDSO, names no file.
 func lddLibraries(out, cache string) ([]string, error) {
 	var found []string
 
@@ -82,13 +90,13 @@ func withCache(found []string, cache string) ([]string, error) {
 	return found, nil
 }
 
-// lddPath returns the file of one line of ldd, "name => /path (address)" or "/path (address)", with its links resolved. A line of a library that ldd did
-// not find, or whose file is gone, is an error.
+// lddPath returns the file of one line of the list, "name => /path (address)" or "/path (address)", with its links resolved. A line of a library that
+// the linker did not find, or whose file is gone, is an error.
 func lddPath(line string) (string, error) {
 	if _, after, ok := strings.Cut(line, "=>"); ok {
 		line = strings.TrimSpace(after)
 		if strings.HasPrefix(line, "not found") {
-			return "", fmt.Errorf("ldd finds no file for a library of git: %s", line)
+			return "", fmt.Errorf("the dynamic linker finds no file for a library of git: %s", line)
 		}
 	}
 
