@@ -298,7 +298,7 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
+		"claim", "item", "facts#1", "preflight:intake#1", "pr_history:history#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
 		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "push:push-implement#1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
@@ -314,7 +314,7 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
+		"claim", "item", "facts#1", "preflight:intake#1", "pr_history:history#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
 		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "push:push-implement#1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
@@ -635,12 +635,13 @@ func TestDryRun_ARoundRunsWithNoEnvironmentVariables(t *testing.T) {
 	var out bytes.Buffer
 
 	// The round reads every setting from the project vars, so the run has no environment at all. It ends early at the read of the queue, which the dry run does not fake.
+	// The queue audit judges the rows of that read, so it comes after it and the dry run does not reach it.
 	err := DryRun(t.Context(), dryRoundFile, "12", nil, &out, dryRound)
 
 	require.ErrorIs(t, err, ErrDryRunEndedEarly, out.String())
 	assert.Contains(t, out.String(), "host_up:round-host#1")
-	assert.Contains(t, out.String(), "agent:queue-audit-1#1")
 	assert.Contains(t, out.String(), "not run in a dry run: read the open work of the project")
+	assert.NotContains(t, out.String(), "agent:queue-audit-1#1")
 	assert.NotContains(t, out.String(), "FAILED")
 	assert.NotContains(t, out.String(), "env:")
 }

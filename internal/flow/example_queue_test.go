@@ -1,12 +1,17 @@
 package flow
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -63,7 +68,7 @@ func TestExampleQueue_ARoundOverAnEmptyQueueStartsNoChild(t *testing.T) {
 	assert.Empty(t, startedChildren(rig))
 }
 
-func TestExampleQueue_TheAuditRunsBeforeTheQueueReadOfEachPass(t *testing.T) {
+func TestExampleQueue_TheAuditOfEachPassRunsAfterItsQueueReadAndBeforeItsSpawn(t *testing.T) {
 	t.Parallel()
 
 	rig := newRoundRig(t, "1 3")
@@ -73,6 +78,73 @@ func TestExampleQueue_TheAuditRunsBeforeTheQueueReadOfEachPass(t *testing.T) {
 	require.NoError(t, err)
 
 	joined := strings.Join(stepNames(t, rig.last), " ")
-	assert.Less(t, strings.Index(joined, "agent:queue-audit-1#"), strings.Index(joined, "queue:round-queue-1#"), "the audit of a pass comes before its queue read")
-	assert.Less(t, strings.Index(joined, "queue:round-queue-1#"), strings.Index(joined, "spawn:round-spawn-1#"))
+	assert.Positive(t, strings.Index(joined, "queue:round-queue-1#"), joined)
+	assert.Less(t, strings.Index(joined, "queue:round-queue-1#"), strings.Index(joined, "agent:queue-audit-1#"), "the audit judges the rows of the queue read of its pass")
+	assert.Less(t, strings.Index(joined, "agent:queue-audit-1#"), strings.Index(joined, "spawn:round-spawn-1#"))
+}
+
+// auditData is the data file of the first queue audit of a round: the rows and the open pull requests that the agent judges.
+type auditData struct {
+	Rows []struct {
+		Item  string `json:"item"`
+		State string `json:"state"`
+	} `json:"rows"`
+	Pulls []struct {
+		Number int    `json:"number"`
+		Branch string `json:"branch"`
+		Item   string `json:"item"`
+	} `json:"pulls"`
+}
+
+func TestExampleQueue_TheAuditGetsTheRowsAndThePullRequestsOfTheQueueReadOfItsPass(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "1 3")
+	rig.q.pulls = []model.PullRequest{openPullOf(t, 7, "loose", "dev", "owner", "no-issue", true)}
+
+	var (
+		mu    sync.Mutex
+		texts []string
+	)
+
+	inner := rig.h.agents.result
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		if strings.Contains(request.Prompt, "## What the queue audit must do") {
+			raw, err := os.ReadFile(filepath.Clean(request.DataFile))
+
+			mu.Lock()
+			texts = append(texts, string(raw)+errText(err))
+			mu.Unlock()
+		}
+
+		return inner(request)
+	}
+
+	_, err := rig.run(t)
+	require.NoError(t, err)
+
+	require.NotEmpty(t, texts, "the round runs a queue audit")
+
+	var got auditData
+	require.NoError(t, json.Unmarshal([]byte(texts[0]), &got), texts[0])
+
+	items := make([]string, 0, len(got.Rows))
+	for _, row := range got.Rows {
+		items = append(items, row.Item)
+	}
+
+	assert.ElementsMatch(t, []string{"1", "3"}, items, "the audit reads the rows that the queue read of its pass gave out")
+	require.Len(t, got.Pulls, 1, "the audit reads the open pull requests of the same read")
+	assert.Equal(t, 7, got.Pulls[0].Number)
+	assert.Equal(t, "loose", got.Pulls[0].Branch)
+	assert.Empty(t, got.Pulls[0].Item, "a branch that names no open item gives an empty item")
+}
+
+// errText is the text of a read error, or "" when the read worked.
+func errText(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return "unreadable: " + err.Error()
 }

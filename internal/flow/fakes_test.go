@@ -1191,6 +1191,10 @@ type fakeForge struct {
 	// pushed holds each Push call as project|item|branch|head|expect. pushErr fails it.
 	pushed  []string
 	pushErr error
+	// history is what History answers; historyErr fails it. historyAsked holds each History call as project|item.
+	history      []model.PriorPull
+	historyErr   error
+	historyAsked []string
 }
 
 // Push records the call.
@@ -1201,6 +1205,16 @@ func (f *fakeForge) Push(_ context.Context, project, item, branch, head, expect 
 	f.pushed = append(f.pushed, strings.Join([]string{project, item, branch, head, expect}, "|"))
 
 	return f.pushErr
+}
+
+// History records the call and answers with history.
+func (f *fakeForge) History(_ context.Context, project, item string) ([]model.PriorPull, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.historyAsked = append(f.historyAsked, project+"|"+item)
+
+	return f.history, f.historyErr
 }
 
 // Comment records the call and answers with the number of the standing.

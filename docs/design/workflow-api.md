@@ -145,6 +145,8 @@ The Change column says how the pair differs from the contract that the five piec
 | `pr_comment` | `key` | unchanged | 1: `examples/remediation/workflow.star` |
 | `pr_comment` | `name` | unchanged | 1: `examples/remediation/workflow.star` |
 | `pr_comment` | `text` | unchanged | 1: `examples/remediation/workflow.star` |
+| `pr_history` | `-` | #700: new, the pull requests of the item in every state, with the closing comment of each closed or merged one | 1: `examples/remediation/workflow.star` |
+| `pr_history` | `name` | #700: new | 1: `examples/remediation/workflow.star` |
 | `pr_open` | `-` | unchanged | 1: `examples/remediation/workflow.star` |
 | `pr_open` | `base` | unchanged | 1: `examples/remediation/workflow.star` |
 | `pr_open` | `body` | unchanged | 1: `examples/remediation/workflow.star` |

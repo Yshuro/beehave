@@ -25,7 +25,7 @@ The file can also define `def finish(item):`.
 
 ### Builtins
 
-The engine predeclares `agent`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_open`, `pr_state`, `preflight`, `push`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
+The engine predeclares `agent`, `command`, `earlier_calls`, `env`, `facts`, `gate`, `gather`, `host_teardown`, `host_up`, `item_comment`, `item_create`, `item_read`, `item_status`, `merge`, `now`, `pr_comment`, `pr_history`, `pr_open`, `pr_state`, `preflight`, `push`, `queue`, `sandbox`, `spawn`, `wait`, `write`, `struct` and `json`. `workflow.Builtins` is the one list of these names.
 
 `json` is the `json` module of the Starlark library (`json.decode`, `json.encode`, `json.indent`). It is pure, so it records no step.
 
@@ -246,6 +246,20 @@ The `parent` argument:
 - An empty `branch` or `head` is refused before the push. So is a project with no clone, and a project with no forge, which pushes nothing.
 - In a dry run the push writes nothing and returns `head`.
 
+#### `pr_history`
+
+`pr_history(name)` reads the pull requests of the item of the run in every state and returns `pulls`. Each has `number`, `title`, `state`, `branch`, `base`, `merged_at` and `closing_comment`.
+
+- The forge lists the pull requests on the branch of the item. For an item that is an issue number, it also lists the pull requests whose title or body names `#N`, and keeps those that name it as a whole word. The two lists join by number.
+- `closing_comment` is the body of the last comment made at or before the close of a closed or merged pull request. A comment after the close does not count. It is empty for an open one and for one with no comment until its close.
+- A closed or merged pull request with no valid close time, or a comment with no valid time, fails the read: the call does not guess which comment explains the close.
+- A list that reaches its limit is refused, so the call never returns a cut list. A project with no forge has none. A project with no repository is refused.
+- The read is a recorded step, so a resumed run replays the first list.
+- A read that fails ends the run with an error: no later step works from a guess.
+- A dry run shows an item with no pull request.
+
+A sandboxed agent holds no forge tool and no credential. The workflow passes `pulls` to the agent through the `data` keyword, and the prompt reads the data file.
+
 #### Closing keywords in posted text
 
 `pr_comment` and `pr_open` refuse text with a closing keyword (`Closes`, `Fixes`, `Resolves` and their forms, with an issue). The check reads the text of the comment, and the title and the body of the pull request. It uses the same keywords as the guard of `merge`. The refusal happens before the post and names the argument and the issue.
@@ -374,11 +388,11 @@ Both builtins match text. They run no command, record no step and need no reposi
 
 ### `queue`
 
-`queue(name, hold, label)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows` and `free`.
+`queue(name, hold, label)` reads the open items of the tracker and the open pull requests of the forge in one recorded step. It returns `rows`, `free` and `pulls`.
 
-`label` keeps the items that carry that tracker label. A call with no `label` keeps every open item. The engine reads no project setting for the choice: the workflow passes it. The rows hold no labels, so only the engine can choose by label. A workflow that needs a list of item ids keeps the rows whose `item` is in the list.
+`label` keeps the items that carry that tracker label. A call with no `label` keeps every open item. The engine reads no project setting for the choice: the workflow passes it. A workflow that needs a list of item ids keeps the rows whose `item` is in the list.
 
-Each row has `item`, `state`, `severity` and `pr`. The state:
+Each row has `item`, `state`, `severity`, `pr`, `parent`, `author`, `changes_requested` and `labels`, the tracker labels of the item. The state:
 
 | State | When |
 | --- | --- |
@@ -392,6 +406,7 @@ Each row has `item`, `state`, `severity` and `pr`. The state:
 - The rows sort by severity, then by item id as byte strings.
 - `pr` is the number of the lowest open pull request whose head branch is the item id, or 0.
 - `free` is the cap of the `items` queue less the runs that the library lists on it as pending or enqueued, so the engine keeps no count.
+- `pulls` lists every open pull request of the forge, each with `number`, `branch`, `base`, `author`, `draft`, `title` and `item`. `item` is the open item that the head branch names, or empty. `label` does not filter `pulls`, and an item that `label` leaves out of the rows still joins its pull request.
 - A read of the tracker or the forge that fails ends the step with an error.
 - A project with no forge has no pull requests.
 - A build with no queue reader fails the call.

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // laneData is the data file text that each kind of agent of the example found when it started. A call with no data file records "".
@@ -86,7 +87,35 @@ func TestExample_TheImplementerTheFixAndTheReviewsGetTheBaseRedsInTheDataFile(t 
 	require.NoError(t, err)
 
 	record := `{"base":"integration","base_reds":["lint-a","test-b"]}`
+	withHistory := `{"base":"integration","base_reds":["lint-a","test-b"],"pulls":[]}`
 
 	assert.Equal(t, []string{"plan", "implement", "review", "fix", "review", "review"}, seen.kinds)
-	assert.Equal(t, []string{"", record, record, record, record, record}, seen.texts, "the plan gets no data file, and each lane finds the base reds of the round")
+	assert.Equal(t, []string{`{"pulls":[]}`, withHistory, record, record, record, record}, seen.texts,
+		"the plan gets the pull requests of the item and no base reds, the implementer gets both, and each other lane finds the base reds of the round")
+}
+
+func TestExample_ThePlanAndTheImplementerGetThePullRequestsOfTheItemInTheDataFile(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	rig.h.forge.history = []model.PriorPull{{Number: 4, Title: "first try", State: "CLOSED", Branch: "item-1", Base: "integration", ClosingComment: "refuted: slower"}}
+
+	seen := &laneData{}
+	inner := rig.h.agents.result
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		seen.add(request)
+
+		return inner(request)
+	}
+
+	_, err := runPipeline(rig.h.engine(t), file)
+	require.NoError(t, err)
+
+	pulls := `"pulls":[{"base":"integration","branch":"item-1","closing_comment":"refuted: slower","merged_at":"","number":4,"state":"CLOSED","title":"first try"}]`
+
+	require.GreaterOrEqual(t, len(seen.texts), 2)
+	assert.Equal(t, []string{"plan", "implement"}, seen.kinds[:2])
+	assert.Equal(t, "{"+pulls+"}", seen.texts[0], "the plan reads the earlier pull requests of the item, with the closing comment")
+	assert.Contains(t, seen.texts[1], pulls, "the implementer reads the same pull requests")
+	assert.Len(t, rig.h.forge.historyAsked, 1, "the engine reads the pull requests once, before the plan")
 }

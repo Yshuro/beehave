@@ -37,6 +37,10 @@ The record of a step stores the sandbox that the step runs with, in the `/render
 
 A step with the `data` keyword gets one file in the state folder (see [Agent runs](agent-runs.md#the-setting-data)). The plan adds that one path to the read paths, after the check of the `sandbox_read` paths. It never adds the inputs folder or the state folder, which holds `dbos.db`. The sandbox denies the home folder, so the default state folder under `~/.local/state` stays closed except for this file. A data file inside a credential path stops the step. The Read tool keeps `blockReadsOutsideWorkingDirectories`, so the agent reads the file with the shell. The file holds what the workflow passed and no credential.
 
+### Forge data for a sandboxed step
+
+In the sandbox, gh cannot read its config, and no forge credential may reach the agent. So no sandboxed step reads the forge itself. The engine reads the forge outside the sandbox, and the workflow passes the answer through the `data` keyword. In the remediation example, `queue` gives the queue audit the rows and the open pull requests of the pass, and `pr_history` gives the plan and the implementer the earlier pull requests of the item with their closing comments. The plan and the queue audit then need no network.
+
 ## What the Claude adapter sets
 
 ### Isolation flags

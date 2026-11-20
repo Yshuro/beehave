@@ -168,6 +168,8 @@ func (e2eFiles) Open(context.Context, string, string, flow.OpenRequest) (flow.Op
 
 func (e2eFiles) Push(context.Context, string, string, string, string, string) error { return nil }
 
+func (e2eFiles) History(context.Context, string, string) ([]model.PriorPull, error) { return nil, nil }
+
 func (f e2eFiles) Release(_ context.Context, _, item, _ string) error {
 	return f.event("release", item)
 }

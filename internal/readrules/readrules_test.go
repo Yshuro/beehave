@@ -166,6 +166,7 @@ var rules = map[string]rule{
 	"internal/flow.forge.ClosingIssues":           {NotHeld: inAdapter},
 	"internal/flow.forge.Comment":                 {NotHeld: inAdapter},
 	"internal/flow.forge.Open":                    {NotHeld: inAdapter},
+	"internal/flow.forge.History":                 {Proof: "TestPRHistory_AFailedReadStopsTheStep", Needle: "historyErr"},
 	"internal/forge.Boarder.CardStatus":           {NotHeld: inAdapter},
 	"internal/forge.Syncer.CommitsAhead":          {NotHeld: inAdapter},
 	"internal/forge.ItemReads.Item":               {NotHeld: inAdapter},

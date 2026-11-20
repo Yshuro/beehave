@@ -36,6 +36,7 @@ const (
 	prOpenName       = "pr_open"
 	prStateName      = "pr_state"
 	pushName         = "push"
+	prHistoryName    = "pr_history"
 	revertField      = "revert"
 	numberField      = "number"
 	statusField      = "status"
@@ -56,7 +57,7 @@ func resultFields() map[string][]string {
 		hostTeardownName: {"down", reasonField},
 		hostUpName:       {"started", "host"},
 		preflightName:    {"ok", "stop", "code", reasonField},
-		queueName:        {"rows", "free"},
+		queueName:        {"rows", "free", "pulls"},
 		spawnName:        {"runs"},
 		waitName:         {"answer", "answers", "timed_out"},
 		writeName:        {"stdout", "stderr", "rc", "key", "skipped"},
@@ -80,7 +81,7 @@ func factsResultFields() map[string][]string {
 	return map[string][]string{factsName: {"repo", "source", "forge", "tracker", "base_branch", "gate", "gate_steps", "build_host", "vars", "runners"}}
 }
 
-// trackerResultFields holds the fields of the builtins that write the tracker, the pull request or its branch, and of pr_state, which reads the pull request.
+// trackerResultFields holds the fields of the builtins that write the tracker, the pull request or its branch, and of pr_state and pr_history, which read pull requests.
 func trackerResultFields() map[string][]string {
 	return map[string][]string{
 		itemCommentName: {"id"},
@@ -91,6 +92,7 @@ func trackerResultFields() map[string][]string {
 		prOpenName:      {numberField, "created", "stack"},
 		prStateName:     {stateField},
 		pushName:        {"head"},
+		prHistoryName:   {"pulls"},
 	}
 }
 

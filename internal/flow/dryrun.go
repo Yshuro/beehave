@@ -462,6 +462,11 @@ func (dryForge) Open(context.Context, string, string, OpenRequest) (OpenResult, 
 // Push shows the head as pushed and writes nothing to the remote.
 func (dryForge) Push(context.Context, string, string, string, string, string) error { return nil }
 
+// History shows an item with no earlier pull request.
+func (dryForge) History(context.Context, string, string) ([]model.PriorPull, error) {
+	return nil, nil
+}
+
 type dryTrees struct{ dir string }
 
 func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {
