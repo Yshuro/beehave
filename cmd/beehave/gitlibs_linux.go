@@ -14,28 +14,62 @@ import (
 	"strings"
 )
 
-// linkerCache is the list of library folders that the dynamic linker reads to find a library by its name.
+// linkerCache is the list of library folders that the glibc dynamic linker reads to find a library by its name.
 const linkerCache = "/etc/ld.so.cache"
 
-// gitLibraries returns the dynamic linker that the program at binary names and the libraries that it loads, with their links resolved, and the cache of
-// the linker when the machine has one. The linker lists the libraries itself (--list, what ldd runs), by its path and with no environment, so no search
-// path and no LD_LIBRARY_PATH plays a part. A static program loads none of them. A file that is no ELF program, a library that the linker cannot find,
-// or a linker that cannot run, is an error.
+// gitLibraries returns the dynamic linker that the program at binary names and the libraries that it loads, with their links resolved, and the file
+// that the linker reads to find a library, when the machine has one. The linker lists the libraries itself (--list, what ldd runs), by its path and
+// with no environment, so no search path and no LD_LIBRARY_PATH plays a part. A static program loads none of them. A file that is no ELF program, a
+// linker that is relative or gone, a library that the linker cannot find, or a linker that cannot run, is an error.
 func gitLibraries(ctx context.Context, binary string) ([]string, error) {
-	interpreter, err := programInterpreter(binary)
-	if err != nil || interpreter == "" {
+	interpreter, linker, err := programLinker(binary)
+	if err != nil || linker == "" {
 		return nil, err
 	}
 
-	list := exec.CommandContext(ctx, interpreter, "--list", binary) //nolint:gosec // the linker that the git of the engine names
+	list := exec.CommandContext(ctx, linker, "--list", binary) //nolint:gosec // the linker that the git of the engine names
 	list.Env = []string{}
 
 	out, err := list.Output()
 	if err != nil {
-		return nil, fmt.Errorf("list the libraries with %s: %w", interpreter, err)
+		return nil, fmt.Errorf("list the libraries with %s: %w", linker, err)
 	}
 
-	return lddLibraries(string(out), linkerCache)
+	found, err := lddLibraries(string(out), linkerConfig(interpreter))
+	if err != nil {
+		return nil, err
+	}
+
+	return append([]string{linker}, found...), nil
+}
+
+// programLinker returns the dynamic linker that the ELF program at path names, as it is named and with its links resolved, or "" for a static program.
+func programLinker(path string) (interpreter, linker string, err error) {
+	interpreter, err = programInterpreter(path)
+	if err != nil || interpreter == "" {
+		return "", "", err
+	}
+
+	if !filepath.IsAbs(interpreter) {
+		return "", "", fmt.Errorf("git names the dynamic linker %s by a relative path, which the copy does not resolve", interpreter)
+	}
+
+	linker, err = filepath.EvalSymlinks(interpreter)
+	if err != nil {
+		return "", "", fmt.Errorf("find the dynamic linker of git: %w", err)
+	}
+
+	return interpreter, linker, nil
+}
+
+// linkerConfig returns the file that the dynamic linker interpreter reads to find a library by its name: /etc/ld-musl-<arch>.path for musl, and the
+// cache of glibc otherwise.
+func linkerConfig(interpreter string) string {
+	if name, ok := strings.CutPrefix(filepath.Base(interpreter), "ld-musl-"); ok {
+		return "/etc/ld-musl-" + strings.TrimSuffix(name, ".so.1") + ".path"
+	}
+
+	return linkerCache
 }
 
 // programInterpreter returns the dynamic linker that the ELF program at path names, or "" for a static program, which loads no library.

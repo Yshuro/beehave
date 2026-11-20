@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"debug/elf"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/exectest"
 )
 
 // Each library line of the list gives its file with links resolved, the vDSO line names no file, and the cache of the linker comes last when it exists.
@@ -113,4 +116,96 @@ func TestGitLibraries_ASearchPathWithNoLddFindsTheLibraries(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, found, evaluated(t, interpreter), "the dynamic linker is read")
 	assert.Greater(t, len(found), 2, "the linker, a library and the cache")
+}
+
+// withInterpreter returns a copy of /bin/sh in a new folder whose program header names interpreter as its dynamic linker.
+func withInterpreter(t *testing.T, interpreter string) string {
+	t.Helper()
+
+	data, err := os.ReadFile("/bin/sh")
+	require.NoError(t, err)
+
+	file, err := elf.Open("/bin/sh")
+	require.NoError(t, err)
+
+	defer file.Close()
+
+	for _, header := range file.Progs {
+		if header.Type == elf.PT_INTERP {
+			require.Less(t, uint64(len(interpreter)), header.Filesz, "the new name fits the old one")
+			field := data[header.Off : header.Off+header.Filesz]
+			clear(field)
+			copy(field, interpreter)
+		}
+	}
+
+	program := filepath.Join(t.TempDir(), "sh")
+	require.NoError(t, exectest.Write(program, string(data)))
+
+	return program
+}
+
+// shortDir returns a new folder with a short path, so that a linker in it fits the program header of /bin/sh.
+func shortDir(t *testing.T) string {
+	t.Helper()
+
+	dir, err := os.MkdirTemp("/tmp", "b")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	return dir
+}
+
+// A dynamic linker named by a link is run and read as the file that the link names.
+func TestGitLibraries_ALinkerNamedByALinkIsReadAsItsFile(t *testing.T) {
+	t.Parallel()
+
+	real, err := programInterpreter("/bin/sh")
+	require.NoError(t, err)
+
+	link := filepath.Join(shortDir(t), "ld")
+	require.NoError(t, os.Symlink(real, link))
+
+	found, err := gitLibraries(t.Context(), withInterpreter(t, link))
+	require.NoError(t, err)
+	assert.Contains(t, found, evaluated(t, real))
+	assert.NotContains(t, found, link)
+}
+
+// A dynamic linker named by a relative path, or one that is gone, gives no read set.
+func TestGitLibraries_ALinkerThatIsRelativeOrGoneIsAnError(t *testing.T) {
+	t.Parallel()
+
+	for interpreter, want := range map[string]string{
+		"lib/ld.so":          "by a relative path",
+		"/nonexistent/ld.so": "find the dynamic linker",
+	} {
+		_, err := gitLibraries(t.Context(), withInterpreter(t, interpreter))
+		assert.ErrorContains(t, err, want, interpreter)
+	}
+}
+
+// The musl linker reads its list of library folders from /etc/ld-musl-<arch>.path, and the glibc linker from /etc/ld.so.cache.
+func TestLinkerConfig_NamesTheFileThatTheLinkerReadsToFindALibrary(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "/etc/ld-musl-x86_64.path", linkerConfig("/lib/ld-musl-x86_64.so.1"))
+	assert.Equal(t, "/etc/ld-musl-aarch64.path", linkerConfig("/lib/ld-musl-aarch64.so.1"))
+	assert.Equal(t, linkerCache, linkerConfig("/lib64/ld-linux-x86-64.so.2"))
+}
+
+// A linker that lists a library it cannot find, or that exits with an error, gives no read set.
+func TestGitLibraries_ALinkerThatFindsNoLibraryOrFailsIsAnError(t *testing.T) {
+	t.Parallel()
+
+	for script, want := range map[string]string{
+		"#!/bin/sh\nprintf '\\tlibx.so.1 => not found\\n'\n": "the dynamic linker finds no file",
+		"#!/bin/sh\nexit 1\n":                                "list the libraries",
+	} {
+		linker := filepath.Join(shortDir(t), "ld")
+		require.NoError(t, exectest.Write(linker, script))
+
+		_, err := gitLibraries(t.Context(), withInterpreter(t, linker))
+		assert.ErrorContains(t, err, want, script)
+	}
 }
