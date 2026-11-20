@@ -156,7 +156,7 @@ silently discards other uncommitted edits.
 {{ else }}This project has no forge: commit on the branch and push nothing.
 {{ end }}
 **Never use the merge queue of GitHub.** The orchestrator merges a pinned head with `gh pr merge`. Never run `gh pr merge --auto` and never add a pull request to a queue.
-**Known base reds are in one file.** The run names the file. Read it, and re-derive each red at the tip you branch from. Never copy the list into a report or a brief.
+**Known base reds are in one file.** The known base reds are the list `base_reds` in the data file {{ .data_file }}, which the engine wrote for this step. Read it with the shell (`cat` or `jq`), and re-derive each red at the tip you branch from. Never copy the list into a report or a brief. If the data file is missing or cannot be read, stop and refuse: say so, and do not guess the base reds.
 
 ## Project rules
 

@@ -300,6 +300,8 @@ def settings(project):
         got["base_reds_file"] = "../base-reds-" + got["base"].replace("/", "_2F") + ".md"
     elif got["base_reds_file"].strip() == "":
         _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for ../base-reds-<base>.md, one file for each round.")
+    elif _leaves_project(got["base_reds_file"]):
+        _round_refuse("base_reds_file", "is %r, which leaves the folder of the project. Write a path from the folder of the round that stays in the project folder, such as ../base-reds.md, or an absolute path." % got["base_reds_file"])
 
     _round_numbers(got)
     got["steps"] = _round_steps(got["steps"])
@@ -309,6 +311,20 @@ def settings(project):
     _method_vars(project.vars)
 
     return got
+
+def _leaves_project(path):
+    """Reports whether a relative path from the folder of the round leaves the folder of the project, its parent: its clean form starts with two ".." parts or more. An absolute path is the choice of the owner."""
+    if path.startswith("/"):
+        return False
+    depth = 0
+    for part in path.split("/"):
+        if part == "..":
+            depth -= 1
+        elif part not in ["", "."]:
+            depth += 1
+        if depth < -1:
+            return True
+    return False
 
 # The method settings of the project vars that the example and its prompts read. Each key is optional. The lists hold text, the dicts map text to text.
 METHOD_LISTS = ["gate_files", "conventions", "brief_rules", "stacked_rules", "limits", "traps", "token_rules"]
@@ -882,7 +898,7 @@ def next_round(project, round_settings, pr):
 def record_base_reds(round_settings):
     """Writes the one record of the known base reds: the reds of vars.round.base_reds, the time and the tip of the base. Each new write replaces the file, so the file holds one record.
     vars.round.base_reds_file names the file, as a path from the folder of the round. The default is ../base-reds-<base>.md, with each "/" of the base written as _2F. It lies in the folder of the project, outside every item folder, so the gate sees a clean folder, and each round has its own file.
-    The prompts tell each lane to read this file and not to copy the list."""
+    The file is the record for the owner. A lane reads the same list from the data file of its step, because its sandbox cannot read this file."""
     base = round_settings["base"]
     tip = command(name = "base-tip", run = ["git", "rev-parse", "origin/" + base], stop_on_rc = [2]).stdout.strip()
     text = "# Known base reds\n\nMeasured at %s on the tip %s of %s.\n\n%s\n" % (now(), tip, base, "\n".join(["- " + red for red in round_settings["base_reds"]]))
@@ -1075,6 +1091,9 @@ def pipeline(item):
 
     capped(plan, "plan", item)
 
+    # The implementer, each fix and each review read the known base reds of the round from the data file that the engine writes, not from the record of the owner.
+    lane_data = {"base_reds": round_settings["base_reds"], "base": base}
+
     implement = agent(
         name = "implement",
         prompt = "prompts/implement.md",
@@ -1085,6 +1104,7 @@ def pipeline(item):
         protect_paths = protected(round_settings),
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
         inputs = {"item": item, "plan": plan.text, "facts": project, "base": base, "acceptance": round_settings["acceptance"], "base_result": round_settings["base_result"]},
+        data = lane_data,
         **scope
     )
 
@@ -1132,7 +1152,7 @@ def pipeline(item):
     def mutants(gate):
         return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"])
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"])
 
     if loop.stopped:
         return item_value(item, "", False, "stopped", loop.host_losses)

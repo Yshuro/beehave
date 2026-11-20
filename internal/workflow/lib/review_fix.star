@@ -302,6 +302,7 @@ def review_args(loop, head, violations, scope, outputs):
         output_tries = 2,
         edits = False,
         inputs = {"item": loop.item, "violations": violations, "facts": loop.facts, "scope": scope},
+        data = loop.data,
     )
 
 def mechanism_of(loop, review):
@@ -416,6 +417,7 @@ def scoped_fix(loop, pending, fixes, decided, outer, inner, lane):
         forbid_commands = FORBID + loop.extra,
         protect_paths = loop.protect,
         inputs = {"item": loop.item, "round": round, "findings": pending.findings, "facts": loop.facts},
+        data = loop.data,
         **loop.scope
     )
     capped(fix, "fix", loop.item)
@@ -456,7 +458,7 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     # The last scoped review asked for changes. Its findings go to the full checks, and its violations keep the full review from a clean approve.
     return struct(end = None, lane = lane, open = pending.findings, breach = review.violations)
 
-def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = None, review_outputs = [], facts = {}, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER):
+def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = None, review_outputs = [], facts = {}, data = None, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER):
     """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, verdict, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
 
     steps is a dict from a step name to {"model": text, "runner": text}. The entries implement, review and fix are required, design is required with a design_prompt, and fix_late is optional.
@@ -469,6 +471,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
     protect lists the directories that no command of a review or a fix may write in. allow lists the globs that a fix may change, and None is no scope. A list that before_review refuses stops the item before the first step of the loop.
     design_prompt turns on the design round: each review then writes the output `mechanism`. review_outputs lists more outputs of the full review.
     facts is the value of the facts() builtin, passed to each agent.
+    data is the data keyword of each review and each fix: a dict that the engine writes to the data file that the prompt names. None gives no data file.
     follow_ups is "allow" or "forbid". With "forbid", each review writes the output `open`, one text with a line for each open finding and an empty text for none,
     and a review with an open finding has the verdict changes unless its verdict is reject. The result field verdict holds the verdict of the last full review with that rule applied.
     """
@@ -498,6 +501,7 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
         guard = guard,
         review_outputs = review_outputs,
         facts = facts,
+        data = data,
         review_check = review_check,
         checks = checks,
         host = {"losses": 0, "lost": False},

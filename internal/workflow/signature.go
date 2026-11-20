@@ -257,6 +257,13 @@ func inputsRule(v starlark.Value) error {
 	return err
 }
 
+// dataRule is the rule of the data keyword of agent.
+func dataRule(v starlark.Value) error {
+	_, err := DataRecord(v)
+
+	return err
+}
+
 // pathsOutsideRule is the rule of the allow keyword of paths_outside.
 func pathsOutsideRule(v starlark.Value) error {
 	_, err := PathsOutsideAllow(v)
@@ -303,11 +310,15 @@ func agentParams() []Param {
 		ruled("allow_paths", KindList, allowRule), words("protect_paths"), ruled("output_tries", KindInt, triesRule),
 		opt("edits", KindBool), opt(LabelKeyword, KindText), ruled("timeout", KindText, durationRule("timeout")),
 		ruled("idle_timeout", KindText, durationRule("idle_timeout")), ruled(budgetKeyword, KindAny, budgetRule(budgetKeyword)), opt(sandboxKeyword, KindAny), opt(nameKeyword, KindText),
+		ruled(dataKeyword, KindDict, dataRule),
 	}
 }
 
 // LabelKeyword is the keyword of the agent builtin that names the call in the ledger and the status line. It is free text and never picks behavior.
 const LabelKeyword = "label"
+
+// dataKeyword is the keyword of the agent builtin whose dict the engine writes to the data file that the prompt names as data_file.
+const dataKeyword = "data"
 
 // writeParams holds the keywords of the write builtin: the keywords of command that make sense for a program on this machine, and its read-back and undo.
 func writeParams() []Param {

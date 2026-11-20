@@ -51,7 +51,8 @@ const coreVersion = 6
 // Version 8 added the note field to the limit record, the limited field to the phase input and the resume_of field to the phase output, so the rerun after a provider limit resumes the limited session.
 // Version 9 adds the skills field to the result of an agent call, and records the label of the call in place of its kind.
 // Version 10 removed the allow_write list from the recorded sandbox of an agent call.
-const agentVersion = 10
+// Version 11 adds the data keyword: the prompt_data output of the render step and the data and data_file fields of the phase input.
+const agentVersion = 11
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.

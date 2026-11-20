@@ -310,6 +310,17 @@ Not seen:
 - an untracked file inside a submodule;
 - a write outside the tree through a symbolic link inside the globs; git cannot see that write.
 
+### The setting data
+
+The setting `data` of an `agent` step is a dict of values that the agent reads from a file, not from the prompt. A large record, such as a list of reds or of pull requests, then costs no prompt text.
+
+- The call encodes the dict once to JSON, with the encoder of the Starlark JSON library. The `/render` step records the text and the path `<state>/inputs/<item>.<step>.json`, beside the output files.
+- The phase writes the file, mode 0600, from the recorded text before each start of the agent. A replay writes the same bytes to the same path. The value is as fresh as the step that read it, never a read at the start of the agent.
+- The prompt names the file as `{{ .data_file }}`. A step with no `data` gets no file and an empty `data_file`.
+- A value that is not a dict is refused, by the run and by `beehave check workflow`.
+
+The prompt tells the agent to read the file with the shell and to refuse when the file is missing. The sandbox reads this one file: see [the sandbox](sandbox.md#the-data-file).
+
 ## Shell rules and the job check
 
 ### check/shell

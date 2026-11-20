@@ -154,3 +154,29 @@ func recalledSandbox(outputs map[string]any) (*model.Sandbox, error) {
 
 	return &box, nil
 }
+
+// recordedPromptData is the output of the render step that holds the data of a call: the file that the recorded prompt names, and the JSON text that
+// the phase writes to it. A call with no data records none. The record sorts after the login and the model, so the clipped line of a dry run still shows both.
+const (
+	recordedPromptData = "prompt_data"
+	recordedDataFile   = "file"
+	recordedDataText   = "text"
+)
+
+// recordData writes the data of a call and its file as an output of the render step. A call with no data writes nothing.
+func recordData(file, record string) map[string]any {
+	if file == "" {
+		return nil
+	}
+
+	return map[string]any{recordedPromptData: map[string]any{recordedDataFile: file, recordedDataText: record}}
+}
+
+// recalledData reads the data file and the data that the render step recorded. A record without them is a call with no data.
+func recalledData(outputs map[string]any) (file, record string) {
+	data, _ := outputs[recordedPromptData].(map[string]any) //nolint:errcheck // a call with no data records none
+	file, _ = data[recordedDataFile].(string)               //nolint:errcheck // a call with no data records none
+	record, _ = data[recordedDataText].(string)             //nolint:errcheck // a call with no data records none
+
+	return file, record
+}

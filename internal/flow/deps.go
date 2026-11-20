@@ -40,7 +40,9 @@ type AgentRequest struct {
 	// OutputFile is the file where the agent writes its declared outputs as a JSON object. Outputs names them. Outputs is empty for a call that declares none.
 	OutputFile string
 	Outputs    []string
-	Started    func(pid int)
+	// DataFile is the file that holds the data of the call, which the engine wrote before the start. The sandbox reads this one path. It is empty for a call with no data.
+	DataFile string
+	Started  func(pid int)
 	// Named receives each new session id of the agent at the output line that holds it, before the run ends. The engine saves the id at once,
 	// so a replay of a lost step can resume the session.
 	Named func(session string)
