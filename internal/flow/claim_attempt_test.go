@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
-	"time"
 
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -138,7 +138,32 @@ func TestBeat_ARenewalOfTheEarlierAttemptThatSaysTheClaimIsGoneLeavesTheResumedR
 
 	_, _, reason, _ := engine.holds.distrust(testRun, engine.deps.Clock)
 	require.Empty(t, reason, "the answer for the first attempt marked the claim of the resumed run lost")
-	require.False(t, isClosed(later), "the answer for the first attempt stopped the resumed run")
+
+	// The resumed run takes the answer and ends with success: a stop by the answer for the first attempt would end it canceled.
+	waitOn(t, waiting[struct{}]{what: "the resumed run to take the answer", run: runOfClient(t, client), read: func() (struct{}, bool, error) {
+		return struct{}{}, client.Answer(testItem, "yes") == nil, nil
+	}})
+	waitOn(t, condition(func() bool {
+		rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterWorkflowIDs(testRun))
+
+		return err == nil && len(rows) == 1 && rows[0].Status == dbos.WorkflowStatusSuccess
+	}))
+}
+
+func TestCancels_BeginRefusesARunWhoseCutAttemptIsStillReleasing(t *testing.T) {
+	t.Parallel()
+
+	var c cancels
+
+	cut := &attempt{id: testRun, cancel: func() {}}
+	c.add(cut)
+	require.Equal(t, []*attempt{cut}, c.cancel([]*attempt{cut}))
+
+	// The cut attempt is no longer listed, and its give-back is under way. A stray give-back makes a new attempt value of the same run id.
+	assert.False(t, c.begin(&attempt{id: testRun}), "a second give-back of the run started while the give-back of its cut attempt was under way")
+
+	c.finish(cut)
+	assert.True(t, c.begin(&attempt{id: testRun}), "the end of the give-back of the cut attempt frees the run")
 }
 
 func TestCancel_TheEndOfTheEarlierGiveBackKeepsTheRecordOfTheGiveBackOfTheResumedRun(t *testing.T) {
@@ -158,7 +183,8 @@ func TestCancel_TheEndOfTheEarlierGiveBackKeepsTheRecordOfTheGiveBackOfTheResume
 	done := runInBackground(engine, testItem)
 	waitOn(t, ownerAsks(t, harness))
 
-	earlier := endedOf(engine, testRun)
+	first := listedAttempt(engine, testRun)
+	earlier := first.ended
 
 	require.NoError(t, client.Cancel(testItem))
 	harness.tick(t)
@@ -177,7 +203,24 @@ func TestCancel_TheEndOfTheEarlierGiveBackKeepsTheRecordOfTheGiveBackOfTheResume
 	// The first give-back ends while the give-back of the resumed run is still under way.
 	close(gated.gate[0])
 	receive(t, gated.returned)
+	soon(t, func() bool { return !releasing(engine, first) }, "the first give-back ends its record")
 
-	assert.Never(t, func() bool { return engine.cancels.begin(&attempt{id: testRun}) }, 300*time.Millisecond, pollEvery, "the end of the first give-back cleared the record of the second one")
+	assert.False(t, engine.cancels.begin(&attempt{id: testRun}), "the end of the first give-back cleared the record of the second one")
 	close(gated.gate[1])
+}
+
+// listedAttempt returns the attempt that the engine lists under the run id, or nil.
+func listedAttempt(engine *Engine, id string) *attempt {
+	engine.cancels.mu.Lock()
+	defer engine.cancels.mu.Unlock()
+
+	return engine.cancels.runs[id]
+}
+
+// releasing reports whether the give-back of the attempt is under way.
+func releasing(engine *Engine, a *attempt) bool {
+	engine.cancels.mu.Lock()
+	defer engine.cancels.mu.Unlock()
+
+	return engine.cancels.releasing[a]
 }

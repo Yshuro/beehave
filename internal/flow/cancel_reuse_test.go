@@ -75,6 +75,13 @@ func resumeRig(t *testing.T, before bool) (*harness, *Engine, *Client, *listHook
 func resumeAndList(t *testing.T, engine *Engine, client *Client, earlier chan struct{}) chan struct{} {
 	t.Helper()
 
+	// The attempt ends before the store records the end of the run, and resume reads the store.
+	assert.Eventually(t, func() bool {
+		rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterWorkflowIDs(testRun), dbos.WithFilterStatus(endedStatuses...))
+
+		return err == nil && len(rows) == 1
+	}, soonBound, pollEvery, "the store records the end of the earlier attempt")
+
 	if err := client.Resume(testItem); err != nil {
 		t.Error(err)
 
