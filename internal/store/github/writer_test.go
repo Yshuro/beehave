@@ -43,9 +43,49 @@ type fakeGh struct {
 	lagging bool
 	// pageSize splits the comments into pages of this many, as `gh api --paginate --slurp` returns them. Zero is one page.
 	pageSize int
+	// repoLabels are the labels the repository has. gh refuses to add a label that is not in the list.
+	repoLabels []string
 }
 
 func newFakeGh() *fakeGh { return &fakeGh{issues: map[int]*fakeIssue{}} }
+
+// hasLabel reports whether the repository has a label of that name, as GitHub compares names: without case.
+func (f *fakeGh) hasLabel(name string) bool {
+	return slices.ContainsFunc(f.repoLabels, func(l string) bool { return strings.EqualFold(l, name) })
+}
+
+// label answers gh label list and gh label create.
+func (f *fakeGh) label(args []string) model.CommandResult {
+	switch {
+	case args[1] == "list":
+		rows := []map[string]string{}
+
+		for _, name := range f.repoLabels {
+			if strings.Contains(strings.ToLower(name), strings.ToLower(args[slices.Index(args, "--search")+1])) {
+				rows = append(rows, map[string]string{"name": name})
+			}
+		}
+
+		return model.CommandResult{Stdout: mustMarshal(rows)}
+	case args[1] == "create" && !f.hasLabel(args[2]):
+		f.repoLabels = append(f.repoLabels, args[2])
+
+		return model.CommandResult{}
+	}
+
+	return model.CommandResult{ExitCode: 1, Stderr: "label already exists"}
+}
+
+// refuseUnknown is the answer of gh to a label that the repository does not have, or the empty result.
+func (f *fakeGh) refuseUnknown(names ...string) model.CommandResult {
+	for _, name := range names {
+		if !f.hasLabel(name) {
+			return model.CommandResult{ExitCode: 1, Stderr: fmt.Sprintf("could not add label: '%s' not found", name)}
+		}
+	}
+
+	return model.CommandResult{}
+}
 
 func (f *fakeGh) Run(_ context.Context, args []string) model.CommandResult {
 	f.calls = append(f.calls, slices.Clone(args))
@@ -57,6 +97,8 @@ func (f *fakeGh) Run(_ context.Context, args []string) model.CommandResult {
 		return f.api(args)
 	case args[0] == "issue":
 		return f.issue(args)
+	case args[0] == "label":
+		return f.label(args)
 	}
 
 	return model.CommandResult{ExitCode: 1, Stderr: "boom"}
@@ -77,7 +119,7 @@ func (f *fakeGh) issue(args []string) model.CommandResult {
 	case "list":
 		return f.list(flags)
 	case "create":
-		return f.create(flags)
+		return f.create(args, flags)
 	case "view":
 		return f.view(number)
 	case "close", "reopen", "edit", "comment":
@@ -130,9 +172,21 @@ func (f *fakeGh) api(args []string) model.CommandResult {
 	return model.CommandResult{Stdout: mustMarshal(pages)}
 }
 
-func (f *fakeGh) create(flags map[string]string) model.CommandResult {
+func (f *fakeGh) create(args []string, flags map[string]string) model.CommandResult {
+	var labels []string
+
+	for i, arg := range args {
+		if arg == "--label" {
+			labels = append(labels, args[i+1])
+		}
+	}
+
+	if refused := f.refuseUnknown(labels...); refused.ExitCode != 0 {
+		return refused
+	}
+
 	number := len(f.issues) + 1
-	f.issues[number] = &fakeIssue{title: flags["--title"], body: flags["--body"]}
+	f.issues[number] = &fakeIssue{title: flags["--title"], body: flags["--body"], labels: labels}
 
 	return model.CommandResult{Stdout: fmt.Sprintf("https://github.com/owner/name/issues/%d\n", number)}
 }
@@ -181,6 +235,10 @@ func (f *fakeGh) change(command string, number int, flags map[string]string) mod
 		issue.comments = append(issue.comments, flags["--body"])
 	case "edit":
 		if label := flags["--add-label"]; label != "" {
+			if refused := f.refuseUnknown(label); refused.ExitCode != 0 {
+				return refused
+			}
+
 			issue.labels = append(issue.labels, label)
 		}
 
@@ -433,6 +491,8 @@ func TestCreate_RefusesAFullPageOfMatches(t *testing.T) {
 func TestSetStatus_RunsTheExactCommands(t *testing.T) {
 	t.Parallel()
 
+	holdListed := []string{"label", "list", "--repo", ghRepo, "--search", "hold", "--json", "name", "--limit", "100"}
+
 	for name, tc := range map[string]struct {
 		start  func(*fakeGh)
 		status store.Status
@@ -441,13 +501,22 @@ func TestSetStatus_RunsTheExactCommands(t *testing.T) {
 		"close an open issue": {func(*fakeGh) {}, store.StatusClosed, [][]string{
 			{"issue", "close", "1", "--repo", ghRepo},
 		}},
-		"hold an open issue": {func(*fakeGh) {}, store.StatusHold, [][]string{
+		"hold an open issue in a repository with no hold label": {func(*fakeGh) {}, store.StatusHold, [][]string{
+			holdListed,
+			{"label", "create", "hold", "--repo", ghRepo},
+			{"issue", "edit", "1", "--repo", ghRepo, "--add-label", "hold"},
+		}},
+		"hold an open issue in a repository that has the hold label": {func(f *fakeGh) { f.repoLabels = []string{"hold"} }, store.StatusHold, [][]string{
+			holdListed,
 			{"issue", "edit", "1", "--repo", ghRepo, "--add-label", "hold"},
 		}},
 		"hold a closed issue": {func(f *fakeGh) { f.issues[1].closed = true }, store.StatusHold, [][]string{
 			{"issue", "reopen", "1", "--repo", ghRepo},
+			holdListed,
+			{"label", "create", "hold", "--repo", ghRepo},
 			{"issue", "edit", "1", "--repo", ghRepo, "--add-label", "hold"},
 		}},
+		"hold a held issue": {func(f *fakeGh) { f.issues[1].labels = []string{"hold"} }, store.StatusHold, nil},
 		"open a held issue": {func(f *fakeGh) { f.issues[1].labels = []string{"hold"} }, store.StatusOpen, [][]string{
 			{"issue", "edit", "1", "--repo", ghRepo, "--remove-label", "hold"},
 		}},
@@ -495,6 +564,7 @@ func TestSetStatus_ReportsEachFailedStep(t *testing.T) {
 	for _, failing := range []string{"reopen", "edit", "close"} {
 		run := &proctest.Scripted{}
 		run.Plan(`{"state":"CLOSED","labels":[]}`, "issue", "view")
+		run.Plan(`[{"name":"hold"}]`, "label", "list")
 
 		status := store.StatusHold
 		if failing == "close" {
@@ -515,19 +585,89 @@ func TestSetStatus_ReportsEachFailedStep(t *testing.T) {
 	}
 }
 
-func TestSetStatus_AHoldWithNoLabelInTheRepositoryNamesTheLabel(t *testing.T) {
+func TestSetStatus_AHoldInARepositoryWithNoHoldLabelCreatesTheLabelAndHoldsTheIssue(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeGh()
+	fake.repoLabels = []string{"bug", "holder"}
+	fake.issues[1] = &fakeIssue{title: "t"}
+
+	require.NoError(t, writerOver(t, fake).SetStatus(t.Context(), "1", store.StatusHold))
+	assert.Equal(t, []string{"hold"}, fake.issues[1].labels)
+	assert.Equal(t, []string{"bug", "holder", "hold"}, fake.repoLabels, "the label of another name does not stand for hold")
+}
+
+func TestSetStatus_AHoldThatCannotReadOrCreateTheLabelRefusesAndDoesNotEdit(t *testing.T) {
+	t.Parallel()
+
+	for name, plan := range map[string]func(*proctest.Scripted){
+		"the label list fails":       func(r *proctest.Scripted) { r.PlanFail("boom", "label", "list") },
+		"the label list is not json": func(r *proctest.Scripted) { r.Plan("not json", "label", "list") },
+		"the label create fails":     func(r *proctest.Scripted) { r.Plan("[]", "label", "list"); r.PlanFail("denied", "label", "create") },
+	} {
+		run := &proctest.Scripted{}
+		run.Plan(`{"state":"OPEN","labels":[]}`, "issue", "view")
+		plan(run)
+
+		gh, err := github.New(ghRepo, run)
+		require.NoError(t, err)
+
+		err = gh.SetStatus(t.Context(), "1", store.StatusHold)
+		require.Error(t, err, name)
+		assert.Equal(t, store.CodeRefused, codeOf(t, err), name)
+		assert.False(t, run.Called("issue", "edit"), name)
+	}
+}
+
+func TestSetStatus_AHoldWhoseEditFailsNamesTheItem(t *testing.T) {
 	t.Parallel()
 
 	run := &proctest.Scripted{}
 	run.Plan(`{"state":"OPEN","labels":[]}`, "issue", "view")
-	run.PlanFail("label not found", "issue", "edit")
+	run.Plan(`[{"name":"Hold"}]`, "label", "list")
+	run.PlanFail("boom", "issue", "edit")
 
 	gh, err := github.New(ghRepo, run)
 	require.NoError(t, err)
 
 	err = gh.SetStatus(t.Context(), "1", store.StatusHold)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), `label named "hold"`)
+	assert.Contains(t, err.Error(), "cannot put item 1 in hold")
+	assert.False(t, run.Called("label", "create"), "a label that differs only in case is the same label")
+}
+
+func TestCreate_CreatesTheSeverityAndOperatorLabelsTheRepositoryLacks(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeGh()
+	fake.repoLabels = []string{"P1"}
+
+	id, created, err := writerOver(t, fake).Create(t.Context(), "run-1:a", store.NewItem{Title: "t", Severity: "P1", Operator: true})
+	require.NoError(t, err)
+	assert.True(t, created)
+	assert.Equal(t, []string{"P1", "operator"}, fake.issues[1].labels, id)
+	assert.Equal(t, []string{"P1", "operator"}, fake.repoLabels)
+
+	_, _, err = writerOver(t, fake).Create(t.Context(), "run-1:a", store.NewItem{Title: "t", Severity: "P2"})
+	require.NoError(t, err)
+	assert.NotContains(t, fake.repoLabels, "P2", "a repeated key files nothing, so it creates no label")
+}
+
+func TestCreate_RefusesAndFilesNothingWhenALabelCannotBeCreated(t *testing.T) {
+	t.Parallel()
+
+	run := &proctest.Scripted{}
+	run.Plan("[]", "issue", "list")
+	run.Plan("[]", "label", "list")
+	run.PlanFail("denied", "label", "create")
+
+	gh, err := github.New(ghRepo, run)
+	require.NoError(t, err)
+
+	_, _, err = gh.Create(t.Context(), "run-1:a", store.NewItem{Title: "t", Severity: "P1"})
+	require.Error(t, err)
+	assert.Equal(t, store.CodeRefused, codeOf(t, err))
+	assert.False(t, run.Called("issue", "create"))
 }
 
 func TestComment_RunsTheExactCommands(t *testing.T) {
