@@ -170,6 +170,7 @@ The Change column says how the pair differs from the contract that the five piec
 | `sandbox` | `-` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
 | `sandbox` | `network` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
 | `spawn` | `-` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
+| `spawn` | `base` | unchanged | 1: `examples/remediation/workflow.star` |
 | `spawn` | `entry` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
 | `spawn` | `items` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
 | `spawn` | `name` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |

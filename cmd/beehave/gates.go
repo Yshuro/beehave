@@ -121,11 +121,13 @@ func gateRefusal(projects map[string]config.Project, refusal cli.GateRefusal) fu
 }
 
 // Key reads the key of the gate that Run would start on the worktree of the item.
-func (g projectGate) Key(ctx context.Context, project, item, cluster string) (flow.GateKey, error) {
+func (g projectGate) Key(ctx context.Context, project, item, cluster, base string) (flow.GateKey, error) {
 	request, err := g.request(ctx, project, item, cluster)
 	if err != nil {
 		return flow.GateKey{}, err
 	}
+
+	request.Base = base
 
 	key, err := gate.New(g.shellFor(project), g.tree, nil).Key(ctx, request)
 	if err != nil {

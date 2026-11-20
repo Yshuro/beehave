@@ -224,7 +224,7 @@ func (g e2eGate) Run(ctx context.Context, _, _, _ string, job flow.GateJob) (flo
 	return result, err
 }
 
-func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, error) {
+func (g e2eGate) Key(context.Context, string, string, string, string) (flow.GateKey, error) {
 	return flow.GateKey{}, nil
 }
 
