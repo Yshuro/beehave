@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -125,6 +126,22 @@ func TestBatchMerge_TheGateOfTheUnionReadsThePinFileAtTheBaseOfTheCallAndRunsNoC
 
 	require.NoError(t, err)
 	assert.Equal(t, [][2]string{{"", "main"}}, rig.gate.submittedBases(), "one gate of the union: no base for the checks, the base of the call for the pin file")
+}
+
+func TestBatchMerge_AGateRecordWithNoPinBaseReadsThePinFileAtTheBaseOfTheProject(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	engine := rig.engine(t)
+
+	var record ExclusiveInput
+
+	require.NoError(t, json.Unmarshal([]byte(`{"kind":"batch_gate","project":"`+testProject+`","item":"`+testItem+`","commit":"`+rig.heads["1"]+`"}`), &record))
+
+	_, err := engine.startBatchGate(t.Context(), record)
+
+	require.NoError(t, err)
+	assert.Equal(t, [][2]string{{"", ""}}, rig.gate.submittedBases(), "a record written before the pin base existed has none, so the project gate reads its own base")
 }
 
 func TestBatchMerge_TheProjectGateReportsTheTreeOfTheUnionItRanOn(t *testing.T) {

@@ -116,8 +116,8 @@ type Request struct {
 	// Base is the base branch of a candidate head. A host gate with a Base runs the candidate steps (secret scan, new-tests check) after the head gate.
 	// An empty Base is a sync head or a landing gate: the gate command only. The Plan records the Base with the job.
 	Base string
-	// PinBase is the branch that the pin file is read from, for a gate that judges a head of a round and has no Base: a sync head or a landing gate.
-	// It turns on no candidate check. A Base, when set, names the same branch for the pin file.
+	// PinBase is the branch that the pin file is read from, for a sync head or a landing gate. It turns on no candidate check.
+	// When both are set, PinBase wins over Base for the pin file, and Base still turns on the checks.
 	PinBase string
 
 	// pins are the pinned tools that the probe in front of each gate command checks. Run and Submit read them from the pin file at the base commit.

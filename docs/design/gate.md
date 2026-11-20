@@ -205,7 +205,7 @@ A gate that passes with the wrong tool proves nothing about the pinned tool. The
 
 beehave reads the file at the base commit, `origin/<base_branch>` (`git show`), not in the work tree of the lane. So a lane cannot edit its own pins. A gate call with a `base`, the branch that the head merges into, reads the file at `origin/<base>` instead, so a child of a round gates with the pins of its round base. The gate key holds the pin text that it read.
 
-A gate call with a `pin_base` reads the file at `origin/<pin_base>` and turns on no candidate check: `base` does both, and `pin_base` only the first. The sync gate of a round sets `pin_base` to the round base. The landing gate of a `merge` call reads the file at the `base` of the call, with no candidate check. So a round that changes a pinned tool on its round base gates its sync head and its landing union with the new tools, as its children do.
+A gate call with a `pin_base` reads the file at `origin/<pin_base>` and turns on no candidate check: `base` does both, and `pin_base` only the first. A call with both reads the file at `pin_base` and runs the checks of `base`. The sync gate of a round sets `pin_base` to the round base. The landing gate of a `merge` call reads the file at the `base` of the call, with no candidate check. So a round that changes a pinned tool on its round base gates its sync head and its landing union with the new tools, as its children do.
 
 #### The probe
 

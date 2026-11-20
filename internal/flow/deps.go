@@ -284,7 +284,7 @@ type CommandRequest struct {
 	Host    string
 	// Base is the base branch of a gate call that judges a candidate head. It is empty for a sync head, a landing gate and a command call.
 	Base string
-	// PinBase is the branch that a gate call reads the pin file from, with no candidate check: a sync head names the round base. It is empty for a gate with a Base.
+	// PinBase is the branch that a gate call reads the pin file from, with no candidate check: a sync head names the round base. When a gate call has both, PinBase names the pin file branch and Base turns on the checks.
 	PinBase string
 	// BuildHost is the build host that the run recorded in host_up. The gate and a call with Host run there. Empty means the default of the project.
 	BuildHost string
