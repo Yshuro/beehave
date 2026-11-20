@@ -305,13 +305,13 @@ func (e *Engine) beatOne(parent context.Context, row claimHold, left time.Durati
 	return e.deps.Beats.Beat(ctx, row.project, row.owner)
 }
 
-// claimCheck returns errClaimLost, with the reason, unless the run holds a trusted claim now. It asks by the id of the run, never by item:
-// another run may hold the item, and its claim is not the claim of this one.
+// claimed is the trust read: the context of the claim when the run holds a trusted claim now, or errClaimLost with the reason. It asks by the id of the run,
+// never by item: another run may hold the item, and its claim is not the claim of this one. item is the item that the error names.
 // DBOS stores the error of the run, so the reason passes through the redactor.
-func (e *Engine) claimCheck(run, item string) error {
-	_, reason, _ := e.holds.distrust(run, e.deps.Clock)
+func (e *Engine) claimed(run, item string) (context.Context, error) {
+	claim, reason, _ := e.holds.distrust(run, e.deps.Clock)
 
-	return e.lostError(item, reason)
+	return claim, e.lostError(item, reason)
 }
 
 // lostError returns errClaimLost with the reason, or nil for an empty reason.

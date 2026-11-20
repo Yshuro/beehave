@@ -40,8 +40,8 @@ const (
 
 // coreVersion is the version of the core module. Version 2 added the vars field to the result of facts. Version 3 removed the round_* fields from it.
 // Version 4 records the wait:notify step at every wait, before the receive of the answer. Version 5 removed the method and board fields from the result of facts.
-// Version 6 adds the runners field to the result of facts.
-const coreVersion = 6
+// Version 6 adds the runners field to the result of facts. Version 7 adds the run and run_item fields to the input of the host job of a command call with a slot class.
+const coreVersion = 7
 
 // agentVersion is the version of the agent module. Version 2 added the limit field to the phase output, and the limit step and the later looks at the caps
 // that an agent call records when a provider limit stops its run. Version 3 added the start_head field to the phase input, the session and diff_stat fields
@@ -52,7 +52,8 @@ const coreVersion = 6
 // Version 9 adds the skills field to the result of an agent call, and records the label of the call in place of its kind.
 // Version 10 removed the allow_write list from the recorded sandbox of an agent call.
 // Version 11 adds the data keyword: the prompt_data output of the render step and the data and data_file fields of the phase input.
-const agentVersion = 11
+// Version 12 adds the committed field to the result of an agent call.
+const agentVersion = 12
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
@@ -62,7 +63,8 @@ const agentVersion = 11
 // Version 6 records the scope check of each member (batch:<call>.scope#<item>) before its intent.
 // Version 7 adds the moved field to the result of merge, and the hand-off steps batch:<call>.ready#<item> and batch:<call>.watch#<item>@<round>.
 // Version 8 removed the foreign, pr, head and author fields from the record of the preflight step.
-const landVersion = 8
+// Version 9 adds the run and run_item fields to the input of the merge of a member.
+const landVersion = 9
 
 // trackerVersion is the version of the tracker module. Version 2 retires the kind item_assign, which version 1 recorded. item_create takes an assignee.
 const trackerVersion = 2
@@ -129,7 +131,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent11.tracker2.forge6.land8.gate6.host1.round3.
+// moduleVersions is the list of module versions of this build, such as core7.agent12.tracker2.forge6.land9.gate6.host1.round3.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

@@ -349,7 +349,7 @@ func (e *Engine) agentQueue(noEdits bool) dbos.Queue { //nolint:ireturn // the q
 func (e *Engine) queuePhase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 	in.Run = workflowID(ctx)
 
-	if err := e.claimCheck(in.Run, in.Item); err != nil {
+	if _, err := e.claimed(in.Run, in.Item); err != nil {
 		return PhaseOutput{}, err
 	}
 

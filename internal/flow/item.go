@@ -98,7 +98,7 @@ func (e *Engine) workHolding(ctx dbos.Context, in ItemInput, login string, taken
 
 	result, err := e.runStar(ctx, in, login, start)
 
-	if lost := e.claimCheck(id, in.Item); lost != nil {
+	if _, lost := e.claimed(id, in.Item); lost != nil {
 		return result, lost
 	}
 
@@ -121,7 +121,9 @@ func (e *Engine) firstTrust(ctx context.Context, id string, in ItemInput, taken 
 		return err
 	}
 
-	return e.claimCheck(id, in.Item)
+	_, err := e.claimed(id, in.Item)
+
+	return err
 }
 
 // makeTree makes the worktree of a round item before its workflow file runs, so the command and gate steps of the item run in the repository.

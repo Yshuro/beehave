@@ -134,7 +134,7 @@ func (s *script) remember(step string, plan writePlan, outputs map[string]any) {
 // runWrite runs the read-back, then the write when the read-back did not report it done, and records the output with the key.
 func (s *script) runWrite(ctx context.Context, plan writePlan) (stepResult, error) {
 	if len(plan.readBack.Run) > 0 {
-		found, err := s.e.deps.Commands.Run(ctx, plan.readBack)
+		found, err := s.writes().Run(ctx, plan.readBack)
 		if err != nil {
 			return stepResult{}, err
 		}
@@ -144,7 +144,7 @@ func (s *script) runWrite(ctx context.Context, plan writePlan) (stepResult, erro
 		}
 	}
 
-	out, err := s.e.deps.Commands.Run(ctx, plan.run)
+	out, err := s.writes().Run(ctx, plan.run)
 	if err != nil {
 		return stepResult{}, err
 	}
