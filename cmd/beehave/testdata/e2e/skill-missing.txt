@@ -13,11 +13,11 @@ exec beehave resume 7
 stderr 'did not call the skill'
 grep -count=1 '^implement ' calls.log
 
-! exec beehave cancel 7
-stderr 'item-7-r1 is failed and has nothing to cancel$'
-rm no-skill
-exec beehave resume 7
+# The cancel ends the failed run, and the item then starts again as a new run.
 exec beehave cancel 7
+exec beehave status
+stdout '^item-7-r1\tcancelled'
+rm no-skill
 exec beehave run 7 --workflow flow/workflow.star
 exec beehave status
 stdout 'item-7-r2'
