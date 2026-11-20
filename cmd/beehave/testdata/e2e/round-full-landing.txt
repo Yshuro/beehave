@@ -2,9 +2,10 @@
 # a trunk move that the sync lands, one child item through plan, implement, the draft, the gate, the review and the landing, and then the owner's wait.
 # The tracker is the local one, the forge is the stand-in of the swarm scripts over a bare repository, and the agents and the remedy tool are fake programs of the PATH.
 #
-# The project file holds four settings that the round of stage 1 does not need to set on a machine that has a build host, and that a refusal of the round makes necessary here:
-# base_reds_file is a path outside the folder of the round (the default file makes the folder unclean for the first sync gate), source_checkout names a checkout
-# (the agent steps forbid writes to it, and refuse when none is named), the owner is the login of the agent (it pushes as the owner), and the host block is a stand-in (see e2e_round_test.go).
+# The project file holds three settings that stand in for a machine of stage 1: source_checkout names a checkout (the agent steps forbid writes to it, and refuse when none is named),
+# the owner is the login of the agent (the stand-in forge authors every pull request as "agent", so the owner must be that login), and the host block is a stand-in (see e2e_round_test.go).
+# The host gate path is not covered by this script: the stand-in host builds locally and the gate check record is injected, so the host checks of the gate
+# (among them the check that the folder of the round is clean) never run here.
 isolate
 
 exec git init -q -b main seed
@@ -34,6 +35,7 @@ env SWARM_FORGE=$WORK/forge
 env HOME=$WORK/home
 cp base forge/base
 cp base forge/closing-ok
+cp base forge/open-on-create
 
 subst fake/claude fake/remedy config/projects/round.star config/runners.star
 chmod 755 fake/claude
@@ -50,13 +52,14 @@ exec beehaveround answer round/integration/s1 --as agent STOP
 wait
 stdout 'finished'
 
-# The sync landed, the child ran each step once, and the landing merged its pull request into the round branch.
+# The sync landed, the child ran each step once, the engine asked for its pull request on the round branch, and the landing merged it into the round branch.
 grep -count=1 '^sync_review$' calls.log
 grep -count=1 '^plan$' calls.log
 grep -count=1 '^implement$' calls.log
 grep -count=2 '^review$' calls.log
 grep -count=1 '^sync land ' remedy.log
 grep -count=1 '^MergePR ' forge/calls.log
+grep -count=1 '^integration/s1$' forge/opened-1
 exec git --git-dir=remote.git show integration/s1:432.txt
 stdout '^432$'
 exec git --git-dir=remote.git show integration/s1:moved.txt
@@ -91,7 +94,7 @@ project(
     build_host = "build",
     host = host(provider = "ssh", disk_floor_gb = 50, slots = {"mutation": 1}, ssh = ssh(address = "10.0.0.5")),
     vars = {
-        "round": {"base": "integration/s1", "owner": "agent", "owner_email": "agent@example.com", "lane_cap": 1, "fix_rounds": 2, "items": ["432"], "merge": True, "wait_hours": 72, "source_checkout": "/own/checkout","base_reds_file": "@WORK@/base-reds.md"},
+        "round": {"base": "integration/s1", "owner": "agent", "owner_email": "agent@example.com", "lane_cap": 1, "fix_rounds": 2, "items": ["432"], "merge": True, "wait_hours": 72, "source_checkout": "/own/checkout"},
         "mutation_command": ["sh", "mutation.sh"],
     },
 )
@@ -130,7 +133,8 @@ prompt=$(cat)
 field() { printf '%s\n' "$prompt" | sed -n "s/^$1=//p"; }
 step=$(field step)
 echo "$step" >> @WORK@/calls.log
-echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"blast-radius-review"}}]}}'
+skill=blast-radius
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"'"$skill"'-review"}}]}}'
 case $step in
   plan) printf '{"regressions":"0"}\n' > "$(field write)" ;;
   review) printf '{"verdict":"approve","mechanism":"","regressions":"0","open":"","findings":[]}\n' > "$(field write)" ;;

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"maps"
-	"os"
 
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/flow"
@@ -69,7 +68,7 @@ func builtLocally(cfg config.Config) config.Config {
 func e2eRound() {
 	e2eStandIn(builtLocally, func(cfg config.Config, deps flow.Deps) flow.Deps {
 		deps.Gate = checkedGate{deps.Gate}
-		deps.Commands = roundCommands{programs: deps.Commands, answers: e2eCommands{dir: os.Getenv(e2eDirVariable)}}
+		deps.Commands = roundCommands{programs: deps.Commands, answers: e2eCommands{dir: config.ProcessEnv()[e2eDirVariable]}}
 		deps.Slots = slotsOf(cfg.Projects)
 
 		return deps
