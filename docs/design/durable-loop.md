@@ -539,7 +539,7 @@ The release runs beside the tick, so a slow tracker delays no renewal and no sca
 `beehave cancel` writes a marker file for the run in the `canceled` folder of the state folder before it cancels the run. The release removes the marker.
 
 - If an engine stops before it finishes the release, the marker stays. The next `beehave run` gives the item back when it starts.
-- A marker for a run that is no longer cancelled, or whose item has a newer run, is dropped.
+- A marker for a run that is no longer cancelled, or whose item has a newer run, is dropped. On a tick, the marker of a run that is still open stays, because the cancel may still come. The tick drops it when the run ends.
 - A marker that cannot be read is logged and skipped. The other markers still give back.
 - The marker is written to a temporary file and renamed, so a crash leaves no half marker.
 - All the markers of one start share one release timeout.
@@ -791,7 +791,7 @@ The line shows no next due time. The library counts the first tick of a fixed de
 
 `beehave cancel <item>` cancels the open run and the phases it started. The release of the worktree and the claim runs outside the cancelled workflow.
 
-- If an engine runs, it does the release on its next tick, after the agent groups of the run are dead.
+- If an engine runs, it does the release on its next tick, after the agent groups of the run are dead. This holds also for a run that the engine does not execute, such as a run that `beehave resume --on-this-build` moved to another build: the engine reads the cancel markers on each tick.
 - If no engine runs, `beehave cancel` does the release itself.
 
 #### `beehave resume <item>`

@@ -134,7 +134,8 @@ func TestTake_AClaimThatNeverLandsStopsAfterFourAttempts(t *testing.T) {
 	h.rows.deaf = 99
 
 	err := h.claims.Take(ctx(), "A", "5")
-	require.ErrorContains(t, err, "could not take #5 after 4 attempts; check `beehave claim who 5`")
+	require.ErrorContains(t, err, "could not take #5 after 4 attempts: the claim store did not record the take. Run the item again")
+	assert.NotContains(t, err.Error(), "beehave claim", "the refusal names no command that does not exist")
 	assert.Equal(t, claim.CodeRefused, h.code(err))
 	assert.Equal(t, 4, h.rows.calls["TryHold"])
 }
