@@ -249,6 +249,167 @@ func reviewFramingRules() []rule {
 	}
 }
 
+const (
+	queue      = "queue"
+	takeReview = "take_review"
+)
+
+func laneBoundaryRules() []rule {
+	return []rule{
+		{"lane_boundaries", "Each lane has one item, one worktree, one branch and one pull request", workLanes()},
+		{"lane_boundaries", "Never merge, never comment on the forge, and never file an issue", workLanes()},
+		{"lane_boundaries", "Run every build, test and lint on the build host", workLanes()},
+		{"lane_boundaries", "Never touch the worktree of another lane", workLanes()},
+	}
+}
+
+func skillOrderRules() []rule {
+	return []rule{
+		{"skill_rules", "Invoke each skill that the rules name with the Skill tool, by name", everyLane()},
+		{"skill_rules", "is never permission to skip the step", everyLane()},
+		{"skill_rules", "`plan-vs-conventions` for a change past one file, `cross-cutting-api-change` for a new variant, field or entry point", workLanes()},
+		{"skill_rules", "then `blast-radius-review` iterated to zero before the gate", workLanes()},
+	}
+}
+
+func briefChoiceRules() []rule {
+	return []rule{
+		{"brief_choice_rules", "A ruling of the owner binds the item", everyLane()},
+		{"brief_choice_rules", "Never reverse a ruling", everyLane()},
+		{"brief_choice_rules", "is the floor of every lane, never the whole answer", everyLane()},
+		{"brief_choice_rules", "Choose the other skills from what the item is", everyLane()},
+		{"acceptance_rules", "take the one that changes fewer cells", workLanes()},
+	}
+}
+
+func baseRedRules() []rule {
+	return []rule{
+		{"base_red_rules", "A base-red entry names the command that CI runs, not the test target", workAndReview()},
+		{"base_red_rules", "The exclusion list of a guard is a decision that expires", workAndReview()},
+		{"base_red_rules", "justify the exclusion again before you add a case", workAndReview()},
+	}
+}
+
+func disjointnessRules() []rule {
+	return []rule{
+		{"disjointness_rules", "A claim that two changes are disjoint carries the SHA it was measured at", workAndReview()},
+		{"disjointness_rules", "measure again at the tip you merge to", workAndReview()},
+	}
+}
+
+func queueScopeRules() []rule {
+	return []rule{
+		{"queue_scope_rules", "An item is the scope of one pull request, not one issue", []string{queue}},
+		{"queue_scope_rules", "share a mechanism, a code area or a fix", []string{queue}},
+		{"queue_scope_rules", "Batch by mechanism, not by the number of the issue", []string{queue}},
+		{"queue_scope_rules", "The scope of the item is fixed at the first review", workLanes()},
+	}
+}
+
+func overtakenRules() []rule {
+	both := []string{queue, takeReview}
+
+	return []rule{
+		{"triage_rules", "has overtaken a pull request before you ask how to resolve it", both},
+		{"triage_rules", "never from the titles", both},
+		{"triage_rules", "what the close loses", both},
+		{"triage_rules", "what a wrong resolution costs", both},
+	}
+}
+
+func stackedBranchRules() []rule {
+	return []rule{
+		{"stacked_branch_rules", "Do not edit a branch that a pending merge depends on", workLanes()},
+		{"stacked_branch_rules", "File the finding that survives as an issue first", workLanes()},
+	}
+}
+
+// loadPrompts reads the named prompts and squashes each one.
+func loadPrompts(t *testing.T, names ...string) map[string]string {
+	t.Helper()
+
+	texts := map[string]string{}
+	folder := os.DirFS("prompts")
+
+	for _, name := range names {
+		raw, err := fs.ReadFile(folder, name+".md")
+		require.NoError(t, err)
+
+		texts[name] = squash(string(raw))
+	}
+
+	return texts
+}
+
+// checkRules fails for each phrase that a prompt of the rule lost, and returns the number of prompt checks it made.
+func checkRules(t *testing.T, texts map[string]string, group []rule) int {
+	t.Helper()
+
+	held := 0
+
+	for _, lost := range group {
+		for _, name := range lost.prompts {
+			held++
+
+			// A plain check: a failed assert.Contains would print the whole prompt.
+			if !strings.Contains(texts[name], lost.phrase) {
+				t.Errorf("prompts/%s.md lost the phrase %q of the rule in %s", name, lost.phrase, lost.from)
+			}
+		}
+	}
+
+	return held
+}
+
+// holdGroup checks one group of rules against every prompt that the group names.
+func holdGroup(t *testing.T, group []rule) {
+	t.Helper()
+
+	texts := loadPrompts(t, append(everyLane(), takeReview, queue)...)
+
+	assert.Positive(t, checkRules(t, texts, group))
+}
+
+func TestPrompts_HoldTheLaneBoundaries(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, laneBoundaryRules())
+}
+
+func TestPrompts_HoldTheSkillOrder(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, skillOrderRules())
+}
+
+func TestPrompts_HoldTheBriefChoiceRules(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, briefChoiceRules())
+}
+
+func TestPrompts_HoldTheBaseRedRules(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, baseRedRules())
+}
+
+func TestPrompts_HoldTheDisjointnessShaRule(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, disjointnessRules())
+}
+
+func TestPrompts_HoldTheQueueScopeRule(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, queueScopeRules())
+}
+
+func TestPrompts_HoldTheOvertakenJudgment(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, overtakenRules())
+}
+
+func TestPrompts_HoldTheStackedBranchRule(t *testing.T) {
+	t.Parallel()
+	holdGroup(t, stackedBranchRules())
+}
+
 // squash drops the bold marks and joins the words of a text with one space, so that a phrase matches across the line breaks and the bold spans of a prompt.
 func squash(text string) string {
 	return strings.Join(strings.Fields(strings.ReplaceAll(text, "**", "")), " ")
@@ -257,37 +418,19 @@ func squash(text string) string {
 func TestPrompts_HoldEveryRuleOfTheBriefText(t *testing.T) {
 	t.Parallel()
 
-	texts := map[string]string{}
-	folder := os.DirFS("prompts")
+	texts := loadPrompts(t, append(everyLane(), takeReview, queue)...)
 
-	for _, name := range append(everyLane(), "take_review") {
-		raw, err := fs.ReadFile(folder, name+".md")
-		require.NoError(t, err)
-
-		texts[name] = squash(string(raw))
-	}
-
-	groups := [][]rule{acceptanceRules(), reportRules(), evidenceRules(), designRules(), shellRules(), compiledAndUnionRules(), reviewRules(), gateEvidenceRules(), hostAndDiskRules(), reviewFormatRules(), briefRules(), mergeRules(), laneLayoutRules(), reviewFramingRules()}
+	groups := [][]rule{acceptanceRules(), reportRules(), evidenceRules(), designRules(), shellRules(), compiledAndUnionRules(), reviewRules(), gateEvidenceRules(), hostAndDiskRules(), reviewFormatRules(), briefRules(), mergeRules(), laneLayoutRules(), reviewFramingRules(), laneBoundaryRules(), skillOrderRules(), briefChoiceRules(), baseRedRules(), disjointnessRules(), queueScopeRules(), overtakenRules(), stackedBranchRules()}
 
 	held, counted := 0, 0
 
 	for _, group := range groups {
 		counted += len(group)
-
-		for _, lost := range group {
-			for _, name := range lost.prompts {
-				held++
-
-				// A plain check: a failed assert.Contains would print the whole prompt.
-				if !strings.Contains(texts[name], lost.phrase) {
-					t.Errorf("prompts/%s.md lost the phrase %q of the rule in %s", name, lost.phrase, lost.from)
-				}
-			}
-		}
+		held += checkRules(t, texts, group)
 	}
 
 	// One phrase for each mapped or added row of the proof table that has a phrase of its own: a dropped phrase fails here.
-	assert.Equal(t, 143, counted)
+	assert.Equal(t, 171, counted)
 	assert.Positive(t, held)
 }
 

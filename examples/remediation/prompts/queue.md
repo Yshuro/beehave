@@ -6,6 +6,12 @@ Read the open issues and the open pull requests with the forge tool. Report each
 
 Say in your report what you found. Write "nothing found" when the open work is as the queue shows it.
 
+## How the queue must group and triage the work
+
+**An item is the scope of one pull request, not one issue.** Report each set of issues that share a mechanism, a code area or a fix and that the queue gives to separate items: they belong in one item, one lane and one pull request. Batch by mechanism, not by the number of the issue.
+
+**Ask whether the tip has overtaken a pull request before you ask how to resolve it.** Judge it from the code at the tip of the base, never from the titles. For a pull request that is far behind the base, do this first. When you recommend a close, say what the close loses. Rank a conflict by what a wrong resolution costs and by whether anything would catch it.
+
 ## Facts of the project
 
 The run read these facts from the project file at its start. A fact that is empty holds no fact: ask the owner, and do not guess it.

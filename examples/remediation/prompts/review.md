@@ -168,6 +168,7 @@ subset of the union of the two parents' versions of that file; the control is th
 parent alone, which must be nonzero.
 Restore a mutated file from a snapshot and **assert the blob**; `git checkout -- <file>` resets to HEAD and
 silently discards other uncommitted edits.
+**A claim that two changes are disjoint carries the SHA it was measured at.** A list of changed paths from one tip is stale after two merges: measure again at the tip you merge to.
 
 ## Brief rules
 
@@ -179,6 +180,14 @@ silently discards other uncommitted edits.
 **Never use the merge queue of GitHub.** A merge is `gh pr merge` on a pinned head. A pull request that waits in a queue is not reviewed at its head.
 **A finding that survives the review is filed before the merge.** Name each surviving finding in the report so that an issue is filed for it. A finding that only lives in the review thread is lost when the pull request merges.
 **Known base reds are in one file.** The known base reds are the list `base_reds` in the data file {{ .data_file }}, which the engine wrote for this step. Read it with the shell (`cat` or `jq`). A red that the list holds is not a finding of this change: re-derive it at the tip, and cite its entry in the list. If the data file is missing or cannot be read, stop and refuse: say so, and do not guess the base reds.
+**A base-red entry names the command that CI runs, not the test target.** The same target under another runner is another measurement. Follow the CI task to its command before you accept or record a red.
+**The exclusion list of a guard is a decision that expires.** State what a guard covers, not only that it passed. When the defect recurs inside an exclusion, justify the exclusion again before you add a case.
+
+## Skills
+
+**Invoke each skill that the rules name with the Skill tool, by name.** Reading the file of a skill instead is a skipped step, and a report with no Skill call goes back unread. If the Skill tool answers `unknown skill`, read the skill file and follow it: that answer is about the registry and is never permission to skip the step.
+**`blast-radius-review` is the floor of every lane, never the whole answer.** Choose the other skills from what the item is, not from habit: a change of output, of a dependency floor or of a harness each asks for more.
+**A ruling of the owner binds the item.** Read the rulings file that the run names. Never reverse a ruling: if you think that it is wrong, stop and report it with your evidence.
 
 ## Project rules
 
