@@ -108,6 +108,17 @@ func TestHostSetupRoot_JudgesNoFolderAboveTheSystemRoot(t *testing.T) {
 	assert.Equal(t, rootDone, lastLine(out), "on a host the walk stops at /, so in a test it stops at the folder that stands for /")
 }
 
+func TestHostSetupRoot_AcceptsAStickyFolderAboveTheClone(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	require.NoError(t, exectest.ChmodFolder(filepath.Dir(h.clone), 0o777|os.ModeSticky))
+
+	out, err := h.rootSetup()
+	require.NoError(t, err, out)
+	assert.Equal(t, rootDone, lastLine(out), "in a sticky folder such as /tmp a user cannot rename the folders of others, so the clone stays safe")
+}
+
 func TestHostSetupRoot_AcceptsAFolderThatOnlyTheGroupOfTheAdminCanWrite(t *testing.T) {
 	t.Parallel()
 
