@@ -40,7 +40,7 @@ func (t workTree) Path(context.Context, string, string) (string, error) {
 	return filepath.Join(t.dir, "tree"), nil
 }
 
-func (t workTree) Ensure(ctx context.Context, project, item, _ string) (string, error) {
+func (t workTree) Ensure(ctx context.Context, project, item, _, _ string) (string, error) {
 	return t.Path(ctx, project, item)
 }
 

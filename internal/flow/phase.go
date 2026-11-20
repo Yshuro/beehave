@@ -65,6 +65,9 @@ type PhaseInput struct {
 	// TreeStart is the commit that the run made the worktree of a round item at. The diff of a lost start makes a removed worktree again there.
 	// It is left out of a recorded phase for any other item.
 	TreeStart string `json:"tree_start,omitempty"`
+
+	// Base is the base branch of the round that spawned the run. A worktree that someone removed is cut there again. It is left out for any other run.
+	Base string `json:"base,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.

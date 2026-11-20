@@ -31,7 +31,7 @@ type hostTrees struct {
 
 func (t hostTrees) Path(context.Context, string, string) (string, error) { return t.dir, t.err }
 
-func (t hostTrees) Ensure(context.Context, string, string, string) (string, error) {
+func (t hostTrees) Ensure(context.Context, string, string, string, string) (string, error) {
 	return t.dir, t.err
 }
 
