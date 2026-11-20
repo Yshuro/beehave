@@ -475,7 +475,7 @@ func (s *script) attempts(name string, a agentArgs, in PhaseInput) (stepResult, 
 // A run that a provider limit stopped is followed by a wait for the reset and a rerun inside the same try: a limit spends no output try and no lane.
 // Each phase looks at the caps first, because the limited run can have spent money before the limit stopped it.
 func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (stepResult, error) {
-	if err := s.clearOutput(name, a.file, try); err != nil {
+	if err := s.clearOutput(name, a, try); err != nil {
 		return stepResult{}, err
 	}
 
@@ -553,11 +553,19 @@ func (s *script) countFailedRun(name string, try int, spend agent.Spend) {
 	}
 }
 
-// clearOutput removes the old output file of an agent call in a recorded step.
-func (s *script) clearOutput(name, file string, try int) error {
+// clearOutput makes the output file of an agent call empty in a recorded step: it removes the old file, and a call that declares outputs gets a new empty one.
+func (s *script) clearOutput(name string, a agentArgs, try int) error {
 	_, err := runStep(s.e, s.ctx, name+"/clear"+strconv.Itoa(try), func(context.Context) (stepResult, error) {
-		if rmErr := os.Remove(file); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
+		if rmErr := os.Remove(a.file); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
 			return stepResult{}, fmt.Errorf("remove the old output file: %w", rmErr)
+		}
+
+		if len(a.declared) == 0 {
+			return stepResult{}, nil
+		}
+
+		if mkErr := os.WriteFile(a.file, nil, dataMode); mkErr != nil {
+			return stepResult{}, fmt.Errorf("make the empty output file: %w", mkErr)
 		}
 
 		return stepResult{}, nil
@@ -633,11 +641,11 @@ func addDeclared(outputs map[string]any, names []string, written map[string]any)
 	return ""
 }
 
-// writtenObject reads the JSON object in the output file. The second result says what is wrong with the file. A missing file names the tools whose
+// writtenObject reads the JSON object in the output file. The second result says what is wrong with the file. A missing or empty file names the tools whose
 // calls to write it the permission check of the agent CLI refused.
 func writtenObject(file string, denials []agent.Denial) (map[string]any, string) {
 	raw, err := fs.ReadFile(os.DirFS(filepath.Dir(file)), filepath.Base(file))
-	if err != nil {
+	if err != nil || len(raw) == 0 {
 		return nil, "the agent wrote no output file at " + file + refusedWrites(file, denials)
 	}
 

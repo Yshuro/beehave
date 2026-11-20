@@ -631,7 +631,8 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 
 	tree, _ := gitTree(t)
-	folder := t.TempDir()
+	folder, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err, "the temp folder of the OS can be a link, and the engine holds the real path of its state folder")
 	require.NoError(t, os.MkdirAll(filepath.Join(folder, "prompts"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(folder, defaultFlowName), []byte(defaultFlow), 0o600))
 	require.NoError(t, os.WriteFile(filepath.Join(folder, "prompts", "work.md"), []byte("Work on the item.\n"), 0o600))

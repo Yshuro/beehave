@@ -47,7 +47,9 @@ If the agent ends with no output file, the error names each tool whose write of 
 
 The file stays in the state folder. The temporary folders are shared by every run, so one step could write the output of another there. The work folder is tracked by git, so the file would dirty the tree of the item. The Write tool refuses a path in either folder without an allow rule.
 
-On Linux, the sandbox ignores a write path that does not exist when the run starts, and the engine removes the old output file before each try. There, the shell cannot write the file, and the agent writes it with the Write tool, whose allow rule does not depend on the sandbox.
+The engine resolves the state folder to its real path once, when it opens the folder, so the output file, the data file, the prompt and the grant all hold one spelling. The sandbox compares real paths, so a grant that holds a link opens nothing.
+
+On Linux, the sandbox ignores a write path that does not exist when the run starts. Before each try, the engine removes the old output file and makes a new empty one, so the exact grant names a file that exists. An empty output file counts as no output file.
 
 ### Forge data for a sandboxed step
 
