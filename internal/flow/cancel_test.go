@@ -123,7 +123,7 @@ func TestGiveBack_LogsAProcessFileAndAReleaseThatFail(t *testing.T) {
 	engine.dir = t.TempDir()
 	require.NoError(t, saveOwner(engine.dir, "run-12", "tok"))
 
-	engine.giveBack(t.Context(), openRun{id: "run-12", in: ItemInput{Item: testItem, Project: testProject}})
+	engine.giveBack(t.Context(), &attempt{id: "run-12", in: ItemInput{Item: testItem, Project: testProject}})
 }
 
 func TestGiveBack_AnOwnerThatCannotBeReadKeepsTheClaim(t *testing.T) {
@@ -135,7 +135,7 @@ func TestGiveBack_AnOwnerThatCannotBeReadKeepsTheClaim(t *testing.T) {
 	engine.dir = t.TempDir()
 	require.NoError(t, os.MkdirAll(ownerPath(engine.dir, "run-12"), ownersMode))
 
-	engine.giveBack(t.Context(), openRun{id: "run-12", in: ItemInput{Item: testItem, Project: testProject}})
+	engine.giveBack(t.Context(), &attempt{id: "run-12", in: ItemInput{Item: testItem, Project: testProject}})
 
 	assert.Empty(t, life.seen(), "a claim with no readable token is not released with a guess")
 }
@@ -151,7 +151,7 @@ func TestGiveBack_ForgetsTheAgentGroupsOfTheCanceledRunOnly(t *testing.T) {
 	require.NoError(t, engine.procs.add(t.Context(), "run-12", mine))
 	require.NoError(t, engine.procs.add(t.Context(), "run-13", other))
 
-	engine.giveBack(t.Context(), openRun{id: "run-12", in: ItemInput{Item: testItem, Project: testProject}})
+	engine.giveBack(t.Context(), &attempt{id: "run-12", in: ItemInput{Item: testItem, Project: testProject}})
 
 	assert.Equal(t, []string{"run-13"}, runsOf(engine.procs.rows), "the groups of the canceled run are forgotten, those of another run stay")
 	requireStayAlive(t, "the end of the claim context kills a live agent, not the give-back", mine, other)
@@ -167,7 +167,7 @@ func TestGiveBackWhenEnded_AStopOfTheTickEndsTheWait(t *testing.T) {
 	stop := make(chan struct{})
 	close(stop)
 
-	engine.giveBackWhenEnded(openRun{ended: make(chan struct{})}, stop)
+	engine.giveBackWhenEnded(&attempt{ended: make(chan struct{})}, stop)
 
 	assert.Empty(t, life.seen())
 }
@@ -214,11 +214,12 @@ func TestCancels_EndedIDsListTheFinishedRunsAndForgetDropsThem(t *testing.T) {
 
 	finished := make(chan struct{})
 	close(finished)
-	runs.add("item-12-r1", openRun{ended: finished})
-	runs.add("item-13-r1", openRun{ended: make(chan struct{})})
+	done := &attempt{id: "item-12-r1", ended: finished}
+	runs.add(done)
+	runs.add(&attempt{id: "item-13-r1", ended: make(chan struct{})})
 
 	ended := runs.endedAttempts()
-	assert.Equal(t, []attempt{{id: "item-12-r1", ended: finished}}, ended, "a running run is not ended")
+	assert.Equal(t, []*attempt{done}, ended, "a running run is not ended")
 
 	runs.forget(ended)
 

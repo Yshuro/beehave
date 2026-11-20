@@ -17,36 +17,37 @@ const (
 	tickInterval = 2 * time.Second
 )
 
-// openRun is a run this process executes: the cancel function of its context, the channel that closes when its workflow function returns, and its input.
-type openRun struct {
+// attempt is one execution of a run. A resumed run reuses the run id and gets a new attempt, so the pointer, not the id, names the attempt.
+// cancel ends its context, ended closes when its workflow function returns, and owner is the token of its claim, read only after ended closes.
+type attempt struct {
 	id     string
+	in     ItemInput
 	cancel context.CancelFunc
 	ended  chan struct{}
-	in     ItemInput
 	// gate is true for a gate of the exclusive queue: a cancel stops its context, and there is no claim or worktree to give back.
-	gate bool
+	gate  bool
+	owner string
 }
 
-// cancels holds the runs this process executes, by run id.
+// cancels holds the attempts this process executes, by run id.
 type cancels struct {
 	mu   sync.Mutex
-	runs map[string]openRun
+	runs map[string]*attempt
 	// releasing holds the attempts whose give-back is under way, so no second give-back starts for one run.
-	// A resumed run reuses the run id, so the record names the attempt: the end of an earlier give-back leaves the record of a later one.
-	releasing map[attempt]bool
+	releasing map[*attempt]bool
 }
 
-// begin marks a canceled run that this process neither executes nor releases, and reports whether the caller must release it.
-// The mark names no channel: the run is not an attempt of this process.
-func (c *cancels) begin(id string) bool {
+// begin marks the give-back of a canceled run that this process neither executes nor releases, and reports whether the caller must release it.
+// a is the attempt that the caller made for the give-back: the run is not an attempt of this process.
+func (c *cancels) begin(a *attempt) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if _, local := c.runs[id]; local || c.releases(id) {
+	if _, local := c.runs[a.id]; local || c.releases(a.id) {
 		return false
 	}
 
-	c.markReleasing(attempt{id: id})
+	c.markReleasing(a)
 
 	return true
 }
@@ -63,71 +64,58 @@ func (c *cancels) releases(id string) bool {
 }
 
 // markReleasing records a give-back under way. The caller holds the lock.
-func (c *cancels) markReleasing(a attempt) {
+func (c *cancels) markReleasing(a *attempt) {
 	if c.releasing == nil {
-		c.releasing = map[attempt]bool{}
+		c.releasing = map[*attempt]bool{}
 	}
 
 	c.releasing[a] = true
 }
 
 // finish ends the record of the give-back of an attempt and leaves the record of any other.
-func (c *cancels) finish(a attempt) {
+func (c *cancels) finish(a *attempt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	delete(c.releasing, a)
 }
 
-func (c *cancels) add(id string, open openRun) {
+// add lists an attempt under its run id, in place of an earlier attempt of the same run.
+func (c *cancels) add(a *attempt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	if c.runs == nil {
-		c.runs = map[string]openRun{}
+		c.runs = map[string]*attempt{}
 	}
 
-	c.runs[id] = open
-}
-
-// attempt names one attempt of a run: its run id and the channel that its own listing created. A resumed run reuses the run id and lists a new channel,
-// so an attempt that has ended no longer matches the entry of the attempt that replaced it.
-type attempt struct {
-	id    string
-	ended chan struct{}
-}
-
-// current reports whether the attempt is the one listed under its run id. The caller holds the lock.
-func (c *cancels) current(a attempt) bool {
-	open, found := c.runs[a.id]
-
-	return found && open.ended == a.ended
+	c.runs[a.id] = a
 }
 
 // attempts lists the attempts this process executes.
-func (c *cancels) attempts() []attempt {
+func (c *cancels) attempts() []*attempt {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	list := make([]attempt, 0, len(c.runs))
-	for id, open := range c.runs {
-		list = append(list, attempt{id: id, ended: open.ended})
+	list := make([]*attempt, 0, len(c.runs))
+	for _, a := range c.runs {
+		list = append(list, a)
 	}
 
 	return list
 }
 
 // endedAttempts lists the attempts whose workflow function has returned.
-func (c *cancels) endedAttempts() []attempt {
+func (c *cancels) endedAttempts() []*attempt {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var list []attempt
+	var list []*attempt
 
-	for id, open := range c.runs {
+	for _, a := range c.runs {
 		select {
-		case <-open.ended:
-			list = append(list, attempt{id: id, ended: open.ended})
+		case <-a.ended:
+			list = append(list, a)
 		default:
 		}
 	}
@@ -140,66 +128,66 @@ func (c *cancels) stop(id string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if open, found := c.runs[id]; found {
-		open.cancel()
+	if a, found := c.runs[id]; found {
+		a.cancel()
 	}
 }
 
 // forget drops each attempt in list that is still the one listed under its run id. A resumed run that replaced an attempt stays listed.
-func (c *cancels) forget(list []attempt) {
+func (c *cancels) forget(list []*attempt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for _, a := range list {
-		if c.current(a) {
+		if c.runs[a.id] == a {
 			delete(c.runs, a.id)
 		}
 	}
 }
 
-// cancel calls the cancel function of each attempt in list that is still the one this process lists under its run id, and forgets those runs.
-// An attempt that a resumed run replaced is left alone. It returns the runs it cut, so the caller releases each one once.
-func (c *cancels) cancel(list []attempt) []openRun {
+// cancel cuts each attempt in list that is still the one this process lists under its run id. An attempt that a resumed run replaced is left alone.
+// It returns the attempts it cut, so the caller releases each one once.
+func (c *cancels) cancel(list []*attempt) []*attempt {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var cut []openRun
+	var cut []*attempt
 
 	for _, a := range list {
-		if c.current(a) {
-			cut = append(cut, c.cut(a.id))
+		if c.runs[a.id] == a {
+			c.cut(a)
+			cut = append(cut, a)
 		}
 	}
 
 	return cut
 }
 
-// cut calls the cancel function of the run and forgets it. The caller holds the lock.
-func (c *cancels) cut(id string) openRun {
-	open := c.runs[id]
-	open.cancel()
-	delete(c.runs, id)
+// cut calls the cancel function of the attempt and forgets it. The caller holds the lock.
+func (c *cancels) cut(a *attempt) {
+	a.cancel()
+	delete(c.runs, a.id)
 
-	if !open.gate {
-		c.markReleasing(attempt{id: id, ended: open.ended})
+	if !a.gate {
+		c.markReleasing(a)
 	}
-
-	return open
 }
 
-// track runs body with a context that the tick can cancel. The run stays in the list of local runs until a tick drops it.
-func (e *Engine) track(parent dbos.Context, in ItemInput, body func(dbos.Context) (ItemResult, error)) (ItemResult, error) {
+// track runs body with a context that the tick can cancel, and gives body its attempt. The attempt stays in the list of local runs until a tick drops it.
+func (e *Engine) track(parent dbos.Context, in ItemInput, body func(dbos.Context, *attempt) (ItemResult, error)) (ItemResult, error) {
 	runCtx, cancel := dbos.WithCancel(parent)
 	defer cancel()
 
-	if id, err := dbos.GetWorkflowID(parent); err == nil {
-		ended := make(chan struct{})
-		e.cancels.add(id, openRun{id: id, cancel: cancel, ended: ended, in: in})
+	a := &attempt{in: in, cancel: cancel, ended: make(chan struct{})}
 
-		defer close(ended)
+	if id, err := dbos.GetWorkflowID(parent); err == nil {
+		a.id = id
+		e.cancels.add(a)
+
+		defer close(a.ended)
 	}
 
-	return body(runCtx)
+	return body(runCtx, a)
 }
 
 // tick lists the canceled runs once for each interval and cancels the ones this process executes. It renews the held claims on the same beat.
@@ -248,13 +236,13 @@ func (e *Engine) cancelCancelled(stop <-chan struct{}) {
 
 // giveBackCut starts the give-back of each canceled run that has one. The give-back waits for the run to end and calls the tracker,
 // so it runs beside the tick: a slow release delays no beat and no scan.
-func (e *Engine) giveBackCut(cut []openRun, stop <-chan struct{}) {
-	for _, open := range cut {
-		if open.gate {
+func (e *Engine) giveBackCut(cut []*attempt, stop <-chan struct{}) {
+	for _, a := range cut {
+		if a.gate {
 			continue
 		}
 
-		e.tickRun.Go(func() { e.giveBackWhenEnded(open, stop) })
+		e.tickRun.Go(func() { e.giveBackWhenEnded(a, stop) })
 	}
 }
 
@@ -270,26 +258,26 @@ func (e *Engine) giveBackStrayCancels() {
 	}
 
 	for id, in := range pending {
-		if e.cancels.begin(id) {
-			e.tickRun.Go(func() { e.giveBackStray(openRun{id: id, in: in}) })
+		if a := (&attempt{id: id, in: in}); e.cancels.begin(a) {
+			e.tickRun.Go(func() { e.giveBackStray(a) })
 		}
 	}
 }
 
 // giveBackStray gives back one canceled run. It leaves the marker of a run that is open and not canceled yet, because beehave cancel writes the marker first.
 // It drops the marker of a run that ended without a cancel or has a newer run.
-func (e *Engine) giveBackStray(open openRun) {
-	defer e.cancels.finish(attempt{id: open.id})
+func (e *Engine) giveBackStray(a *attempt) {
+	defer e.cancels.finish(a)
 
 	ctx, cancel := ReleaseDeps{Clock: e.deps.Clock}.limit(context.WithoutCancel(e.ctx))
 	defer cancel()
 
-	e.sweepOne(ctx, open, false)
+	e.sweepOne(ctx, a, false)
 }
 
 // canceledAttempts lists which of the local attempts the store marks as canceled. It reads no other run, so the cost of a tick does not grow with the history of the store.
 // The store row belongs to the attempt that the caller listed before the read, not to a resume that lists the same run id after it.
-func (e *Engine) canceledAttempts(local []attempt) ([]attempt, error) {
+func (e *Engine) canceledAttempts(local []*attempt) ([]*attempt, error) {
 	if len(local) == 0 {
 		return nil, nil
 	}
@@ -299,7 +287,7 @@ func (e *Engine) canceledAttempts(local []attempt) ([]attempt, error) {
 		return nil, err
 	}
 
-	var canceled []attempt
+	var canceled []*attempt
 
 	for _, a := range local {
 		if marked[a.id] {
@@ -311,7 +299,7 @@ func (e *Engine) canceledAttempts(local []attempt) ([]attempt, error) {
 }
 
 // canceledRows reads the run ids among the local attempts that the store marks as canceled.
-func (e *Engine) canceledRows(local []attempt) (map[string]bool, error) {
+func (e *Engine) canceledRows(local []*attempt) (map[string]bool, error) {
 	ids := make([]string, 0, len(local))
 	for _, a := range local {
 		ids = append(ids, a.id)
@@ -332,34 +320,34 @@ func (e *Engine) canceledRows(local []attempt) (map[string]bool, error) {
 
 // giveBackWhenEnded waits until the workflow function of the run has returned, then gives the item back. A stop of the tick ends the wait.
 // A run that is canceled and not released at the stop keeps its cancel marker, and the next start gives it back.
-func (e *Engine) giveBackWhenEnded(open openRun, stop <-chan struct{}) {
-	defer e.cancels.finish(attempt{id: open.id, ended: open.ended})
+func (e *Engine) giveBackWhenEnded(a *attempt, stop <-chan struct{}) {
+	defer e.cancels.finish(a)
 
 	select {
-	case <-open.ended:
-		e.giveBack(context.WithoutCancel(e.ctx), open)
+	case <-a.ended:
+		e.giveBack(context.WithoutCancel(e.ctx), a)
 	case <-stop:
 	}
 }
 
 // giveBack forgets the agent groups of a canceled run, removes its worktree and releases its claim with the token the run holds now.
-func (e *Engine) giveBack(ctx context.Context, open openRun) {
-	e.endGroups(open.id)
-	e.giveBackClaim(ctx, open)
+func (e *Engine) giveBack(ctx context.Context, a *attempt) {
+	e.endGroups(a.id)
+	e.giveBackClaim(ctx, a)
 }
 
 // giveBackClaim removes the worktree of a canceled item and releases its claim. A run that never claimed has nothing to give back.
-func (e *Engine) giveBackClaim(ctx context.Context, open openRun) {
-	owner, err := currentOwner(e.ctx, e.dir, open.id)
+func (e *Engine) giveBackClaim(ctx context.Context, a *attempt) {
+	owner, err := currentOwner(e.ctx, e.dir, a.id)
 	if err == nil {
-		err = ReleaseDeps{Lifecycle: e.deps.Lifecycle, Trees: e.deps.Trees, Clock: e.deps.Clock, Repository: e.deps.Repository}.giveBack(ctx, e.logger, open.in.Project, open.in.Item, owner)
+		err = ReleaseDeps{Lifecycle: e.deps.Lifecycle, Trees: e.deps.Trees, Clock: e.deps.Clock, Repository: e.deps.Repository}.giveBack(ctx, e.logger, a.in.Project, a.in.Item, owner)
 	}
 
 	if err != nil && !errors.Is(err, errNoOwner) {
-		e.logger.WarnContext(ctx, "cannot release the canceled item", "item", open.in.Item, "error", err)
+		e.logger.WarnContext(ctx, "cannot release the canceled item", "item", a.in.Item, "error", err)
 
 		return
 	}
 
-	e.forget(open.id)
+	e.forget(a.id)
 }

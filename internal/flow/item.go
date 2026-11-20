@@ -57,7 +57,7 @@ type Stopped struct {
 // item runs one item: claim, the steps of its workflow file, release.
 // The workflow is not queued, so the wait for the owner holds no agent slot.
 func (e *Engine) item(parent dbos.Context, in ItemInput) (ItemResult, error) {
-	return e.track(parent, in, func(ctx dbos.Context) (ItemResult, error) {
+	return e.track(parent, in, func(ctx dbos.Context, _ *attempt) (ItemResult, error) {
 		login, owner, took, err := e.begin(ctx, in)
 		if err != nil {
 			return ItemResult{}, err

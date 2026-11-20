@@ -163,20 +163,20 @@ func (e *Engine) sweepCancels() {
 	defer cancel()
 
 	for id, in := range pending {
-		e.sweepOne(ctx, openRun{id: id, in: in}, true)
+		e.sweepOne(ctx, &attempt{id: id, in: in}, true)
 	}
 }
 
 // sweepOne gives back the run of one marker, or drops the marker. A marker of a run that is not canceled belongs to a resumed run.
 // At the start the marker goes. While the engine runs, it stays only for a run that is still open, because the cancel may still come.
-func (e *Engine) sweepOne(ctx context.Context, open openRun, atStart bool) {
-	state, err := e.markerState(open.id, open.in.Item)
+func (e *Engine) sweepOne(ctx context.Context, a *attempt, atStart bool) {
+	state, err := e.markerState(a.id, a.in.Item)
 
 	switch {
 	case err != nil:
-		e.logger.WarnContext(ctx, "cannot read a canceled run", "run", open.id, "error", err)
+		e.logger.WarnContext(ctx, "cannot read a canceled run", "run", a.id, "error", err)
 	case state.superseded || (!state.canceled && (atStart || !state.open)):
-		e.warnOn(removeFile(cancelPath(e.dir, open.id)), open.id)
+		e.warnOn(removeFile(cancelPath(e.dir, a.id)), a.id)
 	case !state.canceled:
 		// beehave cancel writes the marker before it cancels the run, so the cancel may still come.
 	default:
@@ -184,11 +184,11 @@ func (e *Engine) sweepOne(ctx context.Context, open openRun, atStart bool) {
 		list := func(opts ...dbos.ListWorkflowsOption) ([]dbos.WorkflowStatus, error) {
 			return dbos.ListWorkflows(e.ctx, opts...)
 		}
-		if err := disarmCanceled(ctx, list, e.deps.Merge, open.id); err != nil {
-			e.logger.WarnContext(ctx, "cannot turn off the queued merge of a canceled run", "run", open.id, "error", err)
+		if err := disarmCanceled(ctx, list, e.deps.Merge, a.id); err != nil {
+			e.logger.WarnContext(ctx, "cannot turn off the queued merge of a canceled run", "run", a.id, "error", err)
 		}
 
-		e.giveBack(ctx, open)
+		e.giveBack(ctx, a)
 	}
 }
 

@@ -117,15 +117,16 @@ func (e *Engine) trackGate(parent dbos.Context, in ExclusiveInput) (dbos.Context
 
 	run, cancel := dbos.WithCancel(parent)
 
-	ended := make(chan struct{})
+	a := &attempt{cancel: cancel, ended: make(chan struct{}), gate: true}
 
 	if id, err := dbos.GetWorkflowID(parent); err == nil {
-		e.cancels.add(id, openRun{id: id, cancel: cancel, ended: ended, gate: true})
+		a.id = id
+		e.cancels.add(a)
 	}
 
 	return run, func() {
 		cancel()
-		close(ended)
+		close(a.ended)
 	}
 }
 

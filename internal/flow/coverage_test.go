@@ -69,14 +69,17 @@ func TestHolds_ACallOutsideAWorkflowHoldsAndTracksNothing(t *testing.T) {
 
 	var runCtx dbos.Context
 
-	_, err := engine.track(engine.ctx, ItemInput{}, func(ctx dbos.Context) (ItemResult, error) {
+	_, err := engine.track(engine.ctx, ItemInput{}, func(ctx dbos.Context, a *attempt) (ItemResult, error) {
 		runCtx = ctx
+
+		assert.Empty(t, a.id, "a call outside a workflow has no run id")
 
 		return ItemResult{}, nil
 	})
 	require.NoError(t, err)
 
 	require.ErrorIs(t, runCtx.Err(), context.Canceled)
+	assert.Empty(t, engine.cancels.attempts(), "a call outside a workflow is not listed")
 }
 
 func TestHolds_TheEndOfAnEarlierAttemptKeepsTheClaimOfTheResumedRun(t *testing.T) {
@@ -315,7 +318,7 @@ func TestCancels_StopCancelsTheRunAndKeepsItListed(t *testing.T) {
 
 	stopped := 0
 
-	runs.add("run-1", openRun{id: "run-1", cancel: func() { stopped++ }, in: ItemInput{Item: testItem}})
+	runs.add(&attempt{id: "run-1", cancel: func() { stopped++ }, in: ItemInput{Item: testItem}})
 
 	runs.stop("run-1")
 	runs.stop("run-2")
@@ -385,7 +388,7 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, engine.Shutdown())
 
-	engine.cancels.add("item-12-r1", openRun{id: "item-12-r1", ended: make(chan struct{})})
+	engine.cancels.add(&attempt{id: "item-12-r1", ended: make(chan struct{})})
 	engine.cancelCancelled(nil)
 
 	require.ErrorContains(t, engine.deleteOldRuns(), "list the finished runs")

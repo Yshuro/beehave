@@ -38,7 +38,11 @@ func endedOf(engine *Engine, id string) chan struct{} {
 	engine.cancels.mu.Lock()
 	defer engine.cancels.mu.Unlock()
 
-	return engine.cancels.runs[id].ended
+	if a, found := engine.cancels.runs[id]; found {
+		return a.ended
+	}
+
+	return nil
 }
 
 func isClosed(ch chan struct{}) bool {

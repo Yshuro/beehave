@@ -136,6 +136,6 @@ func TestCancel_TheEndOfTheEarlierGiveBackKeepsTheRecordOfTheGiveBackOfTheResume
 	close(gated.gate[0])
 	receive(t, gated.returned)
 
-	assert.Never(t, func() bool { return engine.cancels.begin(testRun) }, 300*time.Millisecond, pollEvery, "the end of the first give-back cleared the record of the second one")
+	assert.Never(t, func() bool { return engine.cancels.begin(&attempt{id: testRun}) }, 300*time.Millisecond, pollEvery, "the end of the first give-back cleared the record of the second one")
 	close(gated.gate[1])
 }

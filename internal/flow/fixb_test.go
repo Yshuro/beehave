@@ -207,7 +207,7 @@ func TestGiveBack_ARunThatNeverClaimedHasNothingToRelease(t *testing.T) {
 	client := harness.client(t, testVersion)
 
 	require.NoError(t, client.giveBack(testProject, testItem, "item-99-r1"))
-	engine.giveBack(t.Context(), openRun{id: "item-99-r1", in: ItemInput{Item: testItem, Project: testProject}})
+	engine.giveBack(t.Context(), &attempt{id: "item-99-r1", in: ItemInput{Item: testItem, Project: testProject}})
 
 	require.NoError(t, os.MkdirAll(ownerPath(harness.opts.StateDir, "item-98-r1"), ownersMode))
 	require.ErrorContains(t, client.giveBack(testProject, testItem, "item-98-r1"), "read the claim of run item-98-r1")
@@ -488,7 +488,7 @@ func TestCanceledIDs_ReadsOnlyTheRunsThisEngineExecutes(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, none, "an engine with no local run reads nothing")
 
-	other, err := engine.canceledAttempts([]attempt{{id: "item-99-r1"}})
+	other, err := engine.canceledAttempts([]*attempt{{id: "item-99-r1"}})
 	require.NoError(t, err)
 	assert.Empty(t, other, "a canceled run that this engine does not execute is not listed")
 
