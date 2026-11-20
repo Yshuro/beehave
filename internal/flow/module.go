@@ -64,6 +64,7 @@ func repositoryDefs() []builtinDef {
 		{name: "gate", call: (*script).gate, repository: true, exempt: "run"},
 		{name: "merge", call: (*script).batchMerge, repository: true},
 		{name: "pr_comment", call: (*script).prComment, repository: true},
+		{name: prHistoryKind, call: (*script).prHistory, repository: true},
 		{name: "pr_open", call: (*script).prOpen, repository: true},
 		{name: prStateKind, call: (*script).prState, repository: true},
 		{name: "preflight", call: (*script).preflight, repository: true},

@@ -262,7 +262,7 @@ func TestClient_ResumeOnThisBuildRefusesARoundRunOfABuildWithAnOlderRoundModuleA
 	err := other.ResumeOnThisBuild(testRound)
 
 	require.ErrorIs(t, err, errStranded)
-	require.ErrorContains(t, err, "round module at version 1, and this build has version 2")
+	require.ErrorContains(t, err, fmt.Sprintf("round module at version 1, and this build has version %d", roundVersion))
 	require.ErrorContains(t, err, `the step "make worktree"`)
 	require.ErrorContains(t, err, "Finish the run on the build that started it, or start the item again: beehave run "+testRound)
 	require.NotContains(t, err.Error(), "UnexpectedStep")

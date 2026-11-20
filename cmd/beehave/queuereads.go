@@ -57,7 +57,8 @@ func (q queueReads) PullState(ctx context.Context, project string, pr int) (stri
 	return *pull.State, nil
 }
 
-// OpenPulls lists the open pull requests of the forge of the project, with their head branch, labels, review decision and author. A project with no forge has none.
+// OpenPulls lists the open pull requests of the forge of the project, with their head and base branch, labels, review decision, author, draft state and title.
+// A project with no forge has none.
 func (q queueReads) OpenPulls(ctx context.Context, project string) ([]model.PullRequest, error) {
 	built, err := q.pulls.forgeOf(project)
 	if errors.Is(err, forge.ErrNoForge) {
@@ -68,7 +69,7 @@ func (q queueReads) OpenPulls(ctx context.Context, project string) ([]model.Pull
 		return nil, err
 	}
 
-	rows, err := built.PRList(ctx, openPullLimit, "--state", "open", "--json", "number,headRefName,labels,reviewDecision,author")
+	rows, err := built.PRList(ctx, openPullLimit, "--state", "open", "--json", "number,headRefName,baseRefName,labels,reviewDecision,author,isDraft,title")
 	if err != nil {
 		return nil, fmt.Errorf("list the open pull requests of project %s: %w", project, err)
 	}

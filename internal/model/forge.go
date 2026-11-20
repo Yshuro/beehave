@@ -110,6 +110,7 @@ type PullRequest struct {
 	HeadRefOid     *string         `json:"headRefOid"`
 	ReviewDecision *string         `json:"reviewDecision"`
 	MergedAt       *string         `json:"mergedAt"`
+	ClosedAt       *string         `json:"closedAt"`
 	UpdatedAt      string          `json:"updatedAt"`
 	HeadRepository *repository     `json:"headRepository"`
 	Author         Account         `json:"author"`
@@ -120,6 +121,17 @@ type PullRequest struct {
 	Comments       []pullComment   `json:"comments"`
 	Reviews        []pullReview    `json:"reviews"`
 	ReviewRequests []reviewRequest `json:"reviewRequests"`
+}
+
+// PriorPull is one pull request of an item in any state. MergedAt is empty when it never merged; ClosingComment is the body of its last comment made at or before its close, empty for an open one.
+type PriorPull struct {
+	Number         int    `json:"number"`
+	Title          string `json:"title"`
+	State          string `json:"state"`
+	Branch         string `json:"branch"`
+	Base           string `json:"base"`
+	MergedAt       string `json:"merged_at"`
+	ClosingComment string `json:"closing_comment"`
 }
 
 // Committer is the committer of one commit of a pull request. A Login or an Email that the forge does not send is empty.

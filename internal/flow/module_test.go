@@ -96,7 +96,7 @@ func TestStepModule_GuardsTheBuiltinsThatReadGitOrAForge(t *testing.T) {
 	}
 
 	assert.Equal(t, map[string]string{
-		"gate": "run", "merge": "", "pr_comment": "", "pr_open": "", "pr_state": "", "preflight": "", "push": "",
+		"gate": "run", "merge": "", "pr_comment": "", "pr_history": "", "pr_open": "", "pr_state": "", "preflight": "", "push": "",
 	}, guarded)
 }
 

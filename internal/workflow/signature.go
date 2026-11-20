@@ -400,8 +400,9 @@ func swarmSignatures() map[string][]Param {
 // readSignatures holds the builtins that read the tracker, the forge or the item folder.
 func readSignatures() map[string][]Param {
 	return map[string][]Param{
-		itemReadName: {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
-		prStateName:  {req("pr", KindInt), opt(nameKeyword, KindText)},
+		itemReadName:  {one(ofKeyword, ItemTargets()), opt(nameKeyword, KindText)},
+		prStateName:   {req("pr", KindInt), opt(nameKeyword, KindText)},
+		prHistoryName: {opt(nameKeyword, KindText)},
 	}
 }
 

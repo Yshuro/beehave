@@ -951,8 +951,9 @@ def derive_gate_list(project):
 # A bound for the loop of the round, because Starlark has no while. A pass ends one run or starts one, so the bound is far above the work of any real round.
 MAX_PASSES = 500
 
-def queue_audit(item, project, round_settings, n):
-    """Runs the agent step queue-audit-<n> before the queue read of the pass and before every spawn, also when the queue is empty."""
+def queue_audit(item, project, round_settings, n, q):
+    """Runs the agent step queue-audit-<n> after the queue read `q` of the pass and before every spawn, also when the queue is empty.
+    The agent audits the rows and the open pull requests that the engine read, from the data file: it holds no forge tool and reads no forge itself."""
     agent(
         name = "queue-audit-%d" % n,
         prompt = "prompts/queue.md",
@@ -960,20 +961,21 @@ def queue_audit(item, project, round_settings, n):
         runner = _runner(round_settings, "queue_audit"),
         edits = False,
         label = "queue audit",
-        sandbox = sandbox(network = ["github.com", "api.github.com"]),
+        sandbox = sandbox(),
         inputs = {"item": item, "pass": n, "base": round_settings["base"], "facts": project},
+        data = {"rows": q.rows, "pulls": q.pulls},
     )
 
 def ready_items(q, round_settings):
     """Returns the ids of the rows of the queue `q` that this pass may start, in the order of the rank rule, up to the free slots and vars.round.lane_cap.
-    The queue read applies vars.round.label, because the rows hold no labels. The item list vars.round.items is applied here, to the rows."""
+    The queue read applies vars.round.label. The item list vars.round.items is applied here, to the rows."""
     listed = round_settings["items"]
     rows = [r for r in q.rows if len(listed) == 0 or r.item in listed]
     return [r.item for r in rank(rows, round_settings["owner"])][:min(q.free, round_settings["lane_cap"])]
 
 def round(item):
     """The round: one entry for the whole round, with one child run (the entry pipeline) for each item. `item` is the round itself, an id that no tracker row uses.
-    A pass is sync-<n> (sync_trunk), queue-audit-<n>, round-queue-<n>, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
+    A pass is sync-<n> (sync_trunk), round-queue-<n>, queue-audit-<n> on the rows of that read, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
     A sync that ends with a reason holds the round: the later passes start no sync and no item, and only gather the open runs. With none open, the round waits in round-wait with the reason.
     The host losses hold it too. `seen` is the highest host_losses that a child result, the landing or the sync gate gave: the count of the engine for the tree of the run, and no count of the round.
     At HOST_LOSS_LIMIT or more, and above `acked`, the reason is host-loss. CONTINUE sets `acked` to `seen`, so the round asks again only after a newer loss.
@@ -1003,8 +1005,8 @@ def round(item):
             seen = max(seen, synced.host_losses)
 
         if held == "":
-            queue_audit(item, project, round_settings, n)
             q = queue(name = "round-queue-%d" % n, hold = "hold", label = round_settings["label"])
+            queue_audit(item, project, round_settings, n, q)
             take = ready_items(q, round_settings)
             if len(take) > 0:
                 runs = runs + spawn(items = take, entry = "pipeline", base = round_settings["base"], name = "round-spawn-%d" % n).runs
@@ -1098,6 +1100,10 @@ def pipeline(item):
     if not intake.ok:
         return item_value(item, "", False, "stopped", 0)
 
+    # The engine reads the pull requests of the item in every state, each closed or merged one with its closing comment, before any agent starts.
+    # The plan and the implementer read them from their data file for the repeat-offender check: no sandboxed agent reads the forge.
+    history = pr_history(name = "history")
+
     scope = lane_scope(round_settings)
 
     # The cap is for the pull request, not for one run: the candidates that earlier runs of this item started count against it. A candidate counts when its first agent starts.
@@ -1121,9 +1127,10 @@ def pipeline(item):
         runner = _runner(round_settings, "plan"),
         edits = False,
         outputs = ["regressions"],
-        # The repeat-offender check in the prompt reads pull requests with gh, so the shell reaches the forge and nothing else.
-        sandbox = sandbox(network = ["github.com", "api.github.com"]),
+        # The plan reads the earlier pull requests of the item from its data file, so its shell reaches no host.
+        sandbox = sandbox(),
         inputs = {"item": item, "facts": project},
+        data = {"pulls": history.pulls},
     )
 
     capped(plan, "plan", item)
@@ -1141,7 +1148,7 @@ def pipeline(item):
         protect_paths = protected(round_settings),
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
         inputs = {"item": item, "plan": plan.text, "facts": project, "base": base, "acceptance": round_settings["acceptance"], "base_result": round_settings["base_result"]},
-        data = lane_data,
+        data = dict(lane_data, pulls = history.pulls),
         **scope
     )
 

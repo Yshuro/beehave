@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/review"
 )
 
@@ -38,4 +39,6 @@ type forge interface {
 	// clone. expect is the lease: the head the branch must hold, or empty for a new branch or a fast forward only. A branch already at head is no error, so a
 	// replay passes. A branch that moved is an error that names it. A project with no forge or no clone is an error.
 	Push(ctx context.Context, project, item, branch, head, expect string) error
+	// History lists the pull requests of the item in every state, each closed or merged one with its closing comment. A project with no forge has none.
+	History(ctx context.Context, project, item string) ([]model.PriorPull, error)
 }
