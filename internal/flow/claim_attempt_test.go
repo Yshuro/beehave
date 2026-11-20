@@ -124,7 +124,7 @@ func TestBeat_ARenewalOfTheEarlierAttemptThatSaysTheClaimIsGoneLeavesTheResumedR
 		later = resumeAndList(t, engine, client, earlier)
 
 		assert.Eventually(t, func() bool {
-			_, reason, early := engine.holds.distrust(testRun, engine.deps.Clock)
+			_, _, reason, early := engine.holds.distrust(testRun, engine.deps.Clock)
 
 			return countOf(harness.life.seen(), "claim") == 2 && reason == "" && !early
 		}, soonBound, pollEvery, "the resumed run holds a trusted claim")
@@ -136,7 +136,7 @@ func TestBeat_ARenewalOfTheEarlierAttemptThatSaysTheClaimIsGoneLeavesTheResumedR
 	require.Error(t, receive(t, done).err, "the first attempt ended at its stop")
 	require.NotNil(t, later, "the run resumed while the tracker answered the renewal")
 
-	_, reason, _ := engine.holds.distrust(testRun, engine.deps.Clock)
+	_, _, reason, _ := engine.holds.distrust(testRun, engine.deps.Clock)
 	require.Empty(t, reason, "the answer for the first attempt marked the claim of the resumed run lost")
 	require.False(t, isClosed(later), "the answer for the first attempt stopped the resumed run")
 }

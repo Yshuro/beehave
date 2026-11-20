@@ -21,11 +21,11 @@ const (
 	rowSeparator = "\t"
 )
 
-// groupRow is one agent process group: its id, the start time of its leader and the id of the run that owns it.
+// groupRow is one agent process group: its id, the start time of its leader and the attempt that owns it.
 type groupRow struct {
 	pgid    int
 	started string
-	run     string
+	attempt *attempt
 }
 
 // groups records the process group of each running agent in a file in the state folder.
@@ -36,8 +36,8 @@ type groups struct {
 	rows []groupRow
 }
 
-// add records the group of an agent of a run that started with the given pid. An agent that already ended leaves no row.
-func (g *groups) add(ctx context.Context, run string, pid int) error {
+// add records the group of an agent of an attempt that started with the given pid. An agent that already ended leaves no row.
+func (g *groups) add(ctx context.Context, a *attempt, pid int) error {
 	started, err := proc.StartTime(ctx, pid)
 	if err != nil {
 		return fmt.Errorf("read the start time of agent process %d: %w", pid, err)
@@ -46,21 +46,21 @@ func (g *groups) add(ctx context.Context, run string, pid int) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	g.rows = append(g.rows, groupRow{pgid: pid, started: started, run: run})
+	g.rows = append(g.rows, groupRow{pgid: pid, started: started, attempt: a})
 
 	return g.write()
 }
 
-// release forgets every group of the run and kills none: the end of the claim context kills a live agent, and the runner kills the leftovers of one that exited.
-// The file rows are crash cleanup only. It never reads an item: two runs of one item own different groups.
-func (g *groups) release(run string) error {
+// release forgets every group of the attempt and kills none: the end of the claim context kills a live agent, and the runner kills the leftovers of one that exited.
+// The file rows are crash cleanup only. It never reads an item or a run id: two runs of one item, and two attempts of one run, own different groups.
+func (g *groups) release(a *attempt) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	kept := g.rows[:0]
 
 	for _, row := range g.rows {
-		if row.run != run {
+		if row.attempt != a {
 			kept = append(kept, row)
 		}
 	}

@@ -118,7 +118,7 @@ func TestHolds_FailKeepsTheReasonAndASnapshotDropsTheLostClaim(t *testing.T) {
 	held.add(first, claimHold{project: testProject, owner: testOwner, renewed: time.Unix(100, 0)})
 	held.add(third, claimHold{renewed: time.Unix(100, 0)})
 
-	claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
+	_, claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
 	require.NoError(t, claim.Err(), "a claim that is trusted has a live context")
 
 	held.fail(&attempt{id: "run-1"}, "an earlier attempt")
@@ -141,7 +141,7 @@ func TestHolds_DropEndsTheContextOfTheClaimAndForgetsIt(t *testing.T) {
 	first := &attempt{id: "run-1"}
 	held.add(first, claimHold{renewed: time.Unix(100, 0)})
 
-	claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
+	_, claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
 
 	held.dropOwn(first)
 	held.dropOwn(&attempt{id: "run-2"})
@@ -176,11 +176,12 @@ func TestHolds_DistrustNamesWhyARunHoldsNoTrustedClaim(t *testing.T) {
 
 			held.add(&attempt{id: "run-1"}, tc.row)
 
-			claim, reason, early := held.distrust(cmp.Or(tc.find, "run-1"), clock{Now: func() time.Time { return now }})
+			holder, claim, reason, early := held.distrust(cmp.Or(tc.find, "run-1"), clock{Now: func() time.Time { return now }})
 
 			assert.Contains(t, reason, tc.reason)
 			assert.Equal(t, tc.early, early)
 			assert.Equal(t, tc.reason == "", claim != nil, "a trusted claim comes with its context, and nothing else does")
+			assert.Equal(t, tc.reason == "", holder != nil, "a trusted claim comes with the attempt that holds it, and nothing else does")
 		})
 	}
 }
@@ -402,7 +403,7 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 	_, err = engine.runOpen(testItem)
 	require.ErrorContains(t, err, "read run 12")
 
-	_, err = engine.awaitClaim(t.Context(), PhaseInput{Run: "run-gone", Item: testItem})
+	_, _, err = engine.awaitClaim(t.Context(), PhaseInput{Run: "run-gone", Item: testItem})
 	require.ErrorContains(t, err, "read run run-gone")
 }
 

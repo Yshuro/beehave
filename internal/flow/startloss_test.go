@@ -104,7 +104,7 @@ func TestLose_KillsNoAgentOfAnotherRunOfTheSameItem(t *testing.T) {
 
 	run := runTimed(t, nil)
 	other := startSleeper(t)
-	require.NoError(t, run.engine.procs.add(t.Context(), testItem+"/review/7", other))
+	require.NoError(t, run.engine.procs.add(t.Context(), &attempt{id: testItem + "/review/7"}, other))
 
 	run.clock.advance(trustLimit)
 	run.engine.beatClaims()

@@ -171,7 +171,9 @@ func (e *Engine) reuseBeforeHost(ctx dbos.Context, in ExclusiveInput, out *Exclu
 // queuedClaim is the claim read of an exclusive call: it waits for the claim of the run that queued the call.
 func (e *Engine) queuedClaim(in ExclusiveInput) func(context.Context) (context.Context, error) {
 	return func(ctx context.Context) (context.Context, error) {
-		return e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.RunItem})
+		claim, _, err := e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.RunItem})
+
+		return claim, err
 	}
 }
 

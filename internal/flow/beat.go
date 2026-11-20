@@ -226,24 +226,25 @@ func (h *holds) expired(a *attempt, stamp time.Time) (claimHold, bool) {
 // distrust says why the run does not hold a trusted claim now, or returns an empty reason and the context of the claim when it does.
 // The run holds no claim, or the claim is lost, or no renewal worked yet, or the last good renewal is older than the limit on either clock.
 // early is true when the run has no first trust yet: it holds no claim row, or no renewal of the row worked.
-func (h *holds) distrust(id string, clk clock) (claim context.Context, reason string, early bool) {
+// holder is the attempt whose claim is trusted, or nil.
+func (h *holds) distrust(id string, clk clock) (holder *attempt, claim context.Context, reason string, early bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	_, row, found := h.find(id)
+	a, row, found := h.find(id)
 
 	switch {
 	case !found:
-		return nil, "the run that started this step holds no claim on the item", true
+		return nil, nil, "the run that started this step holds no claim on the item", true
 	case row.lost != "":
-		return nil, row.lost, false
+		return nil, nil, row.lost, false
 	case row.renewed.IsZero():
-		return nil, "no renewal of the claim has worked yet", true
+		return nil, nil, "no renewal of the claim has worked yet", true
 	case clk.age(row.renewed) >= trustLimit:
-		return nil, lapse(row), false
+		return nil, nil, lapse(row), false
 	}
 
-	return row.ctx, "", false
+	return a, row.ctx, "", false
 }
 
 // lapse says why the engine stops trusting a claim that no renewal kept alive.
@@ -325,7 +326,7 @@ func (e *Engine) beatOne(parent context.Context, row claimHold, left time.Durati
 // never by item: another run may hold the item, and its claim is not the claim of this one. item is the item that the error names.
 // DBOS stores the error of the run, so the reason passes through the redactor.
 func (e *Engine) claimed(run, item string) (context.Context, error) {
-	claim, reason, _ := e.holds.distrust(run, e.deps.Clock)
+	_, claim, reason, _ := e.holds.distrust(run, e.deps.Clock)
 
 	return claim, e.lostError(item, reason)
 }
@@ -341,22 +342,22 @@ func (e *Engine) lostError(item, reason string) error {
 
 // awaitClaim returns the context of the claim once the run that queued the phase holds a trusted claim. A run that has no first trust yet is waited for while it is open,
 // and for a grace time after it ended: beehave resume reopens a phase before it reopens its run, so the phase can reach the queue first.
-// Any other reason stops the phase. A phase of a run that ended for good stops when the grace time is over.
-func (e *Engine) awaitClaim(ctx context.Context, in PhaseInput) (context.Context, error) {
+// Any other reason stops the phase. A phase of a run that ended for good stops when the grace time is over. It also returns the attempt that holds the claim.
+func (e *Engine) awaitClaim(ctx context.Context, in PhaseInput) (context.Context, *attempt, error) {
 	graceEnd := e.deps.Clock.now().Add(cmp.Or(e.deps.Clock.Grace, trustGrace))
 
 	for {
-		claim, reason, early := e.holds.distrust(in.Run, e.deps.Clock)
+		holder, claim, reason, early := e.holds.distrust(in.Run, e.deps.Clock)
 		if reason == "" {
-			return claim, nil
+			return claim, holder, nil
 		}
 
 		if err := e.waitOrStop(in, reason, early, graceEnd); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 
 		if err := proc.Sleep(ctx, cmp.Or(e.deps.Clock.Poll, trustPoll)); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 }

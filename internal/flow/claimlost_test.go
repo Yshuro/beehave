@@ -508,7 +508,7 @@ func TestAwaitClaim_AnOpenRunWithNoFirstTrustIsWaitedForUntilTheContextEnds(t *t
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	_, err = engine.awaitClaim(ctx, PhaseInput{Run: run, Item: testItem})
+	_, _, err = engine.awaitClaim(ctx, PhaseInput{Run: run, Item: testItem})
 
 	require.ErrorIs(t, err, context.Canceled)
 }
@@ -529,7 +529,7 @@ func TestAwaitClaim_AnOpenRunIsWaitedForPastTheGraceTime(t *testing.T) {
 		holdClaim(engine, run, claimHold{renewed: engine.deps.Clock.now()})
 	}()
 
-	claim, err := engine.awaitClaim(t.Context(), PhaseInput{Run: run, Item: testItem})
+	claim, _, err := engine.awaitClaim(t.Context(), PhaseInput{Run: run, Item: testItem})
 
 	require.NoError(t, err, "the run is open, so the grace time does not end the wait")
 	require.NoError(t, claim.Err())
@@ -548,7 +548,7 @@ func TestAwaitClaim_TheGraceTimeCountsOnTheClockOfTheEngine(t *testing.T) {
 	reads := clk.readCount()
 
 	go func() {
-		_, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})
+		_, _, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})
 		done <- err
 	}()
 
@@ -578,7 +578,7 @@ func TestAwaitClaim_AGraceTimeLetsARunThatIsNotOpenYetTakeItsClaim(t *testing.T)
 		holdClaim(engine, "run-late", claimHold{renewed: time.Now()})
 	}()
 
-	claim, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "run-late", Item: testItem})
+	claim, _, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "run-late", Item: testItem})
 
 	require.NoError(t, err)
 	require.NoError(t, claim.Err())
@@ -599,7 +599,7 @@ func TestAwaitClaim_AResumeThatTookAClaimForTheRunKeepsThePhaseWaitingPastTheGra
 		holdClaim(engine, "item-12-r9", claimHold{renewed: time.Now()})
 	}()
 
-	claim, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})
+	claim, _, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})
 
 	require.NoError(t, err)
 	require.NoError(t, claim.Err())
@@ -665,7 +665,7 @@ func stopsByItself(t *testing.T, offset time.Duration) {
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 
-	_, err := engine.awaitClaim(ctx, PhaseInput{Run: "item-12-r9", Item: testItem})
+	_, _, err := engine.awaitClaim(ctx, PhaseInput{Run: "item-12-r9", Item: testItem})
 
 	require.ErrorIs(t, err, errClaimLost)
 	require.NoError(t, ctx.Err(), "the phase stopped by itself and not by the end of the context")
@@ -678,7 +678,7 @@ func TestAwaitClaim_ARunThatEndedWithNoTrustStopsTheWaitWhenTheGraceTimeIsOver(t
 	engine.deps.Clock.Grace = 20 * time.Millisecond
 	engine.deps.Clock.Poll = storePoll
 
-	_, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})
+	_, _, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})
 
 	require.ErrorIs(t, err, errClaimLost)
 	require.ErrorContains(t, err, "holds no claim on the item")

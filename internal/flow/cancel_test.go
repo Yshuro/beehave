@@ -148,10 +148,11 @@ func TestGiveBack_ForgetsTheAgentGroupsOfTheCanceledRunOnly(t *testing.T) {
 	engine.dir = t.TempDir()
 
 	mine, other := startSleeper(t), startSleeper(t)
-	require.NoError(t, engine.procs.add(t.Context(), "run-12", mine))
-	require.NoError(t, engine.procs.add(t.Context(), "run-13", other))
+	canceled := &attempt{id: "run-12", in: ItemInput{Item: testItem, Project: testProject}}
+	require.NoError(t, engine.procs.add(t.Context(), canceled, mine))
+	require.NoError(t, engine.procs.add(t.Context(), &attempt{id: "run-13"}, other))
 
-	engine.giveBack(t.Context(), &attempt{id: "run-12", in: ItemInput{Item: testItem, Project: testProject}})
+	engine.giveBack(t.Context(), canceled)
 
 	assert.Equal(t, []string{"run-13"}, runsOf(engine.procs.rows), "the groups of the canceled run are forgotten, those of another run stay")
 	requireStayAlive(t, "the end of the claim context kills a live agent, not the give-back", mine, other)

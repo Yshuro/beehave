@@ -139,7 +139,7 @@ func TestGroups_AddKeepsTheFilePrivateAndRecordsTheStartTime(t *testing.T) {
 	g := newGroups(t)
 	pid := startSleeper(t)
 
-	require.NoError(t, g.add(t.Context(), "12/implement/0", pid))
+	require.NoError(t, g.add(t.Context(), &attempt{id: "12/implement/0"}, pid))
 
 	info, err := os.Stat(g.path)
 	require.NoError(t, err)
@@ -158,7 +158,7 @@ func TestGroups_AddRefusesAProcessThatIsGone(t *testing.T) {
 
 	g := newGroups(t)
 
-	require.ErrorIs(t, g.add(t.Context(), "12/implement/0", 1<<22), proc.ErrNoProcess)
+	require.ErrorIs(t, g.add(t.Context(), &attempt{id: "12/implement/0"}, 1<<22), proc.ErrNoProcess)
 }
 
 func TestGroups_WriteReportsAFolderThatIsGone(t *testing.T) {
@@ -174,8 +174,8 @@ func TestGroups_KillAllKillsEveryRecordedGroup(t *testing.T) {
 
 	g := newGroups(t)
 	first, second := startSleeper(t), startSleeper(t)
-	require.NoError(t, g.add(t.Context(), "a", first))
-	require.NoError(t, g.add(t.Context(), "b", second))
+	require.NoError(t, g.add(t.Context(), &attempt{id: "a"}, first))
+	require.NoError(t, g.add(t.Context(), &attempt{id: "b"}, second))
 
 	require.NoError(t, g.killAll())
 
@@ -218,12 +218,12 @@ func newProcEngine(t *testing.T, agents agents) *Engine {
 
 // runAgentOf waits for the claim of the run of the phase, then runs the agent of the phase under it, as the phase does.
 func runAgentOf(ctx context.Context, engine *Engine, in PhaseInput) (PhaseOutput, error) {
-	claim, err := engine.awaitClaim(ctx, in)
+	claim, holder, err := engine.awaitClaim(ctx, in)
 	if err != nil {
 		return PhaseOutput{}, err
 	}
 
-	return engine.runAgent(ctx, claim, in, nil)
+	return engine.runAgent(ctx, claim, holder, in, nil)
 }
 
 func TestRunAgent_AGroupDiesWhenThePhaseIsCancelled(t *testing.T) {
@@ -311,7 +311,7 @@ func TestEndGroups_LogsAFileThatCannotBeWritten(t *testing.T) {
 
 	engine.logger = newLogger(&logged)
 
-	engine.endGroups("x")
+	engine.endGroups(&attempt{id: "x"})
 
 	assert.Contains(t, logged.String(), "cannot update the agent process file")
 }
@@ -365,7 +365,7 @@ func runsOf(rows []groupRow) []string {
 	runs := make([]string, 0, len(rows))
 
 	for _, row := range rows {
-		runs = append(runs, row.run)
+		runs = append(runs, row.attempt.id)
 	}
 
 	return runs
@@ -390,14 +390,33 @@ func TestGroups_ReleaseForgetsEveryGroupOfTheRunAndKillsNone(t *testing.T) {
 	first, second := startSleeper(t), startSleeper(t)
 	longer, other := startSleeper(t), startSleeper(t)
 
-	for run, pid := range map[string]int{"item-12-r1": first, "item-12-r10": longer, "item-13-r1": other} {
-		require.NoError(t, g.add(t.Context(), run, pid))
+	r1, r10, r13 := &attempt{id: "item-12-r1"}, &attempt{id: "item-12-r10"}, &attempt{id: "item-13-r1"}
+
+	for a, pid := range map[*attempt]int{r1: first, r10: longer, r13: other} {
+		require.NoError(t, g.add(t.Context(), a, pid))
 	}
 
-	require.NoError(t, g.add(t.Context(), "item-12-r1", second))
+	require.NoError(t, g.add(t.Context(), r1, second))
 
-	require.NoError(t, g.release("item-12-r1"))
+	require.NoError(t, g.release(r1))
 
 	requireStayAlive(t, "a release kills no group", first, second, longer, other)
-	assert.ElementsMatch(t, []groupRow{{pgid: longer, run: "item-12-r10"}, {pgid: other, run: "item-13-r1"}}, withoutStart(g.rows), "run r10 is not run r1")
+	assert.ElementsMatch(t, []groupRow{{pgid: longer, attempt: r10}, {pgid: other, attempt: r13}}, withoutStart(g.rows), "run r10 is not run r1")
+}
+
+func TestGroups_ReleaseOfAnEarlierAttemptKeepsTheGroupsOfTheResumedOne(t *testing.T) {
+	t.Parallel()
+
+	g := newGroups(t)
+	earlier, resumed := &attempt{id: "item-12-r1"}, &attempt{id: "item-12-r1"}
+	mine, theirs := startSleeper(t), startSleeper(t)
+
+	require.NoError(t, g.add(t.Context(), earlier, mine))
+	require.NoError(t, g.add(t.Context(), resumed, theirs))
+
+	require.NoError(t, g.release(earlier))
+
+	require.Len(t, g.rows, 1, "the release of the earlier attempt forgot the groups of the resumed attempt of the same run id")
+	assert.Same(t, resumed, g.rows[0].attempt)
+	assert.Equal(t, theirs, g.rows[0].pgid)
 }

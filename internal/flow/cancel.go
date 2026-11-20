@@ -322,7 +322,7 @@ func (e *Engine) giveBackWhenEnded(a *attempt, stop <-chan struct{}) {
 
 // giveBack forgets the agent groups of a canceled run, removes its worktree and releases its claim with the token the run holds now.
 func (e *Engine) giveBack(ctx context.Context, a *attempt) {
-	e.endGroups(a.id)
+	e.endGroups(a)
 	e.giveBackClaim(ctx, a)
 }
 

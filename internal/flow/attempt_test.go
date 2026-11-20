@@ -3,6 +3,7 @@ package flow
 import (
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -29,7 +30,7 @@ func resumeInsideBeat(t *testing.T, harness *harness, engine *Engine, client *Cl
 		resumeAndList(t, engine, client, earlier)
 
 		assert.Eventually(t, func() bool {
-			_, reason, early := engine.holds.distrust(testRun, engine.deps.Clock)
+			_, _, reason, early := engine.holds.distrust(testRun, engine.deps.Clock)
 
 			return countOf(harness.life.seen(), "claim") == 2 && reason == "" && !early
 		}, soonBound, pollEvery, "the resumed run holds a trusted claim")
@@ -39,6 +40,94 @@ func resumeInsideBeat(t *testing.T, harness *harness, engine *Engine, client *Cl
 	armed.Store(true)
 
 	return resumed
+}
+
+func TestAttempt_ALossOfTheEarlierAttemptCancelsThatAttemptAndNotTheResumedOne(t *testing.T) {
+	t.Parallel()
+
+	engine := &Engine{}
+
+	var earlierStopped, resumedStopped atomic.Bool
+
+	earlier := &attempt{id: testRun, cancel: func() { earlierStopped.Store(true) }}
+	resumed := &attempt{id: testRun, cancel: func() { resumedStopped.Store(true) }}
+
+	// The earlier attempt still unwinds with its claim row while the resumed attempt is listed under the same run id.
+	engine.holds.add(earlier, claimHold{renewed: time.Now()})
+	engine.cancels.add(resumed)
+
+	engine.lose(earlier, "the tracker said the claim is gone")
+
+	assert.True(t, earlierStopped.Load(), "the loss cancels the attempt that held the claim")
+	assert.False(t, resumedStopped.Load(), "the loss of the earlier attempt canceled the resumed attempt of the same run id")
+}
+
+func TestAttempt_TheFirstRenewalOfTheEarlierAttemptLeavesTheClaimOfTheResumedOne(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	engine := idleEngine(t, harness)
+
+	earlier := &attempt{id: testRun, in: ItemInput{Item: testItem, Project: testProject}}
+	engine.holds.add(earlier, claimHold{project: testProject, owner: testOwner})
+
+	// The run resumes while the tracker answers the first renewal of the earlier attempt.
+	var resumed *attempt
+
+	harness.beats.hook(func() { resumed = holdClaim(engine, testRun, claimHold{project: testProject, owner: testOwner + "#2"}) })
+
+	require.NoError(t, engine.firstRenewal(t.Context(), earlier, testOwner))
+
+	require.NotNil(t, resumed)
+	assert.Same(t, resumed, claimAttempt(engine, testRun))
+	assert.True(t, claimRowOf(engine, testRun).renewed.IsZero(), "the first renewal of the earlier attempt trusted the claim of the resumed attempt")
+}
+
+func TestAttempt_TheEndOfAPhaseOfTheEarlierAttemptKeepsTheAgentGroupsOfTheResumedOne(t *testing.T) {
+	t.Parallel()
+
+	agents := blockingAgents{pid: make(chan int, 1), proceed: make(chan struct{})}
+	engine := newProcEngine(t, agents)
+
+	done := make(chan error, 1)
+
+	go func() {
+		_, err := runAgentOf(t.Context(), engine, PhaseInput{Run: procRun, Item: testItem})
+		done <- err
+	}()
+
+	receive(t, agents.pid)
+
+	// The run resumes: the resumed attempt holds the claim, and its agent starts before the phase of the earlier attempt ends.
+	resumed := holdClaim(engine, procRun, claimHold{renewed: time.Now()})
+	theirs := startSleeper(t)
+	require.NoError(t, engine.procs.add(t.Context(), resumed, theirs))
+
+	close(agents.proceed)
+	require.NoError(t, receive(t, done))
+
+	require.Len(t, engine.procs.rows, 1, "the end of the phase of the earlier attempt forgot the agent groups of the resumed attempt")
+	assert.Same(t, resumed, engine.procs.rows[0].attempt)
+}
+
+func TestAttempt_TheGiveBackOfTheEarlierAttemptKeepsTheAgentGroupsOfTheResumedOne(t *testing.T) {
+	t.Parallel()
+
+	engine := newProcEngine(t, nil)
+	engine.deps.Lifecycle = &fakeLifecycle{failing: map[string]bool{}}
+	engine.dir = t.TempDir()
+
+	in := ItemInput{Item: testItem, Project: testProject}
+	earlier, resumed := &attempt{id: testRun, in: in}, &attempt{id: testRun, in: in}
+
+	mine, theirs := startSleeper(t), startSleeper(t)
+	require.NoError(t, engine.procs.add(t.Context(), earlier, mine))
+	require.NoError(t, engine.procs.add(t.Context(), resumed, theirs))
+
+	engine.giveBack(t.Context(), earlier)
+
+	require.Len(t, engine.procs.rows, 1, "the give-back of the earlier attempt forgot the agent groups of the resumed attempt")
+	assert.Same(t, resumed, engine.procs.rows[0].attempt)
 }
 
 func TestAttempt_AGoodRenewalOfTheEarlierAttemptLeavesTheTrustOfTheResumedClaim(t *testing.T) {
