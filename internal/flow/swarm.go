@@ -219,7 +219,7 @@ func (e *Engine) startOf(ctx context.Context, in ItemInput, id, run string, take
 
 // itemsPlace is the place of the run of an item in the items queue. It comes from the severity that the tracker gives the item: no standing is at hand.
 func (e *Engine) itemsPlace(ctx context.Context, project, id string) (uint, error) {
-	fields, err := e.deps.Items.Fields(ctx, project, id)
+	fields, err := e.itemFields(ctx, project, id)
 	if err != nil {
 		return 0, fmt.Errorf("read the fields of item %s: %w", id, err)
 	}

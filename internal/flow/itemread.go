@@ -8,6 +8,7 @@ import (
 
 	"go.starlark.net/starlark"
 
+	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -47,6 +48,11 @@ func (s *script) itemRead(b *starlark.Builtin, args starlark.Tuple, kwargs []sta
 // readItem reads the item that of names. The item of the run is read through the same path as the fields of main.
 func (s *script) readItem(ctx context.Context, of string) (map[string]any, error) {
 	id := s.in.Item
+
+	// A round item has no tracker issue, so it has no fields, no comments and no parent to find.
+	if model.ItemKind(id) == model.KindRound {
+		return readOutputs(false, "", nil, nil, ""), nil
+	}
 
 	if of == "parent" {
 		parent, err := s.e.deps.Reader.Parent(ctx, s.in.Project, id)
