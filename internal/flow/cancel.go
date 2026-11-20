@@ -31,6 +31,39 @@ type openRun struct {
 type cancels struct {
 	mu   sync.Mutex
 	runs map[string]openRun
+	// releasing holds the runs whose give-back is under way, so no second give-back starts for one run.
+	releasing map[string]bool
+}
+
+// begin marks a canceled run that this process neither executes nor releases, and reports whether the caller must release it.
+func (c *cancels) begin(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if _, local := c.runs[id]; local || c.releasing[id] {
+		return false
+	}
+
+	c.markReleasing(id)
+
+	return true
+}
+
+// markReleasing records a give-back under way. The caller holds the lock.
+func (c *cancels) markReleasing(id string) {
+	if c.releasing == nil {
+		c.releasing = map[string]bool{}
+	}
+
+	c.releasing[id] = true
+}
+
+// finish ends the record of the give-back of a run.
+func (c *cancels) finish(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	delete(c.releasing, id)
 }
 
 func (c *cancels) add(id string, open openRun) {
@@ -108,6 +141,10 @@ func (c *cancels) cancel(ids []string) []openRun {
 			open.cancel()
 			delete(c.runs, id)
 
+			if !open.gate {
+				c.markReleasing(id)
+			}
+
 			cut = append(cut, open)
 		}
 	}
@@ -170,7 +207,13 @@ func (e *Engine) cancelCancelled(stop <-chan struct{}) {
 
 	e.cancels.forget(ended)
 
-	// The give-back waits for the run to end and calls the tracker, so it runs beside the tick: a slow release delays no beat and no scan.
+	e.giveBackCut(cut, stop)
+	e.giveBackStrayCancels()
+}
+
+// giveBackCut starts the give-back of each canceled run that has one. The give-back waits for the run to end and calls the tracker,
+// so it runs beside the tick: a slow release delays no beat and no scan.
+func (e *Engine) giveBackCut(cut []openRun, stop <-chan struct{}) {
 	for _, open := range cut {
 		if open.gate {
 			continue
@@ -178,6 +221,34 @@ func (e *Engine) cancelCancelled(stop <-chan struct{}) {
 
 		e.tickRun.Go(func() { e.giveBackWhenEnded(open, stop) })
 	}
+}
+
+// giveBackStrayCancels gives back each canceled run that no run of this process executes: a run that beehave resume reopened for another build, or one that still waits in the queue.
+// Its cancel marker and the claim of its resume stay until an engine gives them back, and the tick is the engine that runs now.
+// A run that this process executes or releases is skipped. The release runs beside the tick, as the release of a local run does.
+func (e *Engine) giveBackStrayCancels() {
+	pending, err := pendingCancels(e.dir, e.logger)
+	if err != nil {
+		e.logger.Warn("cannot read the canceled runs", "error", err)
+
+		return
+	}
+
+	for id, in := range pending {
+		if e.cancels.begin(id) {
+			e.tickRun.Go(func() { e.giveBackStray(openRun{id: id, in: in}) })
+		}
+	}
+}
+
+// giveBackStray gives back one canceled run, or leaves its marker when the run is not canceled yet: beehave cancel writes the marker first.
+func (e *Engine) giveBackStray(open openRun) {
+	defer e.cancels.finish(open.id)
+
+	ctx, cancel := ReleaseDeps{Clock: e.deps.Clock}.limit(context.WithoutCancel(e.ctx))
+	defer cancel()
+
+	e.sweepOne(ctx, open, false)
 }
 
 // canceledIDs lists which of the local runs the store marks as canceled. It reads no other run, so the cost of a tick does not grow with the history of the store.
@@ -202,6 +273,8 @@ func (e *Engine) canceledIDs(local []string) ([]string, error) {
 // giveBackWhenEnded waits until the workflow function of the run has returned, then gives the item back. A stop of the tick ends the wait.
 // A run that is canceled and not released at the stop keeps its cancel marker, and the next start gives it back.
 func (e *Engine) giveBackWhenEnded(open openRun, stop <-chan struct{}) {
+	defer e.cancels.finish(open.id)
+
 	select {
 	case <-open.ended:
 		e.giveBack(context.WithoutCancel(e.ctx), open)

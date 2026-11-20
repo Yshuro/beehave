@@ -163,19 +163,21 @@ func (e *Engine) sweepCancels() {
 	defer cancel()
 
 	for id, in := range pending {
-		e.sweepOne(ctx, openRun{id: id, in: in})
+		e.sweepOne(ctx, openRun{id: id, in: in}, true)
 	}
 }
 
-// sweepOne gives back the run of one marker, or drops the marker.
-func (e *Engine) sweepOne(ctx context.Context, open openRun) {
+// sweepOne gives back the run of one marker, or drops the marker. A marker of a run that is not canceled belongs to a resumed run: dropOpen says whether to drop it or to leave it.
+func (e *Engine) sweepOne(ctx context.Context, open openRun, dropOpen bool) {
 	canceled, superseded, err := e.markerState(open.id, open.in.Item)
 
 	switch {
 	case err != nil:
 		e.logger.WarnContext(ctx, "cannot read a canceled run", "run", open.id, "error", err)
-	case !canceled || superseded:
+	case superseded || (!canceled && dropOpen):
 		e.warnOn(removeFile(cancelPath(e.dir, open.id)), open.id)
+	case !canceled:
+		// beehave cancel writes the marker before it cancels the run, so the cancel may still come.
 	default:
 		// The engine stopped after the cancel and before the run woke, so no live wait turned off the queued merge.
 		list := func(opts ...dbos.ListWorkflowsOption) ([]dbos.WorkflowStatus, error) {
