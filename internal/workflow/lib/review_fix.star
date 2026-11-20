@@ -117,9 +117,10 @@ def labelled(loop, kind, cap):
 def ended(loop, head, gate = None, review = None, stopped = False, exhausted = False, rejected = False, design = None, held = ""):
     """The result of the loop. head is the commit that the last step of the loop judged. gate is the last gate of a candidate, and it is None when the loop ended before the first one.
     verdict is the verdict of the last full review, and it is empty when the loop ended before one.
-    host_losses is the highest count that a gate of the loop read, and host_lost is true when HOST_LOSS_LIMIT stopped the reruns."""
+    host_losses is the highest count that a gate of the loop read, and host_lost is true when HOST_LOSS_LIMIT stopped the reruns.
+    lanes holds the result of each fix agent that ran, in order."""
     verdict = verdict_of(loop, review) if review != None else ""
-    return struct(head = head, stopped = stopped, exhausted = exhausted, rejected = rejected, design = design, held = held, gate = gate, review = review, verdict = verdict, host_losses = loop.host["losses"], host_lost = loop.host["lost"])
+    return struct(head = head, stopped = stopped, exhausted = exhausted, rejected = rejected, design = design, held = held, gate = gate, review = review, verdict = verdict, host_losses = loop.host["losses"], host_lost = loop.host["lost"], lanes = loop.lanes)
 
 def sent_back(findings, mechanism = "", gate = None, review = None, due = True):
     """The result of a step that sends the head back to a fix: the findings and the mechanism that they are about. due is false only for a head that needs no fix."""
@@ -334,7 +335,7 @@ def check_review(loop, check, inner, outer):
     return sent_back(with_violations(review.text, inner.breach, review.violations, lane.violations), mechanism_of(loop, review), check, review)
 
 def check_candidate(loop, inner, outer):
-    """Runs the full checks of the candidate once, in order: the gate on the base, the checks before review, each check of the caller, then the full review.
+    """Runs the full checks of the candidate once, in order: the gate on the base, the checks before review, the check of the lane, each check of the caller, then the full review.
     The first entry with findings sends the candidate back, and the entries after it do not run. Findings that the last scoped review left open go with them."""
     check = check_gate(loop)
 
@@ -349,6 +350,11 @@ def check_candidate(loop, inner, outer):
     findings = check_before_review(loop, check)
     if findings != "":
         return sent_back(with_violations(findings, inner.open), gate = check)
+
+    if loop.lane_check != None:
+        findings = loop.lane_check(inner.lane)
+        if findings != "":
+            return sent_back(with_violations(findings, inner.open), gate = check)
 
     for entry in loop.checks:
         findings = entry(check)
@@ -416,12 +422,14 @@ def scoped_fix(loop, pending, fixes, decided, outer, inner, lane):
         resume = loop.impl.session if early and loop.steps["fix"]["runner"] == loop.steps["implement"]["runner"] else "",
         forbid_commands = FORBID + loop.extra,
         protect_paths = loop.protect,
+        outputs = loop.fix_outputs,
         inputs = {"item": loop.item, "round": round, "findings": pending.findings, "facts": loop.facts},
         data = loop.data,
         **loop.scope
     )
     capped(fix, "fix", loop.item)
     kept_history(fix, "fix", loop.item)
+    loop.lanes.append(fix)
 
     # The engine pushes the head of the fix. The lease is the head of the lane before it, which the caller or the last fix pushed.
     if loop.push_branch != "":
@@ -464,8 +472,8 @@ def fix_until_candidate(loop, pending, fixes, decided, outer, lane):
     # The last scoped review asked for changes. Its findings go to the full checks, and its violations keep the full review from a clean approve.
     return struct(end = None, lane = lane, open = pending.findings, breach = review.violations)
 
-def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = None, review_outputs = [], facts = {}, data = None, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER, push_branch = ""):
-    """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, verdict, host_losses and host_lost. docs/design/durable-loop.md describes the loop.
+def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, follow_ups = "allow", protect = [], design_prompt = "", guard = {}, allow = None, review_outputs = [], fix_outputs = [], lane_check = None, facts = {}, data = None, review_check = None, checks = [], design_after = DESIGN_AFTER, void_reruns = VOID_RERUNS, void_asks = VOID_ASKS, escalate_after = FIX_ESCALATE_AFTER, push_branch = ""):
+    """Runs the loop and returns a struct with head, stopped, exhausted, rejected, design, held, gate, review, verdict, host_losses, host_lost and lanes. docs/design/durable-loop.md describes the loop.
 
     steps is a dict from a step name to {"model": text, "runner": text}. The entries implement, review and fix are required, design is required with a design_prompt, and fix_late is optional.
     The library holds no model. An empty runner means the pool pick. design_after, void_reruns, void_asks and escalate_after are the limits of the loop, and the constants of the same names are their defaults.
@@ -475,7 +483,9 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
     review_check is a function of one argument, the full review, that runs after each full review whose verdict is not reject. A reason ends the loop: held holds it.
     guard holds the settings of the preflight call before every agent of the loop: base, hold and own. A stop ends the loop with stopped set.
     protect lists the directories that no command of a review or a fix may write in. allow lists the globs that a fix may change, and None is no scope. A list that before_review refuses stops the item before the first step of the loop.
-    design_prompt turns on the design round: each review then writes the output `mechanism`. review_outputs lists more outputs of the full review.
+    design_prompt turns on the design round: each review then writes the output `mechanism`. review_outputs lists more outputs of the full review, and fix_outputs lists more outputs of each fix.
+    lane_check is a function of one argument, the lane (the result of the implement or fix agent) that made the candidate head. It runs after the checks before review and before checks.
+    It returns an empty text for a clean lane, or the findings as text, which send the candidate back to a fix. lanes in the result lists the fix agents of the loop, so the caller can read their outputs.
     push_branch is the branch that the caller pushed the head of impl to. Each fix then pushes its head there, with the head before the fix as the lease. Empty pushes nothing.
     facts is the value of the facts() builtin, passed to each agent.
     data is the data keyword of each review and each fix: a dict that the engine writes to the data file that the prompt names. None gives no data file.
@@ -507,6 +517,9 @@ def review_fix(item, impl, review_prompt, fix_prompt, base, steps, rounds = 6, f
         escalate_after = escalate_after,
         guard = guard,
         review_outputs = review_outputs,
+        fix_outputs = fix_outputs,
+        lane_check = lane_check,
+        lanes = [],
         facts = facts,
         data = data,
         review_check = review_check,

@@ -443,6 +443,10 @@ fi
 if [ "$step" = settle ]; then
   printf '{"parked":"[]"}\n' > "$(field write)"
 fi
+# A lane answers the two outputs the example declares for it: its report and the reds it did not cause. The report check of the scripts is answered by e2eCommands.
+if [ "$step" = implement ] || [ "$step" = fix ]; then
+  printf '{"report":"# Report\\n","uncaused":"[]"}\n' > "$(field write)"
+fi
 # The tool calls arrive as assistant lines of the stream, as with the real claude.
 # The fake claude calls the skill that the example requires, so the session reports it.
 # When the file no-skill exists, the fake reports no skill call, as a CLI that does not report them.
@@ -484,9 +488,9 @@ func (e2eLogins) Reset(context.Context, string, string) (time.Time, bool, error)
 // e2ePrompts replace the prompts of the example in the work folder. The workflow file is the example itself.
 var e2ePrompts = map[string]string{
 	"plan":      "step=plan\nwrite={{ .output_file }}\n",
-	"implement": "step=implement\n",
+	"implement": "step=implement\nwrite={{ .output_file }}\n",
 	"review":    "step=review\nwrite={{ .output_file }}\nseen={{ .violations }}\n",
-	"fix":       "step=fix\nround={{ .round }}\nfound={{ .findings }}\n",
+	"fix":       "step=fix\nround={{ .round }}\nwrite={{ .output_file }}\nfound={{ .findings }}\n",
 	"settle":    "step=settle\nwrite={{ .output_file }}\nruling={{ .ruling }}\n",
 	"audit":     "step=audit\nseen={{ .seen }}\n",
 }

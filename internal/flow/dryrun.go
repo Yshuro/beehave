@@ -330,10 +330,12 @@ type dryAgents struct {
 
 // outputVerdict is the output of a review call that holds its verdict. verdictChanges is the verdict of a head that needs a commit.
 // outputOpen is the output that holds the open findings of a review as text, empty when none is open.
+// outputUncaused is the output that holds the reds a lane did not cause, as a JSON list.
 const (
 	outputVerdict  = "verdict"
 	verdictChanges = "changes"
 	outputOpen     = "open"
+	outputUncaused = "uncaused"
 )
 
 func (a dryAgents) Run(_ context.Context, request AgentRequest) (agent.Result, error) {
@@ -365,7 +367,7 @@ func (a dryAgents) outputs(declared []string) []byte {
 	return []byte("{" + strings.Join(fields, ",") + "}")
 }
 
-// dryOutput is the fixed value of a declared output in a dry run: a review approves with no open finding, and any other output holds the text 0.
+// dryOutput is the fixed value of a declared output in a dry run: a review approves with no open finding, the reds a lane did not cause are an empty list, and any other output holds the text 0.
 // The text 0 reads as a count of none, so a workflow that reads a count from an output walks the path of an approved item.
 func dryOutput(name string) string {
 	switch name {
@@ -373,6 +375,8 @@ func dryOutput(name string) string {
 		return "approve"
 	case outputOpen:
 		return ""
+	case outputUncaused:
+		return "[]"
 	}
 
 	return "0"
