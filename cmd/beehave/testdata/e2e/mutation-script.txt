@@ -119,7 +119,7 @@ env GOFLAGS=-mod=mod
 env GREMLINS_REPORT=$WORK/clean.json
 env GREMLINS_RECORDS=
 exec sh repo/scripts/mutation-pr.sh main
-stdout '^fake gremlins GOFLAGS=-mod=mod -count=1 -exec=.*/repo/scripts/mutation-exec\.sh$'
+stdout '^fake gremlins GOFLAGS=-mod=mod -count=1 -exec=.*/repo/scripts/mutation-exec\.sh -timeout=1200s$'
 stdout '^fake gremlins MUTATION_ROOT=.*/repo$'
 env GOFLAGS=
 
@@ -127,7 +127,7 @@ env GOFLAGS=
 env GOENV=$WORK/goenv
 exec go env -w GOFLAGS=-mod=readonly
 exec sh repo/scripts/mutation-pr.sh main
-stdout '^fake gremlins GOFLAGS=-mod=readonly -count=1 -exec=.*/repo/scripts/mutation-exec\.sh$'
+stdout '^fake gremlins GOFLAGS=-mod=readonly -count=1 -exec=.*/repo/scripts/mutation-exec\.sh -timeout=1200s$'
 env GOENV=
 
 # A script that is not executable makes every mutant fail to start, which go test reports as exit 1 (KILLED),
