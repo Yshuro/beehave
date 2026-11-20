@@ -244,6 +244,32 @@ func TestBatchHost_TipFetchesNoSettingThatTheCloneConfigHolds(t *testing.T) {
 	}
 }
 
+// The tip of a batch fetches what git fetch origin fetched in the worktree: every branch of the remote, and the tags that point into them.
+func TestBatchHost_TipFetchesEveryBranchAndTheTagsOfTheRemote(t *testing.T) {
+	t.Parallel()
+
+	rig := newFetchRig(t)
+	work := filepath.Join(t.TempDir(), "work")
+	runGit(t, rig.tree, "clone", "-q", rig.remote, work)
+	other := commitIn(t, work, "on another branch")
+	runGit(t, work, "push", "-q", rig.remote, "HEAD:refs/heads/other")
+	runGit(t, work, "tag", "v1", rig.tip)
+	runGit(t, work, "push", "-q", rig.remote, "refs/tags/v1")
+
+	host := batchHost{
+		pulls:    pulls{projects: rig.pulls.projects, forge: func(model.Project) (forge.Forge, error) { return hostForge{tip: rig.tip, found: true}, nil }},
+		programs: programs{trees: rig.pulls.trees, local: localRunner},
+		base:     rig.pulls.trees,
+	}
+
+	_, err := host.Tip(t.Context(), "p", pushItem, "main")
+
+	require.NoError(t, err)
+	assert.Equal(t, rig.tip, gitOut(t, rig.tree, "rev-parse", "refs/remotes/origin/main"), "the clone holds the base of the remote")
+	assert.Equal(t, other, gitOut(t, rig.tree, "rev-parse", "refs/remotes/origin/other"), "the clone holds every other branch of the remote")
+	assert.Equal(t, rig.tip, gitOut(t, rig.tree, "rev-parse", "refs/tags/v1"), "the clone holds the tags of the remote")
+}
+
 // A rewrite in the clone config can turn the folder of the push repository into an ssh address. The copy into the clone takes the file transport only,
 // so the ssh command never runs and the refresh fails. The control is a plain fetch of that folder in the worktree, which runs the ssh command.
 func TestWorktrees_TheCopyIntoTheCloneTakesTheFileTransportOnly(t *testing.T) {

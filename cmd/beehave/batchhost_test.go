@@ -38,7 +38,7 @@ func (t hostTrees) Ensure(context.Context, string, string, string, string) (stri
 // hostFetch is the fetch of the base in the host tests. The repository of the tests already holds the base, so it fetches nothing.
 type hostFetch struct{ err error }
 
-func (f hostFetch) Fetch(context.Context, string, string) error { return f.err }
+func (f hostFetch) Fetch(context.Context, string) error { return f.err }
 
 // hostForge is the forge of the host tests: the tip of the base, and one pull request in a given state.
 type hostForge struct {

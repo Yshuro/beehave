@@ -250,15 +250,39 @@ func (w worktrees) refresh(ctx context.Context, project config.Project, clone, i
 	return "origin/" + base, w.fetchBranch(ctx, project, clone, base)
 }
 
-// Fetch fetches branch of the remote of the project into its clone under the lock of the clone, as the refresh of an item does.
-func (w worktrees) Fetch(ctx context.Context, project, branch string) error {
+// Fetch fetches every branch of the remote of the project onto refs/remotes/origin of its clone, and the tags that point into them, as git fetch
+// origin does. It runs under the lock of the clone, and the fetch from the remote runs in the push repository.
+func (w worktrees) Fetch(ctx context.Context, project string) error {
 	found, err := w.project(project)
 	if err != nil {
 		return err
 	}
 
-	return cloneLock{repos: w.repos}.hold(ctx, project, func(clone string) error { return w.fetchBranch(ctx, found, clone, branch) })
+	return cloneLock{repos: w.repos}.hold(ctx, project, func(clone string) error { return w.fetchAll(ctx, found, clone) })
 }
+
+// fetchAll fetches every branch from the address of the project into the push repository, then copies the branches into the clone over the file
+// transport. Git follows the tags that point into the branches in both fetches, as it does in git fetch origin.
+func (w worktrees) fetchAll(ctx context.Context, project config.Project, clone string) error {
+	remote, err := cloneSource(project.Project, w.forge)
+	if err != nil {
+		return err
+	}
+
+	repo, err := w.openPush(ctx, project.Name)
+	if err != nil {
+		return err
+	}
+
+	if _, err := repo.run(ctx, "fetch", "-q", "--no-write-fetch-head", remote, "+refs/heads/*:"+remoteRefs); err != nil {
+		return err
+	}
+
+	return w.run(ctx, clone, "fetch", "-q", "--no-write-fetch-head", repo.dir, "+"+remoteRefs+":"+remoteRefs)
+}
+
+// remoteRefs are the refs of the branches of the remote, in the push repository and in the clone.
+const remoteRefs = "refs/remotes/origin/*"
 
 // fetchBase fetches the base branch of a round item into the clone. A base that the remote lacks gives an error that names it.
 func (w worktrees) fetchBase(ctx context.Context, project config.Project, clone, base, item string) error {

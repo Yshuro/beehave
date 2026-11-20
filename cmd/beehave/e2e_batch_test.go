@@ -45,7 +45,7 @@ func (t workTree) Ensure(ctx context.Context, project, item, _, _ string) (strin
 }
 
 // Fetch fetches the origin remote of the folder "tree", which holds the base of every item.
-func (t workTree) Fetch(ctx context.Context, _, _ string) error {
+func (t workTree) Fetch(ctx context.Context, _ string) error {
 	dir := filepath.Join(t.dir, "tree")
 
 	return gitExit("fetch", dir, proc.ExecRunner{Binary: "git", Dir: dir, Timeout: batchGitTimeout}.Run(ctx, []string{"fetch", "-q", "origin"}))

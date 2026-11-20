@@ -299,7 +299,7 @@ func TestWorktrees_FetchRefusesAProjectTheConfigLacksAndRunsNoGit(t *testing.T) 
 
 	trees, git, _ := ensureFixture(t)
 
-	err := trees.Fetch(t.Context(), "nope", "main")
+	err := trees.Fetch(t.Context(), "nope")
 
 	require.ErrorIs(t, err, errUnknownProject)
 	assert.Empty(t, git.calls)
