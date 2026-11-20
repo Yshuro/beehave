@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,7 +99,7 @@ func TestClaimWrites_AStepThatWritesAfterTheRunLostItsClaimWritesNothing(t *test
 	}
 }
 
-func TestClaimWrites_AMergeThatWaitedInTheQueueForARunThatLostItsClaimLandsNothing(t *testing.T) {
+func TestClaimWrites_AMergeOfARunThatNeverHeldAClaimLandsNothing(t *testing.T) {
 	t.Parallel()
 
 	rig := newBatchRig(t)
@@ -121,6 +122,122 @@ func TestClaimWrites_AMergeThatWaitedInTheQueueForARunThatLostItsClaimLandsNothi
 	require.NotNil(t, out.Failure)
 	assert.Contains(t, out.Failure.Text, errClaimLost.Error())
 	assert.Empty(t, rig.merger.asked, "the run holds no claim, so the merger is never asked")
+}
+
+// heldRun is a run of the test item that holds its claim and waits in a command, so a test can lose the claim or queue a merge while the run is open.
+type heldRun struct {
+	engine   *Engine
+	release  chan struct{}
+	done     chan error
+	canceled chan struct{} // closed when the context of the waiting command ends
+	once     sync.Once
+}
+
+// startHeldRun starts the run on an engine of deps and returns when the run holds its claim.
+func startHeldRun(t *testing.T, h *harness, deps Deps) *heldRun {
+	t.Helper()
+
+	engine, err := NewEngine(t.Context(), h.opts, deps)
+	require.NoError(t, err)
+	require.NoError(t, engine.Launch())
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	r := &heldRun{engine: engine, release: make(chan struct{}), done: make(chan error, 1), canceled: make(chan struct{})}
+	h.commands.before = func(ctx context.Context, request CommandRequest) error {
+		if request.Run[0] != "wait" {
+			return nil
+		}
+
+		select {
+		case <-r.release:
+			return nil
+		case <-ctx.Done():
+			close(r.canceled)
+
+			return ctx.Err()
+		}
+	}
+
+	file := writeFlow(t, bodyFlow(`command(name = "w", run = ["wait"])`))
+
+	go func() {
+		_, err := engine.RunFile(testItem, testProject, file)
+		r.done <- err
+	}()
+
+	require.Eventually(t, func() bool { return len(engine.holds.snapshot()) == 1 }, 10*time.Second, 10*time.Millisecond)
+
+	return r
+}
+
+// finish lets the waiting command end and returns the error of the run.
+func (r *heldRun) finish() error {
+	r.once.Do(func() { close(r.release) })
+
+	return <-r.done
+}
+
+// queueMerge queues a merge child that names the run and returns the failure that the child recorded.
+func queueMerge(t *testing.T, engine *Engine, run, head string) *Failure {
+	t.Helper()
+
+	handle, err := dbos.RunWorkflow(engine.ctx, engine.exclusive, ExclusiveInput{Kind: kindMerge, Run: run, Project: testProject, Item: "1", Head: head},
+		dbos.WithQueue(engine.exclusiveQueue), dbos.WithQueuePartitionKey(testProject))
+	require.NoError(t, err)
+
+	out, err := handle.GetResult()
+	require.NoError(t, err, "the exclusive run records a failed call as its failure")
+
+	return out.Failure
+}
+
+func TestClaimWrites_AMergeOfARunThatHeldItsClaimAndLostItLandsNothing(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	run := startHeldRun(t, rig.h, rig.deps())
+
+	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+	failure := queueMerge(t, run.engine, runID(testItem, 1), rig.heads["1"])
+	require.Error(t, run.finish(), "the run ends on the loss")
+
+	require.NotNil(t, failure)
+	assert.Contains(t, failure.Text, errClaimLost.Error())
+	assert.Empty(t, rig.merger.asked, "the run held its claim and lost it, so the merger is never asked")
+}
+
+func TestClaimWrites_AMergeChildWithNoRunIsRefusedWhileOneRunIsOpen(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	deps := rig.deps()
+	deps.Clock.Grace = 20 * time.Millisecond
+	run := startHeldRun(t, rig.h, deps)
+
+	// A child that an older build recorded names no run. The one open run is no claim of the child.
+	failure := queueMerge(t, run.engine, "", rig.heads["1"])
+	require.NoError(t, run.finish())
+
+	require.NotNil(t, failure)
+	assert.Contains(t, failure.Text, errClaimLost.Error())
+	assert.Empty(t, rig.merger.asked)
+}
+
+func TestClaimWrites_ACommandStepIsCancelledWhenTheRunLosesItsClaim(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	run := startHeldRun(t, h, h.deps())
+
+	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+
+	select {
+	case <-run.canceled:
+	case <-time.After(10 * time.Second):
+		require.Fail(t, "the command kept running after the claim was lost")
+	}
+
+	require.ErrorIs(t, run.finish(), errClaimLost)
 }
 
 func TestClaimWrites_AMergeWhileTheRunHoldsItsClaimLands(t *testing.T) {

@@ -171,6 +171,13 @@ Every agent call returns `rewrote`. It is true when the commit of the item folde
 - `beehave status <run id>` shows `rewrote=yes` on the line of such a step.
 - A record made before the render step kept the commit gives false.
 
+### The `committed` output
+
+Every agent call returns `committed`. It is true when the commit of the item folder after the run is not the commit it had before the agent started. A call that made no commit returns false.
+
+- The push of the sync branch in the example workflow reads it: a resolve that made no commit ends on the head it started on, which is not a commit of the sync branch, so the workflow pushes nothing.
+- A record made before the render step kept the commit gives false.
+
 ### Cost budgets
 
 #### The cost of an agent call

@@ -175,11 +175,13 @@ func (e *Engine) runCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutp
 		out.Merge, err = runStep(e, ctx, mergeStep, func(c context.Context) (merge.Result, error) {
 			// The child can wait behind a gate for a long time, so the claim of the run that queued it is read again at the merge.
 			// beehave resume can reopen the child before its run, so a run with no first trust yet is waited for, as an agent phase waits.
-			if _, err := e.awaitClaim(c, PhaseInput{Run: in.Run, Item: in.Item}); err != nil {
+			// The merge runs under the claim context, so a loss while it runs cancels it.
+			claimed, err := e.awaitClaim(c, PhaseInput{Run: in.Run, Item: in.Item})
+			if err != nil {
 				return merge.Result{}, err
 			}
 
-			return e.deps.Merge.Merge(c, in.Project, in.Item, in.Head, in.Settings)
+			return e.deps.Merge.Merge(claimed, in.Project, in.Item, in.Head, in.Settings)
 		})
 	case kindBatchGate:
 		out.Batch, err = e.batchGateCall(ctx, in, out)

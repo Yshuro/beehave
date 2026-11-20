@@ -578,7 +578,7 @@ func readAgent(ctx context.Context, a agentArgs, ended PhaseOutput) (stepResult,
 		return stepResult{}, err
 	}
 
-	outputs := agentOutputs(ended.Text, ended.Session, ended.Transcript, head, strings.Join(violations, "\n"), capOf(ended.Outcome), ended.Spend, rewrote, ended.Skills)
+	outputs := agentOutputs(ended.Text, ended.Session, ended.Transcript, head, strings.Join(violations, "\n"), capOf(ended.Outcome), ended.Spend, rewrote, a.startHead != "" && head != a.startHead, ended.Skills)
 
 	// A run that left a bad output file still cost money, so its outputs stay in the result and the run cap counts them.
 	if problem := a.readOutputs(outputs); problem != "" {

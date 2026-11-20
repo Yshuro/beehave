@@ -52,7 +52,8 @@ const coreVersion = 6
 // Version 9 adds the skills field to the result of an agent call, and records the label of the call in place of its kind.
 // Version 10 removed the allow_write list from the recorded sandbox of an agent call.
 // Version 11 adds the data keyword: the prompt_data output of the render step and the data and data_file fields of the phase input.
-const agentVersion = 11
+// Version 12 adds the committed field to the result of an agent call.
+const agentVersion = 12
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.

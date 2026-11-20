@@ -225,7 +225,7 @@ Each item gets a plain folder under the state folder that beehave makes. Release
 
 No step reads git there:
 
-- An agent call records no start commit, and `rewrote` is false.
+- An agent call records no start commit, and `rewrote` and `committed` are false.
 - `pin` and `allow_paths` are refused.
 - A cancel or a release with no engine running reads no git.
 - The builtins `merge` and `preflight`, and a `gate` call with no `run`, refuse the project with a plain message.

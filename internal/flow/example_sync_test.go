@@ -41,6 +41,7 @@ type syncScript struct {
 	tip    string // the round base tip that a synced line names
 	review string // the verdict of the sync review
 	rc     int    // the exit code of each check call
+	idle   bool   // the agent that resolves a conflict makes no commit, as one that fails before it merges
 }
 
 // syncedLine is the line of a clean sync that the fake tool prints.
@@ -140,6 +141,12 @@ func withSync(t *testing.T, rig *roundRig, script *syncScript) {
 	rig.h.agents.result = func(request AgentRequest) agent.Result {
 		if strings.Contains(request.Prompt, syncReviewMarker) {
 			require.NoError(t, os.WriteFile(request.OutputFile, []byte(`{"verdict":"`+script.review+`"}`), 0o600))
+		}
+
+		if strings.Contains(request.Prompt, syncResolveMarker) && !script.idle {
+			dir, err := rig.h.trees.per(t.Context(), testItem)
+			require.NoError(t, err)
+			commitIn(t, dir, "sync-merge.txt")
 		}
 
 		return inner(request)
@@ -544,6 +551,20 @@ func TestRoundSync_AConflictThatTheAgentResolvesIsGatedReviewedAndLandedInTheSam
 	assert.Equal(t, []string{""}, recorder.roundBases())
 	require.Len(t, rig.questions, 1)
 	assert.NotContains(t, rig.questions[0], "sync-")
+}
+
+func TestRoundSync_AResolveThatMadeNoCommitPushesNothingToTheSyncBranch(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	conflict := "state=conflict branch=" + syncBranch + " source=main base_tip=abc"
+	withSync(t, rig, &syncScript{idle: true, lines: []string{conflict, conflict}})
+
+	_, _, err := runSync(t, rig, false)
+	require.NoError(t, err)
+
+	assert.Empty(t, rig.h.forge.pushed, "a resolve that left the head where it started has nothing to push, and a push of that head would move the sync branch off its commits")
+	assert.Empty(t, syncLands(rig))
 }
 
 func TestRoundSync_TheReviewOfTheSyncReadsOnlyAndRunsOnTheGatedHeadOnly(t *testing.T) {

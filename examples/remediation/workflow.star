@@ -862,7 +862,9 @@ def sync_trunk(item, project, round_settings, n):
         capped(resolve, "sync-resolve", item)
 
         # The agent has no credential, so the engine pushes the merge commit to the sync branch. With no lease, git takes the merge only as a fast forward of the sync branch.
-        push(name = "push-sync-%d" % n, branch = line["branch"], head = resolve.head_sha, expect = "")
+        # A resolve that made no commit ends on the head it started on, which is not a commit of the sync branch, so a push of it would move the branch off its commits.
+        if resolve.committed:
+            push(name = "push-sync-%d" % n, branch = line["branch"], head = resolve.head_sha, expect = "")
         line = sync_check("sync-again-%d" % n, run)
 
     state = line["state"]
