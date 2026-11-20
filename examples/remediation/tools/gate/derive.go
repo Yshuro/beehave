@@ -25,6 +25,9 @@ const (
 	tokenField     = "token"
 	mergeTag       = "!!merge"
 
+	// maxExpandedNodes bounds the nodes of a workflow file with its aliases expanded, so that nested aliases cannot make the record of a step grow past any use.
+	maxExpandedNodes = 100_000
+
 	writePermission = "can write: the token of the run is not read only. Set permissions to read-all, {} or read and none values, at the job or the file"
 	readsSecretText = "reads a secret"
 )
@@ -37,7 +40,8 @@ var (
 	// githubPart is the github context in an expression, with the name of the field it reads, when it reads one, as the first group.
 	githubPart = regexp.MustCompile(`(?i)(?:^|[^.\w])github\b(?:\s*\.\s*([a-z_][\w-]*))?`)
 
-	errAliasLoop = errors.New("a YAML alias refers to a node that holds it")
+	errAliasLoop  = errors.New("a YAML alias refers to a node that holds it")
+	errAliasBound = fmt.Errorf("with its YAML aliases expanded, it holds more than %d nodes", maxExpandedNodes)
 )
 
 // File is a CI workflow file: its path and its text.
@@ -64,6 +68,7 @@ type workflowStep struct {
 	Shell            string    `yaml:"shell"`
 	WorkingDirectory string    `yaml:"working-directory"`
 	ContinueOnError  yaml.Node `yaml:"continue-on-error"`
+	If               string    `yaml:"if"`
 	Env              yaml.Node `yaml:"env"`
 }
 
@@ -92,6 +97,7 @@ type workflowJob struct {
 	Defaults    runDefaults
 	Env         yaml.Node
 	Container   yaml.Node
+	If          string
 	Steps       []workflowStep
 	node        *yaml.Node
 }
@@ -124,6 +130,7 @@ func decodeJob(id string, node *yaml.Node) (workflowJob, error) {
 		Defaults    runDefaults    `yaml:"defaults"`
 		Env         yaml.Node      `yaml:"env"`
 		Container   yaml.Node      `yaml:"container"`
+		If          string         `yaml:"if"`
 		Steps       []workflowStep `yaml:"steps"`
 	}
 
@@ -131,7 +138,9 @@ func decodeJob(id string, node *yaml.Node) (workflowJob, error) {
 		return workflowJob{}, fmt.Errorf("job %s: %w", id, err)
 	}
 
-	return workflowJob{ID: id, Uses: body.Uses, Permissions: body.Permissions, Defaults: body.Defaults, Env: body.Env, Container: body.Container, Steps: body.Steps, node: node}, nil
+	return workflowJob{
+		ID: id, Uses: body.Uses, Permissions: body.Permissions, Defaults: body.Defaults, Env: body.Env, Container: body.Container, If: body.If, Steps: body.Steps, node: node,
+	}, nil
 }
 
 type workflowFile struct {
@@ -157,7 +166,27 @@ func readWorkflow(text string) (workflowFile, error) {
 		return workflow, err
 	}
 
+	if expandedSize(&root, map[*yaml.Node]int{}) > maxExpandedNodes {
+		return workflow, errAliasBound
+	}
+
 	return workflow, root.Decode(&workflow)
+}
+
+// expandedSize counts the nodes of a tree with each alias expanded, up to one past maxExpandedNodes. sizes keeps the count of each node, so the count of a node shared by aliases is made once.
+func expandedSize(node *yaml.Node, sizes map[*yaml.Node]int) int {
+	if size, seen := sizes[node]; seen {
+		return size
+	}
+
+	size := 1
+	for _, child := range node.Content {
+		size = min(size+expandedSize(child, sizes), maxExpandedNodes+1)
+	}
+
+	sizes[node] = size
+
+	return size
 }
 
 // resolveAliases puts the node that each alias names in the place of the alias. resolved holds false for a node whose children are being resolved and true for a node that is done,
@@ -218,14 +247,28 @@ func namesSecret(text string) bool {
 	}
 
 	for _, expression := range expressionPart.FindAllStringSubmatch(text, -1) {
-		for _, ref := range githubPart.FindAllStringSubmatch(expression[1], -1) {
-			if ref[1] == "" || strings.EqualFold(ref[1], tokenField) {
-				return true
-			}
+		if readsToken(expression[1]) {
+			return true
 		}
 	}
 
 	return false
+}
+
+// readsToken reports whether the body of one expression reads the token of the run: github.token, or the github context as a whole.
+func readsToken(body string) bool {
+	for _, ref := range githubPart.FindAllStringSubmatch(body, -1) {
+		if ref[1] == "" || strings.EqualFold(ref[1], tokenField) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ifReadsToken reports whether the if of a job or of one of its steps reads the token of the run. CI reads each if as an expression, with or without `${{ }}`.
+func ifReadsToken(job *workflowJob) bool {
+	return readsToken(job.If) || slices.ContainsFunc(job.Steps, func(step workflowStep) bool { return readsToken(step.If) })
 }
 
 // readOnly reports whether a permissions node gives the token of the run no write: read-all, or a mapping of read and none values only. A missing node takes the default of the repository, which can write.
@@ -325,7 +368,7 @@ func jobProblem(file *workflowFile, job workflowJob, secrets secretReader) strin
 		return "calls the reusable workflow " + job.Uses + ", which the gate does not read"
 	case !readOnly(permissions):
 		return writePermission
-	case secrets.reads(job.node) || secrets.reads(&file.Env) || secrets.reads(file.Defaults.node):
+	case secrets.reads(job.node) || secrets.reads(&file.Env) || secrets.reads(file.Defaults.node) || ifReadsToken(&job):
 		return readsSecretText
 	}
 
@@ -378,6 +421,7 @@ func stepRecord(command string, step workflowStep, stepShell string, context ste
 		{"env", strings.Join(slices.Compact(env), " ")},
 		{"container", context.container},
 		{"continue-on-error", nodeText(&step.ContinueOnError)},
+		{"if", step.If},
 	} {
 		if part[1] != "" {
 			parts = append(parts, "["+part[0]+" "+part[1]+"]")

@@ -1,6 +1,8 @@
 package gate_test
 
 import (
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -148,4 +150,66 @@ func TestDerive_TheCommandsOfTheHeldListAreExactCIText(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Empty(t, gate.Hold(got.Steps, []string{"test"}, gate.Map{`grep -c "a  b" f`: {"test"}}), "a key copied from the CI file matches")
+}
+
+func TestDerive_AnIfWithNoBracesIsReadForTheTokenAndSecrets(t *testing.T) {
+	t.Parallel()
+
+	for name, jobs := range map[string]string{
+		"the field in the if of a job":          "  j:\n    if: startsWith(github.token, 'ghs_')\n    steps:\n      - run: make vet\n",
+		"the whole context in the if of a step": "  j:\n    steps:\n      - if: contains(toJSON(github), 'x')\n        run: make vet\n",
+		"an index of the context in a step if":  "  j:\n    steps:\n      - if: github['token'] != ''\n        run: make vet\n",
+		"braces in the if of a job":             "  j:\n    if: ${{ github.token != '' }}\n    steps:\n      - run: make vet\n",
+		"the stored values in the if of a step": "  j:\n    steps:\n      - if: secrets.DEPLOY != ''\n        run: make vet\n",
+	} {
+		got := derivedAll(t, readOnlyFile+"jobs:\n"+jobs+keptJob)
+
+		assert.Equal(t, []string{"job ci.yaml:j"}, refusedNames(got), name)
+		assert.Equal(t, []string{"k:run-1"}, stepNames(got), name)
+	}
+
+	for name, jobs := range map[string]string{
+		"another field in the if of a job": "  j:\n    if: github.ref == 'refs/heads/main'\n    steps:\n      - run: make vet\n",
+		"an input in the if of a step":     "  j:\n    steps:\n      - if: inputs.github == 'x'\n        run: make vet\n",
+	} {
+		got := derivedAll(t, readOnlyFile+"jobs:\n"+jobs+keptJob)
+
+		assert.Empty(t, got.Refused, name)
+		assert.Equal(t, []string{"j:run-1", "k:run-1"}, stepNames(got), name)
+	}
+}
+
+func TestDerive_TheIfOfAStepJoinsItsCommand(t *testing.T) {
+	t.Parallel()
+
+	got := derivedAll(t, readOnlyFile+"jobs:\n  j:\n    steps:\n      - run: make test\n        if: false\n"+
+		"      - run: make vet\n        if: github.ref == 'refs/heads/main'\n        continue-on-error: true\n      - run: make lint\n")
+
+	assert.Equal(t, []string{
+		"make test [if false]",
+		"make vet [continue-on-error true] [if github.ref == 'refs/heads/main']",
+		"make lint",
+	}, commands(got))
+}
+
+// nestedAliases gives a file whose job container is levels of aliases, each level a list of width aliases of the level below.
+func nestedAliases(levels, width int) string {
+	lines := []string{readOnlyFile + "x:\n  l0: &a0 v\n"}
+
+	for level := 1; level <= levels; level++ {
+		below := "*a" + strconv.Itoa(level-1)
+		lines = append(lines, "  l"+strconv.Itoa(level)+": &a"+strconv.Itoa(level)+" ["+strings.Repeat(below+", ", width-1)+below+"]\n")
+	}
+
+	return strings.Join(lines, "") + "jobs:\n  j:\n    container: *a" + strconv.Itoa(levels) + "\n    steps:\n      - run: make test\n"
+}
+
+func TestDerive_AFileWhoseAliasesExpandPastTheBoundIsRefused(t *testing.T) {
+	t.Parallel()
+
+	assert.Contains(t, refusedDerive(t, nestedAliases(6, 10)), "ci.yaml: not a workflow file: with its YAML aliases expanded, it holds more than 100000 nodes")
+	assert.Contains(t, refusedDerive(t, nestedAliases(5, 11)), "ci.yaml: not a workflow file: with its YAML aliases expanded, it holds more than 100000 nodes")
+
+	got := derivedAll(t, nestedAliases(4, 10))
+	assert.Equal(t, []string{"j:run-1"}, stepNames(got), "the control: an expansion under the bound is read")
 }
