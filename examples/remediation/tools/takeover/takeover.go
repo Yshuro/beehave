@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc"
 )
 
 // CodeGuard is the exit code of a pull request that must not be touched. CodeRule is the exit code of a rule of the takeover.
@@ -43,12 +44,14 @@ type Request struct {
 
 // Context is the settings of the round and the calls of the takeover. The caller passes the clock as Now.
 // Free refuses when another owner holds the claim and writes nothing. No call in the takeover writes a claim.
+// Gh runs gh for a take: it reads the closing issues and adds Me as an assignee of the pull request and of each issue. A take needs it and runs it only after the take is granted.
 type Context struct {
 	Me    string
 	Idle  time.Duration
 	Grace time.Duration
 	Now   time.Time
 	Free  func(ctx context.Context) error
+	Gh    proc.Runner
 }
 
 // Result is the verdict. Code is 0, CodeGuard or CodeRule. Lines are the lines to show, a refusal last.

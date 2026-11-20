@@ -565,6 +565,10 @@ func (s *session) take(ctx context.Context, p plan) error {
 		return err
 	}
 
+	if err = s.assign(ctx); err != nil {
+		return err
+	}
+
 	s.say(fmt.Sprintf("#%d may be taken now (basis: %s) after a %sh grace. The run of the item holds the claim.", s.request.PR, basisOf(p.assigned), hours(since)))
 
 	return nil
