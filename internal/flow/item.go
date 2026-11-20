@@ -57,13 +57,13 @@ type Stopped struct {
 // item runs one item: claim, the steps of its workflow file, release.
 // The workflow is not queued, so the wait for the owner holds no agent slot.
 func (e *Engine) item(parent dbos.Context, in ItemInput) (ItemResult, error) {
-	return e.track(parent, in, func(ctx dbos.Context, _ *attempt) (ItemResult, error) {
+	return e.track(parent, in, func(ctx dbos.Context, a *attempt) (ItemResult, error) {
 		login, owner, took, err := e.begin(ctx, in)
 		if err != nil {
 			return ItemResult{}, err
 		}
 
-		result, workErr := e.workHolding(ctx, in, login, claimTake{owner: owner, took: took})
+		result, workErr := e.workHolding(ctx, a, login, claimTake{owner: owner, took: took})
 
 		// A run whose context ended is canceled, interrupted or without its claim. A canceled run is released by the tick; an interrupted run keeps its claim and continues at the next beehave run.
 		// A run that lost its claim has nothing to release.
@@ -83,22 +83,22 @@ type claimTake struct {
 }
 
 // workHolding runs the work of an item while the tick renews its claim. A run that lost the claim returns errClaimLost, with the reason, in place of the error of its work.
-func (e *Engine) workHolding(ctx dbos.Context, in ItemInput, login string, taken claimTake) (ItemResult, error) {
-	id, forget := e.holds.hold(ctx, in.Project, taken.owner)
+func (e *Engine) workHolding(ctx dbos.Context, a *attempt, login string, taken claimTake) (ItemResult, error) {
+	forget := e.holds.hold(a, a.in.Project, taken.owner)
 	defer forget()
 
-	if err := e.firstTrust(ctx, id, in, taken); err != nil {
+	if err := e.firstTrust(ctx, a, taken); err != nil {
 		return ItemResult{}, err
 	}
 
-	start, err := e.makeTree(ctx, in)
+	start, err := e.makeTree(ctx, a.in)
 	if err != nil {
 		return ItemResult{}, err
 	}
 
-	result, err := e.runStar(ctx, in, login, start)
+	result, err := e.runStar(ctx, a.in, login, start)
 
-	if _, lost := e.claimed(id, in.Item); lost != nil {
+	if _, lost := e.claimed(a.id, a.in.Item); lost != nil {
 		return result, lost
 	}
 
@@ -107,21 +107,21 @@ func (e *Engine) workHolding(ctx dbos.Context, in ItemInput, login string, taken
 
 // firstTrust starts the trust in a claim. A take that this run made is trusted from the start of the take. A take of unknown age
 // needs one good renewal before the first agent starts.
-func (e *Engine) firstTrust(ctx context.Context, id string, in ItemInput, taken claimTake) error {
+func (e *Engine) firstTrust(ctx context.Context, a *attempt, taken claimTake) error {
 	if !taken.took.IsZero() {
-		e.trust(id, taken.took)
+		e.trust(a, taken.took)
 
 		return nil
 	}
 
 	// The first renewal moves the lease to now, so the renewal of the process that ran before is read first.
-	e.remember(ctx, id, in, taken.owner)
+	e.remember(ctx, a, taken.owner)
 
-	if err := e.firstRenewal(ctx, id, in, taken.owner); err != nil {
+	if err := e.firstRenewal(ctx, a, taken.owner); err != nil {
 		return err
 	}
 
-	_, err := e.claimed(id, in.Item)
+	_, err := e.claimed(a.id, a.in.Item)
 
 	return err
 }
@@ -151,34 +151,34 @@ func (e *Engine) makeTree(ctx dbos.Context, in ItemInput) (string, error) {
 
 // remember reads the last renewal of the lease of the claim of the owner from the claim store and keeps it with the claim of the run. A read that fails is logged
 // and keeps nothing: the only cost is that the trace of a later loss gives no run time.
-func (e *Engine) remember(ctx context.Context, id string, in ItemInput, owner string) {
-	renewed, err := e.deps.Beats.Renewed(ctx, in.Project, owner, in.Item)
+func (e *Engine) remember(ctx context.Context, a *attempt, owner string) {
+	renewed, err := e.deps.Beats.Renewed(ctx, a.in.Project, owner, a.in.Item)
 	if err != nil {
-		e.logger.WarnContext(ctx, "cannot read the last renewal of the claim", "item", in.Item, "error", err)
+		e.logger.WarnContext(ctx, "cannot read the last renewal of the claim", "item", a.in.Item, "error", err)
 
 		return
 	}
 
-	e.holds.remember(id, renewed)
+	e.holds.remember(a, renewed)
 }
 
 // firstRenewal renews a claim of unknown age until a renewal works or the tracker says the claim is gone, as the tick does, so one busy tracker call
 // does not end a run that took a fresh claim. It gives up when a limit of trust has passed since the first try: the lease of that take can have ended.
-func (e *Engine) firstRenewal(ctx context.Context, id string, in ItemInput, owner string) error {
+func (e *Engine) firstRenewal(ctx context.Context, a *attempt, owner string) error {
 	first := e.deps.Clock.now()
 
 	for {
 		start := e.deps.Clock.now()
 
-		text, err := e.beatOne(ctx, claimHold{project: in.Project, owner: owner}, trustLimit-e.deps.Clock.age(first))
+		text, err := e.beatOne(ctx, claimHold{project: a.in.Project, owner: owner}, trustLimit-e.deps.Clock.age(first))
 		if err == nil || text != "" {
-			e.settle(id, e.holds.claimOf(id), start, text, err)
+			e.settle(a, start, text, err)
 
 			return nil
 		}
 
 		if e.deps.Clock.age(first) >= trustLimit {
-			return fmt.Errorf("renew the claim of item %s before the first agent starts: %w", in.Item, err)
+			return fmt.Errorf("renew the claim of item %s before the first agent starts: %w", a.in.Item, err)
 		}
 
 		if err := proc.Sleep(ctx, cmp.Or(e.deps.Clock.Poll, tickInterval)); err != nil {

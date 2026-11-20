@@ -211,7 +211,7 @@ func newProcEngine(t *testing.T, agents agents) *Engine {
 	t.Helper()
 
 	engine := &Engine{deps: Deps{Agents: agents}, procs: newGroups(t), logger: newLogger(io.Discard)}
-	engine.holds.add(procRun, claimHold{renewed: time.Now()})
+	holdClaim(engine, procRun, claimHold{renewed: time.Now()})
 
 	return engine
 }
@@ -338,7 +338,7 @@ func TestRunAgent_ALostClaimKillsTheGroupWhileTheRunStaysOpen(t *testing.T) {
 	pid := receive(t, agents.pid)
 
 	// The run is not dropped and the phase does not end: only the loss ends the context of the claim.
-	engine.holds.fail(procRun, engine.holds.claimOf(procRun), "the claim is lost")
+	engine.holds.fail(claimAttempt(engine, procRun), "the claim is lost")
 	requireDies(t, pid)
 
 	close(agents.proceed)
@@ -350,14 +350,14 @@ func TestHolds_AddEndsTheContextOfTheRowItReplaces(t *testing.T) {
 
 	var h holds
 
-	h.add("run", claimHold{})
+	earlier, later := &attempt{id: "run"}, &attempt{id: "run"}
 
-	first := h.rows["run"].ctx
+	first := h.add(earlier, claimHold{})
 
-	h.add("run", claimHold{})
+	h.add(later, claimHold{})
 
 	require.Error(t, first.Err(), "the first context is done")
-	require.NoError(t, h.rows["run"].ctx.Err(), "the new row keeps a live context")
+	require.NoError(t, h.rows[later].ctx.Err(), "the new row keeps a live context")
 }
 
 // runsOf returns the run of each row.

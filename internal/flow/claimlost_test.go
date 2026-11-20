@@ -183,7 +183,7 @@ func TestTrust_ARenewalOfARunThatIsGoneLeavesNoTimerBehind(t *testing.T) {
 	harness := newHarness(t)
 	engine := launchedWith(t, harness, func(deps *Deps) { deps.Clock.After = timers.after })
 
-	engine.trust("run-gone", time.Now())
+	engine.trust(&attempt{id: "run-gone"}, time.Now())
 
 	require.Len(t, timers.all(), 1)
 	assert.True(t, timers.stoppedAt(0))
@@ -331,7 +331,7 @@ func TestFirstTrust_ARunThatIsCanceledWhileItTriesTheRenewalAgainTriesNoMore(t *
 
 	harness, engine, _, agents := failedAtTheAgent(t)
 	harness.beats.fail(testOwner+testItem+"#2", "", errFake)
-	harness.beats.hook(func() { engine.cancels.stop(runID(testItem, 1)) })
+	harness.beats.hook(func() { stopRun(engine, runID(testItem, 1)) })
 	_, err := resumeTheRun(t, harness, engine)
 	require.Error(t, err)
 	assert.Len(t, harness.beats.seen(), 1, "the cancel ended the wait before the second try")
@@ -434,7 +434,7 @@ func TestRunAgent_AnOrphanPhaseOfALostRunStartsNoAgentWhenANewRunHoldsTheItem(t 
 	require.ErrorIs(t, outcome.err, errClaimLost)
 
 	// A new run takes the item and holds a trusted claim on it. The orphan phase belongs to the lost run, not to this one.
-	engine.holds.add("item-"+testItem+"-r2", claimHold{project: testProject, owner: testOwner + testItem + "#2", renewed: time.Now()})
+	holdClaim(engine, "item-"+testItem+"-r2", claimHold{project: testProject, owner: testOwner + testItem + "#2", renewed: time.Now()})
 
 	close(gated.hold)
 	receive(t, gated.returned)
@@ -526,7 +526,7 @@ func TestAwaitClaim_AnOpenRunIsWaitedForPastTheGraceTime(t *testing.T) {
 
 	go func() {
 		time.Sleep(20 * engine.deps.Clock.Grace)
-		engine.holds.add(run, claimHold{renewed: engine.deps.Clock.now()})
+		holdClaim(engine, run, claimHold{renewed: engine.deps.Clock.now()})
 	}()
 
 	claim, err := engine.awaitClaim(t.Context(), PhaseInput{Run: run, Item: testItem})
@@ -575,7 +575,7 @@ func TestAwaitClaim_AGraceTimeLetsARunThatIsNotOpenYetTakeItsClaim(t *testing.T)
 
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		engine.holds.add("run-late", claimHold{renewed: time.Now()})
+		holdClaim(engine, "run-late", claimHold{renewed: time.Now()})
 	}()
 
 	claim, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "run-late", Item: testItem})
@@ -596,7 +596,7 @@ func TestAwaitClaim_AResumeThatTookAClaimForTheRunKeepsThePhaseWaitingPastTheGra
 
 	go func() {
 		time.Sleep(20 * engine.deps.Clock.Grace)
-		engine.holds.add("item-12-r9", claimHold{renewed: time.Now()})
+		holdClaim(engine, "item-12-r9", claimHold{renewed: time.Now()})
 	}()
 
 	claim, err := engine.awaitClaim(t.Context(), PhaseInput{Run: "item-12-r9", Item: testItem})

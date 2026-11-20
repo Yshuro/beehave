@@ -92,7 +92,7 @@ func TestRunAgent_TheAgentRunsUnderTheContextOfTheClaim(t *testing.T) {
 	waitOn(t, waiting[struct{}]{what: "the agent to run", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 
 	// A claim that ends, as the end of the run ends it, ends the context of the agent and kills its group.
-	engine.holds.drop(runID(testItem, 1))
+	engine.holds.dropOwn(claimAttempt(engine, runID(testItem, 1)))
 	requireDies(t, harness.agents.pid)
 	finish()
 

@@ -123,16 +123,6 @@ func (c *cancels) endedAttempts() []*attempt {
 	return list
 }
 
-// stop calls the cancel function of the run and keeps it listed: a tick drops it after it ended. A run that this process does not execute is left alone.
-func (c *cancels) stop(id string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if a, found := c.runs[id]; found {
-		a.cancel()
-	}
-}
-
 // forget drops each attempt in list that is still the one listed under its run id. A resumed run that replaced an attempt stays listed.
 func (c *cancels) forget(list []*attempt) {
 	c.mu.Lock()

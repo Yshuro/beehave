@@ -51,6 +51,48 @@ func (g *gatedLifecycle) Release(ctx context.Context, project, item, owner strin
 	return g.lifecycle.Release(ctx, project, item, owner)
 }
 
+// holdClaim records a claim for a new attempt of the run id and returns the attempt.
+func holdClaim(engine *Engine, id string, row claimHold) *attempt {
+	a := &attempt{id: id, cancel: func() {}}
+	engine.holds.add(a, row)
+
+	return a
+}
+
+// claimAttempt returns the attempt that holds the claim of the run id, or nil.
+func claimAttempt(engine *Engine, id string) *attempt {
+	engine.holds.mu.Lock()
+	defer engine.holds.mu.Unlock()
+
+	a, _, _ := engine.holds.find(id)
+
+	return a
+}
+
+// claimRowOf returns the claim row that the engine holds for the run id.
+func claimRowOf(engine *Engine, id string) claimHold {
+	engine.holds.mu.Lock()
+	defer engine.holds.mu.Unlock()
+
+	_, row, _ := engine.holds.find(id)
+
+	return row
+}
+
+// loseClaim marks the claim that the run id holds now lost, as the tick does when the tracker says it is gone.
+func loseClaim(engine *Engine, id, reason string) {
+	engine.lose(claimAttempt(engine, id), reason)
+}
+
+// stopRun cancels the attempt that the engine lists under the run id, as a lost claim does.
+func stopRun(engine *Engine, id string) {
+	engine.cancels.mu.Lock()
+	a := engine.cancels.runs[id]
+	engine.cancels.mu.Unlock()
+
+	a.cancel()
+}
+
 func TestBeat_ARenewalOfTheEarlierAttemptThatSaysTheClaimIsGoneLeavesTheResumedRunRunning(t *testing.T) {
 	t.Parallel()
 
@@ -76,7 +118,7 @@ func TestBeat_ARenewalOfTheEarlierAttemptThatSaysTheClaimIsGoneLeavesTheResumedR
 			return
 		}
 
-		engine.cancels.stop(testRun)
+		stopRun(engine, testRun)
 		assert.Eventually(t, func() bool { return isClosed(earlier) }, soonBound, pollEvery, "the first attempt ends")
 
 		later = resumeAndList(t, engine, client, earlier)

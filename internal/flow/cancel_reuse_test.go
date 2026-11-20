@@ -136,7 +136,7 @@ func TestCancel_ACancelRowOfTheEarlierAttemptDoesNotStopTheResumedRun(t *testing
 
 	// The first attempt ends and the run resumes after the tick read the canceled row and before it acts on it.
 	hook.run = func() {
-		engine.cancels.stop(testRun)
+		stopRun(engine, testRun)
 		assert.Eventually(t, func() bool { return isClosed(earlier) }, soonBound, pollEvery, "the first attempt ends")
 
 		later = resumeAndList(t, engine, client, earlier)

@@ -43,71 +43,67 @@ type claimHold struct {
 	cancel  context.CancelFunc
 }
 
-// holds keeps the claim of each run this process executes, by run id, from Claim until Release.
-// A phase asks it, by the id of its own run, whether that run holds a trusted claim now, and gets the context of the claim.
+// holds keeps the claim of each attempt this process executes, from Claim until Release. A write names the attempt, so the answer for an earlier
+// attempt cannot change the claim of a resumed one. A phase asks, by the id of its own run, whether that run holds a trusted claim now.
 type holds struct {
 	mu   sync.Mutex
-	rows map[string]claimHold
+	rows map[*attempt]claimHold
 }
 
-// hold records the claim of the run in ctx. It returns the run id, empty outside a workflow, and the function that forgets the claim.
+// hold records the claim of an attempt and returns the function that forgets it. An attempt outside a workflow has no run id and holds nothing.
 // The claim is not trusted until trust stamps it.
-func (h *holds) hold(ctx dbos.Context, project, owner string) (string, func()) {
-	id, err := dbos.GetWorkflowID(ctx)
-	if err != nil {
-		return "", func() {}
+func (h *holds) hold(a *attempt, project, owner string) func() {
+	if a.id == "" {
+		return func() {}
 	}
 
-	return id, h.keep(id, project, owner)
+	h.add(a, claimHold{project: project, owner: owner})
+
+	return func() { h.dropOwn(a) }
 }
 
-// keep records the claim of a run and returns the function that forgets that claim and no later one of the same run id.
-func (h *holds) keep(id, project, owner string) func() {
-	claim := h.add(id, claimHold{project: project, owner: owner})
-
-	return func() { h.dropOwn(claim, id) }
-}
-
-// add records the claim of a run and gives it its context, which it returns. A claim that the run already holds ends: its context is done, so no agent keeps running under a row that no longer exists.
-func (h *holds) add(id string, row claimHold) context.Context {
+// add records the claim of an attempt and gives it its context, which it returns. The claim of an earlier attempt of the same run ends: its context is done,
+// so no agent keeps running under a row that no longer exists.
+func (h *holds) add(a *attempt, row claimHold) context.Context {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
 	if h.rows == nil {
-		h.rows = map[string]claimHold{}
+		h.rows = map[*attempt]claimHold{}
 	}
 
-	if old, found := h.rows[id]; found {
-		old.cancel()
+	if earlier, _, found := h.find(a.id); found {
+		h.release(earlier)
 	}
 
 	row.ctx, row.cancel = context.WithCancel(context.Background())
-	h.rows[id] = row
+	h.rows[a] = row
 
 	return row.ctx
 }
 
-// dropOwn forgets the claim of a run when claim is still the context of its row. A run that resumed under the same id holds a newer row, and the ending of the earlier attempt leaves it alone.
-func (h *holds) dropOwn(claim context.Context, id string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	if h.rows[id].ctx == claim {
-		h.release(id)
+// find returns the attempt that holds a claim for the run id, and its claim. The caller holds the lock.
+func (h *holds) find(id string) (*attempt, claimHold, bool) {
+	for a, row := range h.rows {
+		if a.id == id {
+			return a, row, true
+		}
 	}
+
+	return nil, claimHold{}, false
 }
 
-// drop forgets the claim of a run, stops its timer and ends its context, so the agents of the run stop with it.
-func (h *holds) drop(id string) {
+// dropOwn forgets the claim of an attempt, stops its timer and ends its context, so the agents of the attempt stop with it.
+func (h *holds) dropOwn(a *attempt) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.release(id)
+	h.release(a)
 }
 
 // release stops the timer of a claim, ends its context and forgets it. The caller holds the lock.
-func (h *holds) release(id string) {
-	if row, found := h.rows[id]; found {
+func (h *holds) release(a *attempt) {
+	if row, found := h.rows[a]; found {
 		if row.stop != nil {
 			row.stop()
 		}
@@ -115,7 +111,7 @@ func (h *holds) release(id string) {
 		row.cancel()
 	}
 
-	delete(h.rows, id)
+	delete(h.rows, a)
 }
 
 // clear drops every claim the engine still holds, so no timer of a trust fires after the engine ends.
@@ -123,50 +119,36 @@ func (h *holds) clear() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	for id := range h.rows {
-		h.release(id)
+	for a := range h.rows {
+		h.release(a)
 	}
 }
 
 // snapshot lists the claims that still renew: a lost claim stays lost, and a claim with no first trust waits for it.
-func (h *holds) snapshot() map[string]claimHold {
+func (h *holds) snapshot() map[*attempt]claimHold {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	rows := make(map[string]claimHold, len(h.rows))
+	rows := make(map[*attempt]claimHold, len(h.rows))
 
-	for id, row := range h.rows {
+	for a, row := range h.rows {
 		if row.lost == "" && !row.renewed.IsZero() {
-			rows[id] = row
+			rows[a] = row
 		}
 	}
 
 	return rows
 }
 
-// claimOf returns the done channel of the context of the claim that the run holds now, or nil when it holds none. It names the attempt that took the claim.
-func (h *holds) claimOf(id string) <-chan struct{} {
+// fail marks the claim of an attempt lost and ends its context. A start under the context after this call finds it done,
+// and an agent that started before it dies with its process group. dropOwn ends the same context when the attempt ends.
+func (h *holds) fail(a *attempt, reason string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	row, found := h.rows[id]
+	row, found := h.rows[a]
 	if !found {
-		return nil
-	}
-
-	return row.ctx.Done()
-}
-
-// fail marks the claim of a run lost and ends its context, when claim is the done channel of the context of its row, and reports whether it did.
-// A start under the context after this call finds it done, and an agent that started before it dies with its process group. drop ends the same context when the run ends.
-// A run that resumed under the same id holds a newer row, and a read of the earlier attempt leaves it alone.
-func (h *holds) fail(id string, claim <-chan struct{}, reason string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	row, found := h.rows[id]
-	if !found || row.ctx.Done() != claim {
-		return false
+		return
 	}
 
 	if row.stop != nil {
@@ -176,17 +158,15 @@ func (h *holds) fail(id string, claim <-chan struct{}, reason string) bool {
 	row.cancel()
 
 	row.lost = reason
-	h.rows[id] = row
-
-	return true
+	h.rows[a] = row
 }
 
-// renew records that a renewal which began at start worked, and swaps the timer of the trust for stop. It reports false, and keeps nothing, for a run that is gone or lost.
-func (h *holds) renew(id string, start time.Time, stop func()) bool {
+// renew records that a renewal which began at start worked, and swaps the timer of the trust for stop. It reports false, and keeps nothing, for an attempt whose claim is gone or lost.
+func (h *holds) renew(a *attempt, start time.Time, stop func()) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	row, found := h.rows[id]
+	row, found := h.rows[a]
 	if !found || row.lost != "" {
 		return false
 	}
@@ -196,47 +176,49 @@ func (h *holds) renew(id string, start time.Time, stop func()) bool {
 	}
 
 	row.renewed, row.failure, row.stop = start, "", stop
-	h.rows[id] = row
+	h.rows[a] = row
 
 	return true
 }
 
-// remember keeps the last renewal that the store held for the claim of a run before this process renewed it.
-func (h *holds) remember(id string, before time.Time) {
+// remember keeps the last renewal that the store held for the claim of an attempt before this process renewed it.
+func (h *holds) remember(a *attempt, before time.Time) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if row, found := h.rows[id]; found {
+	if row, found := h.rows[a]; found {
 		row.before = before
-		h.rows[id] = row
+		h.rows[a] = row
 	}
 }
 
-// renewedBefore returns what remember kept for the run, or the zero time.
+// renewedBefore returns what remember kept for the claim of the run, or the zero time.
 func (h *holds) renewedBefore(id string) time.Time {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	return h.rows[id].before
+	_, row, _ := h.find(id)
+
+	return row.before
 }
 
-// note keeps the text of a renewal that failed, so the reason of a lost claim names it.
-func (h *holds) note(id, failure string) {
+// note keeps the text of a renewal of the claim of an attempt that failed, so the reason of a lost claim names it.
+func (h *holds) note(a *attempt, failure string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if row, found := h.rows[id]; found {
+	if row, found := h.rows[a]; found {
 		row.failure = failure
-		h.rows[id] = row
+		h.rows[a] = row
 	}
 }
 
-// expired returns the claim of the run when it is still trusted and its last good renewal began at stamp. A later renewal makes a timer of an earlier stamp void.
-func (h *holds) expired(id string, stamp time.Time) (claimHold, bool) {
+// expired returns the claim of the attempt when it is still trusted and its last good renewal began at stamp. A later renewal makes a timer of an earlier stamp void.
+func (h *holds) expired(a *attempt, stamp time.Time) (claimHold, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	row, found := h.rows[id]
+	row, found := h.rows[a]
 
 	return row, found && row.lost == "" && row.renewed.Equal(stamp)
 }
@@ -248,7 +230,7 @@ func (h *holds) distrust(id string, clk clock) (claim context.Context, reason st
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	row, found := h.rows[id]
+	_, row, found := h.find(id)
 
 	switch {
 	case !found:
@@ -278,58 +260,56 @@ func lapse(row claimHold) string {
 // A tracker that says the claim is gone ends the run at once. A renewal that fails for any other reason is tried again on the next tick,
 // until one tick before the lease of the last good renewal can end. Each tick counts that time on the monotonic and on the wall clock, so a sleep of the machine ends the trust.
 func (e *Engine) beatClaims() {
-	for id, row := range e.holds.snapshot() {
+	for a, row := range e.holds.snapshot() {
 		now := e.deps.Clock.now()
 
 		left := trustLimit - e.deps.Clock.age(row.renewed)
 		if left <= 0 {
-			e.lose(id, row.ctx.Done(), lapse(row))
+			e.lose(a, lapse(row))
 
 			continue
 		}
 
 		text, err := e.beatOne(e.ctx, row, left)
-		e.settle(id, row.ctx.Done(), now, text, err)
+		e.settle(a, now, text, err)
 	}
 }
 
-// settle applies the answer of a renewal that began at start, for the claim that claim names: the tracker says the claim is gone, the renewal worked,
+// settle applies the answer of a renewal that began at start to the claim of the attempt: the tracker says the claim is gone, the renewal worked,
 // or it failed and the next tick tries again.
-func (e *Engine) settle(id string, claim <-chan struct{}, start time.Time, text string, err error) {
+func (e *Engine) settle(a *attempt, start time.Time, text string, err error) {
 	switch {
 	case text != "":
-		e.lose(id, claim, text)
+		e.lose(a, text)
 	case err == nil:
-		e.trust(id, start)
+		e.trust(a, start)
 	default:
-		e.holds.note(id, err.Error())
-		e.logger.Warn("cannot renew the claim; the next tick tries again", "run", id, "error", err)
+		e.holds.note(a, err.Error())
+		e.logger.Warn("cannot renew the claim; the next tick tries again", "run", a.id, "error", err)
 	}
 }
 
-// trust stamps the claim of a run with the start of a good renewal and arms the timer that ends the trust.
+// trust stamps the claim of an attempt with the start of a good renewal and arms the timer that ends the trust.
 // The timer fires whatever a renewal in flight does, so a tracker call that hangs cannot hold the cancel past the lease.
-func (e *Engine) trust(id string, start time.Time) {
-	stop := e.deps.Clock.after(trustLimit-e.deps.Clock.age(start), func() { e.deadline(id, start) })
-	if !e.holds.renew(id, start, stop) {
+func (e *Engine) trust(a *attempt, start time.Time) {
+	stop := e.deps.Clock.after(trustLimit-e.deps.Clock.age(start), func() { e.deadline(a, start) })
+	if !e.holds.renew(a, start, stop) {
 		stop()
 	}
 }
 
-// deadline ends the trust in a claim whose last good renewal began at stamp, when no later renewal worked.
-func (e *Engine) deadline(id string, stamp time.Time) {
-	if row, expired := e.holds.expired(id, stamp); expired {
-		e.lose(id, row.ctx.Done(), lapse(row))
+// deadline ends the trust in the claim of an attempt whose last good renewal began at stamp, when no later renewal worked.
+func (e *Engine) deadline(a *attempt, stamp time.Time) {
+	if row, expired := e.holds.expired(a, stamp); expired {
+		e.lose(a, lapse(row))
 	}
 }
 
-// lose marks the claim that claim names lost and cancels the run. Ending the claim ends the context of every agent of the run, so the agent step in flight stops.
-// A claim that a resumed run replaced is left alone, and so is the run: the answer was for the attempt that held the earlier claim.
+// lose marks the claim of an attempt lost and cancels the attempt. Ending the claim ends the context of every agent of the attempt, so the agent step in flight stops.
 // The worktree and the claim stay as they are: another run may hold the item now.
-func (e *Engine) lose(id string, claim <-chan struct{}, reason string) {
-	if e.holds.fail(id, claim, reason) {
-		e.cancels.stop(id)
-	}
+func (e *Engine) lose(a *attempt, reason string) {
+	e.holds.fail(a, reason)
+	a.cancel()
 }
 
 // beatOne renews one claim under its own timeout, so a tracker call that hangs delays no other claim and no cancel scan for longer than the timeout.
