@@ -487,7 +487,7 @@ def check_mutation(words, base):
 def lane_report(lane):
     """Checks the report that a lane wrote, as the command step candidate-lane-report, and returns the findings as text. An empty text means the report is whole.
     `remedy report` reads the report from its stdin and judges it against the head of the lane: the four tables, the head and the line about background commands.
-    Exit code 1 gives the defect lines as the findings. Exit code 2 means the check could not run, and it ends the item."""
+    Exit code 2 means the check could not run, and it ends the item. Every other code except 0, such as 1, 3 or 127, is a defect of the lane: its output is the findings, and they send the lane back to a fix."""
     done = command(name = "candidate-lane-report", run = ["remedy", "report", "/dev/stdin", "--head", lane.head_sha], stdin = lane.report, stop_on_rc = [2])
     if done.rc == 0:
         return ""
@@ -542,13 +542,19 @@ def changelog_missing(changelog, base, head, id, fetch = False):
 
     return ""
 
-def uncaused_text(lanes):
-    """The JSON list of the reds that the lanes did not cause: the output `uncaused` of each lane, joined. An entry whose id an earlier lane already listed is left out, so two lanes that report one red file one item.
-    An entry that is no object stays in the list, and file_parked refuses it."""
+def uncaused_text(implement, fixes):
+    """The JSON list of the reds that the lanes did not cause: the output `uncaused` of the implement lane and of each fix lane, joined. An entry whose id an earlier lane already listed is left out, so two lanes that report one red file one item.
+    An entry that is no object stays in the list, and file_parked refuses it. A text that is not JSON is refused with the name of the lane and the text itself."""
     joined = []
     seen = []
-    for lane in lanes:
-        listed = json.decode(lane.uncaused)
+    lanes = [implement] + fixes
+    for place in range(len(lanes)):
+        lane = lanes[place]
+        name = "the implement lane" if place == 0 else "fix lane %d" % place
+        listed = json.decode(lane.uncaused, default = ("invalid",))
+        if type(listed) == "tuple":
+            fail("REFUSE: the output uncaused of %s is not valid JSON: %r. Write [] when the lane found no red that it did not cause" % (name, lane.uncaused))
+
         if type(listed) != "list":
             fail("REFUSE: the output uncaused of a lane is not a JSON list. Write [] when the lane found no red that it did not cause")
 
@@ -1250,7 +1256,7 @@ def pipeline(item):
         return item_value(item, loop.head, False, "host-loss", loop.host_losses)
 
     # Each red that a lane says it did not cause is filed as its own item before any verdict, so no approval exists without the item. A refused filing ends the item with no approval.
-    file_parked(uncaused_text([implement] + loop.lanes), "uncaused")
+    file_parked(uncaused_text(implement, loop.lanes), "uncaused")
 
     # A reject verdict ends the loop with no fix round. The item gets the text of the review as the reason and the hold status.
     # A scoped review can reject before the first gate, so an item that the loop holds reports loop.head, the commit that the loop judged last.
