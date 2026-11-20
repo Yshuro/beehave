@@ -179,6 +179,7 @@ A status is `open`, `closed` or `hold`. On GitHub, `hold` needs a label named `h
 - `comments` is the list of the comment texts, oldest first, with no `beehave-key:` line.
 - `parent` is the id of the parent of the item read, or an empty text.
 - With `of = "parent"` and an item that has no parent, `found` is false and the other values are empty.
+- A round item has no tracker issue, so `found` is false and the other values are empty, with no tracker read.
 - The read is a recorded step, so a replay returns what the first start read and does not read the tracker again.
 - The comments and the parent come from the tracker through the optional reader contract. The `local` tracker and beads serve both. GitHub serves both through the REST endpoints for comments and for the parent issue; an issue with no parent gives an empty `parent`.
 - A tracker with no reader fails the call with an error that names the tracker.
