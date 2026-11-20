@@ -282,27 +282,35 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailedWhenItMovesAKeptRoundWorktree(
 	for _, step := range []string{"status", "fetch", "log", "checkout", "update-ref"} {
 		trees, git, _ := ensureFixture(t)
 
-		_, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
+		kept, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 		require.NoError(t, err)
 
 		git.fail = step
+		if step == "update-ref" {
+			git.failIn = kept
+		}
 
 		got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 		require.ErrorContains(t, err, "git "+step, step)
 		assert.Empty(t, got, step)
+
+		if step == "update-ref" {
+			require.ErrorContains(t, err, "git update-ref in "+kept+" exited with code 128", "the placed mark of the kept tree fails, not the ref of the clone")
+		}
 	}
 }
 
 func TestWorktrees_EnsureNamesTheGitCallThatFailedWhenItMarksANewRoundWorktree(t *testing.T) {
 	t.Parallel()
 
-	trees, git, _ := ensureFixture(t)
-	git.fail = "update-ref"
+	trees, git, state := ensureFixture(t)
+	tree := filepath.Join(state, "trees", "p", model.SafeName(roundItem))
+	git.fail, git.failIn = "update-ref", tree
 
 	got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
-	require.ErrorContains(t, err, "git update-ref")
+	require.ErrorContains(t, err, "git update-ref in "+tree+" exited with code 128", "the placed mark of the new tree fails, not the ref of the clone")
 	assert.Empty(t, got)
 }
 

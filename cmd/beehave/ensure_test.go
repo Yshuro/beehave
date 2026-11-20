@@ -28,6 +28,7 @@ type fakeGit struct {
 	calls  []string
 	made   []string
 	fail   string
+	failIn string
 	branch bool
 }
 
@@ -55,24 +56,29 @@ func (r fakeGitIn) Run(_ context.Context, args []string) model.CommandResult {
 	g.calls = append(g.calls, r.dir+": "+strings.Join(args, " "))
 
 	if pushRepo := strings.HasPrefix(args[0], "--git-dir="); pushRepo {
-		return g.inPushRepository(args[1:])
+		return g.inPushRepository(r.dir, args[1:])
 	}
 
-	return g.answer(args)
+	return g.answer(r.dir, args)
+}
+
+// fails reports whether the call of word in dir fails: word is the fail word, and failIn is empty or names dir.
+func (g *fakeGit) fails(dir, word string) bool {
+	return word == g.fail && (g.failIn == "" || g.failIn == dir)
 }
 
 // inPushRepository answers a call in the push repository: a rev-parse prints fakeTip.
-func (g *fakeGit) inPushRepository(args []string) model.CommandResult {
-	if args[0] != g.fail && args[0] == "rev-parse" {
+func (g *fakeGit) inPushRepository(dir string, args []string) model.CommandResult {
+	if !g.fails(dir, args[0]) && args[0] == "rev-parse" {
 		return model.CommandResult{Stdout: fakeTip + "\n"}
 	}
 
-	return g.answer(args)
+	return g.answer(dir, args)
 }
 
 // answer answers a call in the clone, a worktree or the repos folder.
-func (g *fakeGit) answer(args []string) model.CommandResult {
-	if args[0] == g.fail {
+func (g *fakeGit) answer(dir string, args []string) model.CommandResult {
+	if g.fails(dir, args[0]) {
 		return model.CommandResult{ExitCode: 128, Stderr: "fatal: refused\n"}
 	}
 
@@ -303,6 +309,51 @@ func TestWorktrees_FetchRefusesAProjectTheConfigLacksAndRunsNoGit(t *testing.T) 
 
 	require.ErrorIs(t, err, errUnknownProject)
 	assert.Empty(t, git.calls)
+}
+
+func TestWorktrees_FetchNamesTheGitCallThatFailed(t *testing.T) {
+	t.Parallel()
+
+	t.Run("the forge cannot be built", func(t *testing.T) {
+		t.Parallel()
+
+		trees, git, _ := ensureFixture(t)
+		trees.forge = func(model.Project) (forge.Forge, error) { return nil, errFake }
+
+		err := trees.Fetch(t.Context(), "p")
+
+		require.ErrorIs(t, err, errFake)
+		assert.Empty(t, git.calls, "no git call runs with no address of the remote")
+	})
+
+	cases := map[string]struct {
+		remote, clone string
+	}{
+		"the push repository cannot be made": {remote: "init"},
+		"the fetch from the remote fails":    {remote: "fetch"},
+		"the copy into the clone fails":      {clone: "fetch"},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			trees, _, state := ensureFixture(t)
+			remote, local := &fakeGit{fail: c.remote}, &fakeGit{fail: c.clone}
+			trees.remote, trees.git = remote.runner, local.runner
+
+			err := trees.Fetch(t.Context(), "p")
+
+			if c.clone == "" {
+				require.ErrorContains(t, err, "git "+c.remote+" in "+filepath.Join(state, "push", "p.git")+" exited with code 128")
+				assert.Empty(t, local.calls, "the clone gets no call when the push repository fails")
+
+				return
+			}
+
+			require.ErrorContains(t, err, "git "+c.clone+" in "+filepath.Join(state, "repos", "p")+" exited with code 128")
+		})
+	}
 }
 
 func TestWorktrees_EnsureFetchesNothingWhenTheForgeOfAClonedProjectCannotBeBuilt(t *testing.T) {
