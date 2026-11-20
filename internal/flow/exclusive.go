@@ -39,7 +39,7 @@ const (
 )
 
 // ExclusiveInput is one gate or one merge of a repository, or the host job of a command call with a slot class. Kind is "gate", "merge", "batch_gate" or "command".
-// Request belongs to a command call. Request and Head belong to a gate. Run, Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
+// Request belongs to a command call. Request and Head belong to a gate. Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
 // Run is the id of the run that queued the merge or the command, and RunItem is the item whose claim that run holds. A call with no Run is refused.
 type ExclusiveInput struct {
 	Kind    string `json:"kind"`
