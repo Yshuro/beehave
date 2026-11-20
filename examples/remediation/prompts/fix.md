@@ -134,6 +134,7 @@ subset of the union of the two parents' versions of that file; the control is th
 parent alone, which must be nonzero.
 Restore a mutated file from a snapshot and **assert the blob**; `git checkout -- <file>` resets to HEAD and
 silently discards other uncommitted edits.
+**A claim that two changes are disjoint carries the SHA it was measured at.** A list of changed paths from one tip is stale after two merges: measure again at the tip you merge to.
 
 ## Brief rules
 
@@ -147,6 +148,24 @@ silently discards other uncommitted edits.
 **Commit every change at once.** The pull request of the item is open already, and a change that is not committed is lost with the lane. Do not push: the engine pushes the head of the branch after this step. Do not edit the body of the pull request or link a stack: the engine owns both.
 **Never use the merge queue of GitHub.** The orchestrator merges a pinned head with `gh pr merge`. Never run `gh pr merge --auto` and never add a pull request to a queue.
 **Known base reds are in one file.** The known base reds are the list `base_reds` in the data file {{ .data_file }}, which the engine wrote for this step. Read it with the shell (`cat` or `jq`), and re-derive each red at the tip you branch from. Never copy the list into a report or a brief. If the data file is missing or cannot be read, stop and refuse: say so, and do not guess the base reds.
+**A base-red entry names the command that CI runs, not the test target.** The same target under another runner is another measurement. Follow the CI task to its command before you record a red.
+**The exclusion list of a guard is a decision that expires.** State what a guard covers, not only that it passed. When the defect recurs inside an exclusion, justify the exclusion again before you add a case.
+**Do not edit a branch that a pending merge depends on.** That is a branch with an approved head that waits to merge, or the parent of an open stack. File the finding that survives as an issue first, and fix it in a later pull request.
+
+## Lane boundaries
+
+**Each lane has one item, one worktree, one branch and one pull request.** Never take a second item into the tree you were given, however related it looks. Two items in one tree cannot be reviewed, reverted or merged alone. Never touch the worktree of another lane.
+**An item is the scope of one pull request, not one issue.** **The scope of the item is fixed at the first review.** Until then, fix a defect of the same class that you find on the way on this branch. After it, name the defect in your report so that it becomes a later item.
+**Never merge, never comment on the forge, and never file an issue.** The engine and the orchestrator do these. Name a finding that you will not fix in your report, so that an issue is filed for it.
+{{ if .facts.build_host }}**Run every build, test and lint on the build host.** Never run one on this machine.
+{{ else }}This project has no build host: run builds and tests on this machine.
+{{ end }}
+## Skills
+
+**Invoke each skill that the rules name with the Skill tool, by name.** Reading the file of a skill instead is a skipped step, and a report with no Skill call goes back unread. If the Skill tool answers `unknown skill`, read the skill file and follow it: that answer is about the registry and is never permission to skip the step.
+**Run the skills in order.** `plan-vs-conventions` for a change past one file, `cross-cutting-api-change` for a new variant, field or entry point, then `blast-radius-review` iterated to zero before the gate, with the round count in the report.
+**`blast-radius-review` is the floor of every lane, never the whole answer.** Choose the other skills from what the item is, not from habit: a change of output, of a dependency floor or of a harness each asks for more.
+**A ruling of the owner binds the item.** Read the rulings file that the run names. Never reverse a ruling: if you think that it is wrong, stop and report it with your evidence.
 
 ## Project rules
 

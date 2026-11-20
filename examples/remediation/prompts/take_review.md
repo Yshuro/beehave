@@ -8,6 +8,8 @@ The notice that asks the author for an answer is refused until this review is on
 you review. If it sets terms (what to leave alone, what to change, what to ask first), follow them over your own plan.
 Report a term you cannot follow, and do not break it.
 
+**Ask whether the tip has overtaken a pull request before you ask how to resolve it.** Judge it from the code at the tip of the base, never from the titles. When you recommend a close, say what the close loses. Rank a conflict by what a wrong resolution costs and by whether anything would catch it.
+
 ## Facts of the project
 
 The run read these facts from the project file at its start. A fact that is empty holds no fact: ask the owner, and do not guess it.
