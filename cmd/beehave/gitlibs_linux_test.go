@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -44,4 +46,57 @@ func TestLddLibraries_ALibraryThatCannotBeFoundIsAnError(t *testing.T) {
 		_, err := lddLibraries(out, linkerCache)
 		assert.ErrorContains(t, err, want, out)
 	}
+}
+
+// A static git loads no library, so it reads no library and no cache; a file that is no ELF program gives no read set.
+func TestGitLibraries_AStaticGitReadsNoLibraryAndAFileThatIsNoProgramIsAnError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	source, static := filepath.Join(dir, "main.go"), filepath.Join(dir, "static")
+	require.NoError(t, os.WriteFile(source, []byte("package main\n\nfunc main() {}\n"), 0o600))
+
+	// A program that links no C code is static whatever CGO_ENABLED says.
+	build := exec.CommandContext(t.Context(), "go", "build", "-o", static, source) //nolint:gosec // the paths are the temporary folder of the test
+	out, err := build.CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	found, err := gitLibraries(t.Context(), static)
+	require.NoError(t, err)
+	assert.Empty(t, found)
+
+	_, err = gitLibraries(t.Context(), source)
+	assert.ErrorContains(t, err, "read the program")
+}
+
+// A dynamic git reads the dynamic linker that its program names, and the cache of the linker.
+func TestGitLibraries_ADynamicProgramReadsItsLinkerAndTheCache(t *testing.T) {
+	t.Parallel()
+
+	found, err := gitLibraries(t.Context(), "/bin/sh")
+	require.NoError(t, err)
+	assert.Contains(t, found, linkerCache)
+	assert.NotEmpty(t, found[:len(found)-1], "the linker and the libraries")
+}
+
+// A cache of the linker that cannot be read, other than one that does not exist, gives no read set.
+func TestLddLibraries_ACacheThatCannotBeStatedIsAnError(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "file")
+	require.NoError(t, os.WriteFile(file, nil, 0o600))
+
+	_, err := lddLibraries("", filepath.Join(file, "ld.so.cache"))
+	assert.ErrorContains(t, err, "read the cache of the linker")
+}
+
+// An ldd that cannot run gives no read set.
+func TestGitLibraries_AnLddThatCannotRunIsAnError(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := gitLibraries(ctx, "/bin/sh")
+	assert.ErrorContains(t, err, "run ldd")
 }
