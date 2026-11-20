@@ -2,6 +2,7 @@
 Description=Reject non-root access to the instance metadata server
 DefaultDependencies=no
 After=local-fs.target nftables.service
+PartOf=nftables.service
 Wants=network-pre.target
 Before=network-pre.target systemd-user-sessions.service
 

@@ -35,6 +35,20 @@ http://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/toke
 	exit "$rc"
 	;;
 esac
+# The HTTPS endpoint on port 443 answers like the HTTP one: FAKE_METADATA_TLS_CODE (000) and FAKE_METADATA_TLS_RC (7), and the IPv6 URL
+# reads FAKE_METADATA_TLS6_CODE and FAKE_METADATA_TLS6_RC when they are set.
+case $url in
+https://169.254.169.254/computeMetadata/v1/instance/service-accounts/default/token | 'https://[fd20:ce::254]/computeMetadata/v1/instance/service-accounts/default/token')
+	code=${FAKE_METADATA_TLS_CODE:-000}
+	rc=${FAKE_METADATA_TLS_RC:-7}
+	if [ "${url#https://169.254.169.254/}" = "$url" ]; then
+		code=${FAKE_METADATA_TLS6_CODE:-$code}
+		rc=${FAKE_METADATA_TLS6_RC:-$rc}
+	fi
+	printf '%s' "$code"
+	exit "$rc"
+	;;
+esac
 case $url in
 *mode=json*) name=go.json ;;
 *) name=${url##*/} ;;

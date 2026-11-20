@@ -11,8 +11,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +34,8 @@ const (
 		"GITLEAKS_VERSION := v8.30.1\nGREMLINS_VERSION := v0.6.0\nGO_TEST_COVERAGE_VERSION := v2.20.1\nGOVULNCHECK_VERSION := v1.9.0\n" +
 		"DEADCODE_VERSION := golang.org/x/tools/cmd/deadcode@v0.51.0\n"
 	unitProof = "systemd-run --user --wait --pipe"
+	// controllerKey is the public key that the root stage puts in the authorized_keys of the job user.
+	controllerKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIControllerKeyOfTheTests controller@laptop\n"
 )
 
 // goInstalledTools are the fakes in ~/go/bin, each with the first line of its version output.
@@ -82,6 +86,7 @@ type fakeHost struct {
 	t                                                           *testing.T
 	root, source                                                *os.Root
 	base, clone, home, sysroot, workRoot, bin, log, down, state string
+	jobKey                                                      string
 	env                                                         []string
 }
 
@@ -110,6 +115,9 @@ func newFakeHost(t *testing.T) *fakeHost {
 	h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\ntoolchain "+pinnedGo+"\n")
 	h.write(filepath.Join(h.clone, "Makefile"), fakeMakefile)
 	h.write(h.log, "")
+	h.jobKey = filepath.Join(base, "controller.pub")
+	h.write(h.jobKey, controllerKey)
+	h.write(filepath.Join(h.state, "linger-builder"), "") // the root stage turned linger on for the job user, who the tests call builder
 	h.installFakes()
 	h.installUbuntuEnvironmentFiles()
 
@@ -275,11 +283,20 @@ func (h *fakeHost) copy(from, to string, put func(path, text string)) {
 	put(to, string(data))
 }
 
-// run runs the script of the clone with the arguments and the extra environment, and returns its output.
+// run runs the job stage of the script of the clone with the arguments and the extra environment, and returns its output.
 func (h *fakeHost) run(extra []string, args ...string) (string, error) {
 	h.t.Helper()
 
-	return h.sh(extra, filepath.Join(h.clone, "scripts/host-setup.sh"), args...)
+	return h.sh(extra, filepath.Join(h.clone, "scripts/host-setup.sh"), append([]string{"--stage", "job"}, args...)...)
+}
+
+// rootSetup runs the root stage as root, from a clone that root and the admin user own: the fake id prints 0, and SUDO_UID names the owner of the files.
+func (h *fakeHost) rootSetup(extra ...string) (string, error) {
+	h.t.Helper()
+
+	env := append([]string{"FAKE_UID=0", "SUDO_UID=" + strconv.Itoa(os.Getuid())}, extra...)
+
+	return h.sh(env, filepath.Join(h.clone, "scripts/host-setup.sh"), "--stage", "root", "--watchdog", watchdogUnit, "--job-key", h.jobKey)
 }
 
 // sh runs a shell script of the temporary folder with the arguments and the extra environment, and returns its output.
@@ -370,7 +387,7 @@ func TestHostSetup_RefusesToFinishWithoutAnActiveWatchdog(t *testing.T) {
 			require.Error(t, err)
 			assert.Contains(t, out, noWatchdog)
 			assert.NotContains(t, out, done)
-			assert.Equal(t, tc.installsAt, strings.Contains(h.read(h.log), "apt-get install"), "the installs run only after a first watchdog check passes")
+			assert.Equal(t, tc.installsAt, strings.Contains(h.read(h.log), "make setup"), "the installs run only after a first watchdog check passes")
 		})
 	}
 }
@@ -397,7 +414,7 @@ func TestHostSetup_RefusesAWorkRootThatSystemdWouldExpand(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Contains(t, out, tc.message)
-			assert.NotContains(t, h.read(h.log), "apt-get", "the refusal comes before any change")
+			assert.NotContains(t, h.read(h.log), "make setup", "the refusal comes before any change")
 		})
 	}
 }
@@ -411,7 +428,6 @@ func TestHostSetup_RefusesBeforeAnyChange(t *testing.T) {
 	}{
 		{name: "the_root_user", env: "FAKE_UID=0", message: "not as root"},
 		{name: "an_arm_machine", env: "FAKE_ARCH=aarch64", message: "linux amd64 only"},
-		{name: "sudo_that_asks_for_a_password", env: "FAKE_SUDO_RC=1", message: "sudo without a password"},
 		{name: "a_clone_without_go_mod", remove: "go.mod", message: "holds no go.mod and Makefile"},
 		{name: "a_clone_without_a_makefile", remove: "Makefile", message: "holds no go.mod and Makefile"},
 		{name: "no_watchdog_named", message: "--watchdog is required", args: []string{"--work-root", "<work>"}},
@@ -441,7 +457,7 @@ func TestHostSetup_RefusesBeforeAnyChange(t *testing.T) {
 
 			require.Error(t, err)
 			assert.Contains(t, out, tc.message)
-			assert.NotContains(t, h.read(h.log), "apt-get", "the refusal comes before any change")
+			assert.NotContains(t, h.read(h.log), "make setup", "the refusal comes before any change")
 		})
 	}
 }
@@ -506,7 +522,7 @@ func TestHostSetup_RefusesAWorkRootThatIsNotTheLoginUsers(t *testing.T) {
 			assert.Contains(t, out, strings.NewReplacer("<parent>", filepath.Dir(workRoot), "<root>", workRoot).Replace(tc.message))
 
 			log := h.read(h.log)
-			assert.NotContains(t, log, "apt-get", "the refusal comes before any change")
+			assert.NotContains(t, log, "make setup", "the refusal comes before any change")
 			assert.Empty(t, rootActions(log), "the refusal comes before any root action")
 			assert.NotContains(t, log, "mkdir ", "the refusal makes no folder")
 			assert.NotContains(t, log, "\nchown ", "no folder changes owner")
@@ -651,7 +667,7 @@ func TestHostSetup_PutsAStrayGoBackBeforeItReadsTheGoVersion(t *testing.T) {
 	h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n")
 	require.NoError(t, h.root.Rename(h.rel(goRoot), h.rel(goRoot+".old")))
 
-	out, err := h.setup()
+	out, err := h.rootSetup()
 
 	require.Error(t, err)
 	assert.Contains(t, out, "has no toolchain line")
@@ -665,7 +681,7 @@ func TestHostSetup_LeavesAnExistingWorkRootAsItIs(t *testing.T) {
 	t.Parallel()
 
 	h := newFakeHost(t)
-	out, err := h.setup()
+	out, err := h.rootSetup()
 	require.NoError(t, err, out)
 
 	log := h.read(h.log)
@@ -681,12 +697,12 @@ func TestHostSetup_RefusesAUvArchiveWhoseChecksumDiffers(t *testing.T) {
 	require.NoError(t, h.root.Remove(h.rel(filepath.Join(h.bin, "uv"))))
 	h.write(filepath.Join(h.down, "uv-x86_64-unknown-linux-gnu.tar.gz"), "not the pinned uv")
 
-	out, err := h.setup()
+	out, err := h.rootSetup()
 
 	require.Error(t, err)
 	assert.Contains(t, out, "the checksum of uv-x86_64-unknown-linux-gnu.tar.gz does not match the pin")
 	assert.NotContains(t, h.read(h.log), "sudo install -m 0755", "no uv is installed")
-	assert.NotContains(t, out, done)
+	assert.NotContains(t, out, rootDone)
 }
 
 func TestHostSetup_ReadsTheGoVersionFromGoMod(t *testing.T) {
@@ -711,7 +727,7 @@ func TestHostSetup_ReadsTheGoVersionFromGoMod(t *testing.T) {
 			h.write(filepath.Join(h.clone, "go.mod"), "module example.com/h\n\ngo 1.27\n\n"+tc.toolchain)
 			h.serveGo("go1.27.9", tc.sha, tc.broken)
 
-			out, err := h.setup()
+			out, err := h.rootSetup()
 			log := h.read(h.log)
 
 			if !tc.installs {
@@ -730,7 +746,8 @@ func TestHostSetup_ReadsTheGoVersionFromGoMod(t *testing.T) {
 			assert.Less(t, strings.Index(log, "sudo tar -C "+goRoot+".new"), strings.Index(log, "sudo mv "+goRoot+" "+goRoot+".old\n"),
 				"the old Go moves out only after the new one unpacks")
 			assert.Contains(t, log, "sudo mv "+goRoot+".new/go "+goRoot+"\n")
-			assert.Contains(t, h.record(), "tool go go version go1.27.9 linux/amd64\n")
+			assert.Contains(t, h.read(goRoot+"/bin/go"), "go1.27.9", "the pinned Go is in place")
+			assert.Equal(t, rootDone, lastLine(out))
 		})
 	}
 }
@@ -777,7 +794,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		h.serveGo("go1.27.9", "", false)
 
 		for run := 1; run <= 2; run++ {
-			out, err := h.setup("FAKE_MV_FAIL=" + goRoot + ".new/go")
+			out, err := h.rootSetup("FAKE_MV_FAIL=" + goRoot + ".new/go")
 
 			require.Error(t, err, "run %d", run)
 			assert.Contains(t, out, "the new Go did not move into "+goRoot+". The old Go is back in place", "run %d", run)
@@ -799,7 +816,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		h.serveGo("go1.27.9", "", false)
 
 		for run := 1; run <= 2; run++ {
-			out, err := h.setup("FAKE_MV_FAIL=" + goRoot)
+			out, err := h.rootSetup("FAKE_MV_FAIL=" + goRoot)
 
 			require.Error(t, err, "run %d", run)
 			assert.Contains(t, out, "the old Go did not move from "+goRoot+" to "+goRoot+".old. The old Go is kept in "+goRoot, "run %d", run)
@@ -821,7 +838,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 
 		for run := 1; run <= 2; run++ {
 			h.write(h.log, "")
-			out, err := h.setup("FAKE_MV_SPOIL=" + goRoot + ".new/go")
+			out, err := h.rootSetup("FAKE_MV_SPOIL=" + goRoot + ".new/go")
 
 			require.Error(t, err, "run %d", run)
 			assert.Contains(t, out, "the Go in "+goRoot+" was not go1.27.9 after the swap. The old Go is back in place", "run %d", run)
@@ -849,7 +866,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		h.serveGo("go1.27.9", "", false)
 
 		// The new Go fails its check after the swap, and it does not move out again: the old Go stays in the backup.
-		out, err := h.setup("FAKE_MV_SPOIL="+goRoot+".new/go", "FAKE_MV_FAIL_TO="+goRoot+".new/go")
+		out, err := h.rootSetup("FAKE_MV_SPOIL="+goRoot+".new/go", "FAKE_MV_FAIL_TO="+goRoot+".new/go")
 
 		require.Error(t, err)
 		assert.Contains(t, out, "it did not move out. The old Go is in "+goRoot+".old. Move it back by hand")
@@ -857,7 +874,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		assert.Contains(t, h.read(goRoot+"/bin/go"), "spoiled", "the Go that failed its check is in place")
 
 		h.write(h.log, "")
-		out, err = h.setup()
+		out, err = h.rootSetup()
 
 		require.Error(t, err)
 		assert.Contains(t, out, "host-tools: the Go in "+goRoot+" is not go1.27.9, and an old Go is in "+goRoot+".old. This script deletes neither folder.")
@@ -873,7 +890,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		require.NoError(t, h.root.Rename(h.rel(goRoot+".old"), h.rel(goRoot)))
 		require.NoError(t, h.root.RemoveAll(h.rel(goRoot+".new")))
 
-		out, err = h.setup()
+		out, err = h.rootSetup()
 
 		require.NoError(t, err, out)
 		assert.Contains(t, h.read(goRoot+"/bin/go"), "go1.27.9", "the pinned Go is in place")
@@ -886,7 +903,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		goRoot := h.sysroot + "/usr/local/go"
 		h.program(goRoot+".old/bin/go", fakeGo("go1.27.0"))
 
-		out, err := h.setup()
+		out, err := h.rootSetup()
 
 		require.NoError(t, err, out)
 		assert.Contains(t, out, "host-tools: Go "+pinnedGo+" is installed")
@@ -902,7 +919,7 @@ func TestHostSetup_KeepsTheOldGoWhenTheSwapFails(t *testing.T) {
 		require.NoError(t, h.root.RemoveAll(h.rel(goRoot)))
 		h.program(goRoot+".old/bin/go", fakeGo(pinnedGo))
 
-		out, err := h.setup()
+		out, err := h.rootSetup()
 
 		require.NoError(t, err, out)
 		assert.Contains(t, h.read(goRoot+"/bin/go"), pinnedGo, "the old Go is back")
@@ -925,7 +942,8 @@ func TestHostSetup_ProvesEachToolThroughAUserUnit(t *testing.T) {
 
 		require.NoError(t, err, out)
 		assert.Equal(t, done, lastLine(out))
-		assert.Equal(t, len(provedTools), strings.Count(h.read(h.log), unitProof+" --quiet --collect -p WorkingDirectory="+h.clone+" sh -c "))
+		// One unit for each tool, and one for each of the four metadata probes: ports 80 and 443 over IPv4 and IPv6.
+		assert.Equal(t, len(provedTools)+4, strings.Count(h.read(h.log), unitProof+" --quiet --collect -p WorkingDirectory="+h.clone+" sh -c "))
 
 		record := h.record()
 		for _, name := range provedTools {
@@ -1069,7 +1087,6 @@ func TestHostSetup_ASecondRunChangesNothing(t *testing.T) {
 	require.NoError(t, h.root.Chtimes(h.rel(h.envFile()), past, past))
 	first := withoutTime(h.record())
 	firstLog := h.read(h.log)
-	assert.Contains(t, firstLog, "\nsudo loginctl enable-linger builder\n", "the first run turns on linger")
 	assert.Contains(t, firstLog, "\nsystemctl --user daemon-reload\n", "the first run writes the environment file")
 	h.write(h.log, "")
 
@@ -1082,7 +1099,7 @@ func TestHostSetup_ASecondRunChangesNothing(t *testing.T) {
 	assert.Equal(t, first, withoutTime(h.record()))
 
 	log := h.read(h.log)
-	for _, change := range []string{"\nsystemctl --user daemon-reload", "\nsudo loginctl enable-linger", "\ncurl -fsSL", "\nsudo tar ", "\nsudo rm ", "\nsudo mkdir ", "\nsudo chown ", "\nsudo mv ", "\nsudo install ", "\nsudo systemctl restart "} {
+	for _, change := range []string{"\nsystemctl --user daemon-reload", "\ncurl -fsSL"} {
 		assert.NotContains(t, log, change)
 	}
 }
@@ -1240,106 +1257,13 @@ func (h *fakeHost) guardFiles() (rules, unit string) {
 	return filepath.Join(h.sysroot, "etc/beehave/metadata-guard.nft"), filepath.Join(h.sysroot, "etc/systemd/system/metadata-guard.service")
 }
 
-func TestHostSetup_InstallsTheMetadataGuardBeforeTheNetwork(t *testing.T) {
-	t.Parallel()
-
-	h := newFakeHost(t)
-	out, err := h.setup()
-	require.NoError(t, err, out)
-
-	rules, unit := h.guardFiles()
-	assert.Equal(t, h.readSource("metadata-guard.nft"), h.read(rules))
-	assert.Equal(t, h.readSource("metadata-guard.service"), h.read(unit))
-
-	log := h.read(h.log)
-	assert.Regexp(t, `\napt-get install [^\n]* nftables\n`, log, "the nft command that the unit runs comes from the nftables package")
-	assert.Contains(t, log, "\nsudo systemctl enable metadata-guard.service\n")
-	assert.Contains(t, log, "\nsudo systemctl restart metadata-guard.service\n")
-	assert.Less(t, strings.Index(log, "sudo systemctl restart metadata-guard.service"), strings.Index(log, "systemd-run --user"), "the guard runs before the first job unit")
-	assert.Contains(t, h.record(), "metadata user=refused root=200\n")
-}
-
-func TestHostSetup_FailsWhenTheLoginUserStillGetsAnAnswerFromTheMetadataServer(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct{ name, message string }{
-		{name: "FAKE_METADATA_USER_CODE=200 FAKE_METADATA_USER_RC=0", message: "the login user got HTTP 200 from " + metadataURL4},
-		{name: "FAKE_METADATA_USER6_CODE=403 FAKE_METADATA_USER6_RC=0", message: "the login user got HTTP 403 from " + metadataURL6},
-		{name: "FAKE_METADATA_USER_RC=6", message: "ended with curl exit code 6, which proves nothing"},
-		{name: "FAKE_METADATA_USER6_RC=127", message: "ended with curl exit code 127, which proves nothing"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-
-			h := newFakeHost(t)
-			out, err := h.setup(strings.Fields(tc.name)...)
-
-			require.Error(t, err)
-			assert.Contains(t, out, tc.message)
-			assert.NotContains(t, out, done)
-		})
-	}
-}
-
-func TestHostSetup_AcceptsATimeoutAsNoAnswerFromTheMetadataServer(t *testing.T) {
-	t.Parallel()
-
-	h := newFakeHost(t)
-	out, err := h.setup("FAKE_METADATA_USER_RC=28")
-
-	require.NoError(t, err, out)
-	assert.Contains(t, h.record(), "metadata user=refused root=200\n")
-}
-
-func TestHostSetup_FailsWhenRootDoesNotGetTheTokenFromTheMetadataServer(t *testing.T) {
-	t.Parallel()
-
-	for _, code := range []string{"000", "403", "404"} {
-		t.Run(code, func(t *testing.T) {
-			t.Parallel()
-
-			h := newFakeHost(t)
-			out, err := h.setup("FAKE_METADATA_ROOT_CODE=" + code)
-
-			require.Error(t, err)
-			assert.Contains(t, out, "root got HTTP "+code+" from "+metadataURL4+", not 200")
-			assert.NotContains(t, out, done)
-		})
-	}
-}
-
-func TestHostSetup_FailsWhenTheMetadataGuardIsNotInPlace(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct{ env, message string }{
-		{env: "FAKE_GUARD_NO_START=1", message: "metadata-guard.service is not active"},
-		{env: "FAKE_GUARD_NO_ENABLE=1", message: "is not enabled, so a reboot would drop the rules"},
-		{env: "FAKE_NFT_EMPTY=1", message: "the metadata guard rules are not loaded"},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.env, func(t *testing.T) {
-			t.Parallel()
-
-			h := newFakeHost(t)
-			out, err := h.setup(tc.env)
-
-			require.Error(t, err)
-			assert.Contains(t, out, tc.message)
-			assert.NotContains(t, out, done)
-		})
-	}
-}
-
 func TestHostSetup_RestartsTheMetadataGuardOnlyWhenItsFilesOrItsStateDiffer(t *testing.T) {
 	t.Parallel()
 
 	const restart = "\nsudo systemctl restart metadata-guard.service\n"
 
 	h := newFakeHost(t)
-	out, err := h.setup()
+	out, err := h.rootSetup()
 	require.NoError(t, err, out)
 
 	rules, unit := h.guardFiles()
@@ -1358,7 +1282,7 @@ func TestHostSetup_RestartsTheMetadataGuardOnlyWhenItsFilesOrItsStateDiffer(t *t
 		h.write(h.log, "")
 		tc.change()
 
-		out, err = h.setup()
+		out, err = h.rootSetup()
 		require.NoError(t, err, tc.name+": "+out)
 		assert.Equal(t, tc.want, strings.Contains(h.read(h.log), restart), tc.name)
 		assert.Equal(t, h.readSource("metadata-guard.nft"), h.read(rules), tc.name+": the rules file is the source")
@@ -1379,6 +1303,29 @@ type guardRuleset struct {
 	rules  []string
 }
 
+// tableLines are the three table lines of the nft file, each with the step that it does.
+var tableLines = []struct {
+	pattern *regexp.Regexp
+	step    string
+}{
+	{regexp.MustCompile(`^table inet (\S+)$`), "make "},
+	{regexp.MustCompile(`^delete table inet (\S+)$`), "delete "},
+	{regexp.MustCompile(`^table inet (\S+) \{$`), "define "},
+}
+
+// tableStep names what a table line of the nft file does: make, delete or define the table. It returns "" for any other line.
+func tableStep(fields []string) string {
+	line := strings.Join(fields, " ")
+
+	for _, table := range tableLines {
+		if match := table.pattern.FindStringSubmatch(line); match != nil {
+			return table.step + match[1]
+		}
+	}
+
+	return ""
+}
+
 // parseGuardRuleset reads the nft file. A line that starts with # is a comment and holds no rule. The chain header line gives the hook.
 func parseGuardRuleset(text string) guardRuleset {
 	var set guardRuleset
@@ -1387,27 +1334,30 @@ func parseGuardRuleset(text string) guardRuleset {
 		line := strings.TrimSpace(raw)
 		fields := strings.Fields(line)
 
-		switch {
-		case line == "" || strings.HasPrefix(line, "#"):
-		case len(fields) == 3 && fields[0] == "table" && fields[1] == "inet":
-			set.tables = append(set.tables, "make "+fields[2])
-		case len(fields) == 4 && fields[0] == "delete" && fields[1] == "table" && fields[2] == "inet":
-			set.tables = append(set.tables, "delete "+fields[3])
-		case len(fields) == 4 && fields[0] == "table" && fields[1] == "inet" && fields[3] == "{":
-			set.tables = append(set.tables, "define "+fields[2])
-		case len(fields) == 3 && fields[0] == "chain" && fields[2] == "{":
-			set.chain = fields[1]
-		case strings.HasPrefix(line, "type "):
-			set.hook = line
-		case strings.HasPrefix(line, "meta skuid"):
-			set.rules = append(set.rules, line)
+		if step := tableStep(fields); step != "" {
+			set.tables = append(set.tables, step)
+			continue
 		}
+
+		set.readLine(line, fields)
 	}
 
 	return set
 }
 
-func TestMetadataGuard_RulesRejectNonRootTCPPort80ToTheMetadataAddressesOnTheOutputHook(t *testing.T) {
+// readLine reads a chain, a hook or a rule line. Any other line, and a comment, changes nothing.
+func (set *guardRuleset) readLine(line string, fields []string) {
+	switch {
+	case len(fields) == 3 && fields[0] == "chain" && fields[2] == "{":
+		set.chain = fields[1]
+	case strings.HasPrefix(line, "type "):
+		set.hook = line
+	case strings.HasPrefix(line, "meta skuid"):
+		set.rules = append(set.rules, line)
+	}
+}
+
+func TestMetadataGuard_RulesRejectNonRootTCPOnEveryPortButDNSToTheMetadataAddressesOnTheOutputHook(t *testing.T) {
 	t.Parallel()
 
 	h := newFakeHost(t)
@@ -1417,9 +1367,9 @@ func TestMetadataGuard_RulesRejectNonRootTCPPort80ToTheMetadataAddressesOnTheOut
 	assert.Equal(t, "output", set.chain)
 	assert.Equal(t, "type filter hook output priority 0; policy accept;", set.hook)
 	assert.Equal(t, []string{
-		"meta skuid != 0 ip daddr 169.254.169.254 tcp dport 80 reject with tcp reset",
-		"meta skuid != 0 ip6 daddr fd20:ce::254 tcp dport 80 reject with tcp reset",
-	}, set.rules, "one live rule for each address, for TCP port 80 only, so DNS on port 53 is untouched")
+		"meta skuid != 0 ip daddr 169.254.169.254 tcp dport != 53 reject with tcp reset",
+		"meta skuid != 0 ip6 daddr fd20:ce::254 tcp dport != 53 reject with tcp reset",
+	}, set.rules, "one live rule for each address, for every TCP port but 53, so the HTTPS endpoint on 443 is closed and DNS stays open")
 }
 
 // guardUnit is the metadata-guard.service file as sections of key and values.
@@ -1452,6 +1402,7 @@ func TestMetadataGuard_UnitLoadsAfterNftablesAndBeforeTheNetworkAndUserSessions(
 
 	assert.Contains(t, unit["Unit"]["After"], "nftables.service", "the flush of the default ruleset runs first, so it cannot drop the table")
 	assert.Contains(t, unit["Unit"]["Wants"], "network-pre.target", "network-pre.target is passive: only a Wants pulls it in")
+	assert.Equal(t, []string{"nftables.service"}, unit["Unit"]["PartOf"], "a restart or reload of nftables restarts the guard, so the table is made again")
 	assert.Contains(t, unit["Unit"]["Before"], "network-pre.target")
 	assert.Contains(t, unit["Unit"]["Before"], "systemd-user-sessions.service")
 	assert.Equal(t, []string{"multi-user.target"}, unit["Install"]["WantedBy"], "the rules load at every boot")

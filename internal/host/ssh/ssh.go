@@ -427,7 +427,6 @@ func (h *Host) start(ctx context.Context, root, dir, command string) (model.JobI
 	_, err := h.run(ctx, "systemd-run", "systemd-run", "--user", "--quiet", "--unit="+unit, "--remain-after-exit",
 		"-p", "RuntimeMaxSec="+strconv.FormatInt(h.config.RunLimitSeconds(), 10), "-p", "TimeoutStopSec="+strconv.Itoa(stopTimeout),
 		"-p", "WorkingDirectory="+root, "-p", "StandardOutput=append:"+path.Join(dir, unit+logSuffix), "-p", "StandardError=inherit",
-		"-p", "NoNewPrivileges=yes",
 		"--", "sh", "-c", `eval "$(printf %s `+encoded+` | base64 -d)"`)
 	if err != nil {
 		return "", err

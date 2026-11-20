@@ -50,7 +50,6 @@ func TestSubmit_RunsTheCommandAsATransientUnitThatKeepsItsResult(t *testing.T) {
 		"systemd-run", "--user", "--quiet", "--unit=beehave-n1", "--remain-after-exit",
 		"-p", "RuntimeMaxSec=7200", "-p", "TimeoutStopSec=30", "-p", "WorkingDirectory=" + root,
 		"-p", "StandardOutput=append:" + root + "/.beehave/beehave-n1.log", "-p", "StandardError=inherit",
-		"-p", "NoNewPrivileges=yes",
 		"--", "sh", "-c", `eval "$(printf %s ` + base64.StdEncoding.EncodeToString([]byte(u.Command)) + ` | base64 -d)"`,
 	}, u.Args)
 	assert.NotContains(t, strings.Join(u.Args, " "), "CollectMode")

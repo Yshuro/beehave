@@ -1,4 +1,5 @@
-# Reject every user except root on TCP port 80 to the instance metadata server, so a gate step cannot take the machine's token.
+# Reject every user except root on every TCP port but 53 to the instance metadata server, so a gate step cannot take the machine's token.
+# That covers port 80, the HTTPS endpoint on port 443 and any later port. DNS on port 53 stays open.
 # One load makes the table, deletes it and makes it again: nft applies a file as one change, so the old rules stay until the new ones replace them.
 table inet beehave_metadata_guard
 delete table inet beehave_metadata_guard
@@ -6,7 +7,7 @@ delete table inet beehave_metadata_guard
 table inet beehave_metadata_guard {
 	chain output {
 		type filter hook output priority 0; policy accept;
-		meta skuid != 0 ip daddr 169.254.169.254 tcp dport 80 reject with tcp reset
-		meta skuid != 0 ip6 daddr fd20:ce::254 tcp dport 80 reject with tcp reset
+		meta skuid != 0 ip daddr 169.254.169.254 tcp dport != 53 reject with tcp reset
+		meta skuid != 0 ip6 daddr fd20:ce::254 tcp dport != 53 reject with tcp reset
 	}
 }

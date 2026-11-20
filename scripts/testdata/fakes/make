@@ -1,4 +1,6 @@
 #!/bin/sh
 # Fake make: log the target and the PATH. With FAKE_STOP_WATCHDOG set, the watchdog stops during the run.
+# With FAKE_GRANT_SUDO set, the user gets sudo without a password during the run, as a step of a candidate commit could arrange.
 printf 'make %s PATH=%s\n' "$*" "$PATH" >>"$FAKE_LOG"
 if [ -n "${FAKE_STOP_WATCHDOG:-}" ]; then echo inactive >"$FAKE_STATE/watchdog-active"; fi
+if [ -n "${FAKE_GRANT_SUDO:-}" ]; then : >"$FAKE_STATE/sudo-granted"; fi
