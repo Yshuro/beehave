@@ -2,6 +2,8 @@ package remedy
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -15,8 +17,11 @@ import (
 	"github.com/tobocop2/beehave/examples/remediation/tools/job"
 )
 
+// errNoGateSteps is the refusal of a map with no gate step names: the project sets gate, not gate_steps.
+var errNoGateSteps = errors.New("--map holds the CI commands to gate_steps, and the project has no gate_steps. Set gate_steps in the project file, one named step for each command of the gate")
+
 const (
-	gatelistSyntax = "gatelist [--gate <text>] <workflow-file>..."
+	gatelistSyntax = "gatelist [--steps <name>]... [--map <json>] <workflow-file>..."
 	jobSyntax      = "job <script> --list <file> [--job-dir <folder>]"
 	reportSyntax   = "report <file> --head <sha>"
 )
@@ -27,7 +32,7 @@ func gateCommands() []command {
 		{
 			name:    "gatelist",
 			usage:   gatelistSyntax,
-			summary: "derive the gate steps from the run steps of the CI workflow files, list the steps and jobs that the list leaves out (a secret, a write permission, an action that is not a setup, a command that writes outside the machine), and with --gate refuse a round whose gate lacks a derived step",
+			summary: "derive the gate steps from the run steps of the CI workflow files, list the steps and jobs that the list leaves out (a secret, a token that can write, an action that is not a setup, a shell other than bash or sh, a git write or a text no read can judge), and with --steps and --map refuse a gate_map that does not map each derived command exactly to gate_steps names",
 			run:     gatelistCommand,
 		},
 		{
@@ -56,14 +61,16 @@ func printable(lines []string) []string {
 }
 
 // gatelistCommand derives the gate list from the CI workflow files and prints one line for each step, then one line for each step or job that the list leaves out.
-// A file that cannot be read, files with no step to give, and (with --gate) a derived step that the gate of the round does not hold are exit code 2.
+// A file that cannot be read, files with no step to give, and (with --steps or --map) a map that does not match the derived commands are exit code 2.
 func gatelistCommand(_ context.Context, _ Deps, s streams, args []string) int {
-	gateText, paths, ok := gatelistArgs(s, args)
+	var given gatelistFlags
+
+	paths, ok := gatelistArgs(s, args, &given)
 	if !ok {
 		return ExitRefused
 	}
 
-	lines, err := gatelistLines(paths, gateText)
+	lines, err := gatelistLines(paths, given)
 	if err != nil {
 		return refused(s, "gatelist", err)
 	}
@@ -71,29 +78,47 @@ func gatelistCommand(_ context.Context, _ Deps, s streams, args []string) int {
 	return showLines(s, printable(lines), false)
 }
 
-// gatelistArgs reads the flag --gate and the workflow files. It shows the usage and gives false for a bad flag or for no file.
-func gatelistArgs(s streams, args []string) (string, []string, bool) {
-	var gateText string
+// gatelistFlags are the gate step names of the round and the gate_map of the project. mapped is set when --map is given.
+type gatelistFlags struct {
+	steps  []string
+	held   gate.Map
+	mapped bool
+}
 
+func (f *gatelistFlags) declare(flags *flag.FlagSet) {
+	flags.Func("steps", "a name of the gate_steps of the round; give it once for each step", func(name string) error {
+		f.steps = append(f.steps, name)
+
+		return nil
+	})
+	flags.Func("map", "the gate_map of the project as JSON: each derived command to the gate_steps names that run it, or [] when it is not a check", func(text string) error {
+		f.mapped = true
+
+		return json.Unmarshal([]byte(text), &f.held)
+	})
+}
+
+// gatelistArgs reads the flags and the workflow files. It shows the usage and gives false for a bad flag or for no file.
+func gatelistArgs(s streams, args []string, given *gatelistFlags) ([]string, bool) {
 	flags := flag.NewFlagSet("remedy gatelist", flag.ContinueOnError)
 	flags.SetOutput(s.err)
-	flags.StringVar(&gateText, "gate", "", "the gate of the round as text; each derived step must be in it, or the command is exit code 2")
+	given.declare(flags)
 
 	if flags.Parse(args) != nil {
-		return "", nil, false
+		return nil, false
 	}
 
 	if flags.NArg() == 0 {
 		wrongUsage(s.err, gatelistSyntax)
 
-		return "", nil, false
+		return nil, false
 	}
 
-	return gateText, flags.Args(), true
+	return flags.Args(), true
 }
 
-// gatelistLines reads the workflow files and gives the lines of the list. With the gate of the round, a derived step that the gate lacks is a refusal that carries the lines.
-func gatelistLines(paths []string, gateText string) ([]string, error) {
+// gatelistLines reads the workflow files and gives the lines of the list. With --steps or --map, a defect of the map is a refusal that carries the lines and one line for each defect.
+func gatelistLines(paths []string, given gatelistFlags) ([]string, error) {
 	files, err := workflowFiles(paths)
 	if err != nil {
 		return nil, err
@@ -104,10 +129,18 @@ func gatelistLines(paths []string, gateText string) ([]string, error) {
 		return nil, err
 	}
 
-	lines := stepLines(derived)
+	return holdLines(stepLines(derived), derived.Steps, given)
+}
 
-	if missing := gate.Missing(derived.Steps, gateText); gateText != "" && len(missing) > 0 {
-		return nil, &check.Refusal{Message: "the gate of the round lacks derived steps: " + strings.Join(missing, ", ") + ". Add them to gate_steps", Lines: printable(lines)}
+// holdLines gives the lines of the list. With --steps or --map, a map with no gate step names, or with a defect against the derived steps, is a refusal.
+func holdLines(lines []string, steps []gate.Step, given gatelistFlags) ([]string, error) {
+	switch defects := gate.Hold(steps, given.steps, given.held); {
+	case !given.mapped && len(given.steps) == 0:
+		return lines, nil
+	case len(given.steps) == 0:
+		return nil, errNoGateSteps
+	case len(defects) > 0:
+		return nil, &check.Refusal{Message: "the gate_map of the project does not match the CI commands. Map each derived command, exactly as the step line prints it, to the gate_steps that run it or to [] when it is not a check, and remove each stale key", Lines: printable(append(lines, defects...))}
 	}
 
 	return lines, nil

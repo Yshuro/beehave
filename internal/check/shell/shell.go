@@ -69,7 +69,6 @@ type scanner struct {
 	plain       map[string]string // variables the text sets to a plain value, for the paths of protected-path
 	blind       bool              // the current command named a path that no static read can place
 	private     bool              // the repository is private: the kind laptop-copy finds nothing
-	network     bool              // NetworkWrites runs the scan: a command that writes outside the machine is a finding
 }
 
 // value returns the wrapper value of a variable, unless the scan is already reading that value or the value is unreadable.

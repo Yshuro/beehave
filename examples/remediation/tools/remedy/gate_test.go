@@ -52,6 +52,8 @@ func jobFiles(t *testing.T, script string) (string, string) {
 
 const (
 	ciWorkflow = `name: CI
+permissions:
+  contents: read
 jobs:
   check:
     steps:
@@ -67,7 +69,7 @@ jobs:
         run: mkdocs build --strict
 `
 
-	jobsHead = "jobs:\n  ship:\n    steps:\n      - name: Test\n        run: make test\n      - "
+	jobsHead = "permissions: read-all\njobs:\n  ship:\n    steps:\n      - name: Test\n        run: make test\n      - "
 )
 
 func TestGatelist_TheStepsAreDerivedFromTheCIWorkflowFile(t *testing.T) {
@@ -96,20 +98,18 @@ func TestGatelist_TheStepsOfSeveralWorkflowFilesAreOneListWithNoNameTwice(t *tes
 	assert.Contains(t, out, "check-gatelist: OK (steps 4, refused 0)\n")
 }
 
-func TestGatelist_AStepThatPublishesIsRefused(t *testing.T) {
+func TestGatelist_AStepThatTheLabelRefusesIsListedWithItsReason(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name, step, reason string
 	}{
-		{"a_release_by_command", "run: gh release create v1 dist/*", "runs `gh release create v1 dist/*`"},
 		{"a_release_by_action", "uses: softprops/action-gh-release@v2", "uses softprops/action-gh-release@v2, an action that is neither a checkout nor a setup"},
-		{"a_push_by_command", "run: cd out && git push origin main", "runs `git push origin main`"},
+		{"a_push_by_command", "run: cd out && git push origin main", "runs `git push`"},
 		{"a_push_by_action", "uses: docker/build-push-action@v6\n        with:\n          push: true", "uses docker/build-push-action@v6"},
-		{"a_package_by_command", "run: npm publish --access public", "runs `npm publish --access public`"},
 		{"a_package_by_action", "uses: pypa/gh-action-pypi-publish@release/v1", "uses pypa/gh-action-pypi-publish@release/v1"},
-		{"a_deploy_by_command", "run: |\n          make build\n          kubectl apply -f k8s/", "runs `kubectl apply -f k8s/`"},
 		{"a_deploy_by_action", "uses: actions/deploy-pages@v4", "uses actions/deploy-pages@v4"},
+		{"a_shell_that_is_not_sh", "shell: pwsh\n        run: echo hi", "runs in the shell pwsh"},
 		{"a_secret", "env:\n          T: ${{ secrets.T }}\n        run: make docs", "reads a secret"},
 	}
 
@@ -145,22 +145,81 @@ func TestGatelist_AStepThatOnlyMentionsAPublishingCommandIsNotRefused(t *testing
 	}
 }
 
-func TestGatelist_TheGateOfTheRoundMustHoldEveryDerivedStep(t *testing.T) {
+func TestGatelist_TheMapMustNameEveryDerivedCommandExactly(t *testing.T) {
 	t.Parallel()
 
 	file := textFile(t, "ci.yaml", jobsHead+"run: make lint\n")
+	steps := []string{"gatelist", "--steps", "test", "--steps", "lint", "--map"}
 
-	code, out, errOut := run(t, remedy.Deps{}, "gatelist", "--gate", "test: make test; lint: make lint", file)
+	code, out, errOut := run(t, remedy.Deps{}, append(steps, `{"make test": ["test"], "make lint": ["lint"]}`, file)...)
 
 	assert.Equal(t, remedy.ExitPass, code)
 	assert.Contains(t, out, "check-gatelist: OK (steps 2, refused 0)")
 	assert.Empty(t, errOut)
 
-	code, out, errOut = run(t, remedy.Deps{}, "gatelist", "--gate", "test: make test", file)
+	for name, held := range map[string]string{
+		"no key":           `{"make test": ["test"]}`,
+		"a substring key":  `{"make test": ["test"], "make lin": ["lint"]}`,
+		"a trailing space": `{"make test": ["test"], "make lint ": ["lint"]}`,
+	} {
+		code, out, errOut = run(t, remedy.Deps{}, append(steps, held, file)...)
+
+		assert.Equal(t, remedy.ExitRefused, code, name)
+		assert.Contains(t, out, "step ship:run-2: make lint\n", name)
+		assert.Contains(t, out, "unmapped ship:run-2: make lint\n", name)
+		assert.Contains(t, errOut, "the gate_map of the project does not match the CI commands", name)
+		assert.NotContains(t, errOut, "Add them to gate_steps", name)
+	}
+}
+
+func TestGatelist_AMapThatNamesAnUnknownGateStepOrAStaleCommandIsExitCodeTwo(t *testing.T) {
+	t.Parallel()
+
+	file := textFile(t, "ci.yaml", jobsHead+"run: make lint\n")
+
+	code, out, _ := run(t, remedy.Deps{}, "gatelist", "--steps", "test", "--map", `{"make test": ["test"], "make lint": ["lint"]}`, file)
 
 	assert.Equal(t, remedy.ExitRefused, code)
-	assert.Contains(t, out, "step ship:run-2: make lint\n")
-	assert.Contains(t, errOut, "the gate of the round lacks derived steps: ship:run-2. Add them to gate_steps")
+	assert.Contains(t, out, "unknown-step lint\n")
+	assert.NotContains(t, out, "unmapped ")
+
+	code, out, _ = run(t, remedy.Deps{}, "gatelist", "--steps", "test", "--map", `{"make test": ["test"], "make lint": [], "make old": []}`, file)
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Contains(t, out, "stale make old\n")
+	assert.NotContains(t, out, "unknown-step ")
+}
+
+func TestGatelist_AMapWithNoGateStepsIsExitCodeTwo(t *testing.T) {
+	t.Parallel()
+
+	code, out, errOut := run(t, remedy.Deps{}, "gatelist", "--map", `{"make test": ["test"]}`, textFile(t, "ci.yaml", jobsHead+"run: make lint\n"))
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Empty(t, out)
+	assert.Contains(t, errOut, "the project has no gate_steps")
+}
+
+func TestGatelist_AStepsFlagWithNoMapHoldsEachCommandToAnEmptyMap(t *testing.T) {
+	t.Parallel()
+
+	code, out, _ := run(t, remedy.Deps{}, "gatelist", "--steps", "test", textFile(t, "ci.yaml", jobsHead+"run: make lint\n"))
+
+	assert.Equal(t, remedy.ExitRefused, code)
+	assert.Contains(t, out, "unmapped ship:test: make test\n")
+	assert.Contains(t, out, "unmapped ship:run-2: make lint\n")
+}
+
+func TestGatelist_AMapThatIsNotAnObjectOfListsOfTextIsExitCodeTwo(t *testing.T) {
+	t.Parallel()
+
+	for _, held := range []string{`["make test"]`, `{"make test": "test"}`, `{"make test": [1]}`, `{`} {
+		code, out, errOut := run(t, remedy.Deps{}, "gatelist", "--steps", "test", "--map", held, textFile(t, "ci.yaml", ciWorkflow))
+
+		assert.Equal(t, remedy.ExitRefused, code, held)
+		assert.Empty(t, out, held)
+		assert.Contains(t, errOut, "for flag -map: ", held)
+	}
 }
 
 func TestGatelist_AFlagThatDoesNotExistIsExitCodeTwo(t *testing.T) {
@@ -178,9 +237,10 @@ func TestGatelist_AFileThatGivesNoUsableStepIsExitCodeTwo(t *testing.T) {
 
 	tests := map[string]string{
 		"not_yaml":                "jobs: [unclosed\n",
-		"no_run_step":             "jobs:\n  a:\n    steps:\n      - uses: actions/checkout@v7\n",
-		"a_run_that_is_not_shell": "jobs:\n  a:\n    steps:\n      - run: if then fi )\n",
-		"only_a_release":          "jobs:\n  a:\n    steps:\n      - run: goreleaser release\n",
+		"no_run_step":             "permissions: read-all\njobs:\n  a:\n    steps:\n      - uses: actions/checkout@v7\n",
+		"a_run_that_is_not_shell": "permissions: read-all\njobs:\n  a:\n    steps:\n      - run: if then fi )\n",
+		"only_a_push":             "permissions: read-all\njobs:\n  a:\n    steps:\n      - run: git push origin main\n",
+		"only_a_job_that_writes":  "jobs:\n  a:\n    steps:\n      - run: make test\n",
 		"no_jobs":                 "name: CI\n",
 	}
 
@@ -210,12 +270,12 @@ func TestGatelist_AMissingFileAndABadCallAreExitCodeTwo(t *testing.T) {
 func TestGatelist_ACallWithNoWorkflowFileShowsTheUsageAndIsExitCodeTwo(t *testing.T) {
 	t.Parallel()
 
-	for _, args := range [][]string{{"gatelist"}, {"gatelist", "--gate", "x"}} {
+	for _, args := range [][]string{{"gatelist"}, {"gatelist", "--steps", "x"}} {
 		code, out, errOut := run(t, remedy.Deps{}, args...)
 
 		assert.Equal(t, remedy.ExitRefused, code, args)
 		assert.Empty(t, out, args)
-		assert.Equal(t, "usage: remedy gatelist [--gate <text>] <workflow-file>...\n", errOut, args)
+		assert.Equal(t, "usage: remedy gatelist [--steps <name>]... [--map <json>] <workflow-file>...\n", errOut, args)
 	}
 }
 

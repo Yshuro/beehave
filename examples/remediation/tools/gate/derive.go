@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"regexp"
@@ -21,15 +22,17 @@ const (
 	nameSeparator  = "-"
 	expressionText = "${EXPR}"
 	stepsKey       = "steps"
+	readAll        = "read-all"
 
-	writePermission = "has a write permission"
+	writePermission = "can write: the token of the run is not read only. Set permissions to read-all, {} or read and none values, at the job or the file"
 	readsSecretText = "reads a secret"
 )
 
 var (
 	expressionPart = regexp.MustCompile(`\$\{\{.*?\}\}`)
 	nonNameRun     = regexp.MustCompile(`[^a-z0-9]+`)
-	secretsPart    = regexp.MustCompile(`^secrets$|\bsecrets(\.|\[)`)
+	// secretsPart names the secrets context, or the token of the run: github.token, an index of github, or the github context passed whole.
+	secretsPart = regexp.MustCompile(`(?i)\bsecrets\b|\bgithub\s*(?:\.\s*token\b|[\[,)}])`)
 )
 
 // File is a CI workflow file: its path and its text.
@@ -65,7 +68,23 @@ func (s *workflowStep) UnmarshalYAML(node *yaml.Node) error {
 	return node.Decode((*plain)(s))
 }
 
-// readsSecret reports whether a node holds a name or a value that reads a secret: the key secrets, or the expression secrets.NAME.
+// runDefaults is the defaults key of a file or a job: the shell of its run steps. Secret is set when a key or value of it names a secret.
+type runDefaults struct {
+	Run struct {
+		Shell string `yaml:"shell"`
+	} `yaml:"run"`
+	Secret bool `yaml:"-"`
+}
+
+func (d *runDefaults) UnmarshalYAML(node *yaml.Node) error {
+	type plain runDefaults
+
+	d.Secret = readsSecret(node)
+
+	return node.Decode((*plain)(d))
+}
+
+// readsSecret reports whether a node holds a name or a value that names a secret or the token of the run.
 func readsSecret(node *yaml.Node) bool {
 	if node.Kind == yaml.ScalarNode {
 		return secretsPart.MatchString(node.Value)
@@ -74,11 +93,14 @@ func readsSecret(node *yaml.Node) bool {
 	return slices.ContainsFunc(node.Content, readsSecret)
 }
 
-// workflowJob is one job of a CI workflow file, with the id it has in the file. Problem is why the whole job is left out, or an empty text.
+// workflowJob is one job of a CI workflow file, with the id it has in the file. Secret is set when a key or value outside its steps names a secret.
 type workflowJob struct {
-	ID      string
-	Problem string
-	Steps   []workflowStep
+	ID          string
+	Uses        string
+	Permissions yaml.Node
+	Shell       string
+	Secret      bool
+	Steps       []workflowStep
 }
 
 // workflowJobs holds the jobs of a workflow file in file order, which a map would lose.
@@ -90,43 +112,50 @@ func (j *workflowJobs) UnmarshalYAML(node *yaml.Node) error {
 	}
 
 	for i := 0; i+1 < len(node.Content); i += 2 {
-		var body struct {
-			Uses        string         `yaml:"uses"`
-			Permissions yaml.Node      `yaml:"permissions"`
-			Steps       []workflowStep `yaml:"steps"`
+		job, err := decodeJob(node.Content[i].Value, node.Content[i+1])
+		if err != nil {
+			return err
 		}
 
-		if err := node.Content[i+1].Decode(&body); err != nil {
-			return fmt.Errorf("job %s: %w", node.Content[i].Value, err)
-		}
-
-		*j = append(*j, workflowJob{ID: node.Content[i].Value, Problem: jobProblem(node.Content[i+1], body.Uses, &body.Permissions), Steps: body.Steps})
+		*j = append(*j, job)
 	}
 
 	return nil
 }
 
-// jobProblem says why a job cannot give gate steps: it calls a reusable workflow, it can write, or it reads a secret.
-func jobProblem(job *yaml.Node, uses string, permissions *yaml.Node) string {
-	switch {
-	case uses != "":
-		return "calls the reusable workflow " + uses + ", which the gate does not read"
-	case writes(permissions):
-		return writePermission
-	case readsSecret(withoutKey(job, stepsKey)):
-		return readsSecretText
+// decodeJob reads one job of a workflow file by its id.
+func decodeJob(id string, node *yaml.Node) (workflowJob, error) {
+	var body struct {
+		Uses        string         `yaml:"uses"`
+		Permissions yaml.Node      `yaml:"permissions"`
+		Defaults    runDefaults    `yaml:"defaults"`
+		Steps       []workflowStep `yaml:"steps"`
 	}
 
-	return ""
+	if err := node.Decode(&body); err != nil {
+		return workflowJob{}, fmt.Errorf("job %s: %w", id, err)
+	}
+
+	return workflowJob{ID: id, Uses: body.Uses, Permissions: body.Permissions, Shell: body.Defaults.Run.Shell, Secret: readsSecret(withoutKey(node, stepsKey)), Steps: body.Steps}, nil
 }
 
-// writes reports whether a permissions node holds a write permission.
-func writes(node *yaml.Node) bool {
+// readOnly reports whether a permissions node gives the token of the run no write: read-all, or a mapping of read and none values only. A missing node takes the default of the repository, which can write.
+func readOnly(node *yaml.Node) bool {
 	if node.Kind == yaml.ScalarNode {
-		return slices.Contains([]string{"write", "write-all"}, node.Value)
+		return node.Value == readAll
 	}
 
-	return slices.ContainsFunc(node.Content, writes)
+	if node.Kind != yaml.MappingNode {
+		return false
+	}
+
+	for i := 1; i < len(node.Content); i += 2 {
+		if value := node.Content[i]; value.Kind != yaml.ScalarNode || !slices.Contains([]string{"read", "none"}, value.Value) {
+			return false
+		}
+	}
+
+	return true
 }
 
 // withoutKey returns a mapping node without the pair of one key.
@@ -145,12 +174,14 @@ func withoutKey(node *yaml.Node, key string) *yaml.Node {
 
 type workflowFile struct {
 	Permissions yaml.Node    `yaml:"permissions"`
+	Env         yaml.Node    `yaml:"env"`
+	Defaults    runDefaults  `yaml:"defaults"`
 	Jobs        workflowJobs `yaml:"jobs"`
 }
 
-// Derive reads the CI workflow files and returns the gate steps: one for each run step of each job, in file order. A step or a job that the gate list cannot hold is in Refused, with the reason, and never runs.
-// A step stays out when its job or the file can write or reads a secret, when it uses an action other than a setup or checkout action, when its run text has a command that writes outside the machine or that no read can judge.
-// Derive refuses a file that is not a workflow, and files with no run step to give.
+// Derive reads the CI workflow files and returns the gate steps: one for each run step of each job, in file order. A step or a job that the gate list cannot hold is in Refused, with the reason.
+// A job stays out when it calls a reusable workflow, when its token can write, or when it or the file env or defaults names a secret. A step stays out when it names a secret, uses an action other than a setup or checkout action,
+// runs in a shell other than bash or sh, or has run text that the shell reader finds a git write, an opaque command or an unparsed line in. Derive refuses a file that is not a workflow, and files with no run step to give.
 func Derive(files []File) (Derived, error) {
 	out, problems := Derived{}, []string(nil)
 
@@ -174,19 +205,6 @@ func Derive(files []File) (Derived, error) {
 	return out, nil
 }
 
-// Missing returns the names of the derived steps whose command the text of the gate of the round does not hold.
-func Missing(steps []Step, gateText string) []string {
-	var names []string
-
-	for _, step := range steps {
-		if !strings.Contains(gateText, step.Command) {
-			names = append(names, step.Name)
-		}
-	}
-
-	return names
-}
-
 func refusedLines(refused []Refused) []string {
 	lines := make([]string, len(refused))
 	for i, r := range refused {
@@ -205,12 +223,13 @@ func deriveFile(file File) (Derived, []string) {
 	var out Derived
 
 	for _, job := range workflow.Jobs {
-		got := deriveJob(job)
+		if problem := jobProblem(&workflow, job); problem != "" {
+			out.Refused = append(out.Refused, Refused{"job " + file.Path + nameJoin + job.ID, problem})
 
-		if problem := job.Problem; problem != "" || writes(&workflow.Permissions) {
-			got = Derived{Refused: []Refused{{"job " + file.Path + nameJoin + job.ID, firstProblem(problem)}}}
+			continue
 		}
 
+		got := deriveJob(job, cmp.Or(job.Shell, workflow.Defaults.Run.Shell))
 		out.Steps = append(out.Steps, got.Steps...)
 		out.Refused = append(out.Refused, got.Refused...)
 	}
@@ -218,22 +237,33 @@ func deriveFile(file File) (Derived, []string) {
 	return out, nil
 }
 
-// firstProblem returns the problem of a job, or the write permission of its file when the job has none.
-func firstProblem(problem string) string {
-	if problem == "" {
-		return writePermission
+// jobProblem says why a whole job cannot give gate steps, or gives an empty text. The permissions key of the job wins over the key of the file.
+func jobProblem(file *workflowFile, job workflowJob) string {
+	permissions := &file.Permissions
+	if !job.Permissions.IsZero() {
+		permissions = &job.Permissions
 	}
 
-	return problem
+	switch {
+	case job.Uses != "":
+		return "calls the reusable workflow " + job.Uses + ", which the gate does not read"
+	case !readOnly(permissions):
+		return writePermission
+	case job.Secret || readsSecret(&file.Env) || file.Defaults.Secret:
+		return readsSecretText
+	}
+
+	return ""
 }
 
-func deriveJob(job workflowJob) Derived {
+// deriveJob gives the steps of a job. shell is the default shell of its run steps, from the job or the file.
+func deriveJob(job workflowJob, shell string) Derived {
 	var out Derived
 
 	for i, step := range job.Steps {
 		stepName := stepNameOf(job.ID, step, i+1)
 
-		if problem := stepProblem(step); problem != "" {
+		if problem := stepProblem(step, cmp.Or(step.Shell, shell)); problem != "" {
 			out.Refused = append(out.Refused, Refused{"step " + stepName, problem})
 		} else if command := runCommand(step.Run); command != "" {
 			out.Steps = append(out.Steps, Step{stepName, command})
@@ -243,19 +273,20 @@ func deriveJob(job workflowJob) Derived {
 	return out
 }
 
-// stepProblem says why a step cannot be a gate step, or gives an empty text.
-func stepProblem(step workflowStep) string {
+// stepProblem says why a step cannot be a gate step, or gives an empty text. stepShell is the shell the step runs in, or an empty text for the default.
+func stepProblem(step workflowStep, stepShell string) string {
 	switch {
 	case step.Secret:
 		return readsSecretText
 	case step.Uses != "" && !setupAction(step.Uses):
 		return "uses " + step.Uses + ", an action that is neither a checkout nor a setup. Add its command to the gate list by hand"
-	case step.Shell != "" && !slices.Contains([]string{"bash", "sh"}, step.Shell):
-		return "runs in the shell " + step.Shell + ", which the gate does not read"
+	case stepShell != "" && !slices.Contains([]string{"bash", "sh"}, stepShell):
+		return "runs in the shell " + stepShell + ", which the gate does not read"
 	}
 
-	if hits := shell.NetworkWrites(expressionPart.ReplaceAllLiteralString(step.Run, expressionText)); len(hits) > 0 {
-		return "runs `" + hits[0] + "`, a command that writes outside the machine or that the gate cannot read"
+	findings := shell.ScanFor(expressionPart.ReplaceAllLiteralString(step.Run, expressionText), []model.FindingKind{model.FindingGitWrite, model.FindingOpaque, model.FindingUnparsed})
+	if len(findings) > 0 {
+		return "runs `" + findings[0].Text + "`, which the gate does not judge (" + string(findings[0].Kind) + ")"
 	}
 
 	return ""

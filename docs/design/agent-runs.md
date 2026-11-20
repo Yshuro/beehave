@@ -429,17 +429,38 @@ The author check compares the address of a commit with the address of the accoun
 
 The gate list is a Markdown file. Its `## Gate steps` section holds one row for each step.
 
-`remedy gatelist [--gate <text>] <workflow-file>...` derives the steps from the CI workflow files: one step for each run step of each job, named `<job>:<step name>`, in file order. The round runs it from the project var `gate_files` before its first pass, with the gate of the project as `--gate`.
+`remedy gatelist [--steps <name>]... [--map <json>] <workflow-file>...` derives the steps from the CI workflow files: one step for each run step of each job, named `<job>:<step name>`, in file order. The round runs it from the project var `gate_files` before its first pass, with each name of `gate_steps` as `--steps` and the project var `gate_map` as `--map`.
 
-The command leaves out a step or a job that could publish, and names it in the output as `refused <name>: <reason>`. The rule is structural, not a list of publish commands. It never reads the step name. The command leaves out:
+#### The guard is the gate, not the label
 
-- A job that calls a reusable workflow, has a write permission (also from the file), or reads a secret.
-- A step that reads a secret, uses an action other than a checkout or a setup action (so a lint action is left out), or runs in a shell other than bash or sh.
-- A step with a command that the shell reader of `check/shell` finds to write outside the machine, or cannot judge: a variable or an expression as the command word, a line that is not shell, or a script read from a pipe. A `--dry-run` flag makes no difference.
+The gate of a round runs only the commands of `gate_steps`, which the owner writes. No derived CI command runs. A gate step runs the code of the candidate head, so no read of the CI text can stop a network write by the gate. The build host of the gate holds no credential of the repository, so a publish that a CI step names cannot sign in there. The label below decides only which CI commands the round must account for.
 
-A publish that a script file, a make target or an npm script runs is not seen, because the workflow file does not show it. A job with no `permissions` key is not left out, although the default token of the repository can write.
+The host still holds the cloud identity of the machine, which any gate step can reach. Issue #717 tracks it.
 
-Files that give no step are exit code 2. With `--gate`, a derived step whose command the gate text does not hold is exit code 2 too, and the round stops before its first pass. Add a step that the list leaves out to `gate_steps` by hand.
+#### The label
+
+The command labels each run step `step` or `refused`, and names a refused one in the output as `refused <name>: <reason>`. The label fails closed at every level. It never reads the step name, and it holds no list of tools. The command leaves out:
+
+- A job that calls a reusable workflow.
+- A job whose token of the run can write. The job `permissions` key wins over the file key. With no key at the job or the file, the token takes the default of the repository, which can write. Read only is `read-all`, `{}`, or a mapping of `read` and `none` values only. Any other value, an expression included, can write.
+- A job that names a secret or the token of the run (`secrets`, `github.token`, `github['token']`, `toJSON(secrets)`, the `github` context passed whole) in the file `env` or `defaults`, or anywhere in the job outside its steps.
+- A step that names a secret or the token of the run, or uses an action other than a checkout or a setup action (so a lint action is left out).
+- A step whose shell is not exactly `bash` or `sh`. The shell comes from the step, then the job `defaults.run.shell`, then the file `defaults.run.shell`. A custom shell string such as `bash -e {0}` is refused.
+- A step whose run text the shell reader of `check/shell` finds one of its kinds `git-write`, `opaque-command` or `unparsed` in.
+
+Files that give no step are exit code 2.
+
+#### The hold
+
+`gate_map` maps each exact derived command text to a list of `gate_steps` names. An empty list says that the command is not a check, such as an install. With `--steps` or `--map`, the command is exit code 2 with one line for each defect, and the round stops before its first pass:
+
+- `unmapped <step name>: <command>`: a derived step whose command is no key. The match is exact: no trim, no substring.
+- `stale <command>`: a key that no derived step has.
+- `unknown-step <name>`: a name in the map that is not a gate step.
+
+A `--map` with no `--steps` is exit code 2, and the message names `gate_steps`. The round refuses a project with `gate_files` and no `gate_steps` before it runs the command. A refused step needs no key, because it never runs. Add a refused step, such as the lint action, to `gate_steps` by hand.
+
+#### The job check
 
 When a step passes:
 

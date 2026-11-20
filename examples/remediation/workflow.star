@@ -271,7 +271,7 @@ def _round_selector(block, got):
 def settings(project):
     """Returns the settings of the round as a dict, with the default of each key that the project vars leave out.
     The engine reads no setting. This function is the one check of them: it refuses project vars with no `round`, a missing key, a key of the wrong type, a value out of range and a key that is no setting,
-    and it refuses a method setting of the vars (the lists, the dicts, the changelog and the board) of the wrong type or form, each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
+    and it refuses a method setting of the vars (the lists, the dicts, the gate map, the changelog and the board) of the wrong type or form, each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
     if "round" not in project.vars:
         fail("REFUSE: the project vars hold no round. Add the settings of the round to the project file: vars = {\"round\": {\"base\": \"integration/r2\", \"owner\": \"your-login\", \"lane_cap\": 4, \"fix_rounds\": 5, \"label\": \"beehave-round\"}}.")
 
@@ -339,7 +339,7 @@ def _is_text(value):
 
 def _method_vars(vars):
     """Refuses a method setting of the project vars that has the wrong type or a blank entry, before any step runs. The engine keeps vars a free map, so this function is the one check of these keys.
-    The keys are the lists and dicts of facts, the changelog path and the board. A key that the project leaves out passes. Each refusal names the key and the fix."""
+    The keys are the lists and dicts of facts, the gate map, the changelog path and the board. A key that the project leaves out passes. Each refusal names the key and the fix."""
     for key in METHOD_LISTS:
         if key in vars:
             _method_list(key, vars[key])
@@ -347,6 +347,9 @@ def _method_vars(vars):
     for key in METHOD_DICTS:
         if key in vars:
             _method_dict(key, vars[key])
+
+    if "gate_map" in vars:
+        _method_gate_map(vars["gate_map"])
 
     if "changelog" in vars:
         _method_changelog(vars["changelog"])
@@ -369,6 +372,18 @@ def _method_dict(key, value):
     for name, entry in value.items():
         if not _is_text(name) or not _is_text(entry):
             _vars_refuse(key, "holds a blank or non-text name or value (%r: %r). Write both as text or remove the entry." % (name, entry))
+
+def _method_gate_map(value):
+    if type(value) != "dict":
+        _vars_refuse("gate_map", "is %r, of type %s. Write a dict of each CI command to a list of gate_steps names, for example {\"make test\": [\"test\"], \"go install x@v1\": []}." % (value, type(value)))
+
+    for command_text, names in value.items():
+        if not _is_text(command_text) or type(names) != "list":
+            _vars_refuse("gate_map", "holds %r: %r. Write the CI command as text and the gate_steps names that run it as a list, or [] when it is not a check." % (command_text, names))
+
+        for name in names:
+            if not _is_text(name):
+                _vars_refuse("gate_map", "lists %r for the command %r. Write each gate_steps name as text that is not blank." % (name, command_text))
 
 def _method_changelog(value):
     # The check compares the path with the lines that git prints, so only the exact form of such a line matches.
@@ -913,13 +928,22 @@ def record_base_reds(round_settings):
     )
 
 def derive_gate_list(project):
-    """Derives the gate list of the round from the CI workflow files of vars.gate_files, and holds the gate of the project to it. A project with no gate_files derives nothing.
-    The derived steps are the run steps of the files. A step or a job with a secret or a write permission, an action that is neither a checkout nor a setup, or a command that writes outside the machine is left out, and the output names it.
-    The tool `remedy gatelist --gate` stops the round (exit code 2) when the files give no step, or when the gate of the project (`facts().gate`) lacks a derived step: the owner adds a step that is left out, such as the lint action, to `gate_steps` by hand."""
+    """Derives the gate list of the round from the CI workflow files of vars.gate_files, and holds gate_steps to it by vars.gate_map. A project with no gate_files derives nothing.
+    `remedy gatelist` stops the round (exit code 2) when the files give no step, or when gate_map does not map each derived command exactly to gate_steps names.
+    See the gate list section of docs/design/agent-runs.md."""
     files = project.vars.get("gate_files", [])
 
-    if len(files) > 0:
-        command(name = "gate-list", run = ["remedy", "gatelist", "--gate", project.gate] + files, stop_on_rc = [2])
+    if len(files) == 0:
+        return
+
+    if len(project.gate_steps) == 0:
+        _vars_refuse("gate_files", "is set, but the project has no gate_steps. Set gate_steps in the project file, one named step for each command of the gate, and map each CI command to them in vars.gate_map.")
+
+    steps = []
+    for name in project.gate_steps:
+        steps += ["--steps", name]
+
+    command(name = "gate-list", run = ["remedy", "gatelist"] + steps + ["--map", json.encode(project.vars.get("gate_map", {}))] + files, stop_on_rc = [2])
 
 # A bound for the loop of the round, because Starlark has no while. A pass ends one run or starts one, so the bound is far above the work of any real round.
 MAX_PASSES = 500
