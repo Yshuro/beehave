@@ -28,9 +28,9 @@ stdout 'item round/integration/r1 finished'
 grep '^sync-review$' sync.result
 
 # The record sits outside the folder of the round, so the folder holds no change that is not committed.
-exists state/trees/local/base-reds.md
-! exists state/trees/local/round_2Fintegration_2Fr1/base-reds.md
-grep 'TestKnownRed' state/trees/local/base-reds.md
+exists state/trees/local/base-reds-integration_2Fr1.md
+! exists state/trees/local/round_2Fintegration_2Fr1/base-reds-integration_2Fr1.md
+grep 'TestKnownRed' state/trees/local/base-reds-integration_2Fr1.md
 
 -- body.txt --
 The round of the base.

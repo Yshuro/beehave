@@ -150,37 +150,55 @@ func TestRound_TheCutOfTheNextRoundThatTheToolRefusesEndsTheRunWithItsReason(t *
 func TestRound_TheBaseRedsAreOneRecordWithTheTimeAndTheTip(t *testing.T) {
 	t.Parallel()
 
-	rig := newRoundRig(t, "")
-	rig.setRound("base_reds", []any{"lint-a", "test-b"})
+	for name, test := range map[string]struct {
+		file any
+		want string
+	}{
+		"the default file is named by the round and lies outside its folder": {nil, "BASE_REDS_FILE=../base-reds-main.md"},
+		"a file of the settings is the file of the record":                   {"reds.md", "BASE_REDS_FILE=reds.md"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 
-	previous := rig.h.commands.reply
-	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
-		if request.Run[0] == "git" {
-			return CommandOutput{Stdout: "abc123\n"}, nil
-		}
+			rig := newRoundRig(t, "")
+			rig.setRound("base_reds", []any{"lint-a", "test-b"})
 
-		return previous(request)
+			if test.file != nil {
+				rig.setRound("base_reds_file", test.file)
+			}
+
+			previous := rig.h.commands.reply
+			rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
+				if request.Run[0] == "git" {
+					return CommandOutput{Stdout: "abc123\n"}, nil
+				}
+
+				return previous(request)
+			}
+
+			_, err := rig.run(t)
+			require.NoError(t, err)
+
+			var writes []CommandRequest
+
+			for _, request := range rig.h.commands.requests {
+				if slices.ContainsFunc(request.Env, func(pair string) bool { return strings.HasPrefix(pair, "BASE_REDS_FILE=") }) {
+					writes = append(writes, request)
+				}
+			}
+
+			require.Len(t, writes, 1, "the record is written once, by one program")
+
+			written := writes[0]
+			assert.Equal(t, []string{"sh", "-c", `umask 022 && exec tee -- "$BASE_REDS_FILE"`}, written.Run)
+			assert.Contains(t, written.Env, test.want, "the path goes in the environment of the program")
+			assert.Equal(t, time.Minute, written.Timeout)
+			assert.Contains(t, written.Stdin, "tip abc123 of main")
+			assert.Contains(t, written.Stdin, "Measured at 20")
+			assert.Contains(t, written.Stdin, "- lint-a\n- test-b\n")
+			assert.Equal(t, 1, strings.Count(written.Stdin, "# Known base reds"), "one record, not a list of records")
+		})
 	}
-
-	_, err := rig.run(t)
-	require.NoError(t, err)
-
-	var written CommandRequest
-
-	for _, request := range rig.h.commands.requests {
-		if slices.ContainsFunc(request.Env, func(pair string) bool { return strings.HasPrefix(pair, "BASE_REDS_FILE=") }) {
-			written = request
-		}
-	}
-
-	require.NotEmpty(t, written.Run, "the record is written by one program")
-	assert.Equal(t, []string{"sh", "-c", `umask 022 && exec tee -- "$BASE_REDS_FILE"`}, written.Run)
-	assert.Contains(t, written.Env, "BASE_REDS_FILE=../base-reds.md", "the default path lies outside the folder of the round, and goes in the environment of the program")
-	assert.Equal(t, time.Minute, written.Timeout)
-	assert.Contains(t, written.Stdin, "tip abc123 of main")
-	assert.Contains(t, written.Stdin, "Measured at 20")
-	assert.Contains(t, written.Stdin, "- lint-a\n- test-b\n")
-	assert.Equal(t, 1, strings.Count(written.Stdin, "# Known base reds"), "one record, not a list of records")
 }
 
 func TestRound_ANoChildIsOpenBeforeTheRoundReadsTheIntegrationPullRequestAndWaits(t *testing.T) {
