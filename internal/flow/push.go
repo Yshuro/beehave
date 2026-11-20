@@ -31,12 +31,7 @@ func (s *script) push(b *starlark.Builtin, args starlark.Tuple, kwargs []starlar
 	}
 
 	return s.durable(pushKind, label, func(ctx context.Context, _ string) (stepResult, error) {
-		// A run that lost its item pushes nothing. A loss during the push cancels the run, and with it the context of the push.
-		if err := s.e.claimCheck(workflowID(s.ctx), s.in.Item); err != nil {
-			return stepResult{}, err
-		}
-
-		err := s.e.deps.Forge.Push(ctx, s.in.Project, s.in.Item, branch, head, expect)
+		err := s.writes().Push(ctx, s.in.Project, s.in.Item, branch, head, expect)
 
 		return stepResult{Outputs: pushOutputs(head)}, err
 	})

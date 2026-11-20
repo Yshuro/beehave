@@ -33,7 +33,12 @@ type fakeCommands struct {
 	before func(ctx context.Context, request CommandRequest) error
 }
 
+// Run refuses a context that is done before the program starts, as exec.Cmd.Start does.
 func (c *fakeCommands) Run(ctx context.Context, request CommandRequest) (CommandOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandOutput{}, err
+	}
+
 	if c.before != nil {
 		if err := c.before(ctx, request); err != nil {
 			return CommandOutput{}, err

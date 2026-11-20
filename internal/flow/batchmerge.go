@@ -652,7 +652,7 @@ func (b *batchBase) mergeReads(ctx context.Context, m batch.Member, settings Mer
 
 // mergeRead runs one merge of the member as a child run on the exclusive queue.
 func (b *batchBase) mergeRead(ctx context.Context, m batch.Member, settings MergeSettings) (merge.Result, error) {
-	ran, err := b.s.e.queueExclusive(ctx, ExclusiveInput{Kind: kindMerge, Run: workflowID(b.s.ctx), Project: b.s.in.Project, Item: m.Item, Head: m.Head, Settings: settings})
+	ran, err := b.s.e.queueExclusive(ctx, ExclusiveInput{Kind: kindMerge, Run: workflowID(b.s.ctx), RunItem: b.s.in.Item, Project: b.s.in.Project, Item: m.Item, Head: m.Head, Settings: settings})
 	if err != nil {
 		return ran.Merge, err
 	}

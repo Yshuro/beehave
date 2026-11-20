@@ -555,6 +555,7 @@ func TestExclusiveHost_AMergeWaitsForAGateOfItsProjectThatRunsOnAHost(t *testing
 	h.forge.state = review.Standing{Number: testPull, Head: "A"}
 	h.merge = &fakeMerge{}
 	engine := launchHostEngine(t, h, gated)
+	held := holdRun(t, h, engine, func(context.Context, CommandRequest) error { return nil })
 
 	gate := queueHostGate(engine, testProject, "1", "A", "box")
 
@@ -566,7 +567,8 @@ func TestExclusiveHost_AMergeWaitsForAGateOfItsProjectThatRunsOnAHost(t *testing
 	gateEnds[id] = merged
 	gateEndsMu.Unlock()
 
-	_, err := dbos.RunWorkflow(engine.ctx, gateQueuer{engine}.queue, ExclusiveInput{Kind: kindMerge, Project: testProject, Item: "2", Head: "A"}, dbos.WithWorkflowID(id))
+	// The merge is queued by a run of the test item that holds its claim.
+	_, err := dbos.RunWorkflow(engine.ctx, gateQueuer{engine}.queue, ExclusiveInput{Kind: kindMerge, Run: runID(testItem, 1), RunItem: testItem, Project: testProject, Item: "2", Head: "A"}, dbos.WithWorkflowID(id))
 	require.NoError(t, err)
 
 	waitOn(t, condition(waitsInTheQueue(engine, 1)))
@@ -585,6 +587,8 @@ func TestExclusiveHost_AMergeWaitsForAGateOfItsProjectThatRunsOnAHost(t *testing
 
 	require.NoError(t, receive(t, gate).err)
 	require.NoError(t, receive(t, merged).err)
+	assert.True(t, mergeAsked(), "the merge lands once the gate ends")
+	require.NoError(t, held.finish())
 }
 
 func TestExclusiveHost_AProjectThatNamesNoHostRunsOnItsDefaultHost(t *testing.T) {

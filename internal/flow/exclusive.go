@@ -40,10 +40,11 @@ const (
 
 // ExclusiveInput is one gate or one merge of a repository, or the host job of a command call with a slot class. Kind is "gate", "merge", "batch_gate" or "command".
 // Request belongs to a command call. Request and Head belong to a gate. Run, Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
-// Run is the id of the run that queued the merge or the command: the call asks for the claim of that run, and a call with no Run is refused.
+// Run is the id of the run that queued the merge or the command, and RunItem is the item whose claim that run holds. A call with no Run is refused.
 type ExclusiveInput struct {
 	Kind    string `json:"kind"`
 	Run     string `json:"run,omitempty"`
+	RunItem string `json:"run_item,omitempty"`
 	Project string `json:"project"`
 	Item    string `json:"item"`
 	// BuildHost is the build host that the run recorded in host_up, for a batch gate. A gate carries it in Request.
@@ -166,26 +167,33 @@ func (e *Engine) reuseBeforeHost(ctx dbos.Context, in ExclusiveInput, out *Exclu
 	return true, nil
 }
 
-// claimedMerge merges under the claim of the run that queued the merge. The child can wait behind a gate for a long time, so the claim is read again here.
-// beehave resume can reopen the child before its run, so a run with no first trust yet is waited for, as an agent phase waits.
-// The merge runs under the claim context, so a loss while it runs cancels it.
-func (e *Engine) claimedMerge(ctx context.Context, in ExclusiveInput) (merge.Result, error) {
-	claimed, err := e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.Item})
-	if err != nil {
-		return merge.Result{}, err
+// queuedClaim is the claim read of an exclusive call: it waits for the claim of the run that queued the call.
+func (e *Engine) queuedClaim(in ExclusiveInput) func(context.Context) (context.Context, error) {
+	return func(ctx context.Context) (context.Context, error) {
+		return e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.RunItem})
 	}
-
-	return e.deps.Merge.Merge(claimed, in.Project, in.Item, in.Head, in.Settings)
 }
 
-// claimedCommand runs the program of a command job under the claim of its run. The job waits in the queue of its class, so the claim is asked again when the program starts.
-func (e *Engine) claimedCommand(ctx context.Context, in ExclusiveInput) (CommandOutput, error) {
-	claimed, err := e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.Item})
-	if err != nil {
-		return CommandOutput{}, err
-	}
+// claimedMerge merges under the claim of the run that queued the merge.
+func (e *Engine) claimedMerge(ctx context.Context, in ExclusiveInput) (result merge.Result, err error) {
+	err = claimedCall(ctx, e.queuedClaim(in), func(c context.Context) error {
+		result, err = e.deps.Merge.Merge(c, in.Project, in.Item, in.Head, in.Settings)
 
-	return e.deps.Commands.Run(claimed, in.Request)
+		return err
+	})
+
+	return result, err
+}
+
+// claimedCommand runs the program of a command job under the claim of the run that queued it.
+func (e *Engine) claimedCommand(ctx context.Context, in ExclusiveInput) (out CommandOutput, err error) {
+	err = claimedCall(ctx, e.queuedClaim(in), func(c context.Context) error {
+		out, err = e.deps.Commands.Run(c, in.Request)
+
+		return err
+	})
+
+	return out, err
 }
 
 // runCall runs the call of one kind as recorded steps and stores its result in out.

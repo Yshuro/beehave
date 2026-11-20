@@ -6,75 +6,97 @@ import (
 	trackerstore "github.com/tobocop2/beehave/internal/store"
 )
 
-// forgeWrites are the writes of a step to the pull request of its item.
-type forgeWrites interface {
-	Comment(ctx context.Context, project, item, key, text string) (number int, err error)
-	Open(ctx context.Context, project, item string, req OpenRequest) (OpenResult, error)
+// runWrites is the write handle of one item run: every write of the run to the forge, the tracker or a program goes through it.
+type runWrites struct {
+	e    *Engine
+	run  string
+	item string
 }
 
-// holdsClaim returns errClaimLost, with the reason, unless the run of the script holds a trusted claim now.
-func (s *script) holdsClaim() error {
-	return s.e.claimCheck(workflowID(s.ctx), s.in.Item)
+// writes returns the write handle of the run of the script.
+func (s *script) writes() runWrites {
+	return runWrites{e: s.e, run: workflowID(s.ctx), item: s.in.Item}
 }
 
-// claimedForge is the forge that a step writes through. Each write asks for the claim of the run at the call, so a claim lost since the step began stops the write.
-type claimedForge struct {
-	forge forgeWrites
-	holds func() error
+// trusted is the claim read of an item run: the context of its claim when the run holds a trusted claim now.
+func (w runWrites) trusted(context.Context) (context.Context, error) {
+	return w.e.claimed(w.run, w.item)
 }
 
-func (c claimedForge) Comment(ctx context.Context, project, item, key, text string) (int, error) {
-	if err := c.holds(); err != nil {
-		return 0, err
-	}
-
-	return c.forge.Comment(ctx, project, item, key, text)
-}
-
-func (c claimedForge) Open(ctx context.Context, project, item string, req OpenRequest) (OpenResult, error) {
-	if err := c.holds(); err != nil {
-		return OpenResult{}, err
-	}
-
-	return c.forge.Open(ctx, project, item, req)
-}
-
-// claimedWriter is the tracker writer that a step writes through. Each write asks for the claim of the run at the call.
-type claimedWriter struct {
-	writer writer
-	holds  func() error
-}
-
-func (c claimedWriter) Create(ctx context.Context, project, key string, item trackerstore.NewItem) (id string, created bool, err error) {
-	if err := c.holds(); err != nil {
-		return "", false, err
-	}
-
-	return c.writer.Create(ctx, project, key, item)
-}
-
-func (c claimedWriter) SetStatus(ctx context.Context, project, id string, status trackerstore.Status) error {
-	if err := c.holds(); err != nil {
+// claimedCall reads the claim with read, then runs call under ctx, which the end of the claim also ends.
+func claimedCall(ctx context.Context, read func(context.Context) (context.Context, error), call func(context.Context) error) error {
+	claim, err := read(ctx)
+	if err != nil {
 		return err
 	}
 
-	return c.writer.SetStatus(ctx, project, id, status)
+	bound, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	defer context.AfterFunc(claim, func() { cancel(context.Cause(claim)) })()
+
+	return call(bound)
 }
 
-func (c claimedWriter) Comment(ctx context.Context, project, id, key, text string) error {
-	if err := c.holds(); err != nil {
+// PRComment writes a comment on the pull request of an item.
+func (w runWrites) PRComment(ctx context.Context, project, item, key, text string) (number int, err error) {
+	err = claimedCall(ctx, w.trusted, func(c context.Context) error {
+		number, err = w.e.deps.Forge.Comment(c, project, item, key, text)
+
 		return err
-	}
+	})
 
-	return c.writer.Comment(ctx, project, id, key, text)
+	return number, err
 }
 
-// forgeWrites is the forge of the run for the writes of a step.
-func (s *script) forgeWrites() forgeWrites { //nolint:ireturn // the claimed forge hides the forge of the engine behind its write methods
-	return claimedForge{forge: s.e.deps.Forge, holds: s.holdsClaim}
+// Open opens the pull request of an item.
+func (w runWrites) Open(ctx context.Context, project, item string, req OpenRequest) (opened OpenResult, err error) {
+	err = claimedCall(ctx, w.trusted, func(c context.Context) error {
+		opened, err = w.e.deps.Forge.Open(c, project, item, req)
+
+		return err
+	})
+
+	return opened, err
 }
 
-// trackerWrites is the tracker writer of the run for the writes of a step.
-func (s *script) trackerWrites() writer { //nolint:ireturn // the claimed writer hides the writer of the engine behind its write methods
-	return claimedWriter{writer: s.e.deps.Writer, holds: s.holdsClaim}
+// Push pushes a head of the clone of the project to a branch.
+func (w runWrites) Push(ctx context.Context, project, item, branch, head, expect string) error {
+	return claimedCall(ctx, w.trusted, func(c context.Context) error { return w.e.deps.Forge.Push(c, project, item, branch, head, expect) })
+}
+
+// MarkReady marks the pull request of an item ready for review.
+func (w runWrites) MarkReady(ctx context.Context, project, item, repo string) error {
+	return claimedCall(ctx, w.trusted, func(c context.Context) error { return w.e.deps.Batch.SetDraft(c, project, item, repo, false) })
+}
+
+// Create files a tracker item under the key.
+func (w runWrites) Create(ctx context.Context, project, key string, item trackerstore.NewItem) (id string, created bool, err error) {
+	err = claimedCall(ctx, w.trusted, func(c context.Context) error {
+		id, created, err = w.e.deps.Writer.Create(c, project, key, item)
+
+		return err
+	})
+
+	return id, created, err
+}
+
+// SetStatus sets the status of a tracker item.
+func (w runWrites) SetStatus(ctx context.Context, project, id string, status trackerstore.Status) error {
+	return claimedCall(ctx, w.trusted, func(c context.Context) error { return w.e.deps.Writer.SetStatus(c, project, id, status) })
+}
+
+// ItemComment writes a comment on a tracker item under the key.
+func (w runWrites) ItemComment(ctx context.Context, project, id, key, text string) error {
+	return claimedCall(ctx, w.trusted, func(c context.Context) error { return w.e.deps.Writer.Comment(c, project, id, key, text) })
+}
+
+// Run starts the program of a command or a write and waits for it.
+func (w runWrites) Run(ctx context.Context, request CommandRequest) (out CommandOutput, err error) {
+	err = claimedCall(ctx, w.trusted, func(c context.Context) error {
+		out, err = w.e.deps.Commands.Run(c, request)
+
+		return err
+	})
+
+	return out, err
 }

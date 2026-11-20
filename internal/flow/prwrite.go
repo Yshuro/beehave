@@ -18,7 +18,7 @@ func (s *script) prComment(b *starlark.Builtin, args starlark.Tuple, kwargs []st
 	}
 
 	return s.durable("pr_comment", label, func(ctx context.Context, _ string) (stepResult, error) {
-		number, err := s.forgeWrites().Comment(ctx, s.in.Project, s.in.Item, s.scoped(key), text)
+		number, err := s.writes().PRComment(ctx, s.in.Project, s.in.Item, s.scoped(key), text)
 
 		return stepResult{Outputs: prCommentOutputs(number)}, err
 	})
@@ -59,7 +59,7 @@ func (s *script) prOpen(b *starlark.Builtin, args starlark.Tuple, kwargs []starl
 	}
 
 	return s.durable("pr_open", label, func(ctx context.Context, _ string) (stepResult, error) {
-		opened, err := s.forgeWrites().Open(ctx, s.in.Project, s.in.Item, req)
+		opened, err := s.writes().Open(ctx, s.in.Project, s.in.Item, req)
 
 		return stepResult{Outputs: openOutputs(opened)}, err
 	})

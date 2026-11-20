@@ -38,7 +38,7 @@ func (s *script) scoped(key string) string { return workflowID(s.ctx) + ":" + ke
 // so two runs of this engine at the same time file one item. Writers on another host, or with another state folder, do not take this lock.
 func (s *script) create(ctx context.Context, key string, shared bool, item trackerstore.NewItem) (id string, created bool, err error) {
 	if !shared {
-		return s.trackerWrites().Create(ctx, s.in.Project, s.scoped(key), item)
+		return s.writes().Create(ctx, s.in.Project, s.scoped(key), item)
 	}
 
 	unlock, err := trackerstore.LockKey(ctx, s.e.dir, s.in.Project+"\n"+key)
@@ -48,7 +48,7 @@ func (s *script) create(ctx context.Context, key string, shared bool, item track
 
 	defer func() { err = errors.Join(err, unlock()) }()
 
-	return s.trackerWrites().Create(ctx, s.in.Project, key, item)
+	return s.writes().Create(ctx, s.in.Project, key, item)
 }
 
 // check returns the first problem of a write call before the step starts: an empty argument, a status that is not known, or a build with no writer.
@@ -123,7 +123,7 @@ func (s *script) itemStatus(b *starlark.Builtin, args starlark.Tuple, kwargs []s
 	}
 
 	return s.write("item_status", label, func(ctx context.Context) (map[string]any, error) {
-		return statusOutputs(id, string(status)), s.trackerWrites().SetStatus(ctx, s.in.Project, id, status)
+		return statusOutputs(id, string(status)), s.writes().SetStatus(ctx, s.in.Project, id, status)
 	})
 }
 
@@ -143,6 +143,6 @@ func (s *script) itemComment(b *starlark.Builtin, args starlark.Tuple, kwargs []
 	}
 
 	return s.write("item_comment", label, func(ctx context.Context) (map[string]any, error) {
-		return commentOutputs(id), s.trackerWrites().Comment(ctx, s.in.Project, id, s.scoped(key), text)
+		return commentOutputs(id), s.writes().ItemComment(ctx, s.in.Project, id, s.scoped(key), text)
 	})
 }

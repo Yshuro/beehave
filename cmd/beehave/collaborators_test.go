@@ -196,6 +196,32 @@ func TestPrograms_ALocalProgramRunsInTheWorktreeAndKeepsItsExitCode(t *testing.T
 	assert.Equal(t, []string{"check"}, args)
 }
 
+func TestPrograms_ARequestWhoseContextIsDoneStartsNoProgram(t *testing.T) {
+	t.Parallel()
+
+	for name, done := range map[string]bool{"a_live_context_runs_it": false, "a_done_context_starts_nothing": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tree := t.TempDir()
+			marker := filepath.Join(tree, "ran")
+			runs := programs{trees: treeAt(tree), exec: func(spec proc.ExecRunner) proc.Runner { return spec }}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			if done {
+				cancel()
+			}
+			defer cancel()
+
+			_, err := runs.Run(ctx, flow.CommandRequest{Project: "p", Item: "1", Run: []string{"touch", marker}, Timeout: time.Minute})
+			require.NoError(t, err)
+
+			_, statErr := os.Stat(marker)
+			assert.Equal(t, done, os.IsNotExist(statErr), "the real runner starts the program only under a live context")
+		})
+	}
+}
+
 func TestPrograms_ACappedProgramGetsTheCapAndOnlyAForkFailureNamesIt(t *testing.T) {
 	t.Parallel()
 

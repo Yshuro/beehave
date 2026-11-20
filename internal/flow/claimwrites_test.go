@@ -2,6 +2,7 @@ package flow
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -9,6 +10,8 @@ import (
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	trackerstore "github.com/tobocop2/beehave/internal/store"
 )
 
 // claimLoser loses the claim of the run of the test item, as the renewal does when the tracker says that the claim is gone.
@@ -112,7 +115,7 @@ func TestClaimWrites_AMergeOfARunThatNeverHeldAClaimLandsNothing(t *testing.T) {
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
 	// The merge runs as a child of its run and can wait behind a gate for a long time, so the claim is read again when the child reaches the merge call.
-	handle, err := dbos.RunWorkflow(engine.ctx, engine.exclusive, ExclusiveInput{Kind: kindMerge, Run: "item-12-r9", Project: testProject, Item: "1", Head: rig.heads["1"]},
+	handle, err := dbos.RunWorkflow(engine.ctx, engine.exclusive, ExclusiveInput{Kind: kindMerge, Run: "item-12-r9", RunItem: testItem, Project: testProject, Item: "1", Head: rig.heads["1"]},
 		dbos.WithQueue(engine.exclusiveQueue), dbos.WithQueuePartitionKey(testProject))
 	require.NoError(t, err)
 
@@ -132,6 +135,8 @@ type heldRun struct {
 	waiting  chan struct{} // closed when the command starts to wait
 	canceled chan struct{} // closed when the context of the waiting command ends
 	once     sync.Once
+	waited   sync.Once
+	ended    sync.Once
 }
 
 // startHeldRun starts the run on an engine of deps and returns when the run holds its claim.
@@ -143,19 +148,27 @@ func startHeldRun(t *testing.T, h *harness, deps Deps) *heldRun {
 	require.NoError(t, engine.Launch())
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
+	return holdRun(t, h, engine, func(context.Context, CommandRequest) error { return nil })
+}
+
+// holdRun starts the run on a launched engine of h and returns when the run holds its claim. others runs for each command but the wait of the run.
+// The wait of a run that a later engine of h recovers waits again.
+func holdRun(t *testing.T, h *harness, engine *Engine, others func(context.Context, CommandRequest) error) *heldRun {
+	t.Helper()
+
 	r := &heldRun{engine: engine, release: make(chan struct{}), done: make(chan error, 1), canceled: make(chan struct{}), waiting: make(chan struct{})}
 	h.commands.before = func(ctx context.Context, request CommandRequest) error {
-		if request.Run[0] != "wait" {
-			return nil
+		if len(request.Run) == 0 || request.Run[0] != "wait" {
+			return others(ctx, request)
 		}
 
-		close(r.waiting)
+		r.waited.Do(func() { close(r.waiting) })
 
 		select {
 		case <-r.release:
 			return nil
 		case <-ctx.Done():
-			close(r.canceled)
+			r.ended.Do(func() { close(r.canceled) })
 
 			return ctx.Err()
 		}
@@ -186,11 +199,11 @@ func (r *heldRun) finish() error {
 	return <-r.done
 }
 
-// queueMerge queues a merge child that names the run and returns the failure that the child recorded.
-func queueMerge(t *testing.T, engine *Engine, run, head string) *Failure {
+// queueMerge queues the merge of a member as a child that names the run of the test item, and returns the failure that the child recorded.
+func queueMerge(t *testing.T, engine *Engine, run, member, head string) *Failure {
 	t.Helper()
 
-	handle, err := dbos.RunWorkflow(engine.ctx, engine.exclusive, ExclusiveInput{Kind: kindMerge, Run: run, Project: testProject, Item: "1", Head: head},
+	handle, err := dbos.RunWorkflow(engine.ctx, engine.exclusive, ExclusiveInput{Kind: kindMerge, Run: run, RunItem: testItem, Project: testProject, Item: member, Head: head},
 		dbos.WithQueue(engine.exclusiveQueue), dbos.WithQueuePartitionKey(testProject))
 	require.NoError(t, err)
 
@@ -207,7 +220,7 @@ func TestClaimWrites_AMergeOfARunThatHeldItsClaimAndLostItLandsNothing(t *testin
 	run := startHeldRun(t, rig.h, rig.deps())
 
 	run.engine.lose(runID(testItem, 1), "a test lost the claim")
-	failure := queueMerge(t, run.engine, runID(testItem, 1), rig.heads["1"])
+	failure := queueMerge(t, run.engine, runID(testItem, 1), "1", rig.heads["1"])
 	require.Error(t, run.finish(), "the run ends on the loss")
 
 	require.NotNil(t, failure)
@@ -224,7 +237,7 @@ func TestClaimWrites_AMergeChildWithNoRunIsRefusedWhileOneRunIsOpen(t *testing.T
 	run := startHeldRun(t, rig.h, deps)
 
 	// A child that an older build recorded names no run. The one open run is no claim of the child.
-	failure := queueMerge(t, run.engine, "", rig.heads["1"])
+	failure := queueMerge(t, run.engine, "", "1", rig.heads["1"])
 	require.NoError(t, run.finish())
 
 	require.NotNil(t, failure)
@@ -282,7 +295,7 @@ func TestClaimWrites_ACommandChildOfARunThatLostItsClaimNeverRunsItsProgram(t *t
 
 	run.engine.lose(runID(testItem, 1), "a test lost the claim")
 
-	handle, err := dbos.RunWorkflow(run.engine.ctx, run.engine.exclusive, ExclusiveInput{Kind: kindCommand, Run: runID(testItem, 1), Project: testProject, Item: testItem, Request: CommandRequest{Project: testProject, Item: testItem, Run: []string{markCommand}}},
+	handle, err := dbos.RunWorkflow(run.engine.ctx, run.engine.exclusive, ExclusiveInput{Kind: kindCommand, Run: runID(testItem, 1), RunItem: testItem, Project: testProject, Item: testItem, Request: CommandRequest{Project: testProject, Item: testItem, Run: []string{markCommand}}},
 		dbos.WithQueue(run.engine.exclusiveQueue), dbos.WithQueuePartitionKey(testProject))
 	require.NoError(t, err)
 
@@ -302,7 +315,7 @@ func TestClaimWrites_ALossWhileTheMergeRunsCancelsTheContextOfTheMerge(t *testin
 	rig.merger.hold = make(chan context.Context, 1)
 	run := startHeldRun(t, rig.h, rig.deps())
 
-	handle, err := dbos.RunWorkflow(run.engine.ctx, run.engine.exclusive, ExclusiveInput{Kind: kindMerge, Run: runID(testItem, 1), Project: testProject, Item: "1", Head: rig.heads["1"]},
+	handle, err := dbos.RunWorkflow(run.engine.ctx, run.engine.exclusive, ExclusiveInput{Kind: kindMerge, Run: runID(testItem, 1), RunItem: testItem, Project: testProject, Item: "1", Head: rig.heads["1"]},
 		dbos.WithQueue(run.engine.exclusiveQueue), dbos.WithQueuePartitionKey(testProject))
 	require.NoError(t, err)
 
@@ -354,4 +367,157 @@ func TestClaimWrites_AHandOffThatLostItsClaimMarksNothingReady(t *testing.T) {
 
 	require.ErrorIs(t, err, errClaimLost)
 	assert.NotContains(t, rig.host.pr.marked(), "1:false", "the claim was lost before the ready mark, so the pull request is never marked ready (a return to draft is no ready mark)")
+}
+
+func TestClaimWrites_APushAfterTheLossPushesNothing(t *testing.T) {
+	t.Parallel()
+
+	push := stepWrite{"push", `push(name = "p", branch = "fix-7", head = "aaa")`, func(h *harness, _ *fakeWriter) []string { return h.forge.pushed }}
+
+	written, err := writeAfter(t, push, true)
+
+	require.ErrorIs(t, err, errClaimLost)
+	assert.Empty(t, written, "the claim was lost before the push, so the forge pushes nothing")
+
+	written, err = writeAfter(t, push, false)
+
+	require.NoError(t, err)
+	assert.Len(t, written, 1, "control: with the claim kept, the same push reaches the forge")
+}
+
+// draftMarks is a batch host that records each change of the draft flag as item:draft.
+type draftMarks struct {
+	batchHost
+
+	mu    sync.Mutex
+	marks []string
+}
+
+func (d *draftMarks) SetDraft(_ context.Context, _, item, _ string, draft bool) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.marks = append(d.marks, item+":"+strconv.FormatBool(draft))
+
+	return nil
+}
+
+// handleWrite is one method of the write handle, and the count of the writes that the fakes recorded for it.
+type handleWrite struct {
+	name    string
+	write   func(ctx context.Context, w runWrites) error
+	written func() int
+}
+
+func handleWrites(h *harness, writer *fakeWriter, marks *draftMarks) []handleWrite {
+	count := func(mu *sync.Mutex, records *[]string) func() int {
+		return func() int {
+			mu.Lock()
+			defer mu.Unlock()
+
+			return len(*records)
+		}
+	}
+	forgeCount := func(records *[]string) func() int { return count(&h.forge.mu, records) }
+
+	return []handleWrite{
+		{"pr_comment", func(ctx context.Context, w runWrites) error {
+			_, err := w.PRComment(ctx, testProject, testItem, "k", "x")
+
+			return err
+		}, forgeCount(&h.forge.notes)},
+		{"pr_open", func(ctx context.Context, w runWrites) error {
+			_, err := w.Open(ctx, testProject, testItem, OpenRequest{Title: "t", Base: "main"})
+
+			return err
+		}, forgeCount(&h.forge.opened)},
+		{"push", func(ctx context.Context, w runWrites) error {
+			return w.Push(ctx, testProject, testItem, "fix-7", "aaa", "")
+		}, forgeCount(&h.forge.pushed)},
+		{"ready", func(ctx context.Context, w runWrites) error { return w.MarkReady(ctx, testProject, testItem, "") }, count(&marks.mu, &marks.marks)},
+		{"item_create", func(ctx context.Context, w runWrites) error {
+			_, _, err := w.Create(ctx, testProject, "k", trackerstore.NewItem{Title: "t"})
+
+			return err
+		}, count(&writer.mu, &writer.created)},
+		{"item_status", func(ctx context.Context, w runWrites) error {
+			return w.SetStatus(ctx, testProject, "n-1", trackerstore.StatusClosed)
+		}, count(&writer.mu, &writer.statuses)},
+		{"item_comment", func(ctx context.Context, w runWrites) error { return w.ItemComment(ctx, testProject, "n-1", "k", "x") }, count(&writer.mu, &writer.notes)},
+		{"program", func(ctx context.Context, w runWrites) error {
+			_, err := w.Run(ctx, CommandRequest{Project: testProject, Item: testItem, Run: []string{markCommand}})
+
+			return err
+		}, func() int { return len(h.commands.ran()) }},
+	}
+}
+
+func TestClaimWrites_AWriteAfterTheLeaseLapsedWithNoTickIsRefused(t *testing.T) {
+	t.Parallel()
+
+	for name, lapsed := range map[string]bool{"the_claim_is_trusted": false, "the_lease_lapsed": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			lapsedWrites(t, lapsed)
+		})
+	}
+}
+
+// lapsedWrites calls each method of the write handle of a run that holds a trusted claim, after its lease lapsed when lapsed is true.
+func lapsedWrites(t *testing.T, lapsed bool) {
+	t.Helper()
+
+	h := newHarness(t)
+	writer := newFakeWriter()
+	h.writer = writer
+	marks := &draftMarks{}
+	clk := &leaseClock{now: time.Unix(1_000_000, 0)}
+	engine := launchedWith(t, h, func(deps *Deps) {
+		clk.install(&deps.Clock)
+		deps.Batch = marks
+	})
+
+	// A run that holds a trusted claim. No tick runs in the test, so nothing calls lose and the context of the claim stays live.
+	const run = "lapse-run"
+
+	engine.holds.add(run, claimHold{project: testProject, owner: "owner"})
+	require.True(t, engine.holds.renew(run, clk.Now(), func() {}))
+
+	claim, err := engine.claimed(run, testItem)
+	require.NoError(t, err)
+
+	if lapsed {
+		clk.advance(trustLimit)
+	}
+
+	for _, write := range handleWrites(h, writer, marks) {
+		err := write.write(t.Context(), runWrites{e: engine, run: run, item: testItem})
+
+		if !lapsed {
+			require.NoError(t, err, write.name)
+			assert.Equal(t, 1, write.written(), "control: %s writes once while the claim is trusted", write.name)
+
+			continue
+		}
+
+		require.ErrorIs(t, err, errClaimLost, write.name)
+		assert.Zero(t, write.written(), "%s writes nothing once the lease lapsed", write.name)
+		require.NoError(t, claim.Err(), "the context of the claim is still live: only the trust read sees the lapse")
+	}
+}
+
+func TestClaimWrites_TheLostClaimOfAMergeChildNamesTheItemOfTheRun(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+	run := startHeldRun(t, rig.h, rig.deps())
+
+	run.engine.lose(runID(testItem, 1), "a test lost the claim")
+	failure := queueMerge(t, run.engine, runID(testItem, 1), "1", rig.heads["1"])
+	require.Error(t, run.finish())
+
+	require.NotNil(t, failure)
+	assert.Contains(t, failure.Text, "item "+testItem+":", "the claim is on the item of the run, not on the member")
+	assert.Contains(t, failure.Text, "Run beehave run "+testItem+" again")
+	assert.NotContains(t, failure.Text, "item 1:", "the member holds no claim, so the advice names the item of the run")
 }
