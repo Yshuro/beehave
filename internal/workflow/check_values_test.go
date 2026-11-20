@@ -57,6 +57,8 @@ func TestCheck_RefusesTheLiteralValuesThatTheRunRefuses(t *testing.T) {
 		{"outputs element", `agent("p", "m", outputs = [1])`, "agent: outputs must hold strings only"},
 		{"protect_paths element", `agent("p", "m", protect_paths = [1])`, "agent: protect_paths must hold strings only"},
 		{"inputs key", `agent("p", "m", inputs = {1: "a"})`, "agent: a value cannot go into a prompt or a request"},
+		{"data list", `agent("p", "m", data = ["a"])`, "data must be a dict, not a list"},
+		{"data key", `agent("p", "m", data = {1: "a"})`, "agent: a value cannot go into a prompt or a request"},
 		{"max_new_processes with host", `command(run = ["x"], host = "h", max_new_processes = 5)`, "command: max_new_processes cannot be used together with host"},
 		{"max_new_processes none", `command(run = ["x"], max_new_processes = None)`, "command: max_new_processes must be a whole number from 1 to 100000"},
 		{"max_new_processes fraction", `command(run = ["x"], max_new_processes = 2.5)`, "command: max_new_processes must be a whole number from 1 to 100000"},
@@ -119,6 +121,8 @@ func TestCheck_AcceptsTheLiteralValuesThatTheRunAccepts(t *testing.T) {
 		"    agent(\"p\", \"m\", max_budget_usd = 2.5)\n"+
 		"    agent(\"p\", \"m\", max_budget_usd = 0)\n"+
 		"    agent(\"p\", \"m\", label = \"fix 1/5\")\n"+
+		"    agent(\"p\", \"m\", data = {\"base_reds\": [\"a\"]})\n"+
+		"    agent(\"p\", \"m\", data = None)\n"+
 		"    command(run = [\"x\"], stop_on_rc = [1, 255], max_new_processes = 5, timeout = \"\")\n"+
 		"    wait(question = \"q\", timeout = \"48h\")\n"+
 		"    wait(question = \"q\", to = [\"a\", \"b\"], quorum = 2, choices = [\"yes\", \"no\"], timeout = \"1h\")\n"+

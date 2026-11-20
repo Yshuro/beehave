@@ -33,6 +33,10 @@ The project file also takes these keys. Each path is absolute or starts with `~/
 
 The record of a step stores the sandbox that the step runs with, in the `/render` step beside the prompt. A replay reads the record and never the current default of the project. A record without the value replays as a step with no sandbox.
 
+### The data file
+
+A step with the `data` keyword gets one file in the state folder (see [Agent runs](agent-runs.md#the-setting-data)). The plan adds that one path to the read paths, after the check of the `sandbox_read` paths. It never adds the inputs folder or the state folder, which holds `dbos.db`. The sandbox denies the home folder, so the default state folder under `~/.local/state` stays closed except for this file. A data file inside a credential path stops the step. The Read tool keeps `blockReadsOutsideWorkingDirectories`, so the agent reads the file with the shell. The file holds what the workflow passed and no credential.
+
 ## What the Claude adapter sets
 
 ### Isolation flags
@@ -50,7 +54,7 @@ It passes one `--settings` JSON that holds the sandbox object, the permission ru
 ### The sandbox object and the permission rules
 
 - The sandbox object sets `enabled`, `failIfUnavailable` and `allowUnsandboxedCommands: false`.
-- The base is deny by default. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory and the `sandbox_read` paths.
+- The base denies the home folder. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory, the `sandbox_read` paths, the env file and the data file of the step. Outside the home folder, the sandbox reads every path that is not a credential path.
 - The network list sets `allowedDomains` with `strictAllowlist`.
 - The permission rules set `blockReadsOutsideWorkingDirectories` and deny `WebFetch` and `WebSearch`.
 
@@ -124,6 +128,10 @@ Not proven: a real `claude` run that prints `env` in the shell must show that th
 
 The child environment holds no proxy variable and no `SSH_AUTH_SOCK`. It sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, because the base denies `~/.gitconfig`. A step that needs a proxy of the owner sets `sandbox = None`.
 
+The scrub drops `GIT_CONFIG_GLOBAL` by name. The engine writes the git variables to a file `sandbox-env.sh` in the run folder and names it in `CLAUDE_ENV_FILE`; the CLI sources the file in its shell after the scrub. The run folder holds only that file. The run folder is in the temporary folder of the engine, which the sandbox reads by default; the `allowRead` entry for the file matters only when the run folder is under the home folder.
+
+With no global config, the clone has no `user.name` or `user.email`. The engine reads both with its own git at the worktree and sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in the child environment and in the env file. If either value is empty, the step does not start, and the note names `git config user.email`. The shell gets no credential: a push from the shell still fails.
+
 ## When the step does not start
 
 The step ends as `not-started`, with a note, when:
@@ -131,7 +139,8 @@ The step ends as `not-started`, with a note, when:
 - the adapter of the runner has no sandbox;
 - the system is Windows (Claude Code runs commands there with no sandbox);
 - the Claude Code version is below the minimum;
-- the version cannot be read.
+- the version cannot be read;
+- git has no `user.name` or no `user.email` at the worktree.
 
 A Claude Code that does not know a sandbox key ignores it and exits with code 0, so the minimum version is the only guard.
 
@@ -164,7 +173,7 @@ The project file keeps two lists for the gate, and `beehave` records them. The e
 
 ### Choice of the enforcer
 
-The project key `sandbox_enforcer` names the enforcer. It holds for the enforcer of the gate, not for the sandbox of Claude Code in an agent step.
+The project key `sandbox_enforcer` names the enforcer. It holds for the enforcer of the gate and of the copy of the head that the engine push makes (see [push](workflow-files.md#push)), not for the sandbox of Claude Code in an agent step.
 
 | Value | Meaning |
 |---|---|
@@ -184,7 +193,7 @@ Platform support:
 The `seatbelt` enforcer runs the command under `sandbox-exec` with a Seatbelt profile that beehave generates from the plan. The profile:
 
 - denies everything by default;
-- allows reads and writes by path;
+- allows reads and writes by the paths of the plan, and reads of the folders of macOS that every program loads from (`/System`, `/Library/Apple` and the shared cache of the libraries). It adds no other folder: a plan that needs `/usr`, `/etc` or `/opt` names them, as the plan of a gate does;
 - allows TCP connect to the port of the proxy on localhost only;
 - grants no unix socket;
 - allows a Mach service lookup by name only, for the few services that the system libraries need (user and group names, logging, preferences, notifications). A command cannot reach launchd or any other service to start a job.
@@ -266,7 +275,7 @@ Removal:
 
 ### When no enforcer can run
 
-When no enforcer can run here, `beehave` runs no gate command outside a sandbox that the project asked for, and the gate does not run. The refusal text ends with the reason of the enforcer.
+When no enforcer can run here, `beehave` runs no gate command outside a sandbox that the project asked for, and the gate does not run. The refusal text ends with the reason of the enforcer. The engine push is refused too, in every project, because its copy of the head always runs under an enforcer.
 
 The same holds, even in a project that builds on a host, for:
 

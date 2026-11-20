@@ -6,11 +6,10 @@ The round merges the trunk into the round branch `{{ .base }}` through the sync 
 2. Run `git checkout --detach origin/{{ .branch }}`.
 3. Run `git merge --no-ff origin/{{ .source }}`.
 4. Resolve each conflict so that both sides keep their intent. Keep every test of both sides. Commit the merge commit with `git commit --no-edit`.
-5. Run `git push origin HEAD:refs/heads/{{ .branch }}`.
 
-Make one merge commit with the two parents (the sync branch tip, then `origin/{{ .source }}`). Do not rebase, amend, squash or force-push. Do not change a line that the conflict does not need. Do not open a pull request: the round opens it after your push.
+Do not push: the engine pushes the merge commit to `{{ .branch }}` after this step. Make one merge commit with the two parents (the sync branch tip, then `origin/{{ .source }}`). Do not rebase, amend or squash. Do not change a line that the conflict does not need. Do not open a pull request: the round opens it after the push.
 
-If you cannot resolve a conflict, push nothing, and say in your report which files conflict and why. The round then waits for the owner with the reason `sync-conflict`.
+If you cannot resolve a conflict, commit nothing, and say in your report which files conflict and why. The round then waits for the owner with the reason `sync-conflict`.
 
 ## Facts of the project
 

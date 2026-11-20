@@ -285,7 +285,7 @@ func TestRoundRun_CancelRunRefusesAnOpenRunWhoseInputIsNotAnItemInput(t *testing
 	require.ErrorContains(t, err, "read the input of run "+testPassID)
 }
 
-// roundTracker is a harness whose tracker takes only issue numbers, as the GitHub store does.
+// roundTracker is a harness whose tracker takes only issue numbers.
 func roundTracker(t *testing.T) (*harness, *fakeReader) {
 	t.Helper()
 

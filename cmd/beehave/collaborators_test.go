@@ -42,7 +42,7 @@ type treeAt string
 
 func (t treeAt) Path(context.Context, string, string) (string, error) { return string(t), nil }
 
-func (t treeAt) Ensure(context.Context, string, string, string) (string, error) {
+func (t treeAt) Ensure(context.Context, string, string, string, string) (string, error) {
 	return string(t), nil
 }
 
@@ -50,7 +50,9 @@ type treeFails struct{}
 
 func (treeFails) Path(context.Context, string, string) (string, error) { return "", errFake }
 
-func (treeFails) Ensure(context.Context, string, string, string) (string, error) { return "", errFake }
+func (treeFails) Ensure(context.Context, string, string, string, string) (string, error) {
+	return "", errFake
+}
 
 func TestWorktrees_PathIsTheFolderThatGitListsAsAWorktree(t *testing.T) {
 	t.Parallel()

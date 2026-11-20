@@ -60,12 +60,13 @@ type worktrees struct {
 	forge    func(model.Project) (forge.Forge, error)
 }
 
-// Ensure returns the worktree of the item. An item with no worktree gets one, cut from the base branch of the project on a new branch named for the item.
+// Ensure returns the worktree of the item. An item with no worktree gets one, cut from base on a new branch named for the item.
+// An empty base means the base branch of the project. A child item of a round passes the base of its round.
 // If the branch of the item exists, the worktree uses it as it is, so earlier commits stay. A resume finds the worktree again and changes nothing.
 // A round item gets a detached worktree at start, or at the tip of its own base branch on the remote when start is empty.
 // With an empty start, a round worktree that exists moves to that tip when it is clean and is refused when it holds changes. Any other item ignores start.
-// A folder that git does not list as a worktree is an error. Ensure never deletes it. The lookup and the add run under the lock of the clone.
-func (w worktrees) Ensure(ctx context.Context, project, item, start string) (string, error) {
+// A round item ignores base. A folder that git does not list as a worktree is an error. Ensure never deletes it. The lookup and the add run under the lock of the clone.
+func (w worktrees) Ensure(ctx context.Context, project, item, start, base string) (string, error) {
 	if w.plain(project) {
 		return w.ensurePlain(project, item)
 	}
@@ -78,7 +79,7 @@ func (w worktrees) Ensure(ctx context.Context, project, item, start string) (str
 	var dir string
 
 	if err := (cloneLock{repos: w.repos}).hold(ctx, project, func(clone string) (held error) {
-		dir, held = w.ensureLocked(ctx, found, clone, item, start)
+		dir, held = w.ensureLocked(ctx, found, clone, item, start, base)
 
 		return held
 	}); err != nil {
@@ -89,14 +90,14 @@ func (w worktrees) Ensure(ctx context.Context, project, item, start string) (str
 }
 
 // ensureLocked finds or adds the worktree of the item while Ensure holds the lock of the clone.
-func (w worktrees) ensureLocked(ctx context.Context, project config.Project, clone, item, start string) (string, error) {
+func (w worktrees) ensureLocked(ctx context.Context, project config.Project, clone, item, start, base string) (string, error) {
 	dir, err := w.lookup(ctx, project.Name, item)
 	if err != nil {
 		return "", err
 	}
 
 	if dir == "" {
-		return w.addLocked(ctx, project, clone, item, start)
+		return w.addLocked(ctx, project, clone, item, start, base)
 	}
 
 	if base, round := model.RoundBase(item); round && start == "" {
@@ -208,13 +209,13 @@ func (w worktrees) ensurePlain(project, item string) (string, error) {
 
 // addLocked refreshes the clone and adds the worktree of the item while Ensure holds the lock of the clone, so the first start makes the clone and each
 // later start finds it ready. The lock also covers the fetch, because two fetches into one clone race on its ref locks.
-func (w worktrees) addLocked(ctx context.Context, project config.Project, clone, item, start string) (string, error) {
+func (w worktrees) addLocked(ctx context.Context, project config.Project, clone, item, start, base string) (string, error) {
 	dir := filepath.Join(w.root, model.SafeName(project.Name), model.SafeName(item))
 	if err := absent(dir); err != nil {
 		return "", err
 	}
 
-	revision, err := w.refresh(ctx, project, clone, item, start)
+	revision, err := w.refresh(ctx, project, clone, item, start, base)
 	if err != nil {
 		return "", err
 	}
@@ -223,9 +224,9 @@ func (w worktrees) addLocked(ctx context.Context, project config.Project, clone,
 }
 
 // refresh makes the clone of the project if it is missing, fetches the branch of the item into it, and returns the revision to add the worktree at.
-// The branch is the base of a round item, and else the base branch of the project. A base that the remote lacks gives an error that names it.
+// The branch is the base of a round item, else base when it is not empty, else the base branch of the project. A base that the remote lacks gives an error that names it.
 // A round item with a start fetches nothing and returns start: the clone holds the commit that the worktree was first made at.
-func (w worktrees) refresh(ctx context.Context, project config.Project, clone, item, start string) (string, error) {
+func (w worktrees) refresh(ctx context.Context, project config.Project, clone, item, start, base string) (string, error) {
 	if err := w.clone(ctx, project, clone); err != nil {
 		return "", err
 	}
@@ -239,7 +240,11 @@ func (w worktrees) refresh(ctx context.Context, project config.Project, clone, i
 		return "origin/" + branch, w.fetchBase(ctx, clone, branch, item)
 	}
 
-	return "origin/" + project.BaseBranch, w.run(ctx, clone, "fetch", "origin", project.BaseBranch)
+	if base == "" {
+		base = project.BaseBranch
+	}
+
+	return "origin/" + base, w.run(ctx, clone, "fetch", "origin", base)
 }
 
 // fetchBase fetches the base branch of a round item into the clone. A base that the remote lacks gives an error that names it.
@@ -477,7 +482,7 @@ type treeFinder interface {
 // programTrees is what the command runner needs of the worktrees: it finds the tree of an item, and makes the tree of a round item again at its start commit when it is gone.
 type programTrees interface {
 	treeFinder
-	Ensure(ctx context.Context, project, item, start string) (string, error)
+	Ensure(ctx context.Context, project, item, start, base string) (string, error)
 }
 
 // programs runs the programs of command steps. A step with no host runs in the worktree of the item, or in a new empty folder that beehave removes afterwards when the item has none.
@@ -534,7 +539,7 @@ func (p programs) Run(ctx context.Context, request flow.CommandRequest) (flow.Co
 // it is made again at that commit. Any other item may have no worktree.
 func (p programs) folder(ctx context.Context, request flow.CommandRequest) (string, error) {
 	if request.TreeStart != "" {
-		return p.trees.Ensure(ctx, request.Project, request.Item, request.TreeStart)
+		return p.trees.Ensure(ctx, request.Project, request.Item, request.TreeStart, "")
 	}
 
 	return p.trees.Path(ctx, request.Project, request.Item)
@@ -734,10 +739,13 @@ const pullListLimit = 5
 const namedListLimit = 50
 
 // pulls reads and changes the pull request of an item. The pull request is the one on the branch that is named for the item.
+// trees finds the clone that a push copies the head from, and copier runs the copy.
 type pulls struct {
 	projects map[string]config.Project
 	forge    func(model.Project) (forge.Forge, error)
 	runners  []string
+	trees    worktrees
+	copier   headCopy
 }
 
 // opened is the forge of one project. It passes the optional reads of the merge (trees and failed logs) to the forge when the forge has them:

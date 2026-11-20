@@ -2,6 +2,7 @@
 package gate
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -119,6 +120,9 @@ type Request struct {
 	// pins are the pinned tools that the probe in front of each gate command checks. Run and Submit read them from the pin file at the base commit.
 	pins []Pin
 }
+
+// pinBase is the branch that the pin file is read from: the base of a candidate head, which is the branch that the head merges into, or the base branch of the project.
+func (r Request) pinBase() string { return cmp.Or(r.Base, r.Project.BaseBranch) }
 
 // Gate runs gates.
 type Gate struct {

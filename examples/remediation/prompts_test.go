@@ -3,6 +3,7 @@ package remediation_test
 import (
 	"io/fs"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -41,7 +42,7 @@ func acceptanceRules() []rule {
 		{"acceptance_rules", "its `## Expected behavior` table is the acceptance", workLanes()},
 		{"acceptance_rules", "take the one that changes fewer cells", workLanes()},
 		{"acceptance_rules", "stop and report it: a wider rule is the owner's decision", workLanes()},
-		{"before_write_rules", "Check for an existing pull request, at the start and again before you push", []string{implement, fix, plan}},
+		{"before_write_rules", "Check for an existing pull request, at the start and again before", []string{implement, fix, plan}},
 		{"before_write_rules", "Repeat-offender check", []string{implement, fix, plan}},
 		{"before_write_rules", "Re-derive every cited site at the tip you branch from", []string{implement, fix, plan}},
 		{"before_write_rules", "Build-versus-buy search. Before you write a new mechanism", []string{implement, fix, plan}},
@@ -215,20 +216,20 @@ func briefRules() []rule {
 
 func mergeRules() []rule {
 	return []rule{
-		{"merge_rules", "Push the branch when the first commit is green", []string{implement}},
-		{"merge_rules", "the engine does these after this step", []string{implement}},
+		{"merge_rules", "Make the first commit when the change is green", []string{implement}},
+		{"merge_rules", "the engine does these after the push", []string{implement}},
 		{"merge_rules", "the engine owns both", []string{fix}},
 		{"merge_rules", "Never use the merge queue of GitHub", []string{implement, fix, review}},
 		{"merge_rules", "Known base reds are in one file", workAndReview()},
 		{"merge_rules", "A finding that survives the review is filed before the merge", []string{review}},
-		{"merge_rules", "a commit that stays local is lost with the lane", workLanes()},
+		{"merge_rules", "a change that is not committed is lost with the lane", workLanes()},
 	}
 }
 
 func laneLayoutRules() []rule {
 	return []rule{
 		{"lane_layout", "A fix lane is not a proof lane and not a review lane", workLanes()},
-		{"lane_layout", "Run the scoped tests, not the full gate. Before you push, run the red test of each finding and the tests of the packages that your diff reaches", []string{fix}},
+		{"lane_layout", "Run the scoped tests, not the full gate. Before your last commit, run the red test of each finding and the tests of the packages that your diff reaches", []string{fix}},
 		{"lane_layout", "One reviewer judges one pull request", []string{review}},
 		{"lane_layout", "A rise in the regression count blocks the lane", workAndReview()},
 		{"lane_layout", "Patch rounds are bounded for each pull request", workLanes()},
@@ -302,6 +303,25 @@ func TestPrompts_TheWorkLanesLeaveThePullRequestToTheEngine(t *testing.T) {
 
 		for _, gone := range []string{"Addresses #N", "Closes #N", "gh stack link", "native stack", "Open a draft pull request"} {
 			assert.NotContains(t, text, gone, name)
+		}
+	}
+}
+
+// The agent of a sandboxed step has no credential, and the engine pushes after each step that commits (push in workflow.star and review_fix.star).
+// So no prompt of such a step tells the agent to push. The control is the text of the base, which each pattern finds.
+func TestPrompts_NoPromptOfAStepThatCommitsTellsTheAgentToPush(t *testing.T) {
+	t.Parallel()
+
+	tells := regexp.MustCompile(`git push|(^|[*] *|[.] )Push (the branch|every|at the first)|before you push|Before each push`)
+	control := "**Push at the first checkpoint.** Push the branch when the first commit is green. Run `git push origin HEAD`. Before each push, search the diff."
+	require.Len(t, tells.FindAllString(control, -1), 4, "the patterns find each push line of the base")
+
+	for _, name := range []string{implement, fix, "sync"} {
+		raw, err := fs.ReadFile(os.DirFS("prompts"), name+".md")
+		require.NoError(t, err)
+
+		for line := range strings.Lines(string(raw)) {
+			assert.False(t, tells.MatchString(line), "prompts/%s.md tells the agent to push: %s", name, line)
 		}
 	}
 }

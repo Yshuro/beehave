@@ -203,7 +203,7 @@ Three states, one owner: `internal/gate` sets `pass`, `fail` and `unknown`.
 
 A gate that passes with the wrong tool proves nothing about the pinned tool. The optional project key `pin_file` names a file in the format of `.tool-versions`: one tool and its exact version on each line. A `#` starts a comment. The path is relative and has no `..`. The config refuses any other path.
 
-beehave reads the file at the base commit, `origin/<base_branch>` (`git show`), not in the work tree of the lane. So a lane cannot edit its own pins.
+beehave reads the file at the base commit, `origin/<base_branch>` (`git show`), not in the work tree of the lane. So a lane cannot edit its own pins. A gate call with a `base`, the branch that the head merges into, reads the file at `origin/<base>` instead, so a child of a round gates with the pins of its round base. The gate key holds the pin text that it read.
 
 #### The probe
 

@@ -449,7 +449,7 @@ type hostRecordingGate struct {
 	quick    *atomic.Int32
 }
 
-func (hostRecordingGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (hostRecordingGate) Key(context.Context, string, string, string, string) (GateKey, error) {
 	return GateKey{ID: "one-tree", Head: gatedHead, Tree: "tree"}, nil
 }
 

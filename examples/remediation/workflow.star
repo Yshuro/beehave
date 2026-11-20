@@ -129,7 +129,7 @@ ROUND_DEFAULTS = {
     "union_gate": [],
     "base_result": "",
     "base_reds": [],
-    "base_reds_file": "base-reds.md",
+    "base_reds_file": "",
     "lane_kind": "impl",
     "allow_paths": [],
     "wait_hours": 24,
@@ -271,7 +271,7 @@ def _round_selector(block, got):
 def settings(project):
     """Returns the settings of the round as a dict, with the default of each key that the project vars leave out.
     The engine reads no setting. This function is the one check of them: it refuses project vars with no `round`, a missing key, a key of the wrong type, a value out of range and a key that is no setting,
-    and it refuses a method setting of the vars (the lists, the dicts, the changelog and the board) of the wrong type or form, each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
+    and it refuses a method setting of the vars (the lists, the dicts, the gate map, the changelog and the board) of the wrong type or form, each with a message that names the key and the fix. `project` is the value of facts(). Every entry of the file is a round or a child of one, so every entry reads them."""
     if "round" not in project.vars:
         fail("REFUSE: the project vars hold no round. Add the settings of the round to the project file: vars = {\"round\": {\"base\": \"integration/r2\", \"owner\": \"your-login\", \"lane_cap\": 4, \"fix_rounds\": 5, \"label\": \"beehave-round\"}}.")
 
@@ -296,8 +296,12 @@ def settings(project):
     if not _valid_base(got["base"]):
         _round_refuse("base", "is %r. Write a branch name such as integration/r2: letters, digits, `.`, `_` and `-`, with `/` between parts." % got["base"])
 
-    if got["base_reds_file"].strip() == "":
-        _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for base-reds.md.")
+    if "base_reds_file" not in block:
+        got["base_reds_file"] = "../base-reds-" + got["base"].replace("/", "_2F") + ".md"
+    elif got["base_reds_file"].strip() == "":
+        _round_refuse("base_reds_file", "is blank. Write the file of the known base reds, or leave the key out for ../base-reds-<base>.md, one file for each round.")
+    elif _leaves_project(got["base_reds_file"]):
+        _round_refuse("base_reds_file", "is %r, which leaves the folder of the project. Write a path from the folder of the round that stays in the project folder, such as ../base-reds.md, or an absolute path." % got["base_reds_file"])
 
     _round_numbers(got)
     got["steps"] = _round_steps(got["steps"])
@@ -307,6 +311,20 @@ def settings(project):
     _method_vars(project.vars)
 
     return got
+
+def _leaves_project(path):
+    """Reports whether a relative path from the folder of the round leaves the folder of the project, its parent: its clean form starts with two ".." parts or more. An absolute path is the choice of the owner."""
+    if path.startswith("/"):
+        return False
+    depth = 0
+    for part in path.split("/"):
+        if part == "..":
+            depth -= 1
+        elif part not in ["", "."]:
+            depth += 1
+        if depth < -1:
+            return True
+    return False
 
 # The method settings of the project vars that the example and its prompts read. Each key is optional. The lists hold text, the dicts map text to text.
 METHOD_LISTS = ["gate_files", "conventions", "brief_rules", "stacked_rules", "limits", "traps", "token_rules"]
@@ -321,7 +339,7 @@ def _is_text(value):
 
 def _method_vars(vars):
     """Refuses a method setting of the project vars that has the wrong type or a blank entry, before any step runs. The engine keeps vars a free map, so this function is the one check of these keys.
-    The keys are the lists and dicts of facts, the changelog path and the board. A key that the project leaves out passes. Each refusal names the key and the fix."""
+    The keys are the lists and dicts of facts, the gate map, the changelog path and the board. A key that the project leaves out passes. Each refusal names the key and the fix."""
     for key in METHOD_LISTS:
         if key in vars:
             _method_list(key, vars[key])
@@ -329,6 +347,9 @@ def _method_vars(vars):
     for key in METHOD_DICTS:
         if key in vars:
             _method_dict(key, vars[key])
+
+    if "gate_map" in vars:
+        _method_gate_map(vars["gate_map"])
 
     if "changelog" in vars:
         _method_changelog(vars["changelog"])
@@ -351,6 +372,18 @@ def _method_dict(key, value):
     for name, entry in value.items():
         if not _is_text(name) or not _is_text(entry):
             _vars_refuse(key, "holds a blank or non-text name or value (%r: %r). Write both as text or remove the entry." % (name, entry))
+
+def _method_gate_map(value):
+    if type(value) != "dict":
+        _vars_refuse("gate_map", "is %r, of type %s. Write a dict of each CI command to a list of gate_steps names, for example {\"make test\": [\"test\"], \"go install x@v1\": []}." % (value, type(value)))
+
+    for command_text, names in value.items():
+        if not _is_text(command_text) or type(names) != "list":
+            _vars_refuse("gate_map", "holds %r: %r. Write the CI command as text and the gate_steps names that run it as a list, or [] when it is not a check." % (command_text, names))
+
+        for name in names:
+            if not _is_text(name):
+                _vars_refuse("gate_map", "lists %r for the command %r. Write each gate_steps name as text that is not blank." % (name, command_text))
 
 def _method_changelog(value):
     # The check compares the path with the lines that git prints, so only the exact form of such a line matches.
@@ -805,7 +838,7 @@ def sync_land(item, project, round_settings, line, n):
 
 def sync_trunk(item, project, round_settings, n):
     """Merges a moved trunk into the round branch at the start of pass `n`, before its queue audit. Returns sync_end: a reason of SYNC_REASONS that ends the pass, or an empty reason, and the host_losses that its gate read.
-    A conflict gets one agent step, sync-resolve-<n>, on the sync branch, and then one more check. The tool merges the forge side and writes no checkout."""
+    A conflict gets one agent step, sync-resolve-<n>, on the sync branch, the push of its head by the engine, and then one more check. The tool merges the forge side and writes no checkout."""
     run = ["remedy", "sync", "--base", round_settings["base"], "--trunk", project.base_branch]
     line = sync_check("sync-%d" % n, run)
 
@@ -821,6 +854,9 @@ def sync_trunk(item, project, round_settings, n):
             inputs = {"branch": line["branch"], "source": line["source"], "base": round_settings["base"], "facts": project},
         )
         capped(resolve, "sync-resolve", item)
+
+        # The agent has no credential, so the engine pushes the merge commit to the sync branch. With no lease, git takes the merge only as a fast forward of the sync branch.
+        push(name = "push-sync-%d" % n, branch = line["branch"], head = resolve.head_sha, expect = "")
         line = sync_check("sync-again-%d" % n, run)
 
     state = line["state"]
@@ -879,7 +915,8 @@ def next_round(project, round_settings, pr):
 
 def record_base_reds(round_settings):
     """Writes the one record of the known base reds: the reds of vars.round.base_reds, the time and the tip of the base. Each new write replaces the file, so the file holds one record.
-    vars.round.base_reds_file names the file. The prompts tell each lane to read this file and not to copy the list."""
+    vars.round.base_reds_file names the file, as a path from the folder of the round. The default is ../base-reds-<base>.md, with each "/" of the base written as _2F. It lies in the folder of the project, outside every item folder, so the gate sees a clean folder, and each round has its own file.
+    The file is the record for the owner. A lane reads the same list from the data file of its step, because its sandbox cannot read this file."""
     base = round_settings["base"]
     tip = command(name = "base-tip", run = ["git", "rev-parse", "origin/" + base], stop_on_rc = [2]).stdout.strip()
     text = "# Known base reds\n\nMeasured at %s on the tip %s of %s.\n\n%s\n" % (now(), tip, base, "\n".join(["- " + red for red in round_settings["base_reds"]]))
@@ -892,6 +929,24 @@ def record_base_reds(round_settings):
         stdin = text,
         timeout = WRITE_TIMEOUT,
     )
+
+def derive_gate_list(project):
+    """Derives the gate list of the round from the CI workflow files of vars.gate_files, and holds gate_steps to it by vars.gate_map. A project with no gate_files derives nothing.
+    `remedy gatelist` stops the round (exit code 2) when the files give no step, or when gate_map does not map each derived command exactly to gate_steps names.
+    See the gate list section of docs/design/agent-runs.md."""
+    files = project.vars.get("gate_files", [])
+
+    if len(files) == 0:
+        return
+
+    if len(project.gate_steps) == 0:
+        _vars_refuse("gate_files", "is set, but the project has no gate_steps. Set gate_steps in the project file, one named step for each command of the gate, and map each CI command to them in vars.gate_map.")
+
+    steps = []
+    for name in project.gate_steps:
+        steps += ["--steps", name]
+
+    command(name = "gate-list", run = ["remedy", "gatelist"] + steps + ["--map", json.encode(project.vars.get("gate_map", {}))] + files, stop_on_rc = [2])
 
 # A bound for the loop of the round, because Starlark has no while. A pass ends one run or starts one, so the bound is far above the work of any real round.
 MAX_PASSES = 500
@@ -930,6 +985,7 @@ def round(item):
     # The round starts its host once. The child entry pipeline calls no host builtin, so a child cannot stop it. finish stops it.
     host_up(name = "round-host", host = project.build_host)
     record_base_reds(round_settings)
+    derive_gate_list(project)
 
     runs = []
     approved = []
@@ -951,7 +1007,7 @@ def round(item):
             q = queue(name = "round-queue-%d" % n, hold = "hold", label = round_settings["label"])
             take = ready_items(q, round_settings)
             if len(take) > 0:
-                runs = runs + spawn(items = take, entry = "pipeline", name = "round-spawn-%d" % n).runs
+                runs = runs + spawn(items = take, entry = "pipeline", base = round_settings["base"], name = "round-spawn-%d" % n).runs
 
         if len(runs) > 0:
             ended = gather(runs, until = "any", name = "round-gather-%d" % n).results
@@ -1072,6 +1128,9 @@ def pipeline(item):
 
     capped(plan, "plan", item)
 
+    # The implementer, each fix and each review read the known base reds of the round from the data file that the engine writes, not from the record of the owner.
+    lane_data = {"base_reds": round_settings["base_reds"], "base": base}
+
     implement = agent(
         name = "implement",
         prompt = "prompts/implement.md",
@@ -1082,6 +1141,7 @@ def pipeline(item):
         protect_paths = protected(round_settings),
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
         inputs = {"item": item, "plan": plan.text, "facts": project, "base": base, "acceptance": round_settings["acceptance"], "base_result": round_settings["base_result"]},
+        data = lane_data,
         **scope
     )
 
@@ -1092,7 +1152,11 @@ def pipeline(item):
     if "blast-radius-review" not in implement.skills:
         fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls. %s" % restart_steps(item))
 
-    # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the agent pushed.
+    # The agent of a sandboxed step has no credential, so the engine pushes its head to the branch of the item, the branch of its worktree. This is the first push of the branch in the run:
+    # with no lease, git takes only a new branch or a fast forward. Every gate clones the forge, so the push comes before the first gate.
+    push(name = "push-implement", branch = item.id, head = implement.head_sha, expect = "")
+
+    # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the engine pushed.
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
     # when the item has a parent, links it into the native stack of the pull request of that item. The call owns only the closing line of the body:
     # `Closes #N` when the base is the default branch and `Addresses #N` on any other. An item id that is not an issue number gets no line, and a body that exists is kept.
@@ -1129,7 +1193,7 @@ def pipeline(item):
     def mutants(gate):
         return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"])
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"], push_branch = item.id)
 
     if loop.stopped:
         return item_value(item, "", False, "stopped", loop.host_losses)
@@ -1190,10 +1254,13 @@ def pipeline(item):
 
         capped(settle, "settle", item)
 
+        # The settle agent commits the changes of the ruling and has no credential, so the engine pushes its head. The lease is the head that the loop pushed last.
+        push(name = "push-settle", branch = item.id, head = settle.head_sha, expect = loop.head)
+
         # Each finding that the owner parked stays open after the last round: it gets its own issue, so it is not lost with the pull request.
         file_parked(settle.parked)
 
-        return item_value(item, loop.head, False, "settled", loop.host_losses)
+        return item_value(item, settle.head_sha, False, "settled", loop.host_losses)
 
     # The child never merges. It returns the head that the gate ran on and the verdict of the review, and the round lands every approved head of a pass in one batch (land).
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.

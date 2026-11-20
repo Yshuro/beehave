@@ -48,3 +48,14 @@ func TestBeforeReview_ACandidateGateReusesNoEarlierPassBecauseThePassHasNoChecks
 	assert.Equal(t, 2, h.gate.calls, "the candidate gate ran its own job")
 	assert.Equal(t, []string{"", "main"}, h.gate.bases)
 }
+
+func TestBeforeReview_TheKeyOfAGateIsReadAtTheBaseOfTheCallAndAGateWithNoBaseReadsItAtNoBase(t *testing.T) {
+	t.Parallel()
+
+	h := reuseHarness(t, []GateResult{{Passed: true, Head: gatedHead, Tree: "tree-1", Steps: stepsPass}}, nil)
+
+	_, err := walkText(t, h, bodyFlow("a = gate(name = \"first\")\nb = gate(name = \"second\", base = \"integration/s1\")\ncommand(run = [\"show\", b.head])\n"))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"", "integration/s1"}, h.gate.keyBases)
+}

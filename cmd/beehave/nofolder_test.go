@@ -69,7 +69,7 @@ type goneTree struct {
 
 func (goneTree) Path(context.Context, string, string) (string, error) { return "", nil }
 
-func (t goneTree) Ensure(_ context.Context, _, _, start string) (string, error) {
+func (t goneTree) Ensure(_ context.Context, _, _, start, _ string) (string, error) {
 	*t.starts = append(*t.starts, start)
 
 	return t.dir, nil

@@ -26,7 +26,7 @@ type lossyGate struct {
 	jobs atomic.Int32
 }
 
-func (*lossyGate) Key(context.Context, string, string, string) (GateKey, error) {
+func (*lossyGate) Key(context.Context, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 

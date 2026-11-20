@@ -232,17 +232,23 @@ func TestUnpack_RefusesADestinationOfAnotherTypeThanTheKindOfItsKeyword(t *testi
 
 	const want = "destinations that differ from the keywords of its signature"
 
+	params, ok := workflow.Signature("agent")
+	require.True(t, ok)
+
+	// The destination of each keyword comes from the signature by the rule of Param: a Go text, number or flag for a typed keyword, else a Starlark value.
+	typed := map[workflow.Kind]any{workflow.KindText: &text, workflow.KindInt: &tries, workflow.KindBool: &edits}
+
 	agent := func(overrides map[string]any) error {
 		into := map[string]any{}
-		for _, name := range []string{"prompt", "model", "runner", "pin", "resume", "label", "timeout", "idle_timeout", "name"} {
-			into[name] = &text
-		}
 
-		for _, name := range []string{"inputs", "outputs", "forbid_commands", "allow_paths", "protect_paths", "max_budget_usd", "sandbox"} {
-			into[name] = &value
-		}
+		for _, param := range params {
+			dest, found := typed[param.Kind]
+			if !found || param.AsValue {
+				dest = &value
+			}
 
-		into["output_tries"], into["edits"] = &tries, &edits
+			into[param.Name] = dest
+		}
 
 		for name, dest := range overrides {
 			into[name] = dest

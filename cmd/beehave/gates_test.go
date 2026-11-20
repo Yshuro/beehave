@@ -155,13 +155,32 @@ func TestProjectGate_KeyNamesTheHeadAndTheTreeAndStartsNoGate(t *testing.T) {
 		programs: programs{trees: treeAt("/tree"), local: gateRunner(calls, model.CommandResult{Stdout: "abc123\n"}, model.CommandResult{Stdout: "ok"})},
 	}
 
-	got, err := gate.Key(t.Context(), "p", "1", "")
+	got, err := gate.Key(t.Context(), "p", "1", "", "")
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, got.ID)
 	assert.Equal(t, "abc123", got.Head)
 	assert.Equal(t, "tree-of-abc123", got.Tree)
 	assert.NotContains(t, calls.binaries, "sh", "a key never runs the gate")
+}
+
+func TestProjectGate_KeyReadsThePinFileAtTheBaseOfTheCallAndAtTheBaseOfTheProjectWhenTheCallHasNone(t *testing.T) {
+	t.Parallel()
+
+	for base, want := range map[string]string{"integration/s1": "git show origin/integration/s1:.tool-versions", "": "git show origin/main:.tool-versions"} {
+		calls := &gateCalls{}
+		projects := localProject()
+		pinned := projects["p"]
+		pinned.BaseBranch, pinned.PinFile = "main", ".tool-versions"
+		projects["p"] = pinned
+
+		gate := projectGate{projects: projects, programs: programs{trees: treeAt("/tree"), local: gateRunner(calls, model.CommandResult{Stdout: "abc123\n"}, model.CommandResult{Stdout: "gofake 1.0\n"})}}
+
+		_, err := gate.Key(t.Context(), "p", "1", "", base)
+
+		require.NoError(t, err)
+		assert.Contains(t, calls.args, []string{"-c", want}, "base %q", base)
+	}
 }
 
 func TestProjectGate_KeyRefusesWhatItCannotReadWithoutRunningTheGate(t *testing.T) {
@@ -184,7 +203,7 @@ func TestProjectGate_KeyRefusesWhatItCannotReadWithoutRunningTheGate(t *testing.
 			calls := &gateCalls{}
 			gate := projectGate{projects: localProject(), programs: programs{trees: treeAt("/tree"), local: gateRunner(calls, test.head, model.CommandResult{})}}
 
-			_, err := gate.Key(t.Context(), test.project, "1", "")
+			_, err := gate.Key(t.Context(), test.project, "1", "", "")
 
 			require.ErrorContains(t, err, test.wantErr)
 			assert.NotContains(t, calls.binaries, "sh")

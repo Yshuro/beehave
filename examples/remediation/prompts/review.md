@@ -178,7 +178,7 @@ silently discards other uncommitted edits.
 
 **Never use the merge queue of GitHub.** A merge is `gh pr merge` on a pinned head. A pull request that waits in a queue is not reviewed at its head.
 **A finding that survives the review is filed before the merge.** Name each surviving finding in the report so that an issue is filed for it. A finding that only lives in the review thread is lost when the pull request merges.
-**Known base reds are in one file.** The run names the file. A red that the file lists is not a finding of this change: re-derive it at the tip, and cite the line of the file.
+**Known base reds are in one file.** The known base reds are the list `base_reds` in the data file {{ .data_file }}, which the engine wrote for this step. Read it with the shell (`cat` or `jq`). A red that the list holds is not a finding of this change: re-derive it at the tip, and cite its entry in the list. If the data file is missing or cannot be read, stop and refuse: say so, and do not guess the base reds.
 
 ## Project rules
 

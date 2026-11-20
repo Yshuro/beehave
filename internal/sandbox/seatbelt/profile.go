@@ -44,9 +44,10 @@ const header = `(version 1)
 (allow file-read-data (literal "/"))
 `
 
-// systemRead lists the folders that a program on macOS needs to start, on top of sandbox.SystemRead: the system frameworks and the real folder of /etc.
+// systemRead lists the folders of macOS that every program loads from at start, whatever the plan reads: the system frameworks, the shared cache of the
+// libraries, the time zones and the choice of /bin/sh. None of them holds data of a person. The plan names every other path, /etc and /usr included.
 func systemRead() []string {
-	return []string{"/System", "/Library/Apple", "/private/etc", "/private/var/db/dyld", "/private/var/db/timezone", "/private/var/select"}
+	return []string{"/System", "/Library/Apple", "/private/var/db/dyld", "/private/var/db/timezone", "/private/var/select"}
 }
 
 // Profile returns the Seatbelt profile for a plan and the -D arguments that give the profile its paths and its port. port is the port of the allow-list
@@ -56,7 +57,7 @@ func Profile(plan sandbox.Plan, port int) (text string, defines []string) {
 
 	b.WriteString(header)
 
-	reads := append(append(sandbox.SystemRead(), systemRead()...), plan.Read...)
+	reads := append(systemRead(), plan.Read...)
 	defines = rules(&b, "R", "file-read*", reads, defines)
 	defines = rules(&b, "W", "file-read* file-write*", plan.Write, defines)
 

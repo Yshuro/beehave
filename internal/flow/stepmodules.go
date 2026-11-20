@@ -51,7 +51,8 @@ const coreVersion = 6
 // Version 8 added the note field to the limit record, the limited field to the phase input and the resume_of field to the phase output, so the rerun after a provider limit resumes the limited session.
 // Version 9 adds the skills field to the result of an agent call, and records the label of the call in place of its kind.
 // Version 10 removed the allow_write list from the recorded sandbox of an agent call.
-const agentVersion = 10
+// Version 11 adds the data keyword: the prompt_data output of the render step and the data and data_file fields of the phase input.
+const agentVersion = 11
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
@@ -67,8 +68,8 @@ const landVersion = 8
 const trackerVersion = 2
 
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step. Version 3 retires the kind pr_assign, which version 2 recorded.
-// Version 4 retires the kind board_sync, which version 3 recorded.
-const forgeVersion = 4
+// Version 4 retires the kind board_sync, which version 3 recorded. Version 5 adds the push step.
+const forgeVersion = 5
 
 // gateVersion is the version of the gate module. Version 3 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>
 // with a wait field), and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
@@ -108,7 +109,7 @@ func moduleTable() []stepModule {
 		},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: trackerVersion, kinds: []string{"item_comment", "item_create", "item_read", "item_status"}, retired: []string{"item_assign"}},
-		{name: moduleForge, version: forgeVersion, kinds: []string{"pr_comment", "pr_open", prStateKind}, retired: []string{"board_sync", "pr_assign"}},
+		{name: moduleForge, version: forgeVersion, kinds: []string{"pr_comment", "pr_open", prStateKind, pushKind}, retired: []string{"board_sync", "pr_assign"}},
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}, retired: []string{"merge"}},
 		{name: moduleGate, version: gateVersion, kinds: []string{kindGate}, retired: []string{"before_review"}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
@@ -127,7 +128,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent10.tracker2.forge4.land8.gate6.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core6.agent11.tracker2.forge5.land8.gate6.host1.round2.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

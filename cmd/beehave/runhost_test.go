@@ -138,10 +138,10 @@ func TestProjectGate_TheKeyOfAGateNamesTheHostTheRunChose(t *testing.T) {
 		forge: forgeAt("https://example.test/repo.git"),
 	}
 
-	onDefault, err := gate.Key(t.Context(), "p", "1", "")
+	onDefault, err := gate.Key(t.Context(), "p", "1", "", "")
 	require.NoError(t, err)
 
-	onB, err := gate.Key(t.Context(), "p", "1", "gpu-b")
+	onB, err := gate.Key(t.Context(), "p", "1", "gpu-b", "")
 	require.NoError(t, err)
 
 	assert.NotEqual(t, onDefault.ID, onB.ID, "a pass on one host never stands in for a gate on another")

@@ -385,7 +385,9 @@ func newDryGate(dir, head string, red bool) dryGate {
 	return dryGate{dir: dir, head: head, red: red, runs: new(atomic.Int32)}
 }
 
-func (dryGate) Key(context.Context, string, string, string) (GateKey, error) { return GateKey{}, nil }
+func (dryGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+	return GateKey{}, nil
+}
 
 // Submit records the base in the plan of the job, as the host gate does. As a fetch of the base would, it points the remote branch of the base
 // at the parent of the head, so the checks before review find a head that descends from the base.
@@ -457,6 +459,9 @@ func (dryForge) Open(context.Context, string, string, OpenRequest) (OpenResult, 
 	return OpenResult{Number: dryPull}, nil
 }
 
+// Push shows the head as pushed and writes nothing to the remote.
+func (dryForge) Push(context.Context, string, string, string, string, string) error { return nil }
+
 type dryTrees struct{ dir string }
 
 func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {
@@ -465,7 +470,9 @@ func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) erro
 	return nil
 }
 
-func (t dryTrees) Ensure(context.Context, string, string, string) (string, error) { return t.dir, nil }
+func (t dryTrees) Ensure(context.Context, string, string, string, string) (string, error) {
+	return t.dir, nil
+}
 
 // dryCommands runs no program: each command call exits with code 0 and prints nothing.
 type dryCommands struct{}

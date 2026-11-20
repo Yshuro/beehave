@@ -112,7 +112,7 @@ func TestWorktrees_EnsureAddsAWorktreeOnABranchNamedForTheItemFromTheBaseBranch(
 	clone := filepath.Join(state, "repos", "p")
 	want := filepath.Join(state, "trees", "p", "bb-1")
 
-	got, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+	got, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -135,7 +135,7 @@ func TestWorktrees_EnsureClonesFromTheSourceOfTheProjectAndNeverAsksTheForge(t *
 			trees.projects = map[string]config.Project{"p": {Project: model.Project{Name: "p", Source: source, BaseBranch: "main"}}}
 			trees.forge = func(model.Project) (forge.Forge, error) { return nil, errFake }
 
-			_, err := trees.Ensure(t.Context(), "p", "fix-login", "")
+			_, err := trees.Ensure(t.Context(), "p", "fix-login", "", "")
 
 			require.NoError(t, err)
 			assert.Equal(t, filepath.Join(state, "repos")+": clone "+source+" "+filepath.Join(state, "repos", "p"), git.calls[0])
@@ -151,7 +151,7 @@ func TestWorktrees_EnsureAddsTheWorktreeOnAnExistingItemBranchAndNeverResetsIt(t
 	clone := filepath.Join(state, "repos", "p")
 	want := filepath.Join(state, "trees", "p", "bb-1")
 
-	got, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+	got, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -171,7 +171,7 @@ func TestWorktrees_EnsureFailsOnAFolderThatGitDoesNotListAndDeletesNothing(t *te
 	require.NoError(t, os.MkdirAll(stray, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(stray, "keep.txt"), []byte("x"), 0o600))
 
-	got, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+	got, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 	require.ErrorContains(t, err, stray)
 	require.ErrorContains(t, err, "git does not list")
@@ -188,19 +188,19 @@ func TestWorktrees_EnsureReusesTheWorktreeOfAResumeAndTheClone(t *testing.T) {
 
 	trees, git, state := ensureFixture(t)
 
-	first, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+	first, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 	require.NoError(t, err)
 
 	git.calls = nil
 
-	again, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+	again, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 	require.NoError(t, err)
 	assert.Equal(t, first, again)
 	assert.Equal(t, []string{first + ": worktree list --porcelain"}, git.calls, "a resume adds nothing")
 
 	git.calls = nil
 
-	_, err = trees.Ensure(t.Context(), "p", "bb-2", "")
+	_, err = trees.Ensure(t.Context(), "p", "bb-2", "", "")
 	require.NoError(t, err)
 	assert.Len(t, git.calls, 3, "the second item fetches, looks for its branch and adds, and does not clone again")
 	assert.Equal(t, filepath.Join(state, "repos", "p")+": fetch origin main", git.calls[0])
@@ -214,7 +214,7 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailed(t *testing.T) {
 
 		trees.git = (&fakeGit{fail: step}).runner
 
-		got, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+		got, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 		require.ErrorContains(t, err, "git "+step)
 		require.ErrorContains(t, err, "exited with code 128: fatal: refused")
@@ -228,7 +228,7 @@ func TestWorktrees_EnsureFailsWhenTheForgeOfTheProjectCannotBeBuilt(t *testing.T
 	trees, git, _ := ensureFixture(t)
 	trees.forge = func(model.Project) (forge.Forge, error) { return nil, errFake }
 
-	_, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+	_, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 	require.ErrorIs(t, err, errFake)
 	assert.Empty(t, git.calls)
@@ -239,7 +239,7 @@ func TestWorktrees_EnsureRefusesAProjectTheConfigLacks(t *testing.T) {
 
 	trees, git, _ := ensureFixture(t)
 
-	_, err := trees.Ensure(t.Context(), "zzz", "bb-1", "")
+	_, err := trees.Ensure(t.Context(), "zzz", "bb-1", "", "")
 
 	require.ErrorIs(t, err, errUnknownProject)
 	assert.Empty(t, git.calls)
@@ -255,7 +255,7 @@ func TestWorktrees_EnsureReportsAFolderItCannotRead(t *testing.T) {
 		require.NoError(t, os.MkdirAll(trees.root, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(trees.root, "p"), nil, 0o600))
 
-		_, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+		_, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 		require.ErrorContains(t, err, "read the folder")
 	})
@@ -267,7 +267,7 @@ func TestWorktrees_EnsureReportsAFolderItCannotRead(t *testing.T) {
 		require.NoError(t, os.MkdirAll(trees.repos, 0o700))
 		require.NoError(t, os.WriteFile(filepath.Join(trees.repos, "p"), nil, 0o600))
 
-		_, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+		_, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 		require.ErrorContains(t, err, "read the clone of project p")
 	})
@@ -278,7 +278,7 @@ func TestWorktrees_EnsureReportsAFolderItCannotRead(t *testing.T) {
 		trees, _, state := ensureFixture(t)
 		require.NoError(t, os.Symlink(filepath.Join(state, "gone"), trees.repos))
 
-		_, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+		_, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 		require.ErrorContains(t, err, "make the folder for the clone of project p")
 	})
@@ -290,7 +290,7 @@ func TestWorktrees_EnsureReportsAFolderItCannotRead(t *testing.T) {
 		require.NoError(t, os.MkdirAll(trees.root, 0o700))
 		require.NoError(t, os.Symlink(filepath.Join(state, "gone"), filepath.Join(trees.root, "p")))
 
-		_, err := trees.Ensure(t.Context(), "p", "bb-1", "")
+		_, err := trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 		require.ErrorContains(t, err, "make the folder for the worktree of item bb-1")
 	})

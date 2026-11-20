@@ -66,6 +66,7 @@ func takeRun(ctx context.Context, deps Deps, given taking) (takeover.Result, err
 	}
 
 	given.c.Free = freeCall(deps, repo, given.item)
+	given.c.Gh = deps.Gh
 
 	return takeover.Run(ctx, forge, given.req, given.c)
 }

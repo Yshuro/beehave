@@ -80,7 +80,7 @@ func TestWorktrees_EnsureCutsARoundItemDetachedAtTheTipOfItsOwnBase(t *testing.T
 	tip := gitOut(t, rig.origin, "rev-parse", "integration/r1")
 	require.NotEqual(t, tip, gitOut(t, rig.origin, "rev-parse", "main"), "the base differs from the project base")
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, filepath.Join(rig.trees.root, "p", model.SafeName(roundItem)), dir)
@@ -94,14 +94,14 @@ func TestWorktrees_EnsureWithNoStartMovesACleanKeptRoundWorktreeToTheNewTipOfIts
 	t.Parallel()
 
 	rig := newRoundRig(t)
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	first := gitOut(t, dir, "rev-parse", "HEAD")
 	moved := commitOn(t, rig.origin, "integration/r1")
 	require.NotEqual(t, first, moved)
 
-	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, dir, again)
@@ -113,13 +113,13 @@ func TestWorktrees_EnsureWithAStartNeverMovesAnExistingRoundWorktreeWhenTheBaseM
 	t.Parallel()
 
 	rig := newRoundRig(t)
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	first := gitOut(t, dir, "rev-parse", "HEAD")
 	commitOn(t, rig.origin, "integration/r1")
 
-	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, first)
+	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, first, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, dir, again)
@@ -130,21 +130,21 @@ func TestWorktrees_EnsureWithNoStartRefusesAKeptRoundWorktreeWithChangesAndNames
 	t.Parallel()
 
 	for _, test := range []struct{ name, file string }{
-		{"untracked_file", "base-reds.md"},
+		{"untracked_file", "stray.txt"},
 		{"tracked_edit", "TIP"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
 			rig := newRoundRig(t)
-			dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+			dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 			require.NoError(t, err)
 
 			first := gitOut(t, dir, "rev-parse", "HEAD")
 			require.NoError(t, os.WriteFile(filepath.Join(dir, test.file), []byte("changed"), 0o600))
 			commitOn(t, rig.origin, "integration/r1")
 
-			got, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+			got, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 			require.ErrorIs(t, err, errKeptChanges)
 			require.ErrorContains(t, err, "the worktree "+dir+" of item "+roundItem+" holds changes")
@@ -172,7 +172,7 @@ func TestWorktrees_EnsureWithNoStartRefusesAKeptRoundWorktreeWithCommitsOnNoRemo
 			t.Parallel()
 
 			rig := newRoundRig(t)
-			dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+			dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 			require.NoError(t, err)
 
 			var named []string
@@ -192,7 +192,7 @@ func TestWorktrees_EnsureWithNoStartRefusesAKeptRoundWorktreeWithCommitsOnNoRemo
 
 			tip := commitOn(t, rig.origin, "integration/r1")
 
-			got, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+			got, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 			if test.pushed {
 				require.NoError(t, err)
@@ -220,7 +220,7 @@ func TestWorktrees_EnsureWithNoStartMovesAKeptRoundWorktreeAfterAForcePushOfItsB
 			rig := newRoundRig(t)
 			old := commitOn(t, rig.origin, "integration/r1")
 
-			dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+			dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 			require.NoError(t, err)
 			require.Equal(t, old, gitOut(t, dir, "rev-parse", "HEAD"))
 
@@ -237,7 +237,7 @@ func TestWorktrees_EnsureWithNoStartMovesAKeptRoundWorktreeAfterAForcePushOfItsB
 			tip := gitOut(t, rig.origin, "rev-parse", "HEAD")
 			require.NotEqual(t, old, tip, "the force-push took the old tip off the base")
 
-			got, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+			got, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 			if !local {
 				require.NoError(t, err, "the old tip of the base is no work of the item")
@@ -258,11 +258,11 @@ func TestWorktrees_EnsureWithNoStartKeepsTheTipOfAMoveOutOfTheCommitsOfTheItemWh
 	rig := newRoundRig(t)
 	commitOn(t, rig.origin, "integration/r1")
 
-	_, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	_, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	moved := commitOn(t, rig.origin, "integration/r1")
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 	require.Equal(t, moved, gitOut(t, dir, "rev-parse", "HEAD"), "the first run after the move placed the tree at the new tip")
 
@@ -270,7 +270,7 @@ func TestWorktrees_EnsureWithNoStartKeepsTheTipOfAMoveOutOfTheCommitsOfTheItemWh
 	runGit(t, rig.origin, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "rewritten base")
 	tip := gitOut(t, rig.origin, "rev-parse", "HEAD")
 
-	got, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	got, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 	require.NoError(t, err, "the tip that the engine moved the tree to is no work of the item, also after a force-push took it off the base")
 	assert.Equal(t, tip, gitOut(t, got, "rev-parse", "HEAD"))
@@ -282,12 +282,12 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailedWhenItMovesAKeptRoundWorktree(
 	for _, step := range []string{"status", "fetch", "log", "checkout", "update-ref"} {
 		trees, git, _ := ensureFixture(t)
 
-		_, err := trees.Ensure(t.Context(), "p", roundItem, "")
+		_, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 		require.NoError(t, err)
 
 		git.fail = step
 
-		got, err := trees.Ensure(t.Context(), "p", roundItem, "")
+		got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 		require.ErrorContains(t, err, "git "+step, step)
 		assert.Empty(t, got, step)
@@ -300,7 +300,7 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailedWhenItMarksANewRoundWorktree(t
 	trees, git, _ := ensureFixture(t)
 	git.fail = "update-ref"
 
-	got, err := trees.Ensure(t.Context(), "p", roundItem, "")
+	got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 	require.ErrorContains(t, err, "git update-ref")
 	assert.Empty(t, got)
@@ -311,7 +311,7 @@ func TestWorktrees_EnsureRefusesARoundItemWhoseBaseTheRemoteLacksAndNamesTheBase
 
 	rig := newRoundRig(t)
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", "round/release/none", "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", "round/release/none", "", "")
 
 	require.ErrorContains(t, err, `"release/none"`)
 	require.ErrorContains(t, err, "Push the base branch to the remote")
@@ -324,7 +324,7 @@ func TestWorktrees_EnsureCutsAnItemThatIsNotARoundFromTheBaseOfTheProjectOnItsOw
 
 	rig := newRoundRig(t)
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", "bb-1", "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", "bb-1", "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, gitOut(t, rig.origin, "rev-parse", "main"), gitOut(t, dir, "rev-parse", "HEAD"))
@@ -338,7 +338,7 @@ func TestWorktrees_EnsureCallsGitInTheOrderThatCutsARoundItemFromItsBase(t *test
 	clone := filepath.Join(state, "repos", "p")
 	want := filepath.Join(state, "trees", "p", model.SafeName(roundItem))
 
-	got, err := trees.Ensure(t.Context(), "p", roundItem, "")
+	got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -355,7 +355,7 @@ func TestWorktrees_EnsureMakesARoundWorktreeAgainThatSomeoneRemovedAtTheRecorded
 
 	rig := newRoundRig(t)
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	start := gitOut(t, dir, "rev-parse", "HEAD")
@@ -364,7 +364,7 @@ func TestWorktrees_EnsureMakesARoundWorktreeAgainThatSomeoneRemovedAtTheRecorded
 	tip := commitOn(t, rig.origin, "integration/r1")
 	require.NotEqual(t, start, tip, "the base moved")
 
-	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start)
+	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, dir, again)
@@ -377,14 +377,14 @@ func TestWorktrees_EnsureMakesARoundWorktreeAgainWithNoFetchSoABaseThatIsGoneDoe
 
 	rig := newRoundRig(t)
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	start := gitOut(t, dir, "rev-parse", "HEAD")
 	require.NoError(t, os.RemoveAll(dir))
 	runGit(t, rig.origin, "branch", "-D", "integration/r1")
 
-	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start)
+	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, start, gitOut(t, again, "rev-parse", "HEAD"))
@@ -397,7 +397,7 @@ func TestWorktrees_EnsureCallsGitInTheOrderThatMakesARoundItemAgainAtItsStart(t 
 	clone := filepath.Join(state, "repos", "p")
 	want := filepath.Join(state, "trees", "p", model.SafeName(roundItem))
 
-	got, err := trees.Ensure(t.Context(), "p", roundItem, "abc123")
+	got, err := trees.Ensure(t.Context(), "p", roundItem, "abc123", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
@@ -414,7 +414,7 @@ func TestWorktrees_EnsureStopsWithAPlainErrorWhenTheCloneMadeAgainLacksTheStartC
 
 	rig := newRoundRig(t)
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	start := gitOut(t, dir, "rev-parse", "HEAD")
@@ -426,7 +426,7 @@ func TestWorktrees_EnsureStopsWithAPlainErrorWhenTheCloneMadeAgainLacksTheStartC
 	runGit(t, rig.origin, "reflog", "expire", "--expire=now", "--all")
 	runGit(t, rig.origin, "gc", "-q", "--prune=now")
 
-	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start)
+	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start, "")
 
 	require.ErrorContains(t, err, "the clone of project p does not hold the commit "+start+" that the worktree of item "+roundItem+" was made at")
 	require.ErrorContains(t, err, "Start the item again: beehave run "+roundItem)
@@ -439,7 +439,7 @@ func TestWorktrees_EnsureMakesARoundWorktreeAgainAtItsStartWhenTheCloneIsGoneAnd
 
 	rig := newRoundRig(t)
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	start := gitOut(t, dir, "rev-parse", "HEAD")
@@ -447,7 +447,7 @@ func TestWorktrees_EnsureMakesARoundWorktreeAgainAtItsStartWhenTheCloneIsGoneAnd
 	require.NoError(t, os.RemoveAll(rig.clone()))
 	commitOn(t, rig.origin, "integration/r1")
 
-	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start)
+	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, start, gitOut(t, again, "rev-parse", "HEAD"), "the new clone holds the start commit, so the worktree is made there and not at the new tip")
@@ -458,7 +458,7 @@ func TestWorktrees_EnsureForManyCallersOfARemovedRoundWorktreeAtOnceGivesEveryCa
 
 	rig := newRoundRig(t)
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	start := gitOut(t, dir, "rev-parse", "HEAD")
@@ -471,7 +471,7 @@ func TestWorktrees_EnsureForManyCallersOfARemovedRoundWorktreeAtOnceGivesEveryCa
 	var wg sync.WaitGroup
 
 	for i := range callers {
-		wg.Go(func() { dirs[i], errs[i] = rig.trees.Ensure(t.Context(), "p", roundItem, start) })
+		wg.Go(func() { dirs[i], errs[i] = rig.trees.Ensure(t.Context(), "p", roundItem, start, "") })
 	}
 
 	wg.Wait()
@@ -492,7 +492,7 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailedForARoundItem(t *testing.T) {
 
 		trees.git = (&fakeGit{fail: step}).runner
 
-		got, err := trees.Ensure(t.Context(), "p", roundItem, "")
+		got, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 		require.ErrorContains(t, err, "git "+step)
 		assert.Empty(t, got)
@@ -501,7 +501,7 @@ func TestWorktrees_EnsureNamesTheGitCallThatFailedForARoundItem(t *testing.T) {
 	trees, _, _ := ensureFixture(t)
 	trees.git = (&fakeGit{fail: "fetch"}).runner
 
-	_, err := trees.Ensure(t.Context(), "p", roundItem, "")
+	_, err := trees.Ensure(t.Context(), "p", roundItem, "", "")
 
 	require.ErrorContains(t, err, `base branch "integration/r1" of round item `+roundItem, "the error names the base")
 }
@@ -511,17 +511,17 @@ func TestWorktrees_EnsureMakesARemovedRoundWorktreeAgainAndKeepsTheRecordOfARemo
 
 	rig := newRoundRig(t)
 
-	sibling, err := rig.trees.Ensure(t.Context(), "p", "bb-1", "")
+	sibling, err := rig.trees.Ensure(t.Context(), "p", "bb-1", "", "")
 	require.NoError(t, err)
 
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	start := gitOut(t, dir, "rev-parse", "HEAD")
 	require.NoError(t, os.RemoveAll(sibling))
 	require.NoError(t, os.RemoveAll(dir))
 
-	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start)
+	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start, "")
 
 	require.NoError(t, err)
 	assert.Equal(t, dir, again)
@@ -533,7 +533,7 @@ func TestWorktrees_PathOfAnItemNeverFailsWhileSiblingItemsAddTheirWorktrees(t *t
 	t.Parallel()
 
 	rig := newRoundRig(t)
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	const (
@@ -549,7 +549,7 @@ func TestWorktrees_PathOfAnItemNeverFailsWhileSiblingItemsAddTheirWorktrees(t *t
 		defer close(done)
 
 		for i := range siblings {
-			_, addErr := rig.trees.Ensure(t.Context(), "p", "bb-"+strconv.Itoa(i), "")
+			_, addErr := rig.trees.Ensure(t.Context(), "p", "bb-"+strconv.Itoa(i), "", "")
 			assert.NoError(t, addErr, "sibling %d", i)
 		}
 	})
@@ -573,7 +573,7 @@ func TestGateSandbox_AGateCopiesTheRoundWorktreeWhileSiblingItemsAddAndLookUpThe
 	t.Parallel()
 
 	rig := newRoundRig(t)
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	box := sandboxFor(t, &fakeEnforcer{}, nil)
@@ -587,7 +587,7 @@ func TestGateSandbox_AGateCopiesTheRoundWorktreeWhileSiblingItemsAddAndLookUpThe
 		defer close(done)
 
 		for i := range 30 {
-			_, addErr := rig.trees.Ensure(t.Context(), "p", "bb-"+strconv.Itoa(i), "")
+			_, addErr := rig.trees.Ensure(t.Context(), "p", "bb-"+strconv.Itoa(i), "", "")
 			assert.NoError(t, addErr, "sibling %d", i)
 		}
 	})
@@ -617,7 +617,7 @@ func TestWorktrees_WithTreeRunsFnWhileItHoldsTheLockOfTheClone(t *testing.T) {
 	t.Parallel()
 
 	rig := newRoundRig(t)
-	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "")
+	dir, err := rig.trees.Ensure(t.Context(), "p", roundItem, "", "")
 	require.NoError(t, err)
 
 	clones := cloneLock{repos: rig.trees.repos}
@@ -681,4 +681,29 @@ func lookUntil(t *testing.T, trees worktrees, done <-chan struct{}, dir string) 
 			return count, fmt.Errorf("lookup %d found %q, want %q", count, got, dir)
 		}
 	}
+}
+
+func TestWorktrees_EnsureCutsAChildItemOfARoundFromTheBaseOfTheRoundOnItsOwnBranch(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t)
+	tip := gitOut(t, rig.origin, "rev-parse", "integration/r1")
+	require.NotEqual(t, tip, gitOut(t, rig.origin, "rev-parse", "main"), "the base of the round differs from the project base")
+
+	dir, err := rig.trees.Ensure(t.Context(), "p", "bb-1", "", "integration/r1")
+
+	require.NoError(t, err)
+	assert.Equal(t, tip, gitOut(t, dir, "rev-parse", "HEAD"))
+	assert.Equal(t, "bb-1", gitOut(t, dir, "branch", "--show-current"))
+}
+
+func TestWorktrees_EnsureRefusesAChildItemWhoseRoundBaseTheRemoteLacksAndNamesTheBase(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t)
+
+	dir, err := rig.trees.Ensure(t.Context(), "p", "bb-1", "", "integration/none")
+
+	require.ErrorContains(t, err, "integration/none")
+	assert.Empty(t, dir)
 }

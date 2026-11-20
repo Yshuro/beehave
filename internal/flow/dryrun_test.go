@@ -115,6 +115,18 @@ func TestDryRun_TheWritesToAPullRequestAndAnItemAreShownAndChangeNothing(t *test
 	assert.Contains(t, out.String(), "item_create:i#1")
 }
 
+func TestDryRun_APushIsShownAndReturnsTheHeadWithNoPush(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	body := "def main(item):\n    pushed = push(branch = \"b\", head = \"abc\", name = \"p\")\n    command(run = [pushed.head], name = \"seen\")\n"
+	require.NoError(t, DryRun(t.Context(), dryFile(t, body), "12", map[string]string{}, &out), out.String())
+
+	assert.Contains(t, out.String(), "push:p#1")
+	assert.Contains(t, out.String(), "command:seen#1")
+}
+
 func TestDryRun_AStepThatTheDryRunDoesNotFakeIsNotRunAndIsNotAnError(t *testing.T) {
 	t.Parallel()
 
@@ -288,7 +300,7 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 	assert.Equal(t, []string{
 		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
-		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "push:push-implement#1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
 		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "facts#2", "command:candidate-before-review-ancestor#1", "command:candidate-before-review-keywords#2",
@@ -304,11 +316,11 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound
 	assert.Equal(t, []string{
 		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
-		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "push:push-implement#1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
 		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "preflight:before-fix-2#3",
-		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1",
+		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1", "push:push-fix-1#2",
 		"preflight:before-scoped-review-2#4",
 		"agent:scoped-review-1#5/render", "agent:scoped-review-1#5/clear1", "phase", "DBOS.getResult", "agent:scoped-review-1#5/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:candidate-gate#2", "facts#2", "command:candidate-before-review-ancestor#1", "command:candidate-before-review-keywords#2",
@@ -687,7 +699,7 @@ func TestDryFakes_AnswerWithoutTouchingAnything(t *testing.T) {
 	assert.True(t, created)
 	assert.Equal(t, "dry-1", id)
 
-	dir, err := dryTrees{dir: "/t"}.Ensure(ctx, "p", "1", "")
+	dir, err := dryTrees{dir: "/t"}.Ensure(ctx, "p", "1", "", "")
 	require.NoError(t, err)
 	assert.Equal(t, "/t", dir)
 

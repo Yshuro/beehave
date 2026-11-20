@@ -35,9 +35,10 @@ type trees interface {
 
 // treeMaker finds the worktree of an item and makes it when it is missing. Ensure returns the folder, and an empty folder is not a success.
 // A round item with a start is made again at that commit; with an empty start it is made at the tip of its base.
+// Any other item is cut at base, or at the base branch of the project when base is empty.
 type treeMaker interface {
 	trees
-	Ensure(ctx context.Context, project, item, start string) (string, error)
+	Ensure(ctx context.Context, project, item, start, base string) (string, error)
 }
 
 // read is one git call that only reads, with the words that name it in a reason to keep the tree.

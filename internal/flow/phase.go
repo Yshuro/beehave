@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -51,6 +53,11 @@ type PhaseInput struct {
 	OutputFile string   `json:"output_file,omitempty"`
 	Outputs    []string `json:"outputs,omitempty"`
 
+	// DataFile is the file that the phase writes Data to before each start of the agent: the JSON text of the data keyword that the render step recorded.
+	// Both are left out of a recorded phase for a call with no data.
+	DataFile string `json:"data_file,omitempty"`
+	Data     string `json:"data,omitempty"`
+
 	// ResetPassed is true for the rerun after a provider limit whose reset time had passed. A rerun that a limit with a past reset time stops again fails.
 	// It is left out of a recorded phase for any other run.
 	ResetPassed bool `json:"reset_passed,omitempty"`
@@ -65,6 +72,9 @@ type PhaseInput struct {
 	// TreeStart is the commit that the run made the worktree of a round item at. The diff of a lost start makes a removed worktree again there.
 	// It is left out of a recorded phase for any other item.
 	TreeStart string `json:"tree_start,omitempty"`
+
+	// Base is the base branch of the round that spawned the run. A worktree that someone removed is cut there again. It is left out for any other run.
+	Base string `json:"base,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
@@ -139,6 +149,10 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)) })()
 	defer e.endGroups(in.Run)
 
+	if err := writeData(in); err != nil {
+		return PhaseOutput{}, err
+	}
+
 	saver := e.saveSession(ctx, in)
 	defer saver.finish()
 
@@ -173,7 +187,22 @@ func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, lost *LostRun,
 		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: named, Lost: lost,
 		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
 		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
+		DataFile: in.DataFile,
 	}
+}
+
+// writeData writes the recorded data of the phase to its data file, mode 0600, so each start of the agent reads the bytes of the record. A phase with no data writes nothing.
+func writeData(in PhaseInput) error {
+	if in.DataFile == "" {
+		return nil
+	}
+
+	err := errors.Join(os.MkdirAll(filepath.Dir(in.DataFile), outputsMode), os.WriteFile(in.DataFile, []byte(in.Data), dataMode), os.Chmod(in.DataFile, dataMode))
+	if err != nil {
+		return fmt.Errorf("write the data file %s of the step: %w", in.DataFile, err)
+	}
+
+	return nil
 }
 
 // phaseOutput records how the agent of a phase ended.

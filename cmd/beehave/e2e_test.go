@@ -47,12 +47,18 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// The test binary acts as the upload-pack helper of the push, as beehave does in main.
+	std := helperIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}
+	if code, helper := runUploadPack(context.Background(), os.Args, config.ProcessEnv(), machineTools(), std); helper {
+		os.Exit(code)
+	}
+
 	// The test binary also acts as the Landlock helper, as beehave does in main, for the test that runs a gate under the real enforcer.
 	if code, helper := landlock.RunHelper(os.Args, os.Stderr); helper {
 		os.Exit(code)
 	}
 
-	testscript.Main(m, map[string]func(){"beehave": e2eBeehave, "beehavereal": e2eReal, "beehaveswarm": e2eSwarm})
+	testscript.Main(m, map[string]func(){"beehave": e2eBeehave, "beehavereal": e2eReal, "beehaveswarm": e2eSwarm, "beehaveround": e2eRound})
 }
 
 // e2eBeehave is the beehave command of the scripts. It matches main, with the fake collaborators.
@@ -160,6 +166,8 @@ func (e2eFiles) Open(context.Context, string, string, flow.OpenRequest) (flow.Op
 	return flow.OpenResult{}, nil
 }
 
+func (e2eFiles) Push(context.Context, string, string, string, string, string) error { return nil }
+
 func (f e2eFiles) Release(_ context.Context, _, item, _ string) error {
 	return f.event("release", item)
 }
@@ -177,7 +185,7 @@ func (e2eFiles) WithTree(_ context.Context, _, _ string, fn func(string)) error 
 }
 
 // Ensure gives the git folder that e2eSetup makes. The gate reads the commit of that folder.
-func (f e2eFiles) Ensure(context.Context, string, string, string) (string, error) {
+func (f e2eFiles) Ensure(context.Context, string, string, string, string) (string, error) {
 	return filepath.Join(f.dir, "tree"), nil
 }
 
@@ -224,7 +232,7 @@ func (g e2eGate) Run(ctx context.Context, _, _, _ string, job flow.GateJob) (flo
 	return result, err
 }
 
-func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, error) {
+func (g e2eGate) Key(context.Context, string, string, string, string) (flow.GateKey, error) {
 	return flow.GateKey{}, nil
 }
 

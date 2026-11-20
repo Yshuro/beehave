@@ -321,7 +321,7 @@ func (e *Engine) remakeTree(ctx context.Context, request CommandRequest) error {
 		return nil
 	}
 
-	if _, err := e.deps.Trees.Ensure(ctx, request.Project, request.Item, request.TreeStart); err != nil {
+	if _, err := e.deps.Trees.Ensure(ctx, request.Project, request.Item, request.TreeStart, ""); err != nil {
 		return fmt.Errorf("find the folder of item %s: %w", request.Item, err)
 	}
 
@@ -330,7 +330,7 @@ func (e *Engine) remakeTree(ctx context.Context, request CommandRequest) error {
 
 // gateKey reads the key of the project gate. A key that cannot be read is an empty key: the gate then runs and reports the same problem.
 func (e *Engine) gateKey(ctx context.Context, request CommandRequest) GateKey {
-	key, err := e.deps.Gate.Key(ctx, request.Project, request.Item, request.BuildHost)
+	key, err := e.deps.Gate.Key(ctx, request.Project, request.Item, request.BuildHost, request.Base)
 	if err != nil {
 		return GateKey{}
 	}

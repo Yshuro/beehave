@@ -12,6 +12,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // failures records the failure texts of a wait, as ts.Fatalf does for a script.
@@ -273,4 +275,71 @@ func barrierForge(t *testing.T) swarmForgeAt {
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "pause-after-merge"), []byte("c\n"), e2eFileMode))
 
 	return swarmForgeAt{dir: dir}
+}
+
+// pushedForge is a forge over a bare repository whose branches 7 and 8 are pushed.
+func pushedForge(t *testing.T) swarmForgeAt {
+	t.Helper()
+
+	root := t.TempDir()
+	remote, work, dir := filepath.Join(root, "remote.git"), filepath.Join(root, "work"), filepath.Join(root, "forge")
+	require.NoError(t, os.MkdirAll(work, e2eFolderMode))
+	require.NoError(t, os.MkdirAll(dir, e2eFolderMode))
+
+	hostGit(t, root, "init", "-q", "--bare", "-b", "main", remote)
+	hostGit(t, work, "init", "-q", "-b", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(work, "a.txt"), []byte("a"), e2eFileMode))
+	hostGit(t, work, "add", "a.txt")
+	hostGit(t, work, "commit", "-q", "-m", "base")
+	hostGit(t, work, "push", "-q", remote, "main")
+
+	for _, branch := range []string{"7", "8"} {
+		hostGit(t, work, "push", "-q", remote, "main:refs/heads/"+branch)
+	}
+
+	return swarmForgeAt{remote: remote, dir: dir}
+}
+
+func TestCreatePR_RecordsTheBaseOfTheRequest(t *testing.T) {
+	t.Parallel()
+
+	forge := pushedForge(t)
+
+	number, err := forge.CreatePR(t.Context(), model.NewPull{Head: "8", Base: "integration/s1"})
+	require.NoError(t, err)
+	assert.Equal(t, 2, number, "a pushed branch is a pull request without the file open-on-create")
+
+	got, err := os.ReadFile(filepath.Join(forge.dir, "opened-2"))
+	require.NoError(t, err)
+	assert.Equal(t, "integration/s1\n", string(got), "the file holds the base that the call asked for")
+	assert.NoFileExists(t, filepath.Join(forge.dir, "opened-1"), "the other pull request has no record")
+
+	_, err = forge.CreatePR(t.Context(), model.NewPull{Head: "9", Base: "main"})
+	require.Error(t, err, "a branch that the remote lacks has no pull request")
+}
+
+func TestCreatePR_OpensTheBranchOnlyWithTheFileOpenOnCreate(t *testing.T) {
+	t.Parallel()
+
+	forge := pushedForge(t)
+	require.NoError(t, os.WriteFile(filepath.Join(forge.dir, "open-on-create"), nil, e2eFileMode))
+
+	branches, err := forge.branches(t.Context())
+	require.NoError(t, err)
+	assert.Empty(t, branches, "a pushed branch is no pull request before the call")
+
+	number, err := forge.CreatePR(t.Context(), model.NewPull{Head: "8", Base: "integration/s1"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, number)
+
+	branches, err = forge.branches(t.Context())
+	require.NoError(t, err)
+	assert.Equal(t, []string{"8"}, branches, "only the named branch became a pull request")
+
+	got, err := os.ReadFile(filepath.Join(forge.dir, "opened-1"))
+	require.NoError(t, err)
+	assert.Equal(t, "integration/s1\n", string(got))
+
+	_, err = forge.CreatePR(t.Context(), model.NewPull{Head: "9", Base: "main"})
+	require.Error(t, err, "a branch that the remote lacks cannot become a pull request")
 }
