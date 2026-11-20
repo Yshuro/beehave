@@ -30,7 +30,7 @@ job_home=/home/$job_user
 # The groups that give root, or the files of root, to a member.
 root_groups='root sudo admin wheel google-sudoers docker lxd disk shadow staff'
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/.." && pwd -P)
 sysroot=${HOST_SETUP_SYSROOT:-}
 go_root=$sysroot/usr/local/go
 lsm_file=$sysroot/sys/kernel/security/lsm
@@ -195,6 +195,7 @@ admin_private_group() {
 # changeable <tree|folder> <path>: print the first file or folder of the tree, or the folder itself, that a user other than root and the
 # admin can change: write for the group unless it is the private group of the admin, write for every user, or another owner.
 # A sticky folder above a tree does not let a user rename the files of others, so it does not count.
+# The owner of a folder comes from stat. A folder whose owner stat cannot read counts as a folder of another owner.
 changeable() {
 	set -- "$1" "$2" -perm -020
 	[ -z "$admin_group" ] || set -- "$@" ! -group "$admin_group"
@@ -203,19 +204,28 @@ changeable() {
 	shift 2
 	case $kind in
 	tree) find "$path" -xdev ! -type l \( \( "$@" \) -o -perm -002 -o \( ! -user 0 ! -user "$admin" \) \) -print 2>/dev/null | head -n 1 ;;
-	folder) find "$path" -maxdepth 0 \( \( \( \( "$@" \) -o -perm -002 \) ! -perm -1000 \) -o \( ! -user 0 ! -user "$admin" \) \) -print 2>/dev/null | head -n 1 ;;
+	folder)
+		owner=$(stat -c %u -- "$path" 2>/dev/null) || owner=
+		case $owner in
+		0 | "$admin") find "$path" -maxdepth 0 \( \( "$@" \) -o -perm -002 \) ! -perm -1000 -print 2>/dev/null | head -n 1 ;;
+		*) printf '%s\n' "$path" ;;
+		esac
+		;;
 	esac
 }
 
 # check_root_paths fails when a user other than root and the admin user (the one that ran sudo) can change a file of the clone, of
 # /usr/local/go or of /usr/local/bin, or a folder above one of them up to the top. Root runs the code there, so such a file is a way to root.
-# The top is / on a host and HOST_SETUP_SYSROOT in the tests. A path that does not exist yet is skipped: root makes it.
+# The top is / on a host and HOST_SETUP_SYSROOT in the tests. A path that does not exist yet, and is no link, is skipped: root makes it.
+# A path that is a link is judged at its target, with the folders above the target, because root runs the code of the target. A link
+# whose target does not exist yet is judged the same way: root would make the target.
 check_root_paths() {
 	admin=${SUDO_UID:-0}
 	admin_group=$(admin_private_group)
 	top=${sysroot:-/}
 	for start in "$root" "$sysroot/usr/local/go" "$sysroot/usr/local/bin"; do
-		[ -e "$start" ] || continue
+		[ -e "$start" ] || [ -L "$start" ] || continue
+		start=$(realpath -m -- "$start") || fail "the path $start cannot be read"
 		found=$(changeable tree "$start")
 		dir=$start
 		while [ -z "$found" ] && [ "$dir" != / ] && [ "$dir" != "$top" ]; do

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Fake stat: print the owner of a path that exists, in the one form the script uses: stat -c %u -- <path>.
 # Without FAKE_BASE the pattern would be /*, which is every path, so it refuses every path, like fake-path-guard.
-# The file owners in FAKE_STATE holds lines "<uid> <path>". Any other path in FAKE_BASE, the folder of the test, is owned by the login user (1000). A path outside it is owned by root.
+# The file owners in FAKE_STATE holds lines "<uid> <path>". Any other path in FAKE_BASE, the folder of the test, is owned by the login user
+# FAKE_LOGIN_UID, the user that runs the test and owns its files. A path outside it is owned by root.
 if [ $# -ne 4 ] || [ "$1 $2 $3" != '-c %u --' ] || [ -z "$4" ]; then
 	echo "fake stat: unexpected $*" >&2
 	exit 1
@@ -23,6 +24,6 @@ if [ -f "$FAKE_STATE/owners" ]; then
 	done <"$FAKE_STATE/owners"
 fi
 case $4 in
-"$FAKE_BASE" | "$FAKE_BASE"/*) echo 1000 ;;
+"$FAKE_BASE" | "$FAKE_BASE"/*) echo "${FAKE_LOGIN_UID:?fake stat: FAKE_LOGIN_UID, the user id of the test, is not set}" ;;
 *) echo 0 ;;
 esac

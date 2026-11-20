@@ -127,7 +127,7 @@ func newFakeHost(t *testing.T) *fakeHost {
 	h.env = []string{
 		"PATH=" + h.bin + ":/usr/bin:/bin", "HOME=" + h.home, "TMPDIR=" + tmp, "HOST_SETUP_SYSROOT=" + h.sysroot,
 		"FAKE_LOG=" + h.log, "FAKE_BIN=" + h.bin, "FAKE_STATE=" + h.state, "FAKE_DL=" + h.down, "REAL_JQ=" + jq,
-		"REAL_REALPATH=" + gnuRealpath(t), "FAKE_BASE=" + base,
+		"REAL_REALPATH=" + gnuRealpath(t), "FAKE_BASE=" + base, "FAKE_LOGIN_UID=" + strconv.Itoa(os.Getuid()),
 	}
 
 	return h
@@ -513,7 +513,7 @@ func TestHostSetup_RefusesAWorkRootThatIsNotTheLoginUsers(t *testing.T) {
 				h.owns("0", filepath.Dir(workRoot))
 			case "a_missing_folder_whose_parent_is_owned_by_another_user":
 				require.NoError(t, h.root.Mkdir("theirs", 0o755))
-				h.owns("1001", filepath.Dir(workRoot))
+				h.owns(strconv.Itoa(os.Getuid()+1), filepath.Dir(workRoot))
 			}
 
 			out, err := h.run(nil, "--work-root", workRoot, "--watchdog", watchdogUnit)

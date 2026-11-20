@@ -219,6 +219,28 @@ func TestHostSetupRoot_RefusesBeforeAnyChange(t *testing.T) {
 			t.Helper()
 			require.NoError(t, exectest.ChmodFolder(filepath.Dir(h.clone), 0o775))
 		}},
+		{name: "a_parent_folder_of_another_owner", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			parent := filepath.Dir(h.clone)
+			require.NoError(t, exectest.ChmodFolder(parent, 0o755))
+			h.owns(strconv.Itoa(os.Getuid()+1), parent)
+		}},
+		{name: "a_clone_reached_through_a_link", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			// The link sits right below the folder that stands for /, and only the folder above the target lets other users write.
+			require.NoError(t, h.root.Symlink(h.clone, h.rel(filepath.Join(h.sysroot, "clone"))))
+			require.NoError(t, exectest.ChmodFolder(filepath.Dir(h.clone), 0o777))
+			h.clone = filepath.Join(h.sysroot, "clone")
+		}},
+		{name: "a_go_folder_that_links_to_a_folder_the_job_user_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			goRoot := filepath.Join(h.sysroot, "usr/local/go")
+			target := filepath.Join(h.sysroot, "srv/go")
+			require.NoError(t, h.root.MkdirAll(h.rel(target), 0o750))
+			require.NoError(t, exectest.ChmodFolder(target, 0o777))
+			require.NoError(t, h.root.RemoveAll(h.rel(goRoot)))
+			require.NoError(t, h.root.Symlink(target, h.rel(goRoot)))
+		}},
 		{name: "a_system_root_that_the_group_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
 			t.Helper()
 			require.NoError(t, exectest.ChmodFolder(h.sysroot, 0o775))

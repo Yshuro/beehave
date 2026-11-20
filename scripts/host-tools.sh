@@ -19,7 +19,7 @@ uv_version=0.13.6
 uv_sha256=f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645
 actionlint_version=v1.7.12
 
-root=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$(dirname "$0")/.." && pwd -P)
 sysroot=${HOST_SETUP_SYSROOT:-}
 go_root=$sysroot/usr/local/go
 go_staging=$go_root.new
