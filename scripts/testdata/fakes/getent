@@ -1,0 +1,13 @@
+#!/bin/sh
+# Fake getent: `getent group <gid>` prints FAKE_GETENT_GROUP and `getent passwd` prints FAKE_GETENT_PASSWD. An unset value is no entry (exit 2).
+printf 'getent %s\n' "$*" >>"$FAKE_LOG"
+case $1 in
+group) value=${FAKE_GETENT_GROUP-} set=${FAKE_GETENT_GROUP+1} ;;
+passwd) value=${FAKE_GETENT_PASSWD-} set=${FAKE_GETENT_PASSWD+1} ;;
+*)
+	echo "fake getent: unexpected $*" >&2
+	exit 1
+	;;
+esac
+[ -n "$set" ] || exit 2
+printf '%s\n' "$value"
