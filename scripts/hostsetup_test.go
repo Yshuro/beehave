@@ -148,7 +148,7 @@ func gnuRealpath(t *testing.T) string {
 	return path
 }
 
-// owns makes the fake stat report the user id as the owner of the path.
+// owns makes the fake stat report the user id as the owner of the path. The user id - makes the fake stat fail for the path.
 func (h *fakeHost) owns(uid, path string) {
 	h.t.Helper()
 

@@ -92,6 +92,17 @@ func (h *fakeHost) adminGroupWrites(t *testing.T) string {
 	return gid
 }
 
+// linkToSafeFolder replaces /usr/local/<name> with a link to a new folder that only the test user can write.
+func (h *fakeHost) linkToSafeFolder(t *testing.T, name string) {
+	t.Helper()
+
+	link := filepath.Join(h.sysroot, "usr/local", name)
+	target := filepath.Join(h.sysroot, "srv", name)
+	require.NoError(t, h.root.MkdirAll(h.rel(target), 0o750))
+	require.NoError(t, h.root.RemoveAll(h.rel(link)))
+	require.NoError(t, h.root.Symlink(target, h.rel(link)))
+}
+
 // adminPasswd is the passwd line of the admin builder, whose primary group is gid.
 func adminPasswd(gid string) string {
 	return "builder:x:" + strconv.Itoa(os.Getuid()) + ":" + gid + "::/home/builder:/bin/sh"
@@ -224,6 +235,66 @@ func TestHostSetupRoot_RefusesBeforeAnyChange(t *testing.T) {
 			parent := filepath.Dir(h.clone)
 			require.NoError(t, exectest.ChmodFolder(parent, 0o755))
 			h.owns(strconv.Itoa(os.Getuid()+1), parent)
+		}},
+		{name: "a_parent_folder_whose_owner_stat_cannot_read", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			h.owns("-", filepath.Dir(h.clone))
+		}},
+		{name: "a_go_link_to_a_missing_folder_in_a_folder_of_another_owner", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			goRoot := filepath.Join(h.sysroot, "usr/local/go")
+			srv := filepath.Join(h.sysroot, "srv")
+			require.NoError(t, h.root.MkdirAll(h.rel(srv), 0o755))
+			h.owns(strconv.Itoa(os.Getuid()+1), srv)
+			require.NoError(t, h.root.RemoveAll(h.rel(goRoot)))
+			require.NoError(t, h.root.Symlink(filepath.Join(srv, "go"), h.rel(goRoot)))
+		}},
+		{name: "go_and_bin_links_in_a_local_folder_every_user_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			// Both targets are safe. The folder that holds the two links lets every user replace them.
+			h.linkToSafeFolder(t, "go")
+			h.linkToSafeFolder(t, "bin")
+			require.NoError(t, exectest.ChmodFolder(filepath.Join(h.sysroot, "usr/local"), 0o777))
+		}},
+		{name: "a_go_link_to_a_link_in_a_folder_every_user_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			// /usr/local/go -> srv/go -> a safe folder; only srv, the folder of the second link, lets every user replace it.
+			goRoot := filepath.Join(h.sysroot, "usr/local/go")
+			srv := filepath.Join(h.sysroot, "srv")
+			safe := filepath.Join(h.sysroot, "opt/go")
+			require.NoError(t, h.root.MkdirAll(h.rel(safe), 0o750))
+			require.NoError(t, h.root.MkdirAll(h.rel(srv), 0o750))
+			require.NoError(t, h.root.Symlink(safe, h.rel(filepath.Join(srv, "go"))))
+			require.NoError(t, exectest.ChmodFolder(srv, 0o777))
+			require.NoError(t, h.root.RemoveAll(h.rel(goRoot)))
+			require.NoError(t, h.root.Symlink(filepath.Join(srv, "go"), h.rel(goRoot)))
+		}},
+		{name: "a_local_folder_that_is_a_link_in_a_folder_every_user_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			// /usr/local -> opt/local holds plain go and bin folders; only /usr, the folder of the link, lets every user replace it.
+			local := filepath.Join(h.sysroot, "usr/local")
+			moved := filepath.Join(h.sysroot, "opt/local")
+			require.NoError(t, h.root.MkdirAll(h.rel(filepath.Dir(moved)), 0o750))
+			require.NoError(t, h.root.Rename(h.rel(local), h.rel(moved)))
+			require.NoError(t, h.root.Symlink(moved, h.rel(local)))
+			require.NoError(t, exectest.ChmodFolder(filepath.Join(h.sysroot, "usr"), 0o777))
+		}},
+		{name: "a_go_link_in_a_loop_of_links", message: "a loop of links", prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			goRoot := filepath.Join(h.sysroot, "usr/local/go")
+			loop := filepath.Join(h.sysroot, "srv/loop")
+			require.NoError(t, h.root.MkdirAll(h.rel(filepath.Dir(loop)), 0o750))
+			require.NoError(t, h.root.Symlink(goRoot, h.rel(loop)))
+			require.NoError(t, h.root.RemoveAll(h.rel(goRoot)))
+			require.NoError(t, h.root.Symlink(loop, h.rel(goRoot)))
+		}},
+		{name: "a_clone_link_in_a_folder_every_user_can_write", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
+			t.Helper()
+			via := filepath.Join(h.sysroot, "via")
+			require.NoError(t, h.root.MkdirAll(h.rel(via), 0o750))
+			require.NoError(t, h.root.Symlink(h.clone, h.rel(filepath.Join(via, "clone"))))
+			require.NoError(t, exectest.ChmodFolder(via, 0o777))
+			h.clone = filepath.Join(via, "clone")
 		}},
 		{name: "a_clone_reached_through_a_link", message: unsafeClone, prepare: func(t *testing.T, h *fakeHost) {
 			t.Helper()

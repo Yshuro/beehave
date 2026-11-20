@@ -30,7 +30,7 @@ job_home=/home/$job_user
 # The groups that give root, or the files of root, to a member.
 root_groups='root sudo admin wheel google-sudoers docker lxd disk shadow staff'
 
-root=$(cd "$(dirname "$0")/.." && pwd -P)
+root=$(cd "$(dirname "$0")/.." && pwd)
 sysroot=${HOST_SETUP_SYSROOT:-}
 go_root=$sysroot/usr/local/go
 lsm_file=$sysroot/sys/kernel/security/lsm
@@ -214,24 +214,60 @@ changeable() {
 	esac
 }
 
+# changeable_up <folder>: print the first folder that a user other than root and the admin can change, from the real path of the folder up
+# to the top. A folder above the top is not judged, except when the real path is outside the top: then the walk goes up to /.
+changeable_up() {
+	dir=$(realpath -m -- "$1") || {
+		printf '%s\n' "$1"
+		return 0
+	}
+	while :; do
+		found=$(changeable folder "$dir")
+		if [ -n "$found" ]; then
+			printf '%s\n' "$found"
+			return 0
+		fi
+		[ "$dir" != / ] && [ "$dir" != "$top" ] || return 0
+		dir=$(dirname "$dir")
+	done
+}
+
 # check_root_paths fails when a user other than root and the admin user (the one that ran sudo) can change a file of the clone, of
 # /usr/local/go or of /usr/local/bin, or a folder above one of them up to the top. Root runs the code there, so such a file is a way to root.
 # The top is / on a host and HOST_SETUP_SYSROOT in the tests. A path that does not exist yet, and is no link, is skipped: root makes it.
 # A path that is a link is judged at its target, with the folders above the target, because root runs the code of the target. A link
-# whose target does not exist yet is judged the same way: root would make the target.
+# whose target does not exist yet is judged the same way: root would make the target. The folders above the path as written are judged
+# too, each at its real path, because the folder that holds a link decides who can replace the link. For a chain of links, the folder
+# of each link in the chain is judged.
 check_root_paths() {
 	admin=${SUDO_UID:-0}
 	admin_group=$(admin_private_group)
 	top=${sysroot:-/}
 	for start in "$root" "$sysroot/usr/local/go" "$sysroot/usr/local/bin"; do
 		[ -e "$start" ] || [ -L "$start" ] || continue
-		start=$(realpath -m -- "$start") || fail "the path $start cannot be read"
-		found=$(changeable tree "$start")
+		real=$(realpath -m -- "$start") || fail "the path $start cannot be read"
+		found=$(changeable tree "$real")
 		dir=$start
 		while [ -z "$found" ] && [ "$dir" != / ] && [ "$dir" != "$top" ]; do
 			dir=$(dirname "$dir")
-			found=$(changeable folder "$dir")
+			found=$(changeable_up "$dir")
+			# A folder that is its own real path has no link above it either, so changeable_up judged everything above it.
+			[ "$(realpath -m -- "$dir")" != "$dir" ] || break
 		done
+		# Each link of a chain, and its folder. realpath -m accepts a loop of links, so the count of links stops it.
+		hop=$start
+		hops=0
+		while [ -z "$found" ] && [ -L "$hop" ]; do
+			hops=$((hops + 1))
+			[ "$hops" -le 40 ] || fail "the path $start is a chain of more than 40 links, or a loop of links. Point it at a folder with at most a few links"
+			found=$(changeable_up "$(dirname "$hop")")
+			target=$(readlink -- "$hop") || fail "the link $hop cannot be read"
+			case $target in
+			/*) hop=$target ;;
+			*) hop=$(dirname "$hop")/$target ;;
+			esac
+		done
+		[ -n "$found" ] || [ "$real" = "$start" ] || found=$(changeable_up "$(dirname "$real")")
 		[ -z "$found" ] || fail "$found can be written by a user other than root and the admin, so that user could change code that root runs here. Remove the write access of other users, and run the root stage from a clone that only root or the admin can write"
 	done
 }
