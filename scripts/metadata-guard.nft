@@ -1,0 +1,12 @@
+# Reject every user except root on the TCP path to the instance metadata server, so a gate step cannot take the machine's token.
+# The table is made, deleted and made again, so loading this file twice leaves one table.
+table inet beehave_metadata_guard
+delete table inet beehave_metadata_guard
+
+table inet beehave_metadata_guard {
+	chain output {
+		type filter hook output priority 0; policy accept;
+		meta skuid != 0 ip daddr 169.254.169.254 meta l4proto tcp reject with tcp reset
+		meta skuid != 0 ip6 daddr fd20:ce::254 meta l4proto tcp reject with tcp reset
+	}
+}

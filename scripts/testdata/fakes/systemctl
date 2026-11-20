@@ -8,6 +8,18 @@ case "$*" in
 '--user is-system-running') echo "${FAKE_MANAGER:-running}" ;;
 '--user daemon-reload') ;;
 '--user show-environment') "$(dirname "$0")/fake-unit-env" ;;
+daemon-reload) ;;
+'enable metadata-guard.service') [ -n "${FAKE_GUARD_NO_ENABLE:-}" ] || : >"$FAKE_STATE/guard-enabled" ;;
+'restart metadata-guard.service') [ -n "${FAKE_GUARD_NO_START:-}" ] || : >"$FAKE_STATE/guard-active" ;;
+'is-active --quiet metadata-guard.service') [ -f "$FAKE_STATE/guard-active" ] ;;
+'is-active metadata-guard.service')
+	if [ -f "$FAKE_STATE/guard-active" ]; then echo active; else echo inactive; fi
+	[ -f "$FAKE_STATE/guard-active" ]
+	;;
+'is-enabled metadata-guard.service')
+	if [ -f "$FAKE_STATE/guard-enabled" ]; then echo enabled; else echo disabled; fi
+	[ -f "$FAKE_STATE/guard-enabled" ]
+	;;
 'is-active '*)
 	echo "$active"
 	[ "$active" = active ]

@@ -2,7 +2,9 @@
 # Make a linux amd64 machine ready as a beehave build host for the ssh provider, then prove it. See docs/design/hosts.md.
 # Run it on the host, as the login user, from a clone of the repository at the commit under test. A second run changes nothing.
 # It installs no watchdog: it refuses to start and to finish unless the named self-delete watchdog unit is active, enabled and Restart=always.
-# It names no cloud and touches no heartbeat. It deletes nothing outside /usr/local/go, /usr/local/go.new, /usr/local/go.old and its own temporary folder.
+# It installs the metadata guard unit, which rejects every user except root on the TCP path to the instance metadata server, and it fails
+# unless the login user then gets no answer from that server.
+# It touches no heartbeat. It deletes nothing outside /usr/local/go, /usr/local/go.new, /usr/local/go.old and its own temporary folder.
 # It refuses a work root that is not its canonical path, a system folder, and an existing work root that the login user does not own.
 # It makes the last folder of a missing work root only, as the login user and without sudo, in a folder that the login user owns.
 # It never changes the owner or the mode of a folder.
@@ -22,6 +24,9 @@ sysroot=${HOST_SETUP_SYSROOT:-}
 go_root=$sysroot/usr/local/go
 lsm_file=$sysroot/sys/kernel/security/lsm
 env_file=$HOME/.config/environment.d/zz-beehave.conf
+guard_unit=metadata-guard.service
+guard_rules=$sysroot/etc/beehave/metadata-guard.nft
+guard_unit_file=$sysroot/etc/systemd/system/$guard_unit
 work_root=
 watchdog=
 
@@ -334,6 +339,58 @@ landlock() {
 	printf 'landlock warning %s %s\n' "$lsm" "$kernel"
 }
 
+# guard_differs <source> <destination>: succeed when the destination is missing or differs from the source.
+guard_differs() {
+	[ ! -f "$2" ] || ! cmp -s "$1" "$2"
+}
+
+# install_guard installs the rules file and the unit that load it before the network and before any user session, as root, and starts it.
+# A file that is already the same is not written again, and a unit that runs with the same files is not restarted.
+install_guard() {
+	changed=
+	if guard_differs "$root/scripts/metadata-guard.nft" "$guard_rules"; then
+		sudo install -D -m 0644 "$root/scripts/metadata-guard.nft" "$guard_rules"
+		changed=1
+	fi
+	if guard_differs "$root/scripts/metadata-guard.service" "$guard_unit_file"; then
+		sudo install -D -m 0644 "$root/scripts/metadata-guard.service" "$guard_unit_file"
+		sudo systemctl daemon-reload
+		changed=1
+	fi
+	sudo systemctl enable "$guard_unit"
+	if [ -n "$changed" ] || ! systemctl is-active --quiet "$guard_unit"; then
+		say "starting $guard_unit"
+		sudo systemctl restart "$guard_unit"
+	else
+		say "$guard_unit is up to date"
+	fi
+}
+
+# user_probe <url> and root_probe <url>: print the HTTP status that curl gets, or 000, and return the curl exit code.
+# Any status, even 403, means the server answered.
+user_probe() { curl -g -s -o /dev/null --max-time 5 -w '%{http_code}' "$1"; }
+root_probe() { sudo curl -g -s -o /dev/null --max-time 5 -w '%{http_code}' "$1"; }
+
+# check_guard fails unless the unit runs and is enabled, the rules are loaded, and the login user gets no answer from the metadata server over
+# IPv4 or IPv6. A refused connection (curl 7) and a timeout (28) are no answer. Any other curl failure proves nothing, so it fails the script.
+# It prints the record line, which holds the status that root gets, for a host that has a metadata server.
+check_guard() {
+	[ "$(systemctl is-active "$guard_unit" 2>/dev/null || true)" = active ] || fail "$guard_unit is not active"
+	[ "$(systemctl is-enabled "$guard_unit" 2>/dev/null || true)" = enabled ] || fail "$guard_unit is not enabled, so a reboot would drop the rules"
+	sudo nft list table inet beehave_metadata_guard >/dev/null || fail 'the metadata guard rules are not loaded'
+	for url in http://169.254.169.254/ 'http://[fd20:ce::254]/'; do
+		rc=0
+		code=$(user_probe "$url") || rc=$?
+		case $rc in
+		7 | 28) ;;
+		0) fail "the login user got HTTP $code from $url. A step of a gate can take the token of the machine. Read $guard_rules" ;;
+		*) fail "the check of $url ended with curl exit code $rc, which proves nothing. Run curl -g --max-time 5 $url" ;;
+		esac
+	done
+	code=$(root_probe http://169.254.169.254/) || true
+	printf 'metadata user=refused root=%s\n' "$code"
+}
+
 write_record() {
 	record=$work_root/.beehave/host-setup.record
 	{
@@ -343,6 +400,7 @@ write_record() {
 		printf 'systemd=%s\n' "$(systemd_version)"
 		landlock
 		printf 'watchdog %s %s\n' "$watchdog" "$(watchdog_state)"
+		printf '%s\n' "$guard_line"
 		printf '%s\n' "$1"
 	} >"$record.tmp"
 	mv "$record.tmp" "$record"
@@ -354,6 +412,7 @@ refuse
 check_watchdog
 user=$(id -un)
 sh "$root/scripts/host-tools.sh"
+install_guard
 gobin=$(go_bin)
 turn_on_linger
 set_unit_path
@@ -361,6 +420,7 @@ make_work_root
 install_project_tools
 proof=$(prove_tools)
 check_up
+guard_line=$(check_guard)
 write_record "$proof"
 check_watchdog
 echo HOST-SETUP-DONE

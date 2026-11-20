@@ -52,7 +52,7 @@ install_packages() {
 	say 'installing the apt packages'
 	sudo DEBIAN_FRONTEND=noninteractive apt-get update -q
 	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-		build-essential git make curl ca-certificates jq shellcheck bats
+		build-essential git make curl ca-certificates jq shellcheck bats nftables
 }
 
 # go_pin prints the toolchain version of go.mod, such as go1.27.4. A `go` line alone is not a full version, so it refuses.

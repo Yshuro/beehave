@@ -103,7 +103,7 @@ func newFakeHost(t *testing.T) *fakeHost {
 		require.NoError(t, h.root.MkdirAll(h.rel(dir), 0o750))
 	}
 
-	for _, script := range []string{"host-setup.sh", "host-tools.sh"} {
+	for _, script := range []string{"host-setup.sh", "host-tools.sh", "metadata-guard.nft", "metadata-guard.service"} {
 		h.copy(script, filepath.Join(h.clone, "scripts", script), h.write)
 	}
 
@@ -245,6 +245,16 @@ func (h *fakeHost) program(path, text string) {
 	h.t.Helper()
 	require.NoError(h.t, h.root.MkdirAll(filepath.Dir(h.rel(path)), 0o750))
 	require.NoError(h.t, exectest.Write(path, text))
+}
+
+// readSource reads a file of the repository.
+func (h *fakeHost) readSource(name string) string {
+	h.t.Helper()
+
+	data, err := h.source.ReadFile(name)
+	require.NoError(h.t, err)
+
+	return string(data)
 }
 
 func (h *fakeHost) read(path string) string {
@@ -517,7 +527,7 @@ func TestHostSetup_MakesOnlyAMissingWorkRoot(t *testing.T) {
 	assert.Contains(t, log, "\nmkdir -m 0755 -- "+workRoot+"\n", "the login user makes the last folder only, without -p")
 	assert.Empty(t, workRootActions(log, workRoot), "no root action names the work root")
 	assert.NotContains(t, log, "chown ", "no folder changes owner")
-	assert.NotContains(t, log, "sudo install", "install -d sets the owner and the mode of a folder that exists")
+	assert.NotContains(t, log, "sudo install -d", "install -d sets the owner and the mode of a folder that exists")
 
 	info, err := h.root.Stat(h.rel(workRoot))
 	require.NoError(t, err)
@@ -1072,7 +1082,7 @@ func TestHostSetup_ASecondRunChangesNothing(t *testing.T) {
 	assert.Equal(t, first, withoutTime(h.record()))
 
 	log := h.read(h.log)
-	for _, change := range []string{"\nsystemctl --user daemon-reload", "\nsudo loginctl enable-linger", "\ncurl ", "\nsudo tar ", "\nsudo rm ", "\nsudo mkdir ", "\nsudo chown ", "\nsudo mv "} {
+	for _, change := range []string{"\nsystemctl --user daemon-reload", "\nsudo loginctl enable-linger", "\ncurl -fsSL", "\nsudo tar ", "\nsudo rm ", "\nsudo mkdir ", "\nsudo chown ", "\nsudo mv ", "\nsudo install ", "\nsudo systemctl restart "} {
 		assert.NotContains(t, log, change)
 	}
 }
@@ -1224,4 +1234,125 @@ func TestHostSetup_ReadsThePinOfAGoInstalledToolFromItsModuleLine(t *testing.T) 
 	}
 
 	assert.Contains(t, h.record(), "\ntool gitleaks github.com/zricethezav/gitleaks/v8 v8.30.1\n", "its own version text says only: version is set by build process")
+}
+
+func (h *fakeHost) guardFiles() (rules, unit string) {
+	return filepath.Join(h.sysroot, "etc/beehave/metadata-guard.nft"), filepath.Join(h.sysroot, "etc/systemd/system/metadata-guard.service")
+}
+
+func TestHostSetup_InstallsTheMetadataGuardBeforeTheNetwork(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.setup()
+	require.NoError(t, err, out)
+
+	rules, unit := h.guardFiles()
+	assert.Equal(t, h.readSource("metadata-guard.nft"), h.read(rules))
+	assert.Equal(t, h.readSource("metadata-guard.service"), h.read(unit))
+
+	for _, want := range []string{"Before=network-pre.target systemd-user-sessions.service", "WantedBy=multi-user.target", "ExecStart=/usr/sbin/nft -f /etc/beehave/metadata-guard.nft"} {
+		assert.Contains(t, h.read(unit), want, "the unit loads the rules at every boot, before the network and before any user session")
+	}
+
+	for _, want := range []string{"meta skuid != 0 ip daddr 169.254.169.254 meta l4proto tcp reject", "meta skuid != 0 ip6 daddr fd20:ce::254 meta l4proto tcp reject"} {
+		assert.Contains(t, h.read(rules), want, "root is the only user that reaches the metadata server")
+	}
+
+	log := h.read(h.log)
+	assert.Regexp(t, `\napt-get install [^\n]* nftables\n`, log, "the nft command that the unit runs comes from the nftables package")
+	assert.Contains(t, log, "\nsudo systemctl enable metadata-guard.service\n")
+	assert.Contains(t, log, "\nsudo systemctl restart metadata-guard.service\n")
+	assert.Less(t, strings.Index(log, "sudo systemctl restart metadata-guard.service"), strings.Index(log, "systemd-run --user"), "the guard runs before the first job unit")
+	assert.Contains(t, h.record(), "metadata user=refused root=200\n")
+}
+
+func TestHostSetup_FailsWhenTheLoginUserStillGetsAnAnswerFromTheMetadataServer(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ name, message string }{
+		{name: "FAKE_METADATA_USER_CODE=200 FAKE_METADATA_USER_RC=0", message: "the login user got HTTP 200 from http://169.254.169.254/"},
+		{name: "FAKE_METADATA_USER6_CODE=403 FAKE_METADATA_USER6_RC=0", message: "the login user got HTTP 403 from http://[fd20:ce::254]/"},
+		{name: "FAKE_METADATA_USER_RC=6", message: "ended with curl exit code 6, which proves nothing"},
+		{name: "FAKE_METADATA_USER6_RC=127", message: "ended with curl exit code 127, which proves nothing"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newFakeHost(t)
+			out, err := h.setup(strings.Fields(tc.name)...)
+
+			require.Error(t, err)
+			assert.Contains(t, out, tc.message)
+			assert.NotContains(t, out, done)
+		})
+	}
+}
+
+func TestHostSetup_AcceptsATimeoutAsNoAnswerFromTheMetadataServer(t *testing.T) {
+	t.Parallel()
+
+	h := newFakeHost(t)
+	out, err := h.setup("FAKE_METADATA_USER_RC=28", "FAKE_METADATA_ROOT_CODE=000")
+
+	require.NoError(t, err, out)
+	assert.Contains(t, h.record(), "metadata user=refused root=000\n", "a host with no metadata server still passes")
+}
+
+func TestHostSetup_FailsWhenTheMetadataGuardIsNotInPlace(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct{ env, message string }{
+		{env: "FAKE_GUARD_NO_START=1", message: "metadata-guard.service is not active"},
+		{env: "FAKE_GUARD_NO_ENABLE=1", message: "is not enabled, so a reboot would drop the rules"},
+		{env: "FAKE_NFT_EMPTY=1", message: "the metadata guard rules are not loaded"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.env, func(t *testing.T) {
+			t.Parallel()
+
+			h := newFakeHost(t)
+			out, err := h.setup(tc.env)
+
+			require.Error(t, err)
+			assert.Contains(t, out, tc.message)
+			assert.NotContains(t, out, done)
+		})
+	}
+}
+
+func TestHostSetup_RestartsTheMetadataGuardOnlyWhenItsFilesOrItsStateDiffer(t *testing.T) {
+	t.Parallel()
+
+	const restart = "\nsudo systemctl restart metadata-guard.service\n"
+
+	h := newFakeHost(t)
+	out, err := h.setup()
+	require.NoError(t, err, out)
+
+	rules, unit := h.guardFiles()
+	cases := []struct {
+		name   string
+		change func()
+		want   bool
+	}{
+		{name: "nothing_differs", change: func() {}},
+		{name: "the_rules_file_differs", change: func() { h.write(rules, "stale\n") }, want: true},
+		{name: "the_unit_file_differs", change: func() { h.write(unit, "stale\n") }, want: true},
+		{name: "the_unit_is_inactive", change: func() { require.NoError(t, h.root.Remove(h.rel(filepath.Join(h.state, "guard-active")))) }, want: true},
+	}
+
+	for _, tc := range cases {
+		h.write(h.log, "")
+		tc.change()
+
+		out, err = h.setup()
+		require.NoError(t, err, tc.name+": "+out)
+		assert.Equal(t, tc.want, strings.Contains(h.read(h.log), restart), tc.name)
+		assert.Equal(t, h.readSource("metadata-guard.nft"), h.read(rules), tc.name+": the rules file is the source")
+		assert.Equal(t, h.readSource("metadata-guard.service"), h.read(unit), tc.name+": the unit file is the source")
+	}
 }

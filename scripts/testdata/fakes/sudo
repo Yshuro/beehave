@@ -3,5 +3,6 @@
 printf 'sudo %s\n' "$*" >>"$FAKE_LOG"
 if [ "$1" = -n ]; then exit "${FAKE_SUDO_RC:-0}"; fi
 case $1 in *=*) shift ;; esac
+export FAKE_AS_ROOT=1
 case $(command -v "$1") in "$FAKE_BIN"/*) exec "$@" ;; esac
 exit 0

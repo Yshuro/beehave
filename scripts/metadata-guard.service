@@ -1,0 +1,15 @@
+[Unit]
+Description=Reject non-root access to the instance metadata server
+DefaultDependencies=no
+After=local-fs.target
+Wants=network-pre.target
+Before=network-pre.target systemd-user-sessions.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/beehave/metadata-guard.nft
+ExecStop=-/usr/sbin/nft delete table inet beehave_metadata_guard
+
+[Install]
+WantedBy=multi-user.target

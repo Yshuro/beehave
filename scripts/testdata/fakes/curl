@@ -17,6 +17,24 @@ while [ $# -gt 0 ]; do
 		;;
 	esac
 done
+# A metadata URL: root gets FAKE_METADATA_ROOT_CODE (200). The login user gets FAKE_METADATA_USER_CODE (000) and exits FAKE_METADATA_USER_RC (7);
+# the IPv6 URL reads FAKE_METADATA_USER6_CODE and FAKE_METADATA_USER6_RC instead, when they are set.
+case $url in
+http://169.254.169.254/ | 'http://[fd20:ce::254]/')
+	if [ -n "${FAKE_AS_ROOT:-}" ]; then
+		printf '%s' "${FAKE_METADATA_ROOT_CODE:-200}"
+		exit 0
+	fi
+	code=${FAKE_METADATA_USER_CODE:-000}
+	rc=${FAKE_METADATA_USER_RC:-7}
+	if [ "$url" != http://169.254.169.254/ ]; then
+		code=${FAKE_METADATA_USER6_CODE:-$code}
+		rc=${FAKE_METADATA_USER6_RC:-$rc}
+	fi
+	printf '%s' "$code"
+	exit "$rc"
+	;;
+esac
 case $url in
 *mode=json*) name=go.json ;;
 *) name=${url##*/} ;;
