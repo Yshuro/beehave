@@ -2,7 +2,6 @@ package remedy
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,7 +17,10 @@ import (
 )
 
 // errNoGateSteps is the refusal of a map with no gate step names: the project sets gate, not gate_steps.
-var errNoGateSteps = errors.New("--map holds the CI commands to gate_steps, and the project has no gate_steps. Set gate_steps in the project file, one named step for each command of the gate")
+var (
+	errNoGateSteps = errors.New("--map holds the CI commands to gate_steps, and the project has no gate_steps. Set gate_steps in the project file, one named step for each command of the gate")
+	errMapTwice    = errors.New("--map is given twice. Give the whole gate_map once")
+)
 
 const (
 	gatelistSyntax = "gatelist [--steps <name>]... [--map <json>] <workflow-file>..."
@@ -92,9 +94,16 @@ func (f *gatelistFlags) declare(flags *flag.FlagSet) {
 		return nil
 	})
 	flags.Func("map", "the gate_map of the project as JSON: each derived command to the gate_steps names that run it, or [] when it is not a check", func(text string) error {
+		if f.mapped {
+			return errMapTwice
+		}
+
 		f.mapped = true
 
-		return json.Unmarshal([]byte(text), &f.held)
+		held, err := gate.ParseMap(text)
+		f.held = held
+
+		return err
 	})
 }
 

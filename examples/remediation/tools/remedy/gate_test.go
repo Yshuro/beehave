@@ -110,7 +110,6 @@ func TestGatelist_AStepThatTheLabelRefusesIsListedWithItsReason(t *testing.T) {
 		{"a_package_by_action", "uses: pypa/gh-action-pypi-publish@release/v1", "uses pypa/gh-action-pypi-publish@release/v1"},
 		{"a_deploy_by_action", "uses: actions/deploy-pages@v4", "uses actions/deploy-pages@v4"},
 		{"a_shell_that_is_not_sh", "shell: pwsh\n        run: echo hi", "runs in the shell pwsh"},
-		{"a_secret", "env:\n          T: ${{ secrets.T }}\n        run: make docs", "reads a secret"},
 	}
 
 	for _, test := range tests {
@@ -222,6 +221,29 @@ func TestGatelist_AMapThatIsNotAnObjectOfListsOfTextIsExitCodeTwo(t *testing.T) 
 	}
 }
 
+func TestGatelist_AMapThatNamesACommandTwiceHoldsANullListOrIsGivenTwiceIsExitCodeTwo(t *testing.T) {
+	t.Parallel()
+
+	file := textFile(t, "ci.yaml", jobsHead+"run: make lint\n")
+	good := `{"make test": ["test"], "make lint": []}`
+
+	for name, args := range map[string][]string{
+		"a key twice": {"--map", `{"make test": ["nope"], "make test": ["test"], "make lint": []}`},
+		"a null list": {"--map", `{"make test": null, "make lint": []}`},
+		"two maps":    {"--map", `{"make test": ["test"]}`, "--map", `{"make lint": []}`},
+	} {
+		code, out, errOut := run(t, remedy.Deps{}, append(append([]string{"gatelist", "--steps", "test"}, args...), file)...)
+
+		assert.Equal(t, remedy.ExitRefused, code, name)
+		assert.Empty(t, out, name)
+		assert.Contains(t, errOut, "for flag -map: ", name)
+	}
+
+	code, _, errOut := run(t, remedy.Deps{}, "gatelist", "--steps", "test", "--map", good, file)
+	assert.Equal(t, remedy.ExitPass, code, "the control: the same map once and whole")
+	assert.Empty(t, errOut)
+}
+
 func TestGatelist_AFlagThatDoesNotExistIsExitCodeTwo(t *testing.T) {
 	t.Parallel()
 
@@ -241,7 +263,8 @@ func TestGatelist_AFileThatGivesNoUsableStepIsExitCodeTwo(t *testing.T) {
 		"a_run_that_is_not_shell": "permissions: read-all\njobs:\n  a:\n    steps:\n      - run: if then fi )\n",
 		"only_a_push":             "permissions: read-all\njobs:\n  a:\n    steps:\n      - run: git push origin main\n",
 		"only_a_job_that_writes":  "jobs:\n  a:\n    steps:\n      - run: make test\n",
-		"no_jobs":                 "name: CI\n",
+		"only_a_job_with_a_step_that_reads_a_secret": "permissions: read-all\njobs:\n  a:\n    steps:\n      - run: make test\n      - env:\n          T: ${{ secrets.T }}\n        run: make docs\n",
+		"no_jobs": "name: CI\n",
 	}
 
 	for name, text := range tests {

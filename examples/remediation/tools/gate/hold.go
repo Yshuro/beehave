@@ -1,8 +1,13 @@
 package gate
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
 	"maps"
 	"slices"
+	"strings"
 )
 
 // The first words of the defect lines of a hold.
@@ -59,3 +64,57 @@ func unknownSteps(gateSteps []string, held Map) []string {
 
 	return lines
 }
+
+// errMapForm is the refusal of a gate_map that is not one object of commands to lists of gate step names.
+var errMapForm = errors.New("the gate_map must be one JSON object of each derived command to a list of gate step names, with no command twice, no null and no blank text")
+
+// ParseMap reads a gate_map from its JSON text. It refuses a command given twice, which a plain decode would let the last one win, a null list, a blank command or name, and any other form.
+func ParseMap(text string) (Map, error) {
+	decoder, held := json.NewDecoder(strings.NewReader(text)), Map{}
+	if open, err := decoder.Token(); err != nil || open != json.Delim('{') {
+		return nil, errMapForm
+	}
+
+	for decoder.More() {
+		command, names, ok := mapEntry(decoder)
+		if _, twice := held[command]; !ok || twice {
+			return nil, fmt.Errorf("%w: %q", errMapForm, command)
+		}
+
+		held[command] = names
+	}
+
+	if !closedLast(decoder) {
+		return nil, errMapForm
+	}
+
+	return held, nil
+}
+
+// closedLast reports whether the object ends next and nothing follows it.
+func closedLast(decoder *json.Decoder) bool {
+	closed, err := decoder.Token()
+	_, end := decoder.Token()
+
+	return err == nil && closed == json.Delim('}') && errors.Is(end, io.EOF)
+}
+
+// mapEntry reads one command of a gate_map and its list of gate step names. It gives false for a key that is not text, a blank command, a value that is not a list of text, a null list or a blank name.
+func mapEntry(decoder *json.Decoder) (string, []string, bool) {
+	token, err := decoder.Token()
+	command, isText := token.(string)
+
+	if err != nil || !isText || blank(command) {
+		return command, nil, false
+	}
+
+	var names *[]string
+	if decoder.Decode(&names) != nil || names == nil || slices.ContainsFunc(*names, blank) {
+		return command, nil, false
+	}
+
+	return command, *names, true
+}
+
+// blank reports whether a text holds nothing but blanks.
+func blank(text string) bool { return strings.TrimSpace(text) == "" }

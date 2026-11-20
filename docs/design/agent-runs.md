@@ -439,20 +439,24 @@ The host still holds the cloud identity of the machine, which any gate step can 
 
 #### The label
 
-The command labels each run step `step` or `refused`, and names a refused one in the output as `refused <name>: <reason>`. The label fails closed at every level. It never reads the step name, and it holds no list of tools. The command leaves out:
+The command labels each run step `step` or `refused`, and names a refused one in the output as `refused <name>: <reason>`. When the label cannot tell, it refuses. It never reads the step name, and it holds no list of tools. The command parses each file once and puts the node of each YAML alias in its place, so every check below reads a value given through an alias or a merge key where it is used. An alias inside the node it names makes the file not a workflow. The command leaves out:
 
 - A job that calls a reusable workflow.
-- A job whose token of the run can write. The job `permissions` key wins over the file key. With no key at the job or the file, the token takes the default of the repository, which can write. Read only is `read-all`, `{}`, or a mapping of `read` and `none` values only. Any other value, an expression included, can write.
-- A job that names a secret or the token of the run (`secrets`, `github.token`, `github['token']`, `toJSON(secrets)`, the `github` context passed whole) in the file `env` or `defaults`, or anywhere in the job outside its steps.
-- A step that names a secret or the token of the run, or uses an action other than a checkout or a setup action (so a lint action is left out).
+- A job whose token of the run can write. The job `permissions` key wins over the file key. With no key at the job or the file, the token takes the default of the repository, which can write. Read only is `read-all`, `{}`, or a mapping of `read` and `none` values only. Any other value, an expression or a merge key included, can write.
+- A job that names a secret or the token of the run anywhere in the job, any of its steps included, or in the file `env` or `defaults`. A later step can read what an earlier step writes to `GITHUB_ENV`, `GITHUB_OUTPUT` or a file, so a secret in one step leaves out the whole job. A secret is any text that names `secrets`. The token is an expression that reads `github.token`, or the `github` context as a whole: an index such as `github['token']`, the filter `github.*`, or a function of it such as `toJSON(github)` or `join(github.*, ',')`. A field such as `github.ref` is not the token. A checkout action takes the token of the job, which the permissions rule above governs.
+- A step that uses an action other than a checkout or a setup action (so a lint action is left out).
 - A step whose shell is not exactly `bash` or `sh`. The shell comes from the step, then the job `defaults.run.shell`, then the file `defaults.run.shell`. A custom shell string such as `bash -e {0}` is refused.
-- A step whose run text the shell reader of `check/shell` finds one of its kinds `git-write`, `opaque-command` or `unparsed` in.
+- A step whose run text the shell reader of `check/shell` finds one of its kinds `git-write`, `opaque-command` or `unparsed` in. No other kind of the reader is judged.
 
 Files that give no step are exit code 2.
 
+#### The command of a step
+
+The command of a derived step is its whole record: the run text, then each part of the context that CI runs it in, when set: `[shell <shell>]`, `[working-directory <folder>]`, `[env <names>]`, `[container <container>]` and `[continue-on-error <value>]`. The shell and the folder come from the step, then the job defaults, then the file defaults. The env names are the sorted names of the file, job and step `env`, with the names that a merge key merges, without values. The run text keeps each blank inside quotes as CI has it; outside quotes, a run of blanks is one space.
+
 #### The hold
 
-`gate_map` maps each exact derived command text to a list of `gate_steps` names. An empty list says that the command is not a check, such as an install. With `--steps` or `--map`, the command is exit code 2 with one line for each defect, and the round stops before its first pass:
+`gate_map` maps each exact derived command, the whole record as the step line prints it, to a list of `gate_steps` names. A change in CI to the run text or to any part of the record stops the round. An empty list says that the command is not a check, such as an install. `--map` is one JSON object, given once. A command given twice, a null list, a blank command or name, and any other form are exit code 2. With `--steps` or `--map`, the command is exit code 2 with one line for each defect, and the round stops before its first pass:
 
 - `unmapped <step name>: <command>`: a derived step whose command is no key. The match is exact: no trim, no substring.
 - `stale <command>`: a key that no derived step has.

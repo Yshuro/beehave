@@ -209,7 +209,7 @@ func TestDerive_TheTokenOfTheRunCountsAsASecret(t *testing.T) {
 	t.Parallel()
 
 	envStep := func(value string) string {
-		return formStep("      - env:\n          T: " + value + "\n        run: go vet ./...\n")
+		return readOnlyFile + "jobs:\n  j:\n    steps:\n      - env:\n          T: " + value + "\n        run: go vet ./...\n" + keptJob
 	}
 
 	for name, value := range map[string]string{
@@ -224,8 +224,8 @@ func TestDerive_TheTokenOfTheRunCountsAsASecret(t *testing.T) {
 	} {
 		got := derivedAll(t, envStep(value))
 
-		assert.Equal(t, []string{"j:run-2"}, stepNames(got), name)
-		require.Equal(t, []string{"step j:run-1"}, refusedNames(got), name)
+		assert.Equal(t, []string{"k:run-1"}, stepNames(got), name)
+		require.Equal(t, []string{"job ci.yaml:j"}, refusedNames(got), name)
 		assert.Equal(t, "reads a secret", got.Refused[0].Reason, name)
 	}
 
@@ -233,7 +233,7 @@ func TestDerive_TheTokenOfTheRunCountsAsASecret(t *testing.T) {
 		"another field of github": "${{ github.ref }}",
 		"a repository path":       "github.com/o/r",
 	} {
-		assert.Equal(t, []string{"j:run-1", "j:run-2"}, stepNames(derivedAll(t, envStep(value))), name)
+		assert.Equal(t, []string{"j:run-1", "k:run-1"}, stepNames(derivedAll(t, envStep(value))), name)
 	}
 
 	message := refusedDerive(t, readOnlyFile+"env:\n  GH_TOKEN: ${{ github.token }}\njobs:\n  j:\n    steps:\n      - run: go vet ./...\n")
@@ -338,5 +338,9 @@ func TestDerive_TheRunTextIsJudgedOnlyByTheExistingShellKinds(t *testing.T) {
 
 	for _, command := range []string{"gh release create v1", "npm publish", "docker push ghcr.io/o/r:1", "curl -XPUT https://x/a"} {
 		assert.Equal(t, []string{"j:run-1", "j:run-2"}, stepNames(derivedAll(t, formRun(command))), "no list of tools: %s", command)
+	}
+
+	for kind, command := range map[string]string{"local-delete": "rm -rf build", "env-override": "GIT_DIR=x make test"} {
+		assert.Equal(t, []string{"j:run-1", "j:run-2"}, stepNames(derivedAll(t, formRun(command))), "the kind %s is not judged", kind)
 	}
 }

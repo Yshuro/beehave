@@ -44,8 +44,8 @@ func structuralForms() map[string]string {
 		"local reusable workflow": formJobs("  rel:\n    uses: ./.github/workflows/release.yaml\n"),
 		"shell python":            formStep("      - shell: python\n        run: |\n          import subprocess\n          subprocess.run(['git','push'])\n"),
 		"shell pwsh":              formStep("      - shell: pwsh\n        run: git push origin main\n"),
-		"a secret in a step":      formStep("      - env:\n          K: ${{ secrets.KEY }}\n        run: make publish-docs\n"),
-		"a secret in a with":      formStep("      - uses: actions/checkout@v7\n        with:\n          token: ${{ secrets.PAT }}\n"),
+		"a secret in a step":      formJobs("  s:\n    steps:\n      - env:\n          K: ${{ secrets.KEY }}\n        run: make publish-docs\n"),
+		"a secret in a with":      formJobs("  s:\n    steps:\n      - uses: actions/checkout@v7\n        with:\n          token: ${{ secrets.PAT }}\n"),
 	}
 }
 
