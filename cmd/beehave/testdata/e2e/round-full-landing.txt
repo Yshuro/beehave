@@ -28,8 +28,10 @@ exec git -C syncclone push -q origin sync/s1
 
 example remediation/workflow.star flow/workflow.star
 
+# The login folder of the runners is a credential path, so it holds nothing else: the state folder of beehave lies outside it, and an agent may read the data file.
 mkdir forge
 mkdir home
+mkdir login
 env SWARM_REMOTE=$WORK/remote.git
 env SWARM_FORGE=$WORK/forge
 env HOME=$WORK/home
@@ -41,6 +43,8 @@ cp base forge/base
 cp base forge/closing-ok
 cp base forge/open-on-create
 
+# The setup of the scripts writes a runner file whose login folder is the work folder. That folder holds the state folder, so the script puts its own runners in place.
+cp runners.star config/runners.star
 subst fake/claude fake/remedy config/projects/round.star config/runners.star
 chmod 755 fake/claude
 chmod 755 fake/remedy
@@ -83,10 +87,10 @@ reports/
 moved
 -- mutation.sh --
 exit 0
--- config/runners.star --
+-- runners.star --
 agents(max_concurrent = 2)
-runner(name = "one", agent = "claude", config_dir = "@WORK@")
-runner(name = "two", agent = "claude", config_dir = "@WORK@")
+runner(name = "one", agent = "claude", config_dir = "@WORK@/login")
+runner(name = "two", agent = "claude", config_dir = "@WORK@/login")
 -- config/projects/round.star --
 project(
     repo = "o/r",
