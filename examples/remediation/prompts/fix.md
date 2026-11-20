@@ -206,8 +206,9 @@ Measured traps and ownership rules:
 
 ## Report
 
-**Write the full report to the report file that the run names for this lane FIRST**: every measurement, every
-control, every arm you discarded. That file is the record and it is read.
+**Write the full report as the output `report`**: every measurement, every
+control, every arm you discarded. The run checks the output before any full review: each row of `## Claims` names your final head commit, and a line says "no background commands left".
+Write it to {{ .output_file }} as JSON, as a text, for example `{"report":"# Report\n..."}`.
 
 **The report carries four tables.** A report that lacks one goes back to you unread.
 

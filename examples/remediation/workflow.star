@@ -484,6 +484,16 @@ def check_mutation(words, base):
 
     return "The mutation run failed. Each line is one finding:\n" + "\n".join(["- " + line for line in lines])
 
+def lane_report(lane):
+    """Checks the report that a lane wrote, as the command step candidate-lane-report, and returns the findings as text. An empty text means the report is whole.
+    `remedy report` reads the report from its stdin and judges it against the head of the lane: the four tables, the head and the line about background commands.
+    Exit code 1 gives the defect lines as the findings. Exit code 2 means the check could not run, and it ends the item."""
+    done = command(name = "candidate-lane-report", run = ["remedy", "report", "/dev/stdin", "--head", lane.head_sha], stdin = lane.report, stop_on_rc = [2])
+    if done.rc == 0:
+        return ""
+
+    return "The report of the lane has a defect. Each line is one finding:\n" + done.stdout.strip()
+
 def id_patterns(ids):
     """Returns the forbid_text patterns of a merge for the ids of its items, to add to the attribution patterns. No line of a pull request body or of a commit message may match them.
     A text names a change by its problem, fix and result, and never by a tracker id. An id that is only digits is the number of a GitHub issue, which a body may cite as #N, so it adds no pattern."""
@@ -1153,6 +1163,7 @@ def pipeline(item):
         model = _model(round_settings, "implement"),
         runner = _runner(round_settings, "implement"),
         label = "implement",
+        outputs = ["report"],
         forbid_commands = FORBID,
         protect_paths = protected(round_settings),
         sandbox = sandbox(network = ["github.com", "api.github.com"]),
@@ -1209,7 +1220,7 @@ def pipeline(item):
     def mutants(gate):
         return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"], push_branch = item.id)
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], fix_outputs = ["report"], lane_check = lane_report, facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"], push_branch = item.id)
 
     if loop.stopped:
         return item_value(item, "", False, "stopped", loop.host_losses)
