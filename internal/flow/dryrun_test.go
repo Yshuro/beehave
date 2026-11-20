@@ -687,7 +687,7 @@ func TestDryFakes_AnswerWithoutTouchingAnything(t *testing.T) {
 	assert.True(t, created)
 	assert.Equal(t, "dry-1", id)
 
-	dir, err := dryTrees{dir: "/t"}.Ensure(ctx, "p", "1", "")
+	dir, err := dryTrees{dir: "/t"}.Ensure(ctx, "p", "1", "", "")
 	require.NoError(t, err)
 	assert.Equal(t, "/t", dir)
 

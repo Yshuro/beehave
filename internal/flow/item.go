@@ -28,6 +28,8 @@ type ItemInput struct {
 	// Entry is the function of the workflow file that runs the item. It is empty for an item that a user started, which runs main.
 	// A run that spawn started has it set to the entry of the spawn call, and such a run cannot spawn.
 	Entry string `json:"entry,omitempty"`
+	// Base is the base branch of the round that spawned the run. The worktree of the item is cut there. It is empty for any other run, which cuts at the base branch of the project.
+	Base string `json:"base,omitempty"`
 }
 
 // ItemResult is what a finished item workflow reports.
@@ -131,7 +133,7 @@ func (e *Engine) makeTree(ctx dbos.Context, in ItemInput) (string, error) {
 	}
 
 	start, err := runStep(e, ctx, treeMakeStepName, func(c context.Context) (string, error) {
-		dir, err := e.deps.Trees.Ensure(c, in.Project, in.Item, "")
+		dir, err := e.deps.Trees.Ensure(c, in.Project, in.Item, "", "")
 		if err != nil {
 			return "", err
 		}

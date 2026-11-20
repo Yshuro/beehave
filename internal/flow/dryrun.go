@@ -465,7 +465,9 @@ func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) erro
 	return nil
 }
 
-func (t dryTrees) Ensure(context.Context, string, string, string) (string, error) { return t.dir, nil }
+func (t dryTrees) Ensure(context.Context, string, string, string, string) (string, error) {
+	return t.dir, nil
+}
 
 // dryCommands runs no program: each command call exits with code 0 and prints nothing.
 type dryCommands struct{}

@@ -321,7 +321,7 @@ func (e *Engine) remakeTree(ctx context.Context, request CommandRequest) error {
 		return nil
 	}
 
-	if _, err := e.deps.Trees.Ensure(ctx, request.Project, request.Item, request.TreeStart); err != nil {
+	if _, err := e.deps.Trees.Ensure(ctx, request.Project, request.Item, request.TreeStart, ""); err != nil {
 		return fmt.Errorf("find the folder of item %s: %w", request.Item, err)
 	}
 

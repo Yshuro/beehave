@@ -1260,6 +1260,8 @@ type fakeTrees struct {
 	ensured *ensureLog
 	// starts records the start of each Ensure call when a test sets it.
 	starts *ensureLog
+	// bases records the base of each Ensure call when a test sets it.
+	bases *ensureLog
 }
 
 // ensureLog is the items that Ensure was called for, in order.
@@ -1332,9 +1334,13 @@ func (f fakeTrees) WithTree(ctx context.Context, project, item string, fn func(d
 	return nil
 }
 
-func (f fakeTrees) Ensure(ctx context.Context, _, item, start string) (string, error) {
+func (f fakeTrees) Ensure(ctx context.Context, _, item, start, base string) (string, error) {
 	if f.ensured != nil {
 		f.ensured.add(item)
+	}
+
+	if f.bases != nil {
+		f.bases.add(base)
 	}
 
 	if f.starts != nil {

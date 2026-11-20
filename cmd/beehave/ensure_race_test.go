@@ -156,7 +156,7 @@ func TestWorktrees_EnsureForTwoItemsOfOneProjectAtOnceClonesOnceAndAddsBoth(t *t
 		go func() {
 			defer wg.Done()
 
-			_, errs[i] = trees.Ensure(t.Context(), "p", fmt.Sprintf("item-%d", i), "")
+			_, errs[i] = trees.Ensure(t.Context(), "p", fmt.Sprintf("item-%d", i), "", "")
 		}()
 	}
 
@@ -194,7 +194,7 @@ func TestWorktrees_EnsureForTwoProjectsAtOnceDoesNotMakeOneWaitForTheOther(t *te
 		go func() {
 			defer wg.Done()
 
-			_, errs[i] = trees.Ensure(t.Context(), project, "item", "")
+			_, errs[i] = trees.Ensure(t.Context(), project, "item", "", "")
 		}()
 	}
 
@@ -221,7 +221,7 @@ func TestWorktrees_EnsureStopsWaitingForTheCloneLockWhenTheContextEnds(t *testin
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err = trees.Ensure(ctx, "p", "bb-1", "")
+	_, err = trees.Ensure(ctx, "p", "bb-1", "", "")
 
 	require.ErrorContains(t, err, "lock the clone of project p")
 	assert.Empty(t, git.calls)
@@ -248,7 +248,7 @@ func TestWorktrees_EnsureForTwoEnginesOnOneRepoFolderClonesOnce(t *testing.T) {
 		go func() {
 			defer wg.Done()
 
-			_, errs[i] = engine().Ensure(t.Context(), "p", item, "")
+			_, errs[i] = engine().Ensure(t.Context(), "p", item, "", "")
 		}()
 	}
 

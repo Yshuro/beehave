@@ -249,7 +249,8 @@ func (s *script) startRuns(plan []spawnedRun, entry string) error {
 			continue
 		}
 
-		in := ItemInput{Item: one.Item, Project: s.in.Project, File: s.in.File, Files: s.in.Files, Login: one.Login, Entry: entry}
+		base, _ := model.RoundBase(s.in.Item)
+		in := ItemInput{Item: one.Item, Project: s.in.Project, File: s.in.File, Files: s.in.Files, Login: one.Login, Entry: entry, Base: base}
 
 		if _, err := dbos.RunWorkflow(s.ctx, s.e.item, in, dbos.WithQueue(s.e.itemQueue), dbos.WithWorkflowID(one.Run), dbos.WithPriority(one.Priority)); err != nil {
 			return fmt.Errorf("start the run of item %s: %w", one.Item, err)
