@@ -133,8 +133,7 @@ prompt=$(cat)
 field() { printf '%s\n' "$prompt" | sed -n "s/^$1=//p"; }
 step=$(field step)
 echo "$step" >> @WORK@/calls.log
-skill=blast-radius
-echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"'"$skill"'-review"}}]}}'
+echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"blast-radius-review"}}]}}'
 case $step in
   plan) printf '{"regressions":"0"}\n' > "$(field write)" ;;
   review) printf '{"verdict":"approve","mechanism":"","regressions":"0","open":"","findings":[]}\n' > "$(field write)" ;;
