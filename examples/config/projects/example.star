@@ -27,7 +27,7 @@ project(
     # vars = {
     #     "people": {"owner": "your-login", "third_party_idle_hours": "24"},  # a role to a login. The entry third_party_idle_hours is text, not a number: the idle hours after which a pull request of a third party counts as stale
     #     "epics": {"bugs": "proj-1"},                  # a queue name to its epic
-    #     "gate_files": [".github/workflows/ci.yml"],   # the workflow files that the list of gate commands comes from
+    #     "gate_files": [".github/workflows/ci.yml"],   # the CI workflow files that the round derives its gate list from; a file with a step that publishes stops the round
     #     "conventions": ["AGENTS.md"],                 # the files to review against
     #     "brief_rules": ["Name the tempting wrong fix"],     # rules for the brief of an agent
     #     "stacked_rules": ["Merge the base pull request first"],  # rules for a pull request that stacks on another

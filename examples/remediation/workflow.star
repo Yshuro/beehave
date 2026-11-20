@@ -912,6 +912,14 @@ def record_base_reds(round_settings):
         timeout = WRITE_TIMEOUT,
     )
 
+def derive_gate_list(project):
+    """Derives the gate list of the round from the CI workflow files of vars.gate_files, and prints it. A project with no gate_files derives nothing.
+    The tool `remedy gatelist` refuses (exit code 2) a file that holds no run step and a step that publishes, so such a round never starts."""
+    files = project.vars.get("gate_files", [])
+
+    if len(files) > 0:
+        command(name = "gate-list", run = ["remedy", "gatelist"] + files, stop_on_rc = [2])
+
 # A bound for the loop of the round, because Starlark has no while. A pass ends one run or starts one, so the bound is far above the work of any real round.
 MAX_PASSES = 500
 
@@ -949,6 +957,7 @@ def round(item):
     # The round starts its host once. The child entry pipeline calls no host builtin, so a child cannot stop it. finish stops it.
     host_up(name = "round-host", host = project.build_host)
     record_base_reds(round_settings)
+    derive_gate_list(project)
 
     runs = []
     approved = []

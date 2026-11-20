@@ -427,7 +427,11 @@ The author check compares the address of a commit with the address of the accoun
 
 ### The gate list
 
-The gate list is a Markdown file. Its `## Gate steps` section holds one row for each step, with a `Derived from:` line that ends in a commit.
+The gate list is a Markdown file. Its `## Gate steps` section holds one row for each step.
+
+`remedy gatelist <workflow-file>...` derives the steps from the CI workflow files: one step for each run step of each job, named `<job>:<step name>`, in file order. The round runs it from the project var `gate_files` before its first pass.
+
+The command refuses a step that publishes. It reads what a step runs and what it uses, never the step name. A publish is a release, a push, a package publish or a deploy: `gh release create`, `git push`, `npm publish`, `kubectl apply`, and the actions that do the same, such as `softprops/action-gh-release` or `actions/deploy-pages`. A run with `--dry-run` publishes nothing. A run step that is not shell is refused, because the command cannot tell what it runs.
 
 When a step passes:
 

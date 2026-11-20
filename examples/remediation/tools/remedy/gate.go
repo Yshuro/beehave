@@ -15,7 +15,7 @@ import (
 )
 
 const (
-	gatelistSyntax = "gatelist <file>"
+	gatelistSyntax = "gatelist <workflow-file>..."
 	jobSyntax      = "job <script> --list <file> [--job-dir <folder>]"
 	reportSyntax   = "report <file> --head <sha>"
 )
@@ -26,7 +26,7 @@ func gateCommands() []command {
 		{
 			name:    "gatelist",
 			usage:   gatelistSyntax,
-			summary: "read the '## Gate steps' table of a gate list and refuse a list that states no usable step",
+			summary: "derive the gate steps from the run steps of the CI workflow files and refuse a file with no run step and a step that publishes (a release, a push, a package publish or a deploy)",
 			run:     gatelistCommand,
 		},
 		{
@@ -54,24 +54,50 @@ func printable(lines []string) []string {
 	return out
 }
 
-// gatelistCommand reads the gate list in a file. A list that states no usable step, and a file that cannot be read, are exit code 2.
+// gatelistCommand derives the gate list from the CI workflow files and prints one line for each step. A file that cannot be read, a file with no usable step and a step that publishes are exit code 2.
 func gatelistCommand(_ context.Context, _ Deps, s streams, args []string) int {
-	path, ok := parseSubject("gatelist", gatelistSyntax, args, s.err, func(*flag.FlagSet) {})
-	if !ok {
+	if len(args) == 0 {
+		wrongUsage(s.err, gatelistSyntax)
+
 		return ExitRefused
 	}
 
-	text, err := brief.ReadText(path)
+	files, err := workflowFiles(args)
 	if err != nil {
 		return refused(s, "gatelist", err)
 	}
 
-	steps, err := gate.Steps(text, path)
+	steps, err := gate.Derive(files)
 	if err != nil {
 		return refused(s, "gatelist", err)
 	}
 
-	return showLines(s, []string{fmt.Sprintf("check-gatelist: OK (steps %d)", len(steps))}, false)
+	return showLines(s, printable(stepLines(steps)), false)
+}
+
+// workflowFiles reads each workflow file.
+func workflowFiles(paths []string) ([]gate.File, error) {
+	texts, err := readTexts(paths...)
+	if err != nil {
+		return nil, err
+	}
+
+	files := make([]gate.File, len(paths))
+	for i, path := range paths {
+		files[i] = gate.File{Path: path, Text: texts[i]}
+	}
+
+	return files, nil
+}
+
+// stepLines gives one line for each derived step, then the summary.
+func stepLines(steps []gate.Step) []string {
+	lines := make([]string, 0, len(steps)+1)
+	for _, step := range steps {
+		lines = append(lines, "step "+step.Name+": "+step.Command)
+	}
+
+	return append(lines, fmt.Sprintf("check-gatelist: OK (steps %d)", len(steps)))
 }
 
 // jobFlags are the values of the flags of job.
