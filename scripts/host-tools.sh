@@ -1,6 +1,7 @@
 #!/bin/sh
-# Install the system tools of a linux amd64 build host: the apt packages, the Go toolchain that go.mod names, uv and actionlint.
-# scripts/host-setup.sh runs it. A host maker that owns its own idle delete (such as a SkyPilot task setup) can run it alone.
+# Install the tools of a linux amd64 build host. `system` runs as root and installs the apt packages, the Go toolchain that go.mod names and uv.
+# `user` runs as the job user, with no sudo, and installs actionlint into the Go folder of that user.
+# scripts/host-setup.sh runs both. A host maker that owns its own idle delete (such as a SkyPilot task setup) can run `system` alone.
 # It installs no tool that `make setup` installs. `apt-get update` and `apt-get install` run on each run; apt changes no package that is installed.
 # Go, uv and actionlint are read first and installed only when they are not at their pins.
 # A new Go unpacks into /usr/local/go.new and replaces /usr/local/go only after it unpacks, so a failed unpack keeps the old Go.
@@ -10,7 +11,7 @@
 # It deletes nothing outside these three folders and its own temporary folder.
 # A new uv version needs a new sha256: take it from the digest of the asset in the release (`gh release view <tag> -R astral-sh/uv --json assets`).
 #
-# Usage: sh scripts/host-tools.sh   (from any folder; it reads go.mod next to the scripts folder)
+# Usage: sh scripts/host-tools.sh system|user   (from any folder; it reads go.mod next to the scripts folder)
 # HOST_SETUP_SYSROOT is a folder that stands for / in the tests of the script. It is empty on a host.
 set -eu
 
@@ -52,7 +53,7 @@ install_packages() {
 	say 'installing the apt packages'
 	sudo DEBIAN_FRONTEND=noninteractive apt-get update -q
 	sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-install-recommends \
-		build-essential git make curl ca-certificates jq shellcheck bats
+		build-essential git make curl ca-certificates jq shellcheck bats nftables
 }
 
 # go_pin prints the toolchain version of go.mod, such as go1.27.4. A `go` line alone is not a full version, so it refuses.
@@ -157,6 +158,12 @@ install_actionlint() {
 	go install "github.com/rhysd/actionlint/cmd/actionlint@$actionlint_version"
 }
 
+stage=${1:-}
+case $stage in
+system | user) ;;
+*) fail "name the stage: sh scripts/host-tools.sh system (as root: apt, Go, uv) or sh scripts/host-tools.sh user (as the job user: actionlint)" ;;
+esac
+
 if [ "$(uname -s)" != Linux ] || [ "$(uname -m)" != x86_64 ]; then
 	fail 'the pinned archives are for linux amd64 only'
 fi
@@ -166,10 +173,17 @@ export PATH
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-install_packages
-install_go
-# go install puts actionlint into the bin folder of the first GOPATH entry.
-gopath=$(go env GOPATH)
-PATH=${gopath%%:*}/bin:$PATH
-install_uv
-install_actionlint
+case $stage in
+system)
+	install_packages
+	install_go
+	install_uv
+	;;
+user)
+	[ -x "$go_root/bin/go" ] || fail "there is no Go in $go_root. Run the root stage of scripts/host-setup.sh first"
+	# go install puts actionlint into the bin folder of the first GOPATH entry.
+	gopath=$(go env GOPATH)
+	PATH=${gopath%%:*}/bin:$PATH
+	install_actionlint
+	;;
+esac

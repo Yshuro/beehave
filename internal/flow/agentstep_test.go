@@ -2,6 +2,7 @@ package flow
 
 import (
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,7 +121,7 @@ func (r *agentRig) run(t *testing.T, flow, prompt string) (ItemResult, error) {
 }
 
 // crashAfterThePhaseEnded runs the flow on an engine that stops after the phase of the agent ended and before the read step is recorded.
-// The read step runs git rev-parse HEAD in the item folder. The folder config includes a named pipe, so git blocks on the pipe until a writer opens it:
+// The read step runs git rev-parse HEAD in the item folder. The HEAD file of the folder is a named pipe, so git blocks on the pipe until a writer opens it:
 // the open of the writer returns only when the read is in flight. The phase has ended by then. The engine stops while the read waits.
 //
 // Every resource has a cleanup registered before it exists, so a failed assertion or a timeout leaves nothing running or open.
@@ -135,7 +136,7 @@ func (r *agentRig) crashAfterThePhaseEnded(t *testing.T, file string) {
 func (r *agentRig) crashItemAfterThePhaseEnded(t *testing.T, item, file string) {
 	t.Helper()
 
-	// The render step reads HEAD before the agent starts, so the pipe goes into the folder config when the agent ends: the first git command that blocks is the read.
+	// The render step reads HEAD before the agent starts, so the pipe takes the place of the HEAD file when the agent ends: the first git command that blocks is the read.
 	r.crashItemAfterThePhaseEndedArmedBy(t, item, file, func(arm func()) {
 		prior := r.h.agents.result
 
@@ -152,13 +153,16 @@ func (r *agentRig) crashItemAfterThePhaseEnded(t *testing.T, item, file string) 
 	})
 }
 
-// crashItemAfterThePhaseEndedArmedBy is crashItemAfterThePhaseEnded with a choice of when the pipe goes into the folder config.
+// crashItemAfterThePhaseEndedArmedBy is crashItemAfterThePhaseEnded with a choice of when the pipe takes the place of the HEAD file.
 // It hands the arming function to armBy before the engine starts. A git command that runs after the arming blocks on the pipe, so a caller that arms
 // from inside the fake agent lets the steps before the phase run free.
 func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file string, armBy func(arm func())) {
 	t.Helper()
 
-	gate := filepath.Join(t.TempDir(), "gate")
+	// The arming moves the pipe onto the HEAD file. It is not an include of the folder config: the engine refuses a config with an include and runs no git there.
+	gate, headFile := filepath.Join(t.TempDir(), "gate"), filepath.Join(r.dir, ".git", "HEAD")
+	head, err := os.ReadFile(headFile) //nolint:gosec // a file of the test
+	require.NoError(t, err)
 	require.NoError(t, syscall.Mkfifo(gate, 0o600))
 
 	var (
@@ -168,8 +172,10 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 
 	// A writer blocked in its open returns when a reader opens the pipe. A non-blocking read open does that and never blocks itself.
 	t.Cleanup(func() {
-		if reader, err := os.OpenFile(filepath.Clean(gate), os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = reader.Close()
+		for _, path := range []string{gate, headFile} {
+			if reader, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+				_ = reader.Close()
+			}
 		}
 
 		routines.Wait()
@@ -181,7 +187,12 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 		}
 	})
 
-	armBy(func() { gitIn(t, r.dir, "config", "--local", "include.path", gate) })
+	// A later engine of the test calls the arming again; only the first call moves the pipe.
+	var armed sync.Once
+
+	armBy(func() {
+		armed.Do(func() { assert.NoError(t, os.Rename(gate, headFile)) })
+	})
 
 	crashed, err := NewEngine(t.Context(), r.h.opts, r.h.deps())
 	require.NoError(t, err)
@@ -204,7 +215,12 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 	go func() {
 		defer routines.Done()
 
+		// When the arming has moved the pipe already, the pipe is the HEAD file.
 		pipe, openErr := os.OpenFile(filepath.Clean(gate), os.O_WRONLY, 0)
+		if errors.Is(openErr, fs.ErrNotExist) {
+			pipe, openErr = os.OpenFile(filepath.Clean(headFile), os.O_WRONLY, 0)
+		}
+
 		assert.NoError(t, openErr)
 		held <- pipe
 	}()
@@ -218,7 +234,8 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 	require.Error(t, receive(t, ran), "the stopped engine ends the run before it records the read step")
 
 	require.NoError(t, pipe.Close())
-	require.NoError(t, os.Remove(gate), "the replay reads HEAD with no gate")
+	require.NoError(t, os.Remove(headFile))
+	require.NoError(t, os.WriteFile(headFile, head, 0o600), "the replay reads HEAD with no gate") //nolint:gosec // a file of the test
 }
 
 const writeTo = "Write to {{ .output_file }}\nFix {{ .what }}.\n"
@@ -1029,23 +1046,23 @@ func TestAgentStep_TheStartMarkIsTheHeadOfTheFolderAndAMarkThatGitCannotWriteIsA
 
 	dir, head := gitTree(t)
 
-	got, err := agentArgs{dir: dir}.writeStartMark(t.Context())
+	got, err := agentArgs{dir: dir, git: engineGit(dir)}.writeStartMark(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, head, got)
 	assert.Equal(t, head, strings.TrimSpace(gitIn(t, dir, "for-each-ref", "--format=%(objectname)", callStartRef)), "the folder holds the mark at its head")
 
-	got, err = agentArgs{dir: t.TempDir(), plain: true}.writeStartMark(t.Context())
+	got, err = agentArgs{git: engineGit(t.TempDir()), plain: true}.writeStartMark(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, got, "a plain folder has no head and no mark")
 
-	_, err = agentArgs{dir: t.TempDir()}.writeStartMark(t.Context())
+	_, err = agentArgs{git: engineGit(t.TempDir())}.writeStartMark(t.Context())
 	require.ErrorContains(t, err, "read HEAD of the item folder")
 
 	// A lock file of the ref makes git refuse the write.
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "refs", "worktree", "beehave"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "worktree", "beehave", "call-start.lock"), nil, 0o600))
 
-	_, err = agentArgs{dir: dir}.writeStartMark(t.Context())
+	_, err = agentArgs{dir: dir, git: engineGit(dir)}.writeStartMark(t.Context())
 	require.ErrorContains(t, err, "write the start mark of the item folder")
 }

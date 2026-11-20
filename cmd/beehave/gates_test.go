@@ -29,8 +29,8 @@ type gateCalls struct {
 }
 
 // gateRunner returns a local runner that answers `git rev-parse` with head, `git status` with the status of calls, and any other program with gate.
-func gateRunner(calls *gateCalls, head, gate model.CommandResult) func(string, string, time.Duration) proc.Runner {
-	return func(binary, dir string, _ time.Duration) proc.Runner {
+func gateRunner(calls *gateCalls, head, gate model.CommandResult) func(string, string, string, time.Duration) proc.Runner {
+	return func(_, binary, dir string, _ time.Duration) proc.Runner {
 		return recording{run: func(args []string) model.CommandResult {
 			calls.binaries = append(calls.binaries, binary)
 			calls.dirs = append(calls.dirs, dir)
@@ -85,7 +85,7 @@ func TestProjectGate_AnAnswerWithoutTheHeadAndTheTreeFailsTheGateBeforeItRuns(t 
 	t.Parallel()
 
 	calls := &gateCalls{}
-	local := func(binary, _ string, _ time.Duration) proc.Runner {
+	local := func(_, binary, _ string, _ time.Duration) proc.Runner {
 		return recording{run: func(args []string) model.CommandResult {
 			calls.binaries = append(calls.binaries, binary)
 
@@ -249,7 +249,7 @@ func TestProjectGate_ATreeThatCannotBeReadFailsTheGateBeforeItRuns(t *testing.T)
 	t.Parallel()
 
 	calls := &gateCalls{}
-	local := func(binary, _ string, _ time.Duration) proc.Runner {
+	local := func(_, binary, _ string, _ time.Duration) proc.Runner {
 		return recording{run: func(args []string) model.CommandResult {
 			calls.binaries = append(calls.binaries, binary)
 
@@ -445,25 +445,25 @@ func TestProjectGate_RefusesWhatItCannotRunWithoutRunningTheGate(t *testing.T) {
 func TestProjectGate_ALocalGateThatTheTimeoutKillsIsNotAnExitCode(t *testing.T) {
 	t.Parallel()
 
-	local := func(binary, dir string, timeout time.Duration) proc.Runner {
+	local := func(_, binary, dir string, timeout time.Duration) proc.Runner {
 		return proc.ExecRunner{Binary: binary, Dir: dir, Timeout: timeout}
 	}
 	gate := projectGate{programs: programs{local: local}, timeout: 200 * time.Millisecond}
 
 	started := time.Now()
-	_, code := gate.shell(t.Context(), t.TempDir(), "echo partial; exec sleep 30")
+	_, code := gate.shell(t.Context(), "p", t.TempDir(), "echo partial; exec sleep 30")
 
 	assert.Equal(t, igate.ExitTimedOut, code, "a real kill by the local runner")
 	assert.Less(t, time.Since(started), 20*time.Second)
 
-	_, own := gate.shell(t.Context(), t.TempDir(), "exit 124")
+	_, own := gate.shell(t.Context(), "p", t.TempDir(), "exit 124")
 	assert.Equal(t, 124, own, "a command that exits 124 on its own is a failure, not a timeout")
 }
 
 func TestProjectGate_AStatusThatGitCannotReadEndsTheGate(t *testing.T) {
 	t.Parallel()
 
-	runner := func(binary, _ string, _ time.Duration) proc.Runner {
+	runner := func(_, binary, _ string, _ time.Duration) proc.Runner {
 		return recording{run: func(args []string) model.CommandResult {
 			if binary == "git" && args[0] == "status" {
 				return model.CommandResult{Stderr: "fatal: not a repository\n", ExitCode: 128}

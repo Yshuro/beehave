@@ -216,8 +216,13 @@ Measured traps and ownership rules:
 
 ## Report
 
-**Write the full report to the report file that the run names for this lane FIRST**: every measurement, every
-control, every arm you discarded. That file is the record and it is read.
+**Write the full report as the output `report`**: every measurement, every
+control, every arm you discarded. The run checks the output before any full review: each row of `## Claims` names your final head commit, and a line says "no background commands left".
+Write it to {{ .output_file }} as JSON, as a text, for example `{"report":"# Report\n...","uncaused":"[]"}`.
+
+**Write the output `uncaused` as a text that holds a JSON list.** Each gate red that your change did not cause is one entry: a red that the base has too and that no hunk of yours touches. Write `[]` when there is none.
+The run files one item for each id before the merge. An entry has the fields `id` (words in lower case joined by hyphens, the same for the same red), `title`, `body`, `found` (the commit and the exact command), `severity` (`P0` to `P3`) and `operator` (`true` when an operator hits it in normal use).
+The run refuses the whole list when one entry is bad, and it never files the same id twice.
 
 **The report carries four tables.** A report that lacks one goes back to you unread.
 

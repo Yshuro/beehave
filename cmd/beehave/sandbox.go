@@ -13,6 +13,7 @@ import (
 	"github.com/tobocop2/beehave/internal/check/shell"
 	"github.com/tobocop2/beehave/internal/flow"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
@@ -28,18 +29,19 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 	}
 
 	project := a.projects[request.Project]
-	deny := credentialPaths(home, runner.ConfigDir, project.SandboxDeny)
-	read := expandAll(project.SandboxRead, home)
+	deny, read := credentialPaths(home, runner.ConfigDir, project.SandboxDeny), expandAll(project.SandboxRead, home)
 
-	closed, identity, write := closedPaths(ctx, dir, home), a.identity(ctx, dir), outputWrites(request)
+	git := gitOf(a.projects, request.Project, a.repos).Runner(dir, proc.DefaultTimeout)
+	closed, err := closedPaths(ctx, git, dir, home)
+	identity, write := a.identity(ctx, git), outputWrites(request)
 
-	if note := cmp.Or(readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), identityNote(identity, dir)); note != "" {
+	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), identityNote(identity, dir)); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
 	return agent.SandboxPlan{
-		Work: dir, GitDirs: sharedGitDirs(dir), Read: withData(read, request.DataFile), Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed), DenyWritePatterns: hookPatterns(dir),
-		Write: write, Network: request.Sandbox.Network, Identity: identity,
+		Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: withData(read, request.DataFile), ReadDirs: dataFolder(request.DataFile), Deny: deny, DenyPatterns: envPatterns(dir),
+		DenyWrite: writeDenies(dir, closed, request.DataFile), DenyWritePatterns: hookPatterns(dir), Write: write, Network: request.Sandbox.Network, Identity: identity,
 	}, ""
 }
 
@@ -52,12 +54,21 @@ func outputWrites(request flow.AgentRequest) []string {
 	return []string{request.OutputFile}
 }
 
-// gitIdentity returns the user.name and the user.email that the git of the engine reads at dir.
-func gitIdentity(ctx context.Context, dir string) agent.GitIdentity {
+// gitIdentity returns the user.name and the user.email that the git of the engine reads in the repository of git.
+func gitIdentity(ctx context.Context, git gitexec.Runner) agent.GitIdentity {
 	return agent.GitIdentity{
-		Name:  strings.TrimSpace(gitexec.ReadConfig(ctx, dir, "user.name").Stdout),
-		Email: strings.TrimSpace(gitexec.ReadConfig(ctx, dir, "user.email").Stdout),
+		Name:  strings.TrimSpace(git.ReadConfig(ctx, "user.name").Stdout),
+		Email: strings.TrimSpace(git.ReadConfig(ctx, "user.email").Stdout),
 	}
+}
+
+// refusedNote says why the closed paths of the work folder cannot be read, or returns "" when they can.
+func refusedNote(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	return err.Error() + " The step did not start."
 }
 
 // identityNote says why the commits of a sandboxed step would have no author, or returns "".
@@ -72,8 +83,8 @@ func identityNote(identity agent.GitIdentity, dir string) string {
 
 // writeDenies returns the closed paths that the adapter denies for write: the closed paths, less the settings folder of
 // the agent CLI, which the CLI writes itself, and less a .git that is a file (a linked work tree), which holds only a pointer.
-// A .git that does not exist yet stays in the list, so a step that runs git init finds it closed.
-func writeDenies(dir string, closed []string) []string {
+// A .git that does not exist yet stays in the list, so a step that runs git init finds it closed. The folder of the data file joins the list, so it is read only.
+func writeDenies(dir string, closed []string, dataFile string) []string {
 	out := make([]string, 0, len(closed))
 
 	for _, path := range closed {
@@ -85,7 +96,7 @@ func writeDenies(dir string, closed []string) []string {
 		}
 	}
 
-	return out
+	return append(out, dataFolder(dataFile)...)
 }
 
 func isFile(path string) bool {
@@ -123,33 +134,40 @@ func envPatterns(dir string) []string {
 }
 
 // closedPaths returns the paths under the work folder that a step may never write: the closed names and the hooks folder that core.hooksPath names.
-func closedPaths(ctx context.Context, dir, home string) []string {
+func closedPaths(ctx context.Context, git gitexec.Runner, dir, home string) ([]string, error) {
 	paths := make([]string, 0, len(model.ClosedNames())+1)
 
 	for _, name := range model.ClosedNames() {
 		paths = append(paths, filepath.Join(dir, name))
 	}
 
-	if hooks := hooksPath(ctx, dir, home); hooks != "" {
+	hooks, err := hooksPath(ctx, git, dir, home)
+	if err != nil {
+		return nil, err
+	}
+
+	if hooks != "" {
 		paths = append(paths, hooks)
 	}
 
-	return paths
+	return paths, nil
 }
 
-// hooksPath returns the hooks folder that core.hooksPath names for the repository of dir, as an absolute path, or "" when it is not set.
-func hooksPath(ctx context.Context, dir, home string) string {
-	result := gitexec.ReadConfig(ctx, dir, "core.hooksPath")
-	if result.ExitCode != 0 {
-		return ""
+// hooksPath returns the hooks folder that core.hooksPath names for the repository of git, as an absolute path against dir, or "" when it is not set.
+// A clone whose git config cannot be read, or holds a setting outside the allow list, is an error: its hooks folder cannot be read, so no plan can deny it.
+func hooksPath(ctx context.Context, git gitexec.Runner, dir, home string) (string, error) {
+	result := git.ReadConfig(ctx, "core.hooksPath")
+
+	if result.SetupErr != nil {
+		return "", result.SetupErr
 	}
 
 	text := strings.TrimSpace(result.Stdout)
-	if text == "" {
-		return ""
+	if result.ExitCode != 0 || text == "" {
+		return "", nil
 	}
 
-	return filepath.Clean(absolute(expand(text, home), dir))
+	return filepath.Clean(absolute(expand(text, home), dir)), nil
 }
 
 // readNote says why a sandbox_read path cannot start the step, or returns "". A path that is the home folder, holds it, or overlaps a credential path
@@ -177,6 +195,16 @@ func withData(read []string, file string) []string {
 	}
 
 	return append(read, file)
+}
+
+// dataFolder returns the folder of the data file as the one working directory that the step adds, or none for a step with no data file. The folder holds that
+// file alone, so the CLI blocks the read of every other file of the state folder, and the plan denies the write of the folder.
+func dataFolder(file string) []string {
+	if file == "" {
+		return nil
+	}
+
+	return []string{filepath.Dir(file)}
 }
 
 // globCharacters are the characters that make a path of a sandbox rule a pattern.
@@ -325,28 +353,22 @@ func expandAll(paths []string, home string) []string {
 	return out
 }
 
-// sharedGitDirs returns the shared git directory of a linked work tree: the folder that the file .git of the work folder points to, up to its common directory.
-// A work folder with a .git folder, or with no .git, has none outside itself.
-func sharedGitDirs(dir string) []string {
-	raw, err := os.ReadFile(filepath.Clean(filepath.Join(dir, ".git")))
+// sharedGitDirs returns the common git folder of a linked worktree that a clone in found holds a record of. It reads the records of the clones, never
+// the .git file or the commondir file, which a step can write. A clone, and a folder that no clone knows, have none outside themselves.
+func sharedGitDirs(found gitexec.Repositories, dir string) []string {
+	repo, err := found.Of(dir)
 	if err != nil {
 		return nil
 	}
 
-	target, ok := strings.CutPrefix(strings.TrimSpace(string(raw)), "gitdir: ")
-	if !ok {
-		return nil
-	}
-
-	return []string{commonDir(absolute(target, dir))}
+	return commonOf(repo)
 }
 
-// commonDir returns the common directory of a git directory: the folder that its file commondir names, or the git directory when it has none.
-func commonDir(target string) string {
-	common, err := os.ReadFile(filepath.Join(target, "commondir")) //nolint:gosec // the git directory that the .git file of the work folder names
-	if err != nil {
-		return filepath.Clean(target)
+// commonOf returns the common git folder of repo when it lies outside its git folder: repo is a linked worktree. A repository with no git folder has none.
+func commonOf(repo gitexec.Repository) []string {
+	if repo.GitDir == repo.CommonDir {
+		return nil
 	}
 
-	return filepath.Clean(absolute(strings.TrimSpace(string(common)), target))
+	return []string{repo.CommonDir}
 }

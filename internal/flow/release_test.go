@@ -147,7 +147,7 @@ func TestRemoveTree_KeepsTheTreeWhenTheRemoteDoesNotAnswerInTime(t *testing.T) {
 	t.Parallel()
 
 	r := newRepos(t)
-	gitIn(t, r.tree, "config", "protocol.ext.allow", "always")
+	// The fake trees allow the ext transport for the read of the branches; a protocol setting in the clone config is one the engine refuses.
 	gitIn(t, r.tree, "remote", "set-url", "origin", "ext::sleep "+strconv.Itoa(remoteSleepSeconds))
 
 	const limit = 300 * time.Millisecond
@@ -250,8 +250,12 @@ func (l lockedTrees) WithTree(_ context.Context, _, _ string, fn func(dir string
 	return nil
 }
 
+func (lockedTrees) Git(dir string) proc.Runner { return engineGit(dir) }
+
+func (addressTrees) Git(dir string) proc.Runner { return engineGit(dir) }
+
 func (l lockedTrees) Heads(ctx context.Context, _ string) (string, error) {
-	return git(ctx, l.dir, "ls-remote", "--heads", remoteName)
+	return git(ctx, engineGit(l.dir), "ls-remote", "--heads", remoteName)
 }
 
 // addressTrees gives one worktree and reads the branches of the remote from the address that the engine holds, as the worktrees of the engine do.
@@ -267,7 +271,7 @@ func (a addressTrees) WithTree(_ context.Context, _, _ string, fn func(dir strin
 }
 
 func (a addressTrees) Heads(ctx context.Context, _ string) (string, error) {
-	return git(ctx, a.dir, "ls-remote", "--heads", a.address)
+	return git(ctx, engineGit(a.dir), "ls-remote", "--heads", a.address)
 }
 
 func TestRemoveTree_ReadsTheBranchesOfTheRemoteFromTheTreesAndNotFromTheRemoteThatTheCloneNames(t *testing.T) {

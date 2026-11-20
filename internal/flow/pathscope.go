@@ -12,6 +12,7 @@ import (
 
 	"go.starlark.net/starlark"
 
+	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -50,7 +51,7 @@ func (s *script) markStart(a *agentArgs, name string) error {
 	}
 
 	started, err := runStep(s.e, s.ctx, name+"/start", func(ctx context.Context) (stepResult, error) {
-		return markNote(ctx, a.dir)
+		return markNote(ctx, a.git)
 	})
 	if err != nil {
 		return err
@@ -72,8 +73,8 @@ func parseMark(note string) (startMark, error) {
 }
 
 // markNote takes the start mark now and puts it in the note of a step result.
-func markNote(ctx context.Context, dir string) (stepResult, error) {
-	mark, err := takeMark(ctx, dir)
+func markNote(ctx context.Context, tree proc.Runner) (stepResult, error) {
+	mark, err := takeMark(ctx, tree)
 	if err != nil {
 		return stepResult{}, err
 	}
@@ -84,20 +85,20 @@ func markNote(ctx context.Context, dir string) (stepResult, error) {
 }
 
 // takeMark reads the commit and the untracked and ignored entries of the folder now.
-func takeMark(ctx context.Context, dir string) (startMark, error) {
-	head, err := folderHead(ctx, dir)
+func takeMark(ctx context.Context, tree proc.Runner) (startMark, error) {
+	head, err := folderHead(ctx, tree)
 	if err != nil {
 		return startMark{}, err
 	}
 
-	seen, err := others(ctx, dir)
+	seen, err := others(ctx, tree)
 
 	return startMark{Head: head, Seen: seen}, err
 }
 
 // others maps each untracked or ignored entry of the folder to its stamp. The keys are relative to the root of the repository.
-func others(ctx context.Context, dir string) (map[string]string, error) {
-	root, err := git(ctx, dir, "rev-parse", "--show-toplevel")
+func others(ctx context.Context, tree proc.Runner) (map[string]string, error) {
+	root, err := git(ctx, tree, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return nil, fmt.Errorf("find the root of the item folder: %w", err)
 	}
@@ -105,7 +106,7 @@ func others(ctx context.Context, dir string) (map[string]string, error) {
 	seen := map[string]string{}
 
 	for _, ignored := range []bool{false, true} {
-		names, listErr := listOthers(ctx, dir, ignored)
+		names, listErr := listOthers(ctx, tree, ignored)
 		if listErr != nil {
 			return nil, listErr
 		}
@@ -135,13 +136,13 @@ func stamp(root, name string, ignored bool) string {
 
 // listOthers lists the untracked files, or the ignored entries with each ignored directory collapsed to one entry.
 // The paths end with a NUL byte, so a name with a space or a non-ASCII letter stays whole.
-func listOthers(ctx context.Context, dir string, ignored bool) ([]string, error) {
+func listOthers(ctx context.Context, tree proc.Runner, ignored bool) ([]string, error) {
 	query := []string{"ls-files", "--others", "--exclude-standard", "--full-name", "-z"}
 	if ignored {
 		query = append(query, "--ignored", "--directory")
 	}
 
-	out, err := git(ctx, dir, append(query, "--", ":/")...)
+	out, err := git(ctx, tree, append(query, "--", ":/")...)
 	if err != nil {
 		return nil, fmt.Errorf("list the changed paths of the item folder with git %s: %w", query[0], err)
 	}
@@ -152,13 +153,13 @@ func listOthers(ctx context.Context, dir string, ignored bool) ([]string, error)
 // changed lists the paths that the folder changed since the mark: every tracked change, committed or not, and every untracked or ignored
 // entry that is new, gone or, for an untracked file, has another size or time. The diff runs with no rename detection, so a rename lists the old
 // path as well as the new one. Every path is relative to the root of the repository.
-func changed(ctx context.Context, dir string, mark startMark) ([]string, error) {
-	now, err := others(ctx, dir)
+func changed(ctx context.Context, tree proc.Runner, mark startMark) ([]string, error) {
+	now, err := others(ctx, tree)
 	if err != nil {
 		return nil, err
 	}
 
-	out, err := git(ctx, dir, "diff", "--name-only", "--no-renames", "-z", mark.Head)
+	out, err := git(ctx, tree, "diff", "--name-only", "--no-renames", "-z", mark.Head)
 	if err != nil {
 		return nil, fmt.Errorf("list the changed paths of the item folder with git diff: %w", err)
 	}
@@ -186,8 +187,8 @@ func differ(before, now map[string]string) []string {
 }
 
 // outside lists the changed paths that no glob allows.
-func (s scope) outside(ctx context.Context, dir string, mark startMark) ([]string, error) {
-	names, err := changed(ctx, dir, mark)
+func (s scope) outside(ctx context.Context, tree proc.Runner, mark startMark) ([]string, error) {
+	names, err := changed(ctx, tree, mark)
 	if err != nil {
 		return nil, err
 	}
@@ -211,12 +212,12 @@ func (s scope) blocked(names []string) []string {
 }
 
 // check fails when the folder changed a path that no glob allows. The message names each path.
-func (s scope) check(ctx context.Context, dir string, mark startMark) error {
+func (s scope) check(ctx context.Context, tree proc.Runner, mark startMark) error {
 	if !s.active() {
 		return nil
 	}
 
-	bad, err := s.outside(ctx, dir, mark)
+	bad, err := s.outside(ctx, tree, mark)
 	if err != nil {
 		return err
 	}

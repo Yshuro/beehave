@@ -269,8 +269,9 @@ Each candidate then gets the full checks once, in this order. The first entry wi
 
 1. The gate `candidate-gate` on the base. A void result reruns as `candidate-gate-void-<n>`. A void result with a host cause reruns as `candidate-gate-host-<k>`; see "The host loss limit".
 2. The checks before review `candidate-before-review`, which compare the head with `origin/<base>`. Their `command` steps are `candidate-before-review-ancestor`, `-paths` and `-keywords`. A closing keyword in a commit message is a refusal that no new commit repairs, because a fix adds commits and never rewrites history. The loop then stops the item at once with a stop text that names the commit, the issue and the repair (rebuild the branch without the keyword), lists every other finding of the same check so that one rebuild repairs all, and spends no fix round.
-3. Each function in the list `checks` of the caller. The example passes its mutation run.
-4. The fresh agent `candidate-review` reads the whole pull request at the head that the gate passed (`pin` is that head).
+3. The function `lane_check` of the caller, called with the lane that made the head. The example checks the report of the lane (`candidate-lane-report`).
+4. Each function in the list `checks` of the caller. The example passes its mutation run.
+5. The fresh agent `candidate-review` reads the whole pull request at the head that the gate passed (`pin` is that head).
 
 The loop ends when the full review approves and no lane run left a violation. If `rounds` candidates did not end it, the loop is exhausted.
 
@@ -313,6 +314,8 @@ The argument `checks` is a list of functions of one argument, the passed gate. E
 #### The result of the loop
 
 The result holds `head`, the commit that the last step of the loop judged. A scoped review can reject or a guard can stop before the first gate. Then `gate` is `None`, and `head` is the head of the last lane run. So a caller that holds the item reports `head`, not `gate.head`.
+
+The result also holds `lanes`, the list of the fix agent results in the order they ran. It is empty when no fix ran. The caller reads the outputs that it declared with `fix_outputs`, such as the reds that a lane did not cause. The caller holds the result of the implement agent already.
 
 #### The host loss limit
 
@@ -386,6 +389,14 @@ The argument `review_outputs` of `review_fix` (default: an empty list) names mor
 - The returned `review` holds each one as a field. A workflow reads a field of the review, such as a count, and does not parse the text of the report.
 - The review prompt must ask for each one. A review that leaves one out fails like a review that leaves out the verdict.
 - A dry run writes the text `0` for each output that is not the verdict.
+
+#### The `fix_outputs` and `lane_check` arguments
+
+The argument `fix_outputs` of `review_fix` (default: an empty list) names more outputs for each fix agent to write. The caller declares the outputs of the implement agent on its own `agent` call. The fix prompt must ask for each one, and a fix that leaves one out fails like a review that leaves out the verdict.
+
+The argument `lane_check` (default: none) is a function of one argument, the lane that made the candidate head: the result of the implement agent, or of the last fix agent. It runs for each candidate after the checks before review and before the list `checks`. It returns an empty text for a clean lane, or the findings as text, which send the candidate back to a fix. The example reads the output `report` of the lane and checks it with `remedy report`.
+
+A caller that passes neither argument gets no extra output and no extra step.
 
 #### Violations of the lane runs
 
