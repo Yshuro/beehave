@@ -92,14 +92,22 @@ func (Adapter) Sandbox(plan agent.SandboxPlan, guard, runDir string) agent.Launc
 	raw, _ := json.Marshal(settings) //nolint:errcheck,errchkjson // a struct of strings and booleans always encodes
 
 	return agent.Launch{
-		Args: []string{
-			"--setting-sources", "", "--strict-mcp-config",
-			"--disallowedTools", "WebFetch", "WebSearch",
-			"--settings", string(raw),
-		},
+		Args: slices.Concat(
+			[]string{"--setting-sources", "", "--strict-mcp-config", "--disallowedTools", "WebFetch", "WebSearch"},
+			addDirs(plan.ReadDirs), []string{"--settings", string(raw)},
+		),
 		Env:   map[string]string{subprocessScrub: "1", envFileVar: envPath},
 		Files: map[string]string{envFile: exports(plan.GitEnv())},
 	}
+}
+
+// addDirs returns the --add-dir flag with each folder, which the CLI takes as a working directory, or no argument for no folder.
+func addDirs(dirs []string) []string {
+	if len(dirs) == 0 {
+		return nil
+	}
+
+	return append([]string{"--add-dir"}, dirs...)
 }
 
 // exports returns the POSIX shell lines that export each variable, in name order, with each value quoted.

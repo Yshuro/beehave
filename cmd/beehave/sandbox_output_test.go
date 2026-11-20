@@ -137,7 +137,7 @@ func TestSandboxPlan_AStateFileWhosePathHoldsAGlobCharacterStopsTheStep(t *testi
 		assert.Contains(t, result.Note, "The file "+req.OutputFile+" of the state folder holds a glob character", folder)
 
 		req = outputRequest(filepath.Join(r.home, "state", "outputs", "7.json"))
-		req.DataFile = filepath.Join(r.home, folder, "data", "7.json")
+		req.DataFile = filepath.Join(r.home, folder, "data", "7", "data.json")
 
 		result, err = r.f.agents.Run(t.Context(), req)
 
