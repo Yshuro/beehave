@@ -45,7 +45,7 @@ func TestRewroteHistory_AStartCommitThatGitCannotFindIsAnErrorNotARewrite(t *tes
 
 	dir, head := gitTree(t)
 
-	rewrote, err := rewroteHistory(t.Context(), dir, "0123456789012345678901234567890123456789", head)
+	rewrote, err := rewroteHistory(t.Context(), engineGit(dir), "0123456789012345678901234567890123456789", head)
 
 	require.ErrorContains(t, err, "compare the start of the agent")
 	assert.False(t, rewrote)
@@ -206,7 +206,7 @@ func TestAgentArgs_ARenderRecordInTheShapeOfAGitRunReplaysAndComparesWithItsStar
 	// This is the output map of the render step as a run of a project with a repository records it: no field about a repository.
 	record := map[string]any{recordedOutputFile: filepath.Join(t.TempDir(), "out", "x.json"), recordedStartHead: start}
 
-	a := agentArgs{dir: rig.dir}
+	a := agentArgs{dir: rig.dir, git: engineGit(rig.dir)}
 	require.NoError(t, a.recall(record))
 	assert.False(t, a.plain, "a recorded git run has a repository")
 	assert.Equal(t, start, a.startHead)
@@ -233,7 +233,7 @@ func TestAgentArgs_ARenderRecordWithoutStartHeadRecallsEmptyAndNeverRewrites(t *
 	require.NoError(t, a.recall(map[string]any{recordedOutputFile: a.file}))
 	assert.Empty(t, a.startHead)
 
-	rewrote, err := rewroteHistory(t.Context(), t.TempDir(), a.startHead, "deadbeef")
+	rewrote, err := rewroteHistory(t.Context(), engineGit(t.TempDir()), a.startHead, "deadbeef")
 	require.NoError(t, err)
 	assert.False(t, rewrote)
 }

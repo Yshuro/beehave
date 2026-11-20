@@ -443,7 +443,7 @@ func TestNewPrograms_BuildTheHostOfTheProjectOnlyWhenItHasOne(t *testing.T) {
 	_, err = runs.hosts("bare", "")
 	require.ErrorIs(t, err, errNoHost)
 
-	runner := runs.local("sh", t.TempDir(), time.Second)
+	runner := runs.local("bare", "sh", t.TempDir(), time.Second)
 	assert.Equal(t, 0, runner.Run(t.Context(), []string{"-c", "exit 0"}).ExitCode)
 }
 
@@ -512,7 +512,11 @@ func TestNewWorktrees_RunGitInTheFolderAndKeepTheTreesUnderTheStateFolder(t *tes
 
 	assert.Equal(t, filepath.Join(state, "trees"), trees.root)
 	assert.Equal(t, filepath.Join(state, "repos"), trees.repos)
-	assert.Equal(t, 0, trees.git(t.TempDir()).Run(t.Context(), []string{"--version"}).ExitCode)
+	clone := filepath.Join(state, "repos", "p")
+	require.NoError(t, os.MkdirAll(clone, 0o700))
+	runGit(t, clone, "init", "-q")
+	assert.Equal(t, 0, trees.git(clone).Run(t.Context(), []string{"--version"}).ExitCode, "a clone of the repos folder runs git")
+	assert.Equal(t, 128, trees.git(t.TempDir()).Run(t.Context(), []string{"--version"}).ExitCode, "a folder outside the state folder runs no git")
 }
 
 func TestNewWorktrees_EveryGitCallRefusesToPromptForCredentials(t *testing.T) {

@@ -148,6 +148,14 @@ The scrub drops `GIT_CONFIG_GLOBAL` by name. The engine writes the git variables
 
 With no global config, the clone has no `user.name` or `user.email`. The engine reads both with its own git at the worktree and sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in the child environment and in the env file. If either value is empty, the step does not start, and the note names `git config user.email`. The shell gets no credential: a push from the shell still fails.
 
+### The git of the engine
+
+An agent can write the `.git` file of its worktree, the `commondir` file of its record and the git config of the clone. Every git call of the engine in a clone or a worktree therefore sets `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the engine layout: `<state>/repos/<project>/.git` for a clone, and the record under `.git/worktrees` whose `gitdir` file names the worktree for a worktree. In a project with a source or a forge, and in a project that the config does not hold, a folder that no clone holds a record of runs no git. A project that the config holds with neither has no clone: the engine runs git in its folder as the owner's git does, with the hooks off and local transports only, and the gate copy of such a folder takes its git folders from git in the copy before the gate command starts. A sandboxed step cannot write the `.git` of that folder, because `.git` is a closed name. A rewritten `.git` or `commondir` file does not move a call to another repository. The plans of a step and of a gate take the shared git folder of a worktree from the same records, so a rewritten `.git` file does not add a folder to the read list of the next step. A record that `worktree.useRelativePaths` writes names the worktree with a relative path, and the engine reads it from the record folder.
+
+Before each call, the engine lists the keys of the clone config with `git config --file <clone>/.git/config --list --name-only --null --no-includes`, which starts no program. It refuses the clone when a key is outside the allow list, and the call does not run. The allow list holds the keys that `git clone`, `git worktree add` and a local identity write: `core.repositoryformatversion`, `core.filemode`, `core.bare`, `core.logallrefupdates`, `core.ignorecase`, `core.precomposeunicode`, `core.symlinks`, `extensions.objectformat`, `extensions.refstorage`, `extensions.relativeworktrees`, `user.name`, `user.email`, `remote.<name>.url`, `remote.<name>.fetch`, `branch.<name>.remote` and `branch.<name>.merge`. An include, a hooks folder, a filter, an fsmonitor and every key that a later git adds are refused. `core.hooksPath=/dev/null` stays on every call.
+
+The global and the system config of the owner still apply, so a filter that the owner set there runs as before. The listing and the call are two processes, so a write to the clone config between them is not seen; the sandbox keeps the clone config read-only to the step, which closes that window for a sandboxed step only.
+
 ## When the step does not start
 
 The step ends as `not-started`, with a note, when:
@@ -157,6 +165,7 @@ The step ends as `not-started`, with a note, when:
 - the Claude Code version is below the minimum;
 - the version cannot be read;
 - git has no `user.name` or no `user.email` at the worktree.
+- the git config of the clone holds a setting outside the allow list (see [The git of the engine](#the-git-of-the-engine)). The note names each setting and the `git config --unset` command that removes it. A plan without the deny of the hooks folder never starts.
 
 A Claude Code that does not know a sandbox key ignores it and exits with code 0, so the minimum version is the only guard.
 

@@ -9,7 +9,6 @@ import (
 	"io/fs"
 	"maps"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -22,6 +21,7 @@ import (
 
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/workflow"
 )
 
@@ -60,7 +60,9 @@ type agentArgs struct {
 	edits bool
 	tries int
 	dir   string
-	file  string
+	// git is the runner of the engine for git in dir.
+	git  proc.Runner
+	file string
 	// sandbox is the sandbox keyword as written. box is the sandbox the step runs with, which the render step records, or nil for no sandbox.
 	sandbox sandboxChoice
 	box     *model.Sandbox
@@ -345,7 +347,7 @@ func (s *script) prepare(a *agentArgs, name string) (err error) {
 		return fmt.Errorf("item %s of project %s has no folder for the agent", s.in.Item, s.in.Project)
 	}
 
-	a.plain = !s.hasRepository()
+	a.git, a.plain = s.e.deps.Trees.Git(a.dir), !s.hasRepository()
 	if err = a.refusePlain(s.in.Project); err != nil {
 		return err
 	}
@@ -387,7 +389,7 @@ func (a agentArgs) phase(in ItemInput, login, prompt, treeStart string) PhaseInp
 
 // render checks the pin, reads the prompt file and fills it. The data are the inputs, output_file and data_file.
 func (s *script) render(ctx context.Context, a agentArgs) (string, error) {
-	if err := checkPin(ctx, a.dir, a.pin); err != nil {
+	if err := checkPin(ctx, a.git, a.pin); err != nil {
 		return "", err
 	}
 
@@ -437,12 +439,12 @@ func fill(text string, data map[string]any) (string, error) {
 }
 
 // checkPin refuses a folder whose HEAD is not the pin. An empty pin accepts any HEAD.
-func checkPin(ctx context.Context, dir, pin string) error {
+func checkPin(ctx context.Context, tree proc.Runner, pin string) error {
 	if pin == "" {
 		return nil
 	}
 
-	head, err := folderHead(ctx, dir)
+	head, err := folderHead(ctx, tree)
 	if err != nil {
 		return err
 	}
@@ -688,12 +690,12 @@ func (a agentArgs) writeStartMark(ctx context.Context) (string, error) {
 		return "", nil
 	}
 
-	head, err := folderHead(ctx, a.dir)
+	head, err := folderHead(ctx, a.git)
 	if err != nil {
 		return "", err
 	}
 
-	if _, err = git(ctx, a.dir, "update-ref", callStartRef, head); err != nil {
+	if _, err = git(ctx, a.git, "update-ref", callStartRef, head); err != nil {
 		return "", fmt.Errorf("write the start mark of the item folder: %w", err)
 	}
 
@@ -707,15 +709,15 @@ func (a agentArgs) checkEnd(ctx context.Context) (head string, rewrote bool, err
 		return "", false, nil
 	}
 
-	if head, err = folderHead(ctx, a.dir); err != nil {
+	if head, err = folderHead(ctx, a.git); err != nil {
 		return "", false, err
 	}
 
-	if err = a.scope.check(ctx, a.dir, a.start); err != nil {
+	if err = a.scope.check(ctx, a.git, a.start); err != nil {
 		return "", false, err
 	}
 
-	rewrote, err = rewroteHistory(ctx, a.dir, a.startHead, head)
+	rewrote, err = rewroteHistory(ctx, a.git, a.startHead, head)
 
 	return head, rewrote, err
 }
@@ -752,7 +754,7 @@ func (a agentArgs) changedReadOnly(ctx context.Context, head string) (bool, erro
 		return true, nil
 	}
 
-	out, err := git(ctx, a.dir, "status", "--porcelain", "--untracked-files=no")
+	out, err := git(ctx, a.git, "status", "--porcelain", "--untracked-files=no")
 	if err != nil {
 		return false, fmt.Errorf("read the tracked changes of the item folder: %w", err)
 	}
@@ -762,15 +764,15 @@ func (a agentArgs) changedReadOnly(ctx context.Context, head string) (bool, erro
 
 // rewroteHistory is true when the commit the agent started on is not in the history of the commit it ended on: the agent amended, squashed or reset.
 // The ancestor test of git answers with exit code 1 for "not an ancestor"; any other failure is an error.
-func rewroteHistory(ctx context.Context, dir, start, head string) (bool, error) {
+func rewroteHistory(ctx context.Context, tree proc.Runner, start, head string) (bool, error) {
 	if start == "" || start == head {
 		return false, nil
 	}
 
-	_, err := git(ctx, dir, "merge-base", "--is-ancestor", start, head)
+	_, err := git(ctx, tree, "merge-base", "--is-ancestor", start, head)
 
-	var exit *exec.ExitError
-	if errors.As(err, &exit) && exit.ExitCode() == 1 {
+	var exit *gitExit
+	if errors.As(err, &exit) && exit.code == 1 {
 		return true, nil
 	}
 
@@ -782,8 +784,8 @@ func rewroteHistory(ctx context.Context, dir, start, head string) (bool, error) 
 }
 
 // folderHead returns the commit at HEAD of the item folder.
-func folderHead(ctx context.Context, dir string) (string, error) {
-	out, err := git(ctx, dir, "rev-parse", "HEAD")
+func folderHead(ctx context.Context, tree proc.Runner) (string, error) {
+	out, err := git(ctx, tree, "rev-parse", "HEAD")
 	if err != nil {
 		return "", fmt.Errorf("read HEAD of the item folder: %w", err)
 	}

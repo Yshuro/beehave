@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/sandbox"
 )
@@ -79,11 +81,17 @@ func (g gateSandbox) runAt(ctx context.Context, project string, at folder, argv,
 		return notStarted(fmt.Sprintf("make the temporary folder: %v", err))
 	}
 
-	locked := g.clones.of(project)
+	clone := gateClone{hold: g.clones.of(project), git: gitOf(g.projects, project, gitexec.NewRepositories(g.clones.repos))}
 
-	defer func() { out += discard(context.WithoutCancel(ctx), tmp, dir, locked) }()
+	defer func() { out += discard(context.WithoutCancel(ctx), tmp, dir, clone) }()
 
-	return g.runIn(ctx, enforcer, found, tmp, at, locked, argv, env, limit)
+	return g.runIn(ctx, enforcer, found, tmp, at, clone, argv, env, limit)
+}
+
+// gateClone is the clone whose worktree a gate copies: its lock, and the git of the project that runs each git call of the copy.
+type gateClone struct {
+	hold underLock
+	git  projectGit
 }
 
 // underLock runs fn under the lock of the clone whose worktree a gate copies.
@@ -98,7 +106,7 @@ func (l cloneLock) of(project string) underLock {
 
 // discard removes the copy of a gate, also when the context is done, and then tells the repository in dir to forget the records of gate copies whose folder
 // is gone. That covers the record that the gate could not name. It returns a line for the output when the copy stays.
-func discard(ctx context.Context, tmp, dir string, locked underLock) string {
+func discard(ctx context.Context, tmp, dir string, clone gateClone) string {
 	note := ""
 	if err := removeTree(tmp); err != nil {
 		note = fmt.Sprintf("beehave sandbox: the copy of the gate stays at %s: %v\n", tmp, err)
@@ -106,8 +114,8 @@ func discard(ctx context.Context, tmp, dir string, locked underLock) string {
 
 	if isRepository(dir) {
 		//nolint:errcheck // a lock that fails leaves the records, and the next gate tries again
-		_ = locked(ctx, func() error {
-			forgetCopies(ctx, dir, filepath.Dir(tmp))
+		_ = clone.hold(ctx, func() error {
+			forgetCopies(ctx, clone.git.Runner(dir, 0), filepath.Dir(tmp))
 
 			return nil
 		})
@@ -227,14 +235,14 @@ func removeTree(path string) error {
 	return os.RemoveAll(path)
 }
 
-// forgetCopies tells the repository in dir to forget the worktrees of gate copies whose folder is gone. A gate copy is a worktree whose path lies under root,
+// forgetCopies tells the repository of git to forget the worktrees of gate copies whose folder is gone. A gate copy is a worktree whose path lies under root,
 // the folder that beehave owns for them. Each record goes by its path, so the record of a worktree that the owner made, and whose folder is away (an
 // unmounted disk), stays. It does nothing for a folder that is not a repository.
-func forgetCopies(ctx context.Context, dir, root string) {
+func forgetCopies(ctx context.Context, git gitexec.Runner, root string) {
 	ctx, cancel := context.WithTimeout(ctx, forgetLimit)
 	defer cancel()
 
-	out, err := gitIn(ctx, dir, "worktree", "list", "--porcelain")
+	out, err := gitIn(ctx, git, "worktree", "list", "--porcelain")
 	if err != nil {
 		return
 	}
@@ -248,7 +256,7 @@ func forgetCopies(ctx context.Context, dir, root string) {
 		}
 
 		if _, err := os.Lstat(path); errors.Is(err, fs.ErrNotExist) {
-			_, _ = gitIn(ctx, dir, "worktree", "remove", "--force", path) //nolint:errcheck // a record that stays is tried again by the next gate
+			_, _ = gitIn(ctx, git, "worktree", "remove", "--force", path) //nolint:errcheck // a record that stays is tried again by the next gate
 		}
 	}
 }
@@ -266,45 +274,49 @@ const forgetLimit = 30 * time.Second
 // disposableTree returns the folder that the gate command works in. When dir is a git work tree, that is a detached worktree of its head, made under tmp,
 // and the function that removes the record of the worktree from the repository. The command then writes a copy that beehave throws away: the real git
 // folder (its hooks, its config and the folder that core.hooksPath names) and the real work folder (.husky, .claude) are outside the plan, so a gate
-// cannot plant a hook or an agent setting that runs later as the owner. A folder with no .git holds no hooks and is the work folder itself.
-func disposableTree(ctx context.Context, dir, tmp string, locked underLock) (string, func(), error) {
+// cannot plant a hook or an agent setting that runs later as the owner. A folder with no .git holds no hooks and is the work folder itself. The repository
+// that it returns names the work folder in WorkTree, and the git folders of the copy when there is one.
+func disposableTree(ctx context.Context, dir, tmp string, clone gateClone) (gitexec.Repository, func(), error) {
 	if !isRepository(dir) {
-		return dir, func() {}, nil
+		return gitexec.Repository{WorkTree: dir}, func() {}, nil
 	}
 
 	work := filepath.Join(tmp, "work")
 
-	if err := locked(ctx, func() error { return addCopy(ctx, dir, tmp, work) }); err != nil {
-		return "", nil, err
+	if err := clone.hold(ctx, func() error { return addCopy(ctx, clone, dir, tmp, work) }); err != nil {
+		return gitexec.Repository{}, nil, err
 	}
 
 	// The record of the worktree is forgotten after the removal of the copy, so a rev-parse that fails leaks nothing.
-	record, err := gitIn(ctx, work, "rev-parse", "--absolute-git-dir")
+	// The record is read before the gate command starts, so the command cannot move it.
+	record, err := clone.git.copyRecord(ctx, work)
 	if err != nil {
-		return "", nil, fmt.Errorf("find the git record of the worktree for the gate: %w: %s", err, record)
+		return gitexec.Repository{}, nil, fmt.Errorf("find the git record of the worktree for the gate: %w", err)
 	}
 
-	return work, func() {
+	record.WorkTree = work
+
+	return record, func() {
 		//nolint:errcheck // a record that stays is forgotten by the discard of the copy, or by the next gate
-		_ = locked(context.WithoutCancel(ctx), func() error { return os.RemoveAll(strings.TrimSpace(record)) })
+		_ = clone.hold(context.WithoutCancel(ctx), func() error { return os.RemoveAll(record.GitDir) })
 	}, nil
 }
 
 // addCopy adds the worktree work for a gate in the repository of dir. Records of copies that an earlier gate left, because it was killed, go first.
-func addCopy(ctx context.Context, dir, tmp, work string) error {
-	forgetCopies(ctx, dir, filepath.Dir(tmp))
+func addCopy(ctx context.Context, clone gateClone, dir, tmp, work string) error {
+	forgetCopies(ctx, clone.git.Runner(dir, 0), filepath.Dir(tmp))
 
-	if out, err := gitIn(ctx, dir, "worktree", "add", "--detach", "--quiet", work, "HEAD"); err != nil {
+	if out, err := gitIn(ctx, clone.git.Runner(dir, 0), "worktree", "add", "--detach", "--quiet", work, "HEAD"); err != nil {
 		return fmt.Errorf("make the worktree for the gate: %w: %s", err, out)
 	}
 
 	return nil
 }
 
-// gitIn runs git in dir and returns what it printed. A canceled context kills the process group of git, and a child that holds the output open
+// gitIn runs git with the runner git and returns what it printed. A canceled context kills the process group of git, and a child that holds the output open
 // does not keep the call past the grace period of the runner.
-func gitIn(ctx context.Context, dir string, args ...string) (string, error) {
-	result := gitexec.New(dir, 0).Run(ctx, args)
+func gitIn(ctx context.Context, git gitexec.Runner, args ...string) (string, error) {
+	result := git.Run(ctx, args)
 	out := result.Stdout + result.Stderr
 
 	if result.ExitCode != 0 {
@@ -329,12 +341,12 @@ func gitFailure(ctx context.Context, result model.CommandResult) string {
 }
 
 // runIn makes the disposable work folder of dir under the temporary folder tmp, makes the plan for it and runs the command there.
-func (g gateSandbox) runIn(ctx context.Context, enforcer sandbox.Enforcer, project config.Project, tmp string, at folder, locked underLock, argv, env []string,
+func (g gateSandbox) runIn(ctx context.Context, enforcer sandbox.Enforcer, project config.Project, tmp string, at folder, clone gateClone, argv, env []string,
 	limit time.Duration,
 ) (string, int) {
 	dir := at.path
 
-	work, release, err := disposableTree(ctx, dir, tmp, locked)
+	copied, release, err := disposableTree(ctx, dir, tmp, clone)
 	if err != nil {
 		return notStarted(err.Error())
 	}
@@ -343,12 +355,12 @@ func (g gateSandbox) runIn(ctx context.Context, enforcer sandbox.Enforcer, proje
 
 	// A folder with no .git has no copy. The plan then never grants it for writing, unless beehave made it for the command: a write there would change the
 	// real folder, where a planted hook folder or agent setting runs later as the owner. A project with no repository still writes through gate_allow_write.
-	plan, note := g.plan(ctx, project, dir, work, tmp, work == dir && !at.own)
+	plan, note := g.plan(ctx, project, dir, copied, tmp, clone.git, copied.WorkTree == dir && !at.own)
 	if note != "" {
 		return notStarted(note)
 	}
 
-	command := sandbox.Command{Argv: argv, Dir: work, Env: append(slices.Clone(g.envOf(env)), "TMPDIR="+tmp)}
+	command := sandbox.Command{Argv: argv, Dir: copied.WorkTree, Env: append(slices.Clone(g.envOf(env)), "TMPDIR="+tmp)}
 
 	return execute(ctx, enforcer, plan, command, limit)
 }
@@ -398,11 +410,11 @@ func execute(ctx context.Context, enforcer sandbox.Enforcer, plan sandbox.Plan, 
 	return text, code
 }
 
-// plan makes the plan of a gate command. The command may read the system folders, the work folder work (the disposable copy), the shared git directories
-// of the real work tree dir and the sandbox_read paths of the project, and nothing else under the home folder. It may write the whole work folder, its own
+// plan makes the plan of a gate command. The command may read the system folders, the work folder of copied (the disposable copy), the common git folder
+// of the copy and the sandbox_read paths of the project, and nothing else under the home folder. It may write the whole work folder, its own
 // temporary folder and the gate_allow_write paths. A real folder with no .git has no copy, so it is read-only unless beehave made it for the command. It may reach the gate_network domains through the proxy and nothing else. The real work folder and the real
 // git folder are never writable: a gate_allow_write path that is or holds one of them, or the hooks folder that core.hooksPath names, is refused.
-func (g gateSandbox) plan(ctx context.Context, project config.Project, dir, work, tmp string, readOnly bool) (sandbox.Plan, string) {
+func (g gateSandbox) plan(ctx context.Context, project config.Project, dir string, copied gitexec.Repository, tmp string, git projectGit, readOnly bool) (sandbox.Plan, string) {
 	home, err := g.home()
 	if err != nil {
 		return sandbox.Plan{}, "beehave cannot find the home folder, so the sandbox cannot deny it. The gate did not run."
@@ -415,14 +427,25 @@ func (g gateSandbox) plan(ctx context.Context, project config.Project, dir, work
 		return sandbox.Plan{}, note
 	}
 
-	protected := slices.Concat(deny, closedPaths(ctx, dir, home), sharedGitDirs(dir))
+	closed, refused := protected(ctx, git, dir, home, deny)
+	write, note := writablePaths(project.GateAllowWrite, home, copied.WorkTree, closed)
 
-	write, note := writablePaths(project.GateAllowWrite, home, work, protected)
-	if note != "" {
+	if note = cmp.Or(refused, note); note != "" {
 		return sandbox.Plan{}, strings.Replace(note, " The step did not start.", "", 1) + " The gate did not run."
 	}
 
-	return planOf(project.GateNetwork, work, tmp, read, write, readOnly), ""
+	return planOf(project.GateNetwork, copied.WorkTree, tmp, slices.Concat(commonOf(copied), read), write, readOnly), ""
+}
+
+// protected returns the paths that no gate_allow_write path may reach: the credential paths deny, the closed paths of dir and its shared git folders.
+// It returns the reason instead when the clone of dir is refused, so no plan leaves out the hooks folder of the clone.
+func protected(ctx context.Context, git projectGit, dir, home string, deny []string) ([]string, string) {
+	closed, err := closedPaths(ctx, git.Runner(dir, proc.DefaultTimeout), dir, home)
+	if err != nil {
+		return nil, err.Error()
+	}
+
+	return slices.Concat(deny, closed, sharedGitDirs(git.clones, dir)), ""
 }
 
 // planOf joins the system paths, the work folder, the temporary folder and the lists of the project into one plan. The work folder is read-only when readOnly is true.
@@ -433,7 +456,7 @@ func planOf(network []string, work, tmp string, read, write []string, readOnly b
 	}
 
 	return sandbox.Plan{
-		Read:    slices.Concat(sandbox.SystemRead(), []string{work}, sharedGitDirs(work), read),
+		Read:    slices.Concat(sandbox.SystemRead(), []string{work}, read),
 		Write:   slices.Concat(sandbox.SystemWrite(), own, write),
 		Network: len(network) > 0,
 		Domains: slices.Clone(network),

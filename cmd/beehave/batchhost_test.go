@@ -145,7 +145,7 @@ func hostOver(dir string, f hostForge, treeErr error) batchHost {
 		},
 		programs: programs{
 			trees: hostTrees{dir: dir, err: treeErr},
-			local: func(binary, folder string, timeout time.Duration) proc.Runner {
+			local: func(_, binary, folder string, timeout time.Duration) proc.Runner {
 				return proc.ExecRunner{Binary: binary, Dir: folder, Timeout: timeout}
 			},
 		},

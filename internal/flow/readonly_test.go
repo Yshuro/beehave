@@ -87,7 +87,7 @@ func TestAgentStep_AReadOnlyCallInAFolderWhoseIndexIsBrokenIsAnError(t *testing.
 	dir, head := gitTree(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("junk"), 0o600))
 
-	a := agentArgs{dir: dir, startHead: head}
+	a := agentArgs{dir: dir, git: engineGit(dir), startHead: head}
 
 	changed, err := a.changedReadOnly(t.Context(), head)
 	require.ErrorContains(t, err, "read the tracked changes of the item folder")

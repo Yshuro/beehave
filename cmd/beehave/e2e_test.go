@@ -26,6 +26,7 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/preflight"
 	"github.com/tobocop2/beehave/internal/proc"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/sandbox/landlock"
 )
@@ -182,6 +183,11 @@ func (e2eFiles) WithTree(_ context.Context, _, _ string, fn func(string)) error 
 	fn("")
 
 	return nil
+}
+
+// Git runs git in the folder that e2eSetup makes, as the clone of a repos folder.
+func (e2eFiles) Git(dir string) proc.Runner {
+	return gitexec.NewRepositories(filepath.Dir(dir)).Runner(dir, 0)
 }
 
 // Heads is never read: WithTree gives no worktree.

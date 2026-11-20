@@ -87,7 +87,7 @@ func (g projectGate) Submit(ctx context.Context, project, item, cluster, base, p
 }
 
 func (g projectGate) gate(project string) gate.Gate {
-	return gate.New(g.shellFor(project), g.tree, func(chosen model.Project) (gate.Remote, error) { return g.programs.hosts(project, chosen.BuildHost) })
+	return gate.New(g.shellFor(project), g.treeOf(project), func(chosen model.Project) (gate.Remote, error) { return g.programs.hosts(project, chosen.BuildHost) })
 }
 
 // shellFor returns the function that runs the gate command of the project: under the sandbox when the project has it on and builds here, else as before.
@@ -97,7 +97,7 @@ func (g projectGate) shellFor(project string) func(context.Context, string, stri
 			return g.programs.sandbox.run(ctx, project, dir, []string{"sh", "-c", command}, nil, cmp.Or(g.timeout, gateTimeout))
 		}
 
-		return g.shell(ctx, dir, command)
+		return g.shell(ctx, project, dir, command)
 	}
 }
 
@@ -129,7 +129,7 @@ func (g projectGate) Key(ctx context.Context, project, item, cluster, base, pinB
 
 	request.Base, request.PinBase = base, pinBase
 
-	key, err := gate.New(g.shellFor(project), g.tree, nil).Key(ctx, request)
+	key, err := gate.New(g.shellFor(project), g.treeOf(project), nil).Key(ctx, request)
 	if err != nil {
 		return flow.GateKey{}, fmt.Errorf("read the gate key of item %s: %w", item, err)
 	}
@@ -204,14 +204,10 @@ func (g projectGate) cloneURL(project config.Project) (string, error) {
 	return url, nil
 }
 
-// shell runs the gate command in dir on this machine and returns its output and exit code.
-func (g projectGate) shell(ctx context.Context, dir, command string) (string, int) {
-	return g.run(ctx, "sh", dir, []string{"-c", command})
-}
-
-// run starts a program in dir on this machine and returns its output and exit code. The time limit ends it, and the code is then gate.ExitTimedOut.
-func (g projectGate) run(ctx context.Context, program, dir string, args []string) (string, int) {
-	result := g.programs.local(program, dir, cmp.Or(g.timeout, gateTimeout)).Run(ctx, args)
+// shell runs the gate command of the project in dir on this machine and returns its output and exit code. The time limit ends it, and the code is then
+// gate.ExitTimedOut.
+func (g projectGate) shell(ctx context.Context, project, dir, command string) (string, int) {
+	result := g.programs.local(project, "sh", dir, cmp.Or(g.timeout, gateTimeout)).Run(ctx, []string{"-c", command})
 
 	if result.TimedOut {
 		return result.Stdout + result.Stderr, gate.ExitTimedOut
@@ -220,10 +216,15 @@ func (g projectGate) run(ctx context.Context, program, dir string, args []string
 	return result.Stdout + result.Stderr, result.ExitCode
 }
 
-// tree reads the head of the worktree in dir, the tree of that head and whether it has no uncommitted change.
-func (g projectGate) tree(ctx context.Context, dir string) (gate.State, error) {
+// treeOf returns the reader of the worktree of an item of the project, which runs the git of the project.
+func (g projectGate) treeOf(project string) func(context.Context, string) (gate.State, error) {
+	return func(ctx context.Context, dir string) (gate.State, error) { return g.tree(ctx, project, dir) }
+}
+
+// tree reads the head of the worktree in dir of the project, the tree of that head and whether it has no uncommitted change.
+func (g projectGate) tree(ctx context.Context, project, dir string) (gate.State, error) {
 	// One call reads both, so the tree always belongs to the head.
-	ids, err := g.programs.git(ctx, dir, gateTimeout, "git rev-parse", "rev-parse", "HEAD", "HEAD^{tree}")
+	ids, err := g.programs.git(ctx, project, dir, gateTimeout, "git rev-parse", "rev-parse", "HEAD", "HEAD^{tree}")
 	if err != nil {
 		return gate.State{}, err
 	}
@@ -235,7 +236,7 @@ func (g projectGate) tree(ctx context.Context, dir string) (gate.State, error) {
 
 	head, tree := lines[0], lines[1]
 
-	changes, err := g.programs.git(ctx, dir, gateTimeout, "git status", "status", "--porcelain")
+	changes, err := g.programs.git(ctx, project, dir, gateTimeout, "git status", "status", "--porcelain")
 	if err != nil {
 		return gate.State{}, err
 	}

@@ -193,11 +193,9 @@ func (l cloneLock) hold(ctx context.Context, project string, fn func(clone strin
 }
 
 // plain reports whether the named project has no repository. Its item folder is then a plain folder that beehave makes, and git never reads it.
-// A project that the finder does not know is not plain.
+// A project that the finder does not know is not plain (see repositoryOf).
 func (w worktrees) plain(project string) bool {
-	found, ok := w.projects[project]
-
-	return ok && !found.HasRepository()
+	return !repositoryOf(w.projects)(project)
 }
 
 // ensurePlain returns the plain folder of the item and makes it when it is missing. A resume finds the folder again with its files.
@@ -488,6 +486,11 @@ func gitExit(name, dir string, out model.CommandResult) error {
 	return nil
 }
 
+// Git returns the runner of the engine for git in a clone or a worktree, pinned to the repository that the records of the clones name.
+func (w worktrees) Git(dir string) proc.Runner { //nolint:ireturn // the trees contract of the engine returns the interface
+	return w.git(dir)
+}
+
 // Path returns the worktree of the item, or an empty path when the item has none. The git call that lists the worktrees runs under the lock of the clone.
 func (w worktrees) Path(ctx context.Context, project, item string) (string, error) {
 	var found string
@@ -608,8 +611,8 @@ type programTrees interface {
 // A step with a host runs as one job on the host of the project. A host job that succeeds has no output to read. A host job that fails has the end of its log as stdout, and its code is 1.
 type programs struct {
 	trees programTrees
-	// local runs a program with the environment of the process. The gate uses it.
-	local func(binary, dir string, timeout time.Duration) proc.Runner
+	// local runs a program of a project with the environment of the process. The gate uses it.
+	local func(project, binary, dir string, timeout time.Duration) proc.Runner
 	// exec runs the program of a command step. Its spec holds the whole environment of the program (Only) and its stdin.
 	exec func(spec proc.ExecRunner) proc.Runner
 	// hosts builds the host of a cluster of the project. An empty cluster is the build host of the project.
@@ -621,10 +624,10 @@ type programs struct {
 	sandbox gateSandbox
 }
 
-// git runs git with args in dir for at most timeout and returns what it printed, without the space at both ends.
+// git runs git of the project with args in dir for at most timeout and returns what it printed, without the space at both ends.
 // When git fails, the error starts with failure and ends with what git printed on stderr.
-func (p programs) git(ctx context.Context, dir string, timeout time.Duration, failure string, args ...string) (string, error) {
-	out := p.local("git", dir, timeout).Run(ctx, args)
+func (p programs) git(ctx context.Context, project, dir string, timeout time.Duration, failure string, args ...string) (string, error) {
+	out := p.local(project, "git", dir, timeout).Run(ctx, args)
 	if out.ExitCode != 0 {
 		return "", fmt.Errorf("%s in %s: %s", failure, dir, strings.TrimSpace(out.Stderr))
 	}

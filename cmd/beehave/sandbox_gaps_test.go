@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/tobocop2/beehave/internal/model"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
 func TestSandboxPlan_AnAllowWriteLinkToAMissingTargetInsideAClosedPathIsRefused(t *testing.T) {
@@ -57,6 +58,7 @@ func TestSandboxPlan_ASandboxedStepHasNoDenyOnTheObjectFolderOfTheClone(t *testi
 
 			r := newSandboxRig(t)
 			r.f.agents.trees = rig.trees
+			r.f.agents.repos = gitexec.NewRepositories(filepath.Dir(rig.clone()))
 			req := request()
 			req.Item, req.Sandbox = item, &model.Sandbox{}
 
