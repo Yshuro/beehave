@@ -167,16 +167,17 @@ func (e *Engine) sweepCancels() {
 	}
 }
 
-// sweepOne gives back the run of one marker, or drops the marker. A marker of a run that is not canceled belongs to a resumed run: dropOpen says whether to drop it or to leave it.
-func (e *Engine) sweepOne(ctx context.Context, open openRun, dropOpen bool) {
-	canceled, superseded, err := e.markerState(open.id, open.in.Item)
+// sweepOne gives back the run of one marker, or drops the marker. A marker of a run that is not canceled belongs to a resumed run.
+// At the start the marker goes. While the engine runs, it stays only for a run that is still open, because the cancel may still come.
+func (e *Engine) sweepOne(ctx context.Context, open openRun, atStart bool) {
+	state, err := e.markerState(open.id, open.in.Item)
 
 	switch {
 	case err != nil:
 		e.logger.WarnContext(ctx, "cannot read a canceled run", "run", open.id, "error", err)
-	case superseded || (!canceled && dropOpen):
+	case state.superseded || (!state.canceled && (atStart || !state.open)):
 		e.warnOn(removeFile(cancelPath(e.dir, open.id)), open.id)
-	case !canceled:
+	case !state.canceled:
 		// beehave cancel writes the marker before it cancels the run, so the cancel may still come.
 	default:
 		// The engine stopped after the cancel and before the run woke, so no live wait turned off the queued merge.
@@ -200,12 +201,12 @@ func attemptOf(id, prefix string) (attempt int, ok bool) {
 
 // markerState reads the runs of the item that a cancel marker names. canceled is true when the store marks that run as canceled.
 // superseded is true when the item has a run with a higher attempt number.
-func (e *Engine) markerState(id, item string) (canceled, superseded bool, err error) {
+func (e *Engine) markerState(id, item string) (state markerRun, err error) {
 	prefix := runPrefix + item + attemptMarker
 
 	rows, err := dbos.ListWorkflows(e.ctx, dbos.WithFilterWorkflowIDPrefix(prefix), dbos.WithFilterName(itemName))
 	if err != nil {
-		return false, false, err
+		return markerRun{}, err
 	}
 
 	own, _ := attemptOf(id, prefix) // A name with no number counts as attempt 0, so every other attempt is newer.
@@ -213,9 +214,20 @@ func (e *Engine) markerState(id, item string) (canceled, superseded bool, err er
 	for _, row := range rows {
 		attempt, numbered := attemptOf(row.ID, prefix)
 
-		canceled = canceled || (row.ID == id && row.Status == dbos.WorkflowStatusCancelled)
-		superseded = superseded || (numbered && attempt > own)
+		state.canceled = state.canceled || (row.ID == id && row.Status == dbos.WorkflowStatusCancelled)
+		state.open = state.open || (row.ID == id && !run{Status: row}.terminal())
+		state.superseded = state.superseded || (numbered && attempt > own)
 	}
 
-	return canceled, superseded, nil
+	return state, nil
+}
+
+// markerRun is what the store says about the run of a cancel marker.
+type markerRun struct {
+	// canceled is true when the store marks the run as canceled.
+	canceled bool
+	// open is true when the run has not ended.
+	open bool
+	// superseded is true when the item has a run with a higher attempt number.
+	superseded bool
 }

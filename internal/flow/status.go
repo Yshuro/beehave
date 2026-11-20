@@ -579,7 +579,7 @@ func (c *Client) cancelHeld(item string, last run) error {
 	}
 
 	// The marker comes first. An engine that stops before its release ends leaves it, and the next start finishes the release.
-	// A marker for a run that stays open is harmless: the start drops it.
+	// A marker for a run that stays open is harmless: the engine drops it when the run ends or a newer run replaces it, and the start drops it.
 	project, err := c.markCancel(item, last)
 	if err != nil {
 		return err

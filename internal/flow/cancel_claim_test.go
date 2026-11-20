@@ -66,7 +66,7 @@ func TestCancel_TheNextRunOfAnotherOwnerTakesTheItemAfterAResumeAndACancelFromTh
 	harness, serve := resumedAndCanceledRig(t)
 
 	harness.tick(t)
-	waitOn(t, condition(func() bool { return !fileExists(cancelPath(serve.dir, testRun)) }))
+	soon(t, func() bool { return !fileExists(cancelPath(serve.dir, testRun)) }, "the tick gives back the canceled run that the engine does not execute")
 
 	result, err := serve.Run(testItem, testProject)
 
@@ -74,17 +74,68 @@ func TestCancel_TheNextRunOfAnotherOwnerTakesTheItemAfterAResumeAndACancelFromTh
 	assert.Equal(t, ItemResult{Item: testItem}, result)
 }
 
-func TestCancel_AMarkerOfARunThatIsNotCanceledYetStaysForTheCancelThatIsAboutToCome(t *testing.T) {
+// soon waits a short time for a fact that a tick or a give-back brings at once, so a regression fails in seconds and not at the bound of waitOn.
+func soon(t *testing.T, check func() bool, what string) {
+	t.Helper()
+
+	require.Eventually(t, check, soonBound, pollEvery, what)
+}
+
+const soonBound = 20 * time.Second
+
+func TestCancel_AMarkerOfARunThatIsOpenAndNotCanceledYetStaysForTheCancelThatIsAboutToCome(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.flowIs(t, waitFlow)
+	engine := harness.engine(t)
+
+	runInBackground(engine, testItem)
+	waitOn(t, ownerAsks(t, harness))
+
+	in := ItemInput{Item: testItem, Project: testProject}
+	require.NoError(t, markCancel(engine.dir, testRun, in))
+
+	engine.giveBackStray(openRun{id: testRun, in: in})
+
+	assert.FileExists(t, cancelPath(engine.dir, testRun), "the run is open, so the cancel may still come")
+	assert.Empty(t, harness.life.releasedBy())
+}
+
+func TestCancel_AMarkerOfARunThatEndedWithoutACancelIsDropped(t *testing.T) {
 	t.Parallel()
 
 	harness := newHarness(t)
 	engine := harness.engine(t)
-	require.NoError(t, markCancel(engine.dir, "item-99-r1", ItemInput{Item: "99", Project: testProject}))
 
-	engine.giveBackStray(openRun{id: "item-99-r1", in: ItemInput{Item: "99", Project: testProject}})
+	_, err := engine.Run(testItem, testProject)
+	require.NoError(t, err)
 
-	assert.FileExists(t, cancelPath(engine.dir, "item-99-r1"))
-	assert.Empty(t, harness.life.releasedBy())
+	in := ItemInput{Item: testItem, Project: testProject}
+	require.NoError(t, markCancel(engine.dir, testRun, in))
+
+	engine.giveBackStray(openRun{id: testRun, in: in})
+
+	assert.NoFileExists(t, cancelPath(engine.dir, testRun), "the run ended, so no cancel comes and the tick reads the store for it no more")
+}
+
+func TestCancel_TheReleaseRecordOfACanceledLocalRunEndsWithItsGiveBack(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.agents.gate = make(chan struct{})
+	engine := harness.engine(t)
+	client := harness.client(t, testVersion)
+
+	done := runInBackground(engine, testItem)
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
+
+	require.NoError(t, client.Cancel(testItem))
+	harness.tick(t)
+	require.Error(t, receive(t, done).err)
+	soon(t, func() bool { return countOf(harness.life.seen(), "release") == 1 }, "the give-back of the canceled run releases the item")
+
+	soon(t, func() bool { return engine.cancels.begin(testRun) }, "a later begin of the same run id is refused for ever when the give-back leaves its record")
 }
 
 func TestCancels_BeginRefusesARunThatThisProcessExecutesOrReleases(t *testing.T) {

@@ -241,7 +241,8 @@ func (e *Engine) giveBackStrayCancels() {
 	}
 }
 
-// giveBackStray gives back one canceled run, or leaves its marker when the run is not canceled yet: beehave cancel writes the marker first.
+// giveBackStray gives back one canceled run. It leaves the marker of a run that is open and not canceled yet, because beehave cancel writes the marker first.
+// It drops the marker of a run that ended without a cancel or has a newer run.
 func (e *Engine) giveBackStray(open openRun) {
 	defer e.cancels.finish(open.id)
 
