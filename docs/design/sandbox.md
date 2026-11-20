@@ -173,7 +173,7 @@ The project file keeps two lists for the gate, and `beehave` records them. The e
 
 ### Choice of the enforcer
 
-The project key `sandbox_enforcer` names the enforcer. It holds for the enforcer of the gate, not for the sandbox of Claude Code in an agent step.
+The project key `sandbox_enforcer` names the enforcer. It holds for the enforcer of the gate and of the copy of the head that the engine push makes (see [push](workflow-files.md#push)), not for the sandbox of Claude Code in an agent step.
 
 | Value | Meaning |
 |---|---|
@@ -193,7 +193,7 @@ Platform support:
 The `seatbelt` enforcer runs the command under `sandbox-exec` with a Seatbelt profile that beehave generates from the plan. The profile:
 
 - denies everything by default;
-- allows reads and writes by path;
+- allows reads and writes by the paths of the plan, and reads of the folders of macOS that every program loads from (`/System`, `/Library/Apple` and the shared cache of the libraries). It adds no other folder: a plan that needs `/usr`, `/etc` or `/opt` names them, as the plan of a gate does;
 - allows TCP connect to the port of the proxy on localhost only;
 - grants no unix socket;
 - allows a Mach service lookup by name only, for the few services that the system libraries need (user and group names, logging, preferences, notifications). A command cannot reach launchd or any other service to start a job.
@@ -275,7 +275,7 @@ Removal:
 
 ### When no enforcer can run
 
-When no enforcer can run here, `beehave` runs no gate command outside a sandbox that the project asked for, and the gate does not run. The refusal text ends with the reason of the enforcer.
+When no enforcer can run here, `beehave` runs no gate command outside a sandbox that the project asked for, and the gate does not run. The refusal text ends with the reason of the enforcer. The engine push is refused too, in every project, because its copy of the head always runs under an enforcer.
 
 The same holds, even in a project that builds on a host, for:
 

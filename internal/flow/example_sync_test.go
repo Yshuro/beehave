@@ -505,12 +505,16 @@ func TestRoundSync_AConflictThatTheAgentResolvesIsGatedReviewedAndLandedInTheSam
 	require.NoError(t, err)
 
 	names := stepNames(t, rig.last)
-	order := []string{"command:sync-1#", "agent:sync-resolve-1#", "command:sync-again-1#", "gate:sync-gate-1#", "agent:sync-review-1#", "command:sync-land-1#", "agent:queue-audit-1#"}
+	order := []string{"command:sync-1#", "agent:sync-resolve-1#", "push:push-sync-1#", "command:sync-again-1#", "gate:sync-gate-1#", "agent:sync-review-1#", "command:sync-land-1#", "agent:queue-audit-1#"}
 
 	for i := 1; i < len(order); i++ {
 		require.GreaterOrEqual(t, at(names, order[i]), 0, "the step %s ran: %v", order[i], names)
 		assert.Less(t, at(names, order[i-1]), at(names, order[i]), "%s comes before %s", order[i-1], order[i])
 	}
+
+	require.Len(t, rig.h.forge.pushed, 1, "the engine pushes the head of the resolve once")
+	assert.Contains(t, rig.h.forge.pushed[0], "|"+syncBranch+"|", "the push goes to the sync branch that the line names")
+	assert.True(t, strings.HasSuffix(rig.h.forge.pushed[0], "|"), "the first push of the sync branch leases the head that the clone saw")
 
 	assert.Equal(t, []string{"remedy sync land --pr 7 --head " + script.head + " --base-tip " + script.tip}, syncLands(rig))
 	assert.Equal(t, []string{""}, recorder.roundBases())

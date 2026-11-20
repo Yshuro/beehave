@@ -587,7 +587,7 @@ func TestMerge_AnItemWithNoPullRequestAndAProjectWithNoForgeAreErrors(t *testing
 func TestNewLife_TheRunnersOfTheConfigAreTheOwnRunnersOfTheMerger(t *testing.T) {
 	t.Parallel()
 
-	life := newLife(config.Config{Runners: []model.Runner{{Name: "bee-1"}, {Name: "bee-2"}}}, newAdapters(nil, nil, nil))
+	life := newLife(config.Config{Runners: []model.Runner{{Name: "bee-1"}, {Name: "bee-2"}}}, newAdapters(nil, nil, nil), worktrees{})
 
 	assert.Equal(t, []string{"bee-1", "bee-2"}, life.runners)
 }

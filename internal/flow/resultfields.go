@@ -85,6 +85,9 @@ func openOutputs(r OpenResult) map[string]any {
 // prStateOutputs are the fields of pr_state: the state of the pull request, OPEN, CLOSED or MERGED.
 func prStateOutputs(state string) map[string]any { return map[string]any{stateField: state} }
 
+// pushOutputs are the fields of push: the head that the branch holds after the push.
+func pushOutputs(head string) map[string]any { return map[string]any{headKeyword: head} }
+
 // agentOutputs are the fields that every agent call returns. The outputs that the call declares come in addition.
 // stop is "turns" or "budget" when a cap ended the run, and empty otherwise.
 // cost_usd is the total cost in dollars that the agent CLI reported for the run, or 0 when it reported none.

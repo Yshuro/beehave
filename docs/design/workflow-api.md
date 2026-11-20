@@ -164,6 +164,11 @@ The Change column says how the pair differs from the contract that the five piec
 | `preflight` | `id` | unchanged | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
 | `preflight` | `name` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
 | `preflight` | `own` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
+| `push` | `-` | #697: new, the engine pushes the head of a step to a branch with a lease | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
+| `push` | `branch` | #697: new | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
+| `push` | `expect` | #697: new | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
+| `push` | `head` | #697: new | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
+| `push` | `name` | #697: new | 2: `examples/remediation/workflow.star`, `internal/workflow/lib/review_fix.star` |
 | `queue` | `-` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
 | `queue` | `hold` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
 | `queue` | `label` | unchanged | 1: `examples/remediation/workflow.star` |

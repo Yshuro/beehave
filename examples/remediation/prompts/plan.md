@@ -28,7 +28,7 @@ orchestrator dispatches a fix lane.
 
 ## Before you write
 
-**Check for an existing pull request, at the start and again before you push.**
+**Check for an existing pull request, at the start and again before you write the plan.**
 **Repeat-offender check:** `git log -S` and `gh pr list --state all --search`, reading the CLOSING comment
 rather than the commits. A closed pull request is not a record of work that landed.
 **Re-derive every cited site at the tip you branch from.** Line numbers move.

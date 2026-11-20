@@ -418,6 +418,7 @@ func itemSignatures() map[string][]Param {
 		prCommentName:  {filled("text"), filled("key"), forbidText(), opt("integration", KindBool), label},
 		prOpenName:     {filled("title"), filled("base"), opt("body", KindText), opt("issue", KindInt), opt("parent", KindText), forbidText(), opt("integration", KindBool), label},
 		preflightName:  {opt("head", KindText), opt("base", KindText), opt("hold", KindText), ruled("own", KindDict, ownRule), opt("id", KindText), label},
+		pushName:       {filled("branch"), filled("head"), opt("expect", KindText), label},
 	}
 }
 

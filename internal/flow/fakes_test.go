@@ -1188,6 +1188,19 @@ type fakeForge struct {
 	notes    []string
 	opened   []string // each Open call as project|item|title|body|issue|base|parent
 	writeErr error
+	// pushed holds each Push call as project|item|branch|head|expect. pushErr fails it.
+	pushed  []string
+	pushErr error
+}
+
+// Push records the call.
+func (f *fakeForge) Push(_ context.Context, project, item, branch, head, expect string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.pushed = append(f.pushed, strings.Join([]string{project, item, branch, head, expect}, "|"))
+
+	return f.pushErr
 }
 
 // Comment records the call and answers with the number of the standing.

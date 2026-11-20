@@ -34,4 +34,8 @@ type forge interface {
 	// Open finds the open pull request on the branch of the item, or opens a draft one, and makes its body and stack right. The same call again opens no second pull request.
 	// A project with no forge, and a forge that cannot open pull requests, are errors.
 	Open(ctx context.Context, project, item string, req OpenRequest) (OpenResult, error)
+	// Push pushes the commit head of the clone of the project to the branch on the remote that the engine read, with no setting from the git config of the
+	// clone. expect is the lease: the head the branch must hold, or empty for a new branch or a fast forward only. A branch already at head is no error, so a
+	// replay passes. A branch that moved is an error that names it. A project with no forge or no clone is an error.
+	Push(ctx context.Context, project, item, branch, head, expect string) error
 }

@@ -838,7 +838,7 @@ def sync_land(item, project, round_settings, line, n):
 
 def sync_trunk(item, project, round_settings, n):
     """Merges a moved trunk into the round branch at the start of pass `n`, before its queue audit. Returns sync_end: a reason of SYNC_REASONS that ends the pass, or an empty reason, and the host_losses that its gate read.
-    A conflict gets one agent step, sync-resolve-<n>, on the sync branch, and then one more check. The tool merges the forge side and writes no checkout."""
+    A conflict gets one agent step, sync-resolve-<n>, on the sync branch, the push of its head by the engine, and then one more check. The tool merges the forge side and writes no checkout."""
     run = ["remedy", "sync", "--base", round_settings["base"], "--trunk", project.base_branch]
     line = sync_check("sync-%d" % n, run)
 
@@ -854,6 +854,9 @@ def sync_trunk(item, project, round_settings, n):
             inputs = {"branch": line["branch"], "source": line["source"], "base": round_settings["base"], "facts": project},
         )
         capped(resolve, "sync-resolve", item)
+
+        # The agent has no credential, so the engine pushes the merge commit to the sync branch. With no lease, git takes the merge only as a fast forward of the sync branch.
+        push(name = "push-sync-%d" % n, branch = line["branch"], head = resolve.head_sha, expect = "")
         line = sync_check("sync-again-%d" % n, run)
 
     state = line["state"]
@@ -1149,7 +1152,11 @@ def pipeline(item):
     if "blast-radius-review" not in implement.skills:
         fail("REFUSE: the implement step did not call the skill blast-radius-review. Check that the runner has the skill and reports its calls. %s" % restart_steps(item))
 
-    # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the agent pushed.
+    # The agent of a sandboxed step has no credential, so the engine pushes its head to the branch of the item, the branch of its worktree. This is the first push of the branch in the run:
+    # with no lease, git takes only a new branch or a fast forward. Every gate clones the forge, so the push comes before the first gate.
+    push(name = "push-implement", branch = item.id, head = implement.head_sha, expect = "")
+
+    # The first checkpoint the engine can act on: the plan step makes no commit and one agent step is opaque, so the draft opens after the implement step, on the branch that the engine pushed.
     # The engine opens the draft pull request of the item once (a resume finds the open one) and,
     # when the item has a parent, links it into the native stack of the pull request of that item. The call owns only the closing line of the body:
     # `Closes #N` when the base is the default branch and `Addresses #N` on any other. An item id that is not an issue number gets no line, and a body that exists is kept.
@@ -1186,7 +1193,7 @@ def pipeline(item):
     def mutants(gate):
         return check_mutation(mutation, base)
 
-    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"])
+    loop = review_fix(item, implement, "prompts/review.md", "prompts/fix.md", base = base, follow_ups = "forbid", protect = protected(round_settings), design_prompt = "prompts/design.md", guard = guard, allow = scope.get("allow_paths"), rounds = rounds, review_outputs = ["regressions"], facts = project, data = lane_data, review_check = rise_after_review, checks = [mutants], steps = {name: round_settings["steps"][name] for name in LOOP_STEPS}, design_after = round_settings["design_after"], void_reruns = round_settings["void_reruns"], void_asks = round_settings["void_asks"], escalate_after = round_settings["escalate_after"], push_branch = item.id)
 
     if loop.stopped:
         return item_value(item, "", False, "stopped", loop.host_losses)
@@ -1247,10 +1254,13 @@ def pipeline(item):
 
         capped(settle, "settle", item)
 
+        # The settle agent commits the changes of the ruling and has no credential, so the engine pushes its head. The lease is the head that the loop pushed last.
+        push(name = "push-settle", branch = item.id, head = settle.head_sha, expect = loop.head)
+
         # Each finding that the owner parked stays open after the last round: it gets its own issue, so it is not lost with the pull request.
         file_parked(settle.parked)
 
-        return item_value(item, loop.head, False, "settled", loop.host_losses)
+        return item_value(item, settle.head_sha, False, "settled", loop.host_losses)
 
     # The child never merges. It returns the head that the gate ran on and the verdict of the review, and the round lands every approved head of a pass in one batch (land).
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.

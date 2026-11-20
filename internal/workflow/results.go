@@ -35,6 +35,7 @@ const (
 	prCommentName    = "pr_comment"
 	prOpenName       = "pr_open"
 	prStateName      = "pr_state"
+	pushName         = "push"
 	revertField      = "revert"
 	numberField      = "number"
 	statusField      = "status"
@@ -79,7 +80,7 @@ func factsResultFields() map[string][]string {
 	return map[string][]string{factsName: {"repo", "source", "forge", "tracker", "base_branch", "gate", "gate_steps", "build_host", "vars", "runners"}}
 }
 
-// trackerResultFields holds the fields of the builtins that write the tracker or the pull request, and of pr_state, which reads the pull request.
+// trackerResultFields holds the fields of the builtins that write the tracker, the pull request or its branch, and of pr_state, which reads the pull request.
 func trackerResultFields() map[string][]string {
 	return map[string][]string{
 		itemCommentName: {"id"},
@@ -89,6 +90,7 @@ func trackerResultFields() map[string][]string {
 		prCommentName:   {numberField},
 		prOpenName:      {numberField, "created", "stack"},
 		prStateName:     {stateField},
+		pushName:        {"head"},
 	}
 }
 
