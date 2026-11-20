@@ -59,6 +59,8 @@ func reportRules() []rule {
 		{"closing_rules", "Write the full report to the report file that the run names for this lane FIRST", []string{plan, review}},
 		{"lane_report_check", "Write the full report as the output `report`", workLanes()},
 		{"lane_report_check", `a line says "no background commands left"`, workLanes()},
+		{"lane_uncaused_red", "Write the output `uncaused` as a text that holds a JSON list", workLanes()},
+		{"lane_uncaused_red", "a red that the base has too and that no hunk of yours touches", workLanes()},
 		{"closing_rules", "The report carries four tables", everyLane()},
 		{"closing_rules", "`## Claims`: every claim in the title, body, commit messages", everyLane()},
 		{"closing_rules", "`## Hunks`: every changed production hunk, the arm that removes it", everyLane()},
@@ -432,7 +434,7 @@ func TestPrompts_HoldEveryRuleOfTheBriefText(t *testing.T) {
 	}
 
 	// One phrase for each mapped or added row of the proof table that has a phrase of its own: a dropped phrase fails here.
-	assert.Equal(t, 173, counted)
+	assert.Equal(t, 175, counted)
 	assert.Positive(t, held)
 }
 

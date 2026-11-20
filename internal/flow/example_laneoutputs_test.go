@@ -1,11 +1,17 @@
 package flow
 
 import (
+	"context"
+	"errors"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/agent"
+	trackerstore "github.com/tobocop2/beehave/internal/store"
 )
 
 // These tests run the review loop of the example and read what it does with the outputs that a lane writes.
@@ -146,4 +152,159 @@ func TestExample_AReportCheckThatCannotRunStopsTheItem(t *testing.T) {
 	assert.Equal(t, 2, result.Stopped.RC)
 	assert.Equal(t, []string{"opus", "sonnet", "opus"}, base.models(), "the plan, the implement step and its scoped review ran, and no full review started")
 	assert.Equal(t, -1, agentIndex(base, fullReview))
+}
+
+// orderWriter is a tracker writer that notes whether the approval comment of the pull request was posted before a Create call.
+type orderWriter struct {
+	*fakeWriter
+
+	forge         *fakeForge
+	approvedFirst bool
+}
+
+func (w *orderWriter) Create(ctx context.Context, project, key string, item trackerstore.NewItem) (string, bool, error) {
+	if len(approvals(w.forge)) > 0 {
+		w.approvedFirst = true
+	}
+
+	return w.fakeWriter.Create(ctx, project, key, item)
+}
+
+// approvals returns the approval comments that the fake forge holds.
+func approvals(forge *fakeForge) []string {
+	forge.mu.Lock()
+	defer forge.mu.Unlock()
+
+	var notes []string
+
+	for _, note := range forge.notes {
+		if strings.Contains(note, ":approved|") {
+			notes = append(notes, note)
+		}
+	}
+
+	return notes
+}
+
+// uncausedEntry is the entry of the output uncaused for the red `id`.
+func uncausedEntry(id string) string {
+	return `{"id":"` + id + `","title":"The red ` + id + `","body":"## Problem\nIt is red.","found":"Run make check at commit abc.","severity":"P2","operator":false}`
+}
+
+// uncausedRig is the committing example rig with a tracker writer, whose lanes write the output uncaused. byLane gives the list of a lane kind (implement or fix), and a kind with no entry writes [].
+func uncausedRig(t *testing.T, base *agentRig, byLane map[string]string) (*committingRig, *orderWriter) {
+	t.Helper()
+
+	rig := newCommittingRig(t, base, implementMarker, fixMarker)
+	writer := &orderWriter{fakeWriter: newFakeWriter(), forge: rig.h.forge}
+	rig.h.writer = writer
+
+	inner := rig.h.agents.result
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		done := inner(request)
+
+		kind := laneKind(request)
+		if list, set := byLane[kind]; set && slices.Contains(request.Outputs, "uncaused") {
+			rig.putOutputs(request.OutputFile, map[string]string{"report": cleanLaneReport(kind), "uncaused": list})
+		}
+
+		return done
+	}
+
+	return rig, writer
+}
+
+func TestExample_AGateRedTheLaneDidNotCauseFilesARepairItemBeforeTheMerge(t *testing.T) {
+	t.Parallel()
+
+	base, file := exampleRig(t, approveAfter(1))
+	rig, writer := uncausedRig(t, base, map[string]string{"fix": "[" + uncausedEntry("retry-loop") + "]"})
+
+	result, err := runPipeline(rig.h.engine(t), file)
+	require.NoError(t, err)
+
+	require.Len(t, writer.created, 1, "the fix lane reported one red, so one item is filed")
+	assert.True(t, strings.HasPrefix(writer.created[0], testProject+"|"+testRun+":finding-retry-loop|The red retry-loop|"), "the key is the id of the red")
+	assert.False(t, writer.approvedFirst, "the item exists before the approval comment")
+	assert.Len(t, approvals(rig.h.forge), 1, "the review approved the head")
+	assert.True(t, childOf(t, result).Approved)
+}
+
+func TestExample_ARedThatTwoLanesReportIsFiledOnce(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		implement, fix string
+		keys           []string
+	}{
+		"the same id from both lanes": {uncausedEntry("one-red"), uncausedEntry("one-red"), []string{"finding-one-red"}},
+		"two ids from two lanes":      {uncausedEntry("red-a"), uncausedEntry("red-b"), []string{"finding-red-a", "finding-red-b"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			base, file := exampleRig(t, approveAfter(1))
+			rig, writer := uncausedRig(t, base, map[string]string{"implement": "[" + tc.implement + "]", "fix": "[" + tc.fix + "]"})
+
+			_, err := runPipeline(rig.h.engine(t), file)
+			require.NoError(t, err)
+
+			var keys []string
+
+			for _, created := range writer.created {
+				keys = append(keys, strings.TrimPrefix(strings.Split(created, "|")[1], testRun+":"))
+			}
+
+			assert.Equal(t, tc.keys, keys)
+		})
+	}
+}
+
+func TestExample_AFailedRepairFilingLeavesTheItemUnapprovedAndPostsNoApproval(t *testing.T) {
+	t.Parallel()
+
+	base, file := exampleRig(t, func(int) string { return "approve" })
+	rig, writer := uncausedRig(t, base, map[string]string{"implement": "[" + uncausedEntry("retry-loop") + "]"})
+	writer.err = errors.New("tracker down")
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.Error(t, err, "the refused filing ends the item with an error")
+	assert.Empty(t, writer.created)
+	assert.Empty(t, approvals(rig.h.forge), "no approval exists for an item whose repair item is not filed")
+}
+
+func TestExample_ALaneWithNoUncausedRedFilesNoItem(t *testing.T) {
+	t.Parallel()
+
+	base, file := exampleRig(t, approveAfter(1))
+	rig, writer := uncausedRig(t, base, map[string]string{"implement": "[]", "fix": "[]"})
+
+	_, err := runPipeline(rig.h.engine(t), file)
+	require.NoError(t, err)
+
+	assert.Empty(t, writer.created, "an empty list from every lane makes no item")
+	assert.Len(t, approvals(rig.h.forge), 1)
+}
+
+func TestExample_AnUncausedListWithABadEntryFilesNothingAndRefusesTheApproval(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ list, refusal string }{
+		"an entry with no found": {"[" + uncausedEntry("good-red") + `,{"id":"bad-red","title":"t","body":"b","severity":"P2","operator":false}]`, `an entry of uncaused has no "found"`},
+		"a list that is no list": {uncausedEntry("good-red"), "the output uncaused of a lane is not a JSON list"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			base, file := exampleRig(t, func(int) string { return "approve" })
+			rig, writer := uncausedRig(t, base, map[string]string{"implement": tc.list})
+
+			_, err := runPipeline(rig.h.engine(t), file)
+
+			require.ErrorContains(t, err, tc.refusal)
+			assert.Empty(t, writer.created, "the good entry before the bad one is not filed")
+			assert.Empty(t, approvals(rig.h.forge))
+		})
+	}
 }

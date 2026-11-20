@@ -315,6 +315,8 @@ The argument `checks` is a list of functions of one argument, the passed gate. E
 
 The result holds `head`, the commit that the last step of the loop judged. A scoped review can reject or a guard can stop before the first gate. Then `gate` is `None`, and `head` is the head of the last lane run. So a caller that holds the item reports `head`, not `gate.head`.
 
+The result also holds `lanes`, the list of the fix agent results in the order they ran. It is empty when no fix ran. The caller reads the outputs that it declared with `fix_outputs`, such as the reds that a lane did not cause. The caller holds the result of the implement agent already.
+
 #### The host loss limit
 
 A void gate has a host cause when its `host_loss` is not empty: the engine proved that the host job of the gate was lost. The gate gave no verdict about the code, and the host is not the fault of the item.

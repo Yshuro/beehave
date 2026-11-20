@@ -241,10 +241,10 @@ func laneKind(request AgentRequest) string {
 }
 
 // putDeclared makes a request of the example rig that is no review answer each output it declares with a clean value: a count of none, no parked
-// finding and a whole report. The outputs of a review and of the design step are written by their own rules.
+// finding, no red that the lane did not cause and a whole report. The outputs of a review and of the design step are written by their own rules.
 // The file holds no value for any other name, so a new output of the example fails the run until this table knows it.
 func (rig *agentRig) putDeclared(request AgentRequest) {
-	clean := map[string]string{"regressions": "0", "parked": "[]", "report": cleanLaneReport(laneKind(request))}
+	clean := map[string]string{"regressions": "0", "parked": "[]", "uncaused": "[]", "report": cleanLaneReport(laneKind(request))}
 	answer := map[string]string{}
 
 	for _, name := range request.Outputs {
@@ -259,9 +259,18 @@ func (rig *agentRig) putDeclared(request AgentRequest) {
 		return
 	}
 
-	text, _ := json.Marshal(answer) // a map of text values always encodes
+	rig.putOutputs(request.OutputFile, answer)
+}
 
-	rig.put(request.OutputFile, string(text))
+// putOutputs writes the outputs of a fake agent as the JSON object that the agent step reads. An encoding error is kept like a failed write, and run reports it.
+func (rig *agentRig) putOutputs(path string, outputs map[string]string) {
+	text, err := json.Marshal(outputs)
+
+	rig.mu.Lock()
+	rig.failed = append(rig.failed, err)
+	rig.mu.Unlock()
+
+	rig.put(path, string(text))
 }
 
 // exampleSkill is the skill that the project of the example rig names in vars.review_skill, and that the fake agent reports.
