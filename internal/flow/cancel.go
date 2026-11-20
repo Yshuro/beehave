@@ -77,35 +77,49 @@ func (c *cancels) add(id string, open openRun) {
 	c.runs[id] = open
 }
 
-// ids lists the runs this process executes.
-func (c *cancels) ids() []string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	ids := make([]string, 0, len(c.runs))
-	for id := range c.runs {
-		ids = append(ids, id)
-	}
-
-	return ids
+// attempt names one attempt of a run: its run id and the channel that its own listing created. A resumed run reuses the run id and lists a new channel,
+// so an attempt that has ended no longer matches the entry of the attempt that replaced it.
+type attempt struct {
+	id    string
+	ended chan struct{}
 }
 
-// endedIDs lists the runs whose workflow function has returned.
-func (c *cancels) endedIDs() []string {
+// current reports whether the attempt is the one listed under its run id. The caller holds the lock.
+func (c *cancels) current(a attempt) bool {
+	open, found := c.runs[a.id]
+
+	return found && open.ended == a.ended
+}
+
+// attempts lists the attempts this process executes.
+func (c *cancels) attempts() []attempt {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var ids []string
+	list := make([]attempt, 0, len(c.runs))
+	for id, open := range c.runs {
+		list = append(list, attempt{id: id, ended: open.ended})
+	}
+
+	return list
+}
+
+// endedAttempts lists the attempts whose workflow function has returned.
+func (c *cancels) endedAttempts() []attempt {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	var list []attempt
 
 	for id, open := range c.runs {
 		select {
 		case <-open.ended:
-			ids = append(ids, id)
+			list = append(list, attempt{id: id, ended: open.ended})
 		default:
 		}
 	}
 
-	return ids
+	return list
 }
 
 // stop calls the cancel function of the run and keeps it listed: a tick drops it after it ended. A run that this process does not execute is left alone.
@@ -118,38 +132,46 @@ func (c *cancels) stop(id string) {
 	}
 }
 
-// forget drops the runs in ids.
-func (c *cancels) forget(ids []string) {
+// forget drops each attempt in list that is still the one listed under its run id. A resumed run that replaced an attempt stays listed.
+func (c *cancels) forget(list []attempt) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	for _, id := range ids {
-		delete(c.runs, id)
+	for _, a := range list {
+		if c.current(a) {
+			delete(c.runs, a.id)
+		}
 	}
 }
 
-// cancel calls the cancel function of each run in ids that this process executes and forgets those runs.
-// It returns them, so the caller releases each one once.
-func (c *cancels) cancel(ids []string) []openRun {
+// cancel calls the cancel function of each attempt in list that is still the one this process lists under its run id, and forgets those runs.
+// An attempt that a resumed run replaced is left alone. It returns the runs it cut, so the caller releases each one once.
+func (c *cancels) cancel(list []attempt) []openRun {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	var cut []openRun
 
-	for _, id := range ids {
-		if open, found := c.runs[id]; found {
-			open.cancel()
-			delete(c.runs, id)
-
-			if !open.gate {
-				c.markReleasing(id)
-			}
-
-			cut = append(cut, open)
+	for _, a := range list {
+		if c.current(a) {
+			cut = append(cut, c.cut(a.id))
 		}
 	}
 
 	return cut
+}
+
+// cut calls the cancel function of the run and forgets it. The caller holds the lock.
+func (c *cancels) cut(id string) openRun {
+	open := c.runs[id]
+	open.cancel()
+	delete(c.runs, id)
+
+	if !open.gate {
+		c.markReleasing(id)
+	}
+
+	return open
 }
 
 // track runs body with a context that the tick can cancel. The run stays in the list of local runs until a tick drops it.
@@ -194,16 +216,16 @@ func (e *Engine) tick(interval time.Duration, stop <-chan struct{}) {
 // A run stays listed after it ends: DBOS can end a canceled run before the tick lists it.
 // The tick drops the runs that had ended before it listed, as the store marks a cancel before the run ends.
 func (e *Engine) cancelCancelled(stop <-chan struct{}) {
-	ended := e.cancels.endedIDs()
+	ended := e.cancels.endedAttempts()
 
-	ids, err := e.canceledIDs(e.cancels.ids())
+	canceled, err := e.canceledAttempts(e.cancels.attempts())
 	if err != nil {
 		e.logger.Warn("cannot list the canceled runs", "error", err)
 
 		return
 	}
 
-	cut := e.cancels.cancel(ids)
+	cut := e.cancels.cancel(canceled)
 
 	e.cancels.forget(ended)
 
@@ -252,23 +274,47 @@ func (e *Engine) giveBackStray(open openRun) {
 	e.sweepOne(ctx, open, false)
 }
 
-// canceledIDs lists which of the local runs the store marks as canceled. It reads no other run, so the cost of a tick does not grow with the history of the store.
-func (e *Engine) canceledIDs(local []string) ([]string, error) {
+// canceledAttempts lists which of the local attempts the store marks as canceled. It reads no other run, so the cost of a tick does not grow with the history of the store.
+// The store row belongs to the attempt that the caller listed before the read, not to a resume that lists the same run id after it.
+func (e *Engine) canceledAttempts(local []attempt) ([]attempt, error) {
 	if len(local) == 0 {
 		return nil, nil
 	}
 
-	rows, err := dbos.ListWorkflows(e.ctx, dbos.WithFilterStatus(dbos.WorkflowStatusCancelled), dbos.WithFilterWorkflowIDs(local...))
+	marked, err := e.canceledRows(local)
 	if err != nil {
 		return nil, err
 	}
 
-	ids := make([]string, 0, len(rows))
-	for _, row := range rows {
-		ids = append(ids, row.ID)
+	var canceled []attempt
+
+	for _, a := range local {
+		if marked[a.id] {
+			canceled = append(canceled, a)
+		}
 	}
 
-	return ids, nil
+	return canceled, nil
+}
+
+// canceledRows reads the run ids among the local attempts that the store marks as canceled.
+func (e *Engine) canceledRows(local []attempt) (map[string]bool, error) {
+	ids := make([]string, 0, len(local))
+	for _, a := range local {
+		ids = append(ids, a.id)
+	}
+
+	rows, err := dbos.ListWorkflows(e.ctx, dbos.WithFilterStatus(dbos.WorkflowStatusCancelled), dbos.WithFilterWorkflowIDs(ids...))
+	if err != nil {
+		return nil, err
+	}
+
+	marked := make(map[string]bool, len(rows))
+	for _, row := range rows {
+		marked[row.ID] = true
+	}
+
+	return marked, nil
 }
 
 // giveBackWhenEnded waits until the workflow function of the run has returned, then gives the item back. A stop of the tick ends the wait.
