@@ -192,6 +192,7 @@ mutation:
 
 # Per-PR run: mutate only the Go lines that differ from BASE, the branch the pull request targets. BASE is required: make mutation-pr BASE=origin/integration/r1
 # Needs git, go, gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit, a positive whole number of seconds (default 3600 when the diff changes a non-test Go file in internal/flow or below it, otherwise 1200).
+# Starts gremlins once for each changed folder (a folder below another changed folder is covered by the upper one), so the coverage run reads those packages only. MUTATION_TIMEOUT is one deadline for all starts and also the -timeout of the coverage run.
 # Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes. A diff whose changed lines hold no operator that gremlins mutates is "no candidate" and passes.
 mutation-pr:
 	sh scripts/mutation-pr.sh "$(BASE)"

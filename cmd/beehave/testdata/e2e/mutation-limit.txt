@@ -126,7 +126,10 @@ package flow
 func F(x int) bool { return x > 0 }
 -- fake/gremlins --
 #!/bin/sh
-cp "$GREMLINS_REPORT" "$5"
+# Gremlins names each file relative to the folder that it starts on.
+prefix=${PWD#"$WORK/repo"}
+prefix=${prefix#/}
+jq --arg p "$prefix" '.files |= map(.file_name |= ltrimstr($p + "/"))' "$GREMLINS_REPORT" > "$5"
 -- fake/timeout --
 #!/bin/sh
 echo "$3" > "$WORK/limit"

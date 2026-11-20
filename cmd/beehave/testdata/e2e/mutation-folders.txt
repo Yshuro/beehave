@@ -1,0 +1,184 @@
+# scripts/mutation-pr.sh starts gremlins once for each changed folder, and sets the limit of the coverage run itself.
+# Only gremlins and timeout are stubs. The stub gremlins writes one START line for each start to starts-<case>, and the stub
+# timeout writes the limit that it gets to limits-<case>. A START line holds the folder of the start, its path argument
+# relative to the repository, GOFLAGS and diff.relative. The report of a start is r-<case>-<folder with _ for />.json,
+# and its file names are relative to the folder, as gremlins gives them.
+[!exec:jq] skip
+[!exec:git] skip
+env HOME=$WORK/home
+env GIT_CONFIG_GLOBAL=/dev/null
+env GIT_CONFIG_NOSYSTEM=1
+chmod 755 fake/gremlins
+chmod 755 fake/timeout
+env PATH=$WORK/fake:$PATH
+
+exec git init -q -b main repo
+mkdir repo/internal/config/sub
+mkdir repo/internal/store/deep
+mkdir repo/internal/gone
+cp base.go repo/a.go
+cp base.go repo/internal/config/host.go
+cp base.go repo/internal/config/sub/b.go
+cp base.go repo/internal/store/d.go
+cp base.go repo/internal/store/deep/e.go
+cp base.go repo/internal/gone/g.go
+cp gomod repo/go.mod
+script mutation-pr.sh repo/scripts/mutation-pr.sh
+script mutation-exec.sh repo/scripts/mutation-exec.sh
+chmod 755 repo/scripts/mutation-exec.sh
+exec git -C repo add a.go internal go.mod scripts
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m base
+
+# Two changed folders, and a folder below one of them: one start for each of the two upper folders, with diff.relative,
+# the absolute path of the folder, and the limit of the script as the last -timeout of GOFLAGS. The first start gets the whole limit.
+# The reports merge with the folder as a prefix: the lived mutant of the store start is named from the module root.
+exec git -C repo checkout -q -b two main
+cp chg.go repo/internal/config/host.go
+cp chg.go repo/internal/config/sub/b.go
+cp chg.go repo/internal/store/d.go
+exec git -C repo add internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m two
+env GREMLINS_CASE=two
+env GREMLINS_RECORDS='internal/store/d.go\t3\t5\t0\t\n'
+! exec sh repo/scripts/mutation-pr.sh main
+grep -count=2 '^START;' starts-two
+grep '^START;internal/config;/internal/config;-count=1 -exec=[^;]*/repo/scripts/mutation-exec\.sh -timeout=1200s;true$' starts-two
+grep '^START;internal/store;/internal/store;-count=1 -exec=[^;]*/repo/scripts/mutation-exec\.sh -timeout=1200s;true$' starts-two
+grep -count=2 '^[0-9]+$' limits-two
+grep '^1200$' limits-two
+stdout '^mutation-pr: applied=3 killed=2 lived=1 timed_out=0$'
+stdout -count=1 '^finding: '
+stdout '^finding: internal/store/d\.go:3: a mutant lived: CONDITIONALS_NEGATION$'
+stdout '^mutation-pr: lived internal/store/d\.go:3 CONDITIONALS_NEGATION$'
+stdout '^mutation-pr: end count=1 printed=1$'
+
+# A changed file in the module root: one start on ".", with no diff.relative and the path ".". Its names are not prefixed.
+exec git -C repo checkout -q -b root main
+cp chg.go repo/a.go
+cp chg.go repo/internal/config/host.go
+exec git -C repo add a.go internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m root
+env GREMLINS_CASE=root
+env GREMLINS_RECORDS=
+exec sh repo/scripts/mutation-pr.sh main
+grep -count=1 '^START;' starts-root
+grep '^START;\.;\.;-count=1 -exec=[^;]*mutation-exec\.sh -timeout=1200s;$' starts-root
+stdout '^mutation-pr: applied=2 killed=2 lived=0 timed_out=0$'
+
+# A change in one nested folder: a lived mutant is reported at its path from the module root.
+exec git -C repo checkout -q -b nested main
+cp chg.go repo/internal/store/deep/e.go
+exec git -C repo add internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m nested
+env GREMLINS_CASE=nested
+env GREMLINS_RECORDS='internal/store/deep/e.go\t3\t5\t0\t\n'
+! exec sh repo/scripts/mutation-pr.sh main
+grep -count=1 '^START;internal/store/deep;/internal/store/deep;' starts-nested
+stdout '^finding: internal/store/deep/e\.go:3: a mutant lived: CONDITIONALS_NEGATION$'
+stdout '^mutation-pr: lived internal/store/deep/e\.go:3 CONDITIONALS_NEGATION$'
+stdout '^mutation-pr: end count=1 printed=1$'
+
+# The script limit is the last -timeout of GOFLAGS, so it wins over a -timeout of the caller.
+env GREMLINS_CASE=caller
+env GREMLINS_RECORDS=
+env GOFLAGS=-timeout=5m
+exec sh repo/scripts/mutation-pr.sh main
+grep '^START;internal/store/deep;/internal/store/deep;-timeout=5m -count=1 -exec=[^;]*mutation-exec\.sh -timeout=1200s;true$' starts-caller
+env GOFLAGS=
+
+# A folder that the diff deleted is dropped.
+exec git -C repo checkout -q -b gone main
+exec git -C repo rm -q internal/gone/g.go
+cp chg.go repo/internal/store/d.go
+exec git -C repo add internal
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m gone
+env GREMLINS_CASE=gone
+exec sh repo/scripts/mutation-pr.sh main
+grep -count=1 '^START;' starts-gone
+grep '^START;internal/store;' starts-gone
+
+# A diff with no folder left is "no candidate", and gremlins does not start.
+exec git -C repo checkout -q -b onlygone main
+exec git -C repo rm -q internal/gone/g.go
+exec git -C repo -c user.name=e2e -c user.email=e2e@example.com commit -q -m onlygone
+env GREMLINS_CASE=onlygone
+exec sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: no candidate: the folder of each changed file is gone: internal/gone/g\.go$'
+stdout '^mutation-pr: end count=0 printed=0$'
+! exists starts-onlygone
+
+# One deadline for the whole run: the first start uses it up, so the second start does not begin and the message names its folder.
+exec git -C repo checkout -q two
+env GREMLINS_CASE=late
+env GREMLINS_SLEEP=2
+env MUTATION_TIMEOUT=1
+! exec sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: the run exceeded MUTATION_TIMEOUT=1s before the start on internal/store$'
+! stdout '^mutation-pr: applied='
+grep -count=1 '^START;' starts-late
+env GREMLINS_SLEEP=
+env MUTATION_TIMEOUT=
+
+# A start with no report found no mutant in its folder. The other start still gives the result.
+env GREMLINS_CASE=half
+env GREMLINS_RECORDS=
+exec sh repo/scripts/mutation-pr.sh main
+grep -count=2 '^START;' starts-half
+stdout '^mutation-pr: applied=1 killed=1 lived=0 timed_out=0$'
+
+# No start wrote a report: the run fails.
+env GREMLINS_CASE=none
+! exec sh repo/scripts/mutation-pr.sh main
+grep -count=2 '^START;' starts-none
+stdout '^mutation-pr: gremlins wrote no report: it found no mutant in the module$'
+
+# A report that is not JSON fails the run.
+env GREMLINS_CASE=bad
+! exec sh repo/scripts/mutation-pr.sh main
+stdout '^mutation-pr: the gremlins report is not readable$'
+
+-- gomod --
+module example.com/r
+
+go 1.27
+-- base.go --
+package x
+-- chg.go --
+package x
+
+func F(x int) bool { return x > 0 }
+-- fake/gremlins --
+#!/bin/sh
+prefix=${PWD#"$WORK/repo"}
+prefix=${prefix#/}
+[ -n "$prefix" ] || prefix=.
+for a in "$@"; do last=$a; done
+path=${last#"$WORK/repo"}
+echo "START;$prefix;$path;$GOFLAGS;$(git config --get diff.relative)" >>"$WORK/starts-$GREMLINS_CASE"
+[ -z "${GREMLINS_RECORDS:-}" ] || printf '%b' "$GREMLINS_RECORDS" >>"$MUTATION_EXIT_LOG"
+[ -z "${GREMLINS_SLEEP:-}" ] || sleep "$GREMLINS_SLEEP"
+report=$WORK/r-$GREMLINS_CASE-$(printf '%s' "$prefix" | tr / _).json
+if [ -f "$report" ]; then
+	cp "$report" "$5"
+fi
+-- fake/timeout --
+#!/bin/sh
+echo "$3" >>"$WORK/limits-$GREMLINS_CASE"
+shift 3
+exec "$@"
+-- r-two-internal_config.json --
+{"files":[{"file_name":"host.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]},{"file_name":"sub/b.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- r-two-internal_store.json --
+{"files":[{"file_name":"d.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"LIVED"}]}]}
+-- r-root-..json --
+{"files":[{"file_name":"a.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]},{"file_name":"internal/config/host.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- r-nested-internal_store_deep.json --
+{"files":[{"file_name":"e.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"LIVED"}]}]}
+-- r-caller-internal_store_deep.json --
+{"files":[{"file_name":"e.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- r-gone-internal_store.json --
+{"files":[{"file_name":"d.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]}]}
+-- r-half-internal_config.json --
+{"files":[{"file_name":"host.go","mutations":[{"line":3,"column":5,"type":"CONDITIONALS_NEGATION","status":"KILLED"}]},{"file_name":"sub/b.go","mutations":[]}]}
+-- r-bad-internal_config.json --
+not json

@@ -18,10 +18,18 @@
 # prints the recorded runs as "mutation-pr: test run of path:line:column exited with N: <first failing line>".
 # The records and the mutants of the report pair by file, line and column. The script needs go and gofmt on the path.
 #
-# The script changes to the module root and runs gremlins on the path ".". Gremlins matches the lines of the
-# diff to mutants by file path. The diff has paths relative to the module root. Gremlins gives mutants paths
-# relative to the folder that it was started on. The two forms match only when that folder is the module
-# root. With a package path, every mutant is "skipped", nothing runs, and the exit code is 0.
+# Gremlins has no package filter. Its coverage run and its mutants cover the module, or the folder that it starts on. So the
+# script starts gremlins once for each folder that holds a changed non-test Go file, and drops each folder below another
+# changed folder. A changed file in the module root gives one start on ".". A folder that the diff deleted is dropped.
+# A start on a folder runs in that folder, with the absolute path of the folder as its argument and the git setting
+# diff.relative=true. Gremlins matches the lines of the diff to mutants by file path, and gives mutants paths relative to
+# the folder that it starts on, so the setting makes the paths of its own diff equal to them. The script prefixes the
+# names of each report with the folder, and merges the reports, so that the checks below read paths from the module root.
+# A start on a folder reads the .gremlins.yaml of the module root, because gremlins finds the module root from that folder.
+#
+# MUTATION_TIMEOUT is one deadline for the whole run. Each start gets the time that is left, and a start with no time left
+# fails the run. The script also appends -timeout=<limit>s to GOFLAGS: the coverage run of gremlins sets no -timeout, so go
+# test would stop it at 10 minutes. The test run of each mutant sets its own -timeout, which wins over GOFLAGS.
 #
 # "Applied" means killed + lived + timed out, counted from the JSON report of gremlins.
 # The run fails when gremlins exits with a non-zero status, when applied is 0 with a mutant on a changed line,
@@ -82,11 +90,30 @@ if [ -z "$limit" ]; then
 	fi
 fi
 
-# gremlins names each mutant by its path relative to the folder that it starts on, and runs "git diff" in that
-# folder, whose paths are relative to the top of the repository. The two match only when this folder is both the
-# top of the repository and the module root. Check both, so that a path mismatch cannot occur.
+# The paths of the diff are relative to the top of the repository, and the folders of the starts are relative to the module
+# root. The two agree only when this folder is both the top of the repository and the module root. Check both.
 [ -z "$(git rev-parse --show-prefix)" ] || { echo "mutation-pr: $root is not the top folder of its git repository"; exit 1; }
 [ -f go.mod ] || { echo "mutation-pr: $root has no go.mod, so it is not the module root"; exit 1; }
+
+# The folders of the starts: the folder of each changed file, with each folder below another changed folder dropped, and
+# only ".", when a changed file is in the module root. A folder that the diff deleted is dropped.
+folders=$(printf '%s\n' "$changed" | awk '
+	{ d = "."; if (match($0, /\/[^\/]*$/) > 0) d = substr($0, 1, RSTART - 1); set[d] = 1 }
+	END {
+		if ("." in set) { print "."; exit }
+		for (d in set) {
+			keep = 1
+			for (e in set) if (e != d && index(d, e "/") == 1) keep = 0
+			if (keep) print d
+		}
+	}' | sort | while IFS= read -r folder; do
+	if [ -d "$folder" ]; then printf '%s\n' "$folder"; fi
+done)
+if [ -z "$folders" ]; then
+	echo "mutation-pr: no candidate: the folder of each changed file is gone: $(printf '%s' "$changed" | tr '\n' ' ')"
+	echo "$none_lived"
+	exit 0
+fi
 
 command -v gremlins >/dev/null 2>&1 || { echo "mutation-pr: gremlins is not on the path"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "mutation-pr: jq is not on the path"; exit 1; }
@@ -121,7 +148,7 @@ export MUTATION_ROOT="$root" MUTATION_EXIT_LOG="$exits"
 # "go env GOFLAGS" gives the value that go would read: the variable, or else the file that "go env -w" writes.
 # The variable replaces the file in go, so the script merges the value into the variable it sets.
 goflags=$(go env GOFLAGS) || { echo "mutation-pr: go env GOFLAGS failed"; exit 1; }
-export GOFLAGS="${goflags:+$goflags }-count=1 -exec=$root/scripts/mutation-exec.sh"
+export GOFLAGS="${goflags:+$goflags }-count=1 -exec=$root/scripts/mutation-exec.sh -timeout=${limit}s"
 : >"$exits"
 
 # Print each recorded test run: the evidence that a run which ended with no report still leaves.
@@ -142,23 +169,58 @@ export "GIT_CONFIG_KEY_$git_config_count=diff.noprefix" "GIT_CONFIG_VALUE_$git_c
 export "GIT_CONFIG_KEY_$((git_config_count + 1))=diff.mnemonicPrefix" "GIT_CONFIG_VALUE_$((git_config_count + 1))=false"
 export GIT_CONFIG_COUNT=$((git_config_count + 2))
 
-status=0
-"$limiter" -k 30 "$limit" gremlins unleash --diff "$base" --output "$report" . || status=$?
-if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
-	echo "mutation-pr: the run exceeded MUTATION_TIMEOUT=${limit}s"
-	print_exits
-	exit 1
-fi
-if [ "$status" -ne 0 ]; then
-	echo "mutation-pr: gremlins exited with status $status"
-	print_exits
-	exit "$status"
-fi
+# Start gremlins on one folder, for the time that is left. A folder other than "." gets diff.relative=true, so that the
+# paths of the diff of gremlins are relative to the folder, like its mutants.
+start_gremlins() {
+	folder=$1 left=$2 out=$3
+	path=.
+	if [ "$folder" != . ]; then
+		path=$root/$folder
+		export "GIT_CONFIG_KEY_$GIT_CONFIG_COUNT=diff.relative" "GIT_CONFIG_VALUE_$GIT_CONFIG_COUNT=true"
+		export GIT_CONFIG_COUNT=$((GIT_CONFIG_COUNT + 1))
+	fi
+	cd "$folder" && "$limiter" -k 30 "$left" gremlins unleash --diff "$base" --output "$out" "$path" </dev/null
+}
 
-# gremlins writes no report when it finds no mutant in the module, on a changed line or not.
-[ -s "$report" ] || { echo "mutation-pr: gremlins wrote no report: it found no mutant in the module"; exit 1; }
+# One start for each folder. The deadline of the run starts at the first start. The report of a start names files relative
+# to its folder, so each report gets the folder as a prefix, and the reports merge into one. A start with no report found
+# no mutant in its folder.
+printf '%s\n' "$folders" >"$exitdir/folders"
+started=
+reports=0
+while IFS= read -r folder; do
+	now=$(date +%s)
+	[ -n "$started" ] || started=$now
+	left=$((limit - (now - started)))
+	if [ "$left" -le 0 ]; then
+		echo "mutation-pr: the run exceeded MUTATION_TIMEOUT=${limit}s before the start on $folder"
+		print_exits
+		exit 1
+	fi
+	status=0
+	(start_gremlins "$folder" "$left" "$exitdir/report") || status=$?
+	if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+		echo "mutation-pr: the run exceeded MUTATION_TIMEOUT=${limit}s"
+		print_exits
+		exit 1
+	fi
+	if [ "$status" -ne 0 ]; then
+		echo "mutation-pr: gremlins exited with status $status"
+		print_exits
+		exit "$status"
+	fi
+	if [ -s "$exitdir/report" ]; then
+		reports=$((reports + 1))
+		jq --arg folder "$folder" '.files = ((.files // []) | map(.file_name |= (if $folder == "." then . else $folder + "/" + . end)))' "$exitdir/report" >"$exitdir/prefixed.$reports" || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
+		: >"$exitdir/report"
+	fi
+done <"$exitdir/folders"
 
-# The report lists every mutant of the module, and marks "SKIPPED" each one that is not on a changed line.
+# gremlins writes no report when it finds no mutant in the folder, on a changed line or not.
+[ "$reports" -gt 0 ] || { echo "mutation-pr: gremlins wrote no report: it found no mutant in the module"; exit 1; }
+jq -s '{files: (map(.files) | add)}' "$exitdir"/prefixed.* >"$report"
+
+# The merged report lists every mutant of the changed folders, and marks "SKIPPED" each one that is not on a changed line.
 # A path mismatch also marks every mutant skipped, so the report must prove its paths: each file that it names
 # must be a file under the module root. Only then does "all skipped" mean "no candidate".
 names=$(jq -r '.files[]?.file_name' "$report") || { echo "mutation-pr: the gremlins report is not readable"; exit 1; }
@@ -235,7 +297,7 @@ applied=$((killed + lived + timed))
 # "No candidate" is the only result line of its run. A reader of the job log takes a counts line with applied=0 as a
 # failed run, so this path prints no counts line.
 if [ "$total" -gt 0 ] && [ "$candidates" -eq 0 ]; then
-	echo "mutation-pr: no candidate: no changed line of $(printf '%s' "$changed" | tr '\n' ' ') holds an operator that gremlins mutates; the report marks all $total mutant(s) of the module skipped"
+	echo "mutation-pr: no candidate: no changed line of $(printf '%s' "$changed" | tr '\n' ' ') holds an operator that gremlins mutates; the report marks all $total mutant(s) of the changed folders skipped"
 	echo "$none_lived"
 	exit 0
 fi
