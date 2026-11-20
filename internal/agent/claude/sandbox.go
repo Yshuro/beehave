@@ -69,12 +69,14 @@ type permissions struct {
 // settings file, so an excludedCommands entry or an allow rule in one of them has no effect. --strict-mcp-config with no --mcp-config loads no MCP
 // server, and a local one runs with the access of the owner. --disallowedTools removes WebFetch and WebSearch, which ignore the domain list.
 //
-// One --settings JSON holds the rest. The base is deny by default: the home folder is unreadable, and only the work folder, the shared git
-// directories and the extra read paths are readable. The credential paths are denied again for read and write, in the sandbox and in the
-// permission rules of the file tools (a path in the sandbox alone leaves the Read tool open, and the reverse leaves cat open).
+// One --settings JSON holds the rest. The base denies the home folder: in it, only the work folder, the shared git directories and the extra read
+// paths are readable. The sandbox reads every path outside the home folder by default; there, the settings deny only the credential paths. The
+// credential paths are denied again for read and write, in the sandbox and in the permission rules of the file tools (a path in the sandbox alone
+// leaves the Read tool open, and the reverse leaves cat open).
 // A permission path is written as //absolute. The settings never set excludedCommands, allowLocalBinding, allowAllUnixSockets or allowAppleEvents,
 // and never put the shared git directory in allowWrite: a linked work tree gets it, and an explicit entry could open hooks and config.
-// The git variables of the plan reach the shell through the env file in the run folder, which is the one path of the run folder that the shell may read.
+// The git variables of the plan reach the shell through the env file, the only file in the run folder. Its allowRead entry keeps it readable when the
+// run folder is under the home folder.
 func (Adapter) Sandbox(plan agent.SandboxPlan, guard, runDir string) agent.Launch {
 	envPath := filepath.Join(runDir, envFile)
 	settings := settingsOf(plan, envPath)
@@ -108,7 +110,8 @@ func exports(env map[string]string) string {
 	return lines.String()
 }
 
-// settingsOf returns the settings of the sandbox and of the permission rules for a plan, with no hooks. envPath is the env file, the one readable path of the run folder.
+// settingsOf returns the settings of the sandbox and of the permission rules for a plan, with no hooks. envPath is the env file. The settings allow reading it, and not the
+// run folder, so a run folder under the home folder stays denied except for that file.
 func settingsOf(plan agent.SandboxPlan, envPath string) sandboxSettings {
 	return sandboxSettings{
 		Sandbox: sandboxBlock{

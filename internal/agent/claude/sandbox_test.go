@@ -81,7 +81,23 @@ func TestSandbox_TheShellReadsTheGitVariablesOfTheEngineFromAnEnvFile(t *testing
 	}
 }
 
-func TestSandbox_TheEnvFileIsTheOnlyRunFolderPathTheSandboxReads(t *testing.T) {
+func TestSandbox_TheEnvFileExportsTheSixGitVariablesAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	p := plan()
+	p.Identity = agent.GitIdentity{Name: "Ann", Email: "ann@example.com"}
+
+	launch := claude.New(nil).Sandbox(p, "", "/run")
+
+	assert.Equal(t, map[string]string{"sandbox-env.sh": "export GIT_AUTHOR_EMAIL=ann@example.com\n" +
+		"export GIT_AUTHOR_NAME=Ann\n" +
+		"export GIT_COMMITTER_EMAIL=ann@example.com\n" +
+		"export GIT_COMMITTER_NAME=Ann\n" +
+		"export GIT_CONFIG_GLOBAL=/dev/null\n" +
+		"export GIT_CONFIG_NOSYSTEM=1\n"}, launch.Files, "the run folder holds only the env file, and the env file holds no other variable")
+}
+
+func TestSandbox_TheSettingsAllowReadingTheEnvFileAndNotTheRunFolder(t *testing.T) {
 	t.Parallel()
 
 	args := claude.New(nil).Sandbox(plan(), "/bin/beehave check command", "/run/folder").Args

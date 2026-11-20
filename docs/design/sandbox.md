@@ -50,7 +50,7 @@ It passes one `--settings` JSON that holds the sandbox object, the permission ru
 ### The sandbox object and the permission rules
 
 - The sandbox object sets `enabled`, `failIfUnavailable` and `allowUnsandboxedCommands: false`.
-- The base is deny by default. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory and the `sandbox_read` paths.
+- The base denies the home folder. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory, the `sandbox_read` paths and the env file. Outside the home folder, the sandbox reads every path that is not a credential path.
 - The network list sets `allowedDomains` with `strictAllowlist`.
 - The permission rules set `blockReadsOutsideWorkingDirectories` and deny `WebFetch` and `WebSearch`.
 
@@ -124,7 +124,7 @@ Not proven: a real `claude` run that prints `env` in the shell must show that th
 
 The child environment holds no proxy variable and no `SSH_AUTH_SOCK`. It sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, because the base denies `~/.gitconfig`. A step that needs a proxy of the owner sets `sandbox = None`.
 
-The scrub drops `GIT_CONFIG_GLOBAL` by name. The engine writes the git variables to a file `sandbox-env.sh` in the run folder and names it in `CLAUDE_ENV_FILE`; the CLI sources the file in its shell after the scrub. That file is the one path of the run folder that the sandbox may read.
+The scrub drops `GIT_CONFIG_GLOBAL` by name. The engine writes the git variables to a file `sandbox-env.sh` in the run folder and names it in `CLAUDE_ENV_FILE`; the CLI sources the file in its shell after the scrub. The run folder holds only that file. The run folder is in the temporary folder of the engine, which the sandbox reads by default; the `allowRead` entry for the file matters only when the run folder is under the home folder.
 
 With no global config, the clone has no `user.name` or `user.email`. The engine reads both with its own git at the worktree and sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in the child environment and in the env file. If either value is empty, the step does not start, and the note names `git config user.email`. The shell gets no credential: a push from the shell still fails.
 
