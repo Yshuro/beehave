@@ -88,6 +88,8 @@ type PhaseOutput struct {
 	Text       string        `json:"text,omitempty"`
 	Skills     []string      `json:"skills,omitempty"`
 	Violations []string      `json:"violations,omitempty"`
+	// Denials lists the tool calls that the permission check of the agent CLI refused. It is left out of a recorded phase that has none.
+	Denials []agent.Denial `json:"denials,omitempty"`
 	// Spend is the cost of the run: the dollars that the agent CLI reported, or an estimate that beehave made from the tokens, or the mark that the cost is unknown.
 	agent.Spend
 	// Limit is the provider limit that stopped a run that ended as limited. It is left out of a recorded phase for any other run, so a stored phase keeps its form.
@@ -209,7 +211,7 @@ func writeData(in PhaseInput) error {
 func phaseOutput(result agent.Result) PhaseOutput {
 	return PhaseOutput{
 		Outcome: result.Outcome, ExitCode: result.ExitCode, Note: result.Note, Session: result.Session, Transcript: result.Transcript,
-		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Spend: result.Spend, Limit: result.Limit, Resumed: result.Resumed,
+		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Denials: result.Denials, Spend: result.Spend, Limit: result.Limit, Resumed: result.Resumed,
 	}
 }
 

@@ -37,6 +37,18 @@ The record of a step stores the sandbox that the step runs with, in the `/render
 
 A step with the `data` keyword gets one file in the state folder (see [Agent runs](agent-runs.md#the-setting-data)). The plan adds that one path to the read paths, after the check of the `sandbox_read` paths. It never adds the inputs folder or the state folder, which holds `dbos.db`. The sandbox denies the home folder, so the default state folder under `~/.local/state` stays closed except for this file. A data file inside a credential path stops the step. The Read tool keeps `blockReadsOutsideWorkingDirectories`, so the agent reads the file with the shell. The file holds what the workflow passed and no credential.
 
+### The output file
+
+A step that declares `outputs` writes them to one file in the state folder, `<state>/outputs/<item>.<step>.json`. The plan opens that one file for write, by its exact path, and nothing else outside the work folder. The adapter writes the path as one `Edit` allow rule with no `/**` tail. The Write tool obeys the rule, and Claude Code merges its path into the write paths of the sandbox, so the shell can write the file too. The adapter sets no `allowWrite` list. A step with `edits = False` runs in the default permission mode, which refuses every other write of the file tools, so the agent still edits no file of the work folder. The outputs folder and the state folder stay closed, so a step cannot write the output of another step or the state of the engine. An output file inside a credential path stops the step.
+
+Claude Code does not escape the paths of its rules. So a data file or an output file whose path holds a glob character (`*`, `?`, `[` or `\`) stops the step, because its rule would open more than the one file.
+
+If the agent ends with no output file, the error names each tool whose write of that file the permission check of the CLI refused, by a rule or by the permission mode. The adapter reads these calls from the `permission_denials` list of the result line.
+
+The file stays in the state folder. The temporary folders are shared by every run, so one step could write the output of another there. The work folder is tracked by git, so the file would dirty the tree of the item. The Write tool refuses a path in either folder without an allow rule.
+
+On Linux, the sandbox ignores a write path that does not exist when the run starts, and the engine removes the old output file before each try. There, the shell cannot write the file, and the agent writes it with the Write tool, whose allow rule does not depend on the sandbox.
+
 ### Forge data for a sandboxed step
 
 In the sandbox, gh cannot read its config, and no forge credential may reach the agent. So no sandboxed step reads the forge itself. The engine reads the forge outside the sandbox, and the workflow passes the answer through the `data` keyword. In the remediation example, `queue` gives the queue audit the rows and the open pull requests of the pass, and `pr_history` gives the plan and the implementer the earlier pull requests of the item with their closing comments. The plan and the queue audit then need no network.
@@ -60,7 +72,7 @@ It passes one `--settings` JSON that holds the sandbox object, the permission ru
 - The sandbox object sets `enabled`, `failIfUnavailable` and `allowUnsandboxedCommands: false`.
 - The base denies the home folder. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory, the `sandbox_read` paths, the env file and the data file of the step. Outside the home folder, the sandbox reads every path that is not a credential path.
 - The network list sets `allowedDomains` with `strictAllowlist`.
-- The permission rules set `blockReadsOutsideWorkingDirectories` and deny `WebFetch` and `WebSearch`.
+- The permission rules set `blockReadsOutsideWorkingDirectories` and deny `WebFetch` and `WebSearch`. For a step with outputs, they allow `Edit` of the output file alone.
 
 The adapter does not set `excludedCommands`, `allowLocalBinding`, `allowAllUnixSockets` or `allowAppleEvents`. It sets no `allowWrite` list, so it never puts the shared git directory in it. Claude Code makes it writable for a linked work tree and keeps `hooks` and `config` read-only, and an explicit entry could open them.
 
