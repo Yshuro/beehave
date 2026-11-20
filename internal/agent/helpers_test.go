@@ -37,6 +37,7 @@ grand) sleep 120 & echo $! > "$here/grandchild.tmp"; mv "$here/grandchild.tmp" "
 holdgrand) sleep 120 & echo $! > "$here/grandchild.tmp"; mv "$here/grandchild.tmp" "$here/grandchild"; sleep 30 ;;
 secret) echo "token is $CLAUDE_CODE_OAUTH_TOKEN and sk-ant-abcdef123456 here"; echo "err $CLAUDE_CODE_OAUTH_TOKEN" >&2; exit 3 ;;
 fail) echo "boom" >&2; exit 7 ;;
+envfile) cat "$CLAUDE_ENV_FILE" > "$here/envfile" ;;
 partial) printf 'no newline at the end' ;;
 long) head -c 300 /dev/zero | tr '\0' x; echo; echo after ;;
 esac

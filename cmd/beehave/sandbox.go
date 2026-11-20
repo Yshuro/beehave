@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"os"
@@ -18,7 +19,7 @@ import (
 // sandboxPlan makes the plan for the sandbox of one run, or returns the reason why the step cannot start with it.
 // The shell may read the work folder, the shared git directories of a linked work tree and the read paths of the project, and nothing else under the home folder.
 // The credential paths come from the engine list, the project file and the config folder of the runner. The .env files of the work folder, at any depth
-// and whether or not they exist yet, are denied by a pattern that the CLI matches when the file is used.
+// and whether or not they exist yet, are denied by a pattern that the CLI matches when the file is used. The commits carry the git identity of the engine at the work folder.
 func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runner model.Runner, dir string) (agent.SandboxPlan, string) {
 	home, err := a.home()
 	if err != nil {
@@ -29,16 +30,34 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 	deny := credentialPaths(home, runner.ConfigDir, project.SandboxDeny)
 	read := expandAll(project.SandboxRead, home)
 
-	closed := closedPaths(ctx, dir, home)
+	closed, identity := closedPaths(ctx, dir, home), a.identity(ctx, dir)
 
-	if note := readNote(read, home, deny); note != "" {
+	if note := cmp.Or(readNote(read, home, deny), identityNote(identity, dir)); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
 	return agent.SandboxPlan{
 		Work: dir, GitDirs: sharedGitDirs(dir), Read: read, Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed), DenyWritePatterns: hookPatterns(dir),
-		Network: request.Sandbox.Network,
+		Network: request.Sandbox.Network, Identity: identity,
 	}, ""
+}
+
+// gitIdentity returns the user.name and the user.email that the git of the engine reads at dir.
+func gitIdentity(ctx context.Context, dir string) agent.GitIdentity {
+	return agent.GitIdentity{
+		Name:  strings.TrimSpace(gitexec.ReadConfig(ctx, dir, "user.name").Stdout),
+		Email: strings.TrimSpace(gitexec.ReadConfig(ctx, dir, "user.email").Stdout),
+	}
+}
+
+// identityNote says why the commits of a sandboxed step would have no author, or returns "".
+func identityNote(identity agent.GitIdentity, dir string) string {
+	if identity.Name != "" && identity.Email != "" {
+		return ""
+	}
+
+	return fmt.Sprintf("git has no user.name or no user.email at %s, so a commit in the sandbox has no author. The step did not start. "+
+		"Set them with git config user.email and git config user.name.", dir)
 }
 
 // writeDenies returns the closed paths that the adapter denies for write: the closed paths, less the settings folder of
