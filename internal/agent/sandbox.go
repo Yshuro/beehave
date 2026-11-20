@@ -20,12 +20,15 @@ import (
 // a file that does not exist yet is covered too. DenyWrite lists absolute paths that stay readable but that the adapter denies for write, in the
 // sandbox and in the file tools. DenyWritePatterns lists absolute glob patterns that stay readable and that the adapter denies for write in the same
 // way as DenyWrite, so that the CLI matches them when a file is used and a path that does not exist yet is covered too.
+// ReadDirs lists the folders outside the work folder that the run may read, as working directories that the adapter passes to the CLI. An allow rule does not open a path to the file tools when
+// the CLI blocks reads outside the working directories, so each folder here holds only the files that the run may read.
 // Write lists the files outside the work folder that the shell and the file tools may write, each by its exact path.
 // Identity is the git identity of the engine at the work folder, which the commits of the shell carry.
 type SandboxPlan struct {
 	Work              string
 	GitDirs           []string
 	Read              []string
+	ReadDirs          []string
 	Deny              []string
 	DenyPatterns      []string
 	DenyWrite         []string

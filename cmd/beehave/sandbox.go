@@ -40,8 +40,8 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 	}
 
 	return agent.SandboxPlan{
-		Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: withData(read, request.DataFile), Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed), DenyWritePatterns: hookPatterns(dir),
-		Write: write, Network: request.Sandbox.Network, Identity: identity,
+		Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: withData(read, request.DataFile), ReadDirs: dataFolder(request.DataFile), Deny: deny, DenyPatterns: envPatterns(dir),
+		DenyWrite: writeDenies(dir, closed, request.DataFile), DenyWritePatterns: hookPatterns(dir), Write: write, Network: request.Sandbox.Network, Identity: identity,
 	}, ""
 }
 
@@ -83,8 +83,8 @@ func identityNote(identity agent.GitIdentity, dir string) string {
 
 // writeDenies returns the closed paths that the adapter denies for write: the closed paths, less the settings folder of
 // the agent CLI, which the CLI writes itself, and less a .git that is a file (a linked work tree), which holds only a pointer.
-// A .git that does not exist yet stays in the list, so a step that runs git init finds it closed.
-func writeDenies(dir string, closed []string) []string {
+// A .git that does not exist yet stays in the list, so a step that runs git init finds it closed. The folder of the data file joins the list, so it is read only.
+func writeDenies(dir string, closed []string, dataFile string) []string {
 	out := make([]string, 0, len(closed))
 
 	for _, path := range closed {
@@ -96,7 +96,7 @@ func writeDenies(dir string, closed []string) []string {
 		}
 	}
 
-	return out
+	return append(out, dataFolder(dataFile)...)
 }
 
 func isFile(path string) bool {
@@ -195,6 +195,16 @@ func withData(read []string, file string) []string {
 	}
 
 	return append(read, file)
+}
+
+// dataFolder returns the folder of the data file as the one working directory that the step adds, or none for a step with no data file. The folder holds that
+// file alone, so the CLI blocks the read of every other file of the state folder, and the plan denies the write of the folder.
+func dataFolder(file string) []string {
+	if file == "" {
+		return nil
+	}
+
+	return []string{filepath.Dir(file)}
 }
 
 // globCharacters are the characters that make a path of a sandbox rule a pattern.

@@ -426,7 +426,7 @@ func TestSandboxPlan_TheDataFileIsTheOnlyStateFolderPathTheSandboxReads(t *testi
 	r := newSandboxRig(t)
 	r.f.agents.projects = map[string]config.Project{"p": {Project: model.Project{SandboxRead: []string{"/opt/tools"}}}}
 	state := filepath.Join(r.home, ".local", "state", "beehave")
-	data := filepath.Join(state, "inputs", "7.agent_3Aimplement_231.json")
+	data := filepath.Join(state, "inputs", "7.agent_3Aimplement_231", "data.json")
 
 	req := request()
 	req.Sandbox = &model.Sandbox{}
@@ -521,4 +521,26 @@ func TestNewAgents_FindsTheHomeFolderOfTheOwner(t *testing.T) {
 
 	require.NoError(t, err)
 	assert.True(t, filepath.IsAbs(home))
+}
+
+func TestSandboxPlan_TheFolderOfTheDataFileIsTheOnlyWorkingDirectoryThatIsAdded(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	state := filepath.Join(r.home, ".local", "state", "beehave")
+	data := filepath.Join(state, "inputs", "7.agent_3Aplan_231", "data.json")
+
+	req := request()
+	req.Sandbox = &model.Sandbox{}
+	req.DataFile = data
+
+	_, err := r.f.agents.Run(t.Context(), req)
+	require.NoError(t, err)
+	assert.Equal(t, []string{filepath.Dir(data)}, r.f.spec.Sandbox.ReadDirs, "the folder of the one data file, never the inputs folder")
+	assert.Contains(t, r.f.spec.Sandbox.DenyWrite, filepath.Dir(data), "the folder stays read only")
+
+	req.DataFile = ""
+	_, err = r.f.agents.Run(t.Context(), req)
+	require.NoError(t, err)
+	assert.Empty(t, r.f.spec.Sandbox.ReadDirs, "a step with no data file adds no folder")
 }

@@ -66,7 +66,7 @@ type agentArgs struct {
 	// sandbox is the sandbox keyword as written. box is the sandbox the step runs with, which the render step records, or nil for no sandbox.
 	sandbox sandboxChoice
 	box     *model.Sandbox
-	// record is the JSON text of the data keyword, and dataFile the file that the phase writes it to. Both are empty for a call with no data.
+	// record is the JSON text of the data keyword, and dataFile the file that the prompt names for it. Both are empty for a call with no data.
 	record   string
 	dataFile string
 }
@@ -208,9 +208,10 @@ func outputFile(state, item, step string) string {
 	return stepFile(state, outputsFolder, item, step)
 }
 
-// dataFile is the path where the phase of a step writes the data of the call, in the inputs folder of the state folder.
+// dataFile is the path where the phase of a step writes the data of the call: the one file of a folder of its own in the inputs folder of the state folder,
+// so the sandbox can name that folder as a working directory and open no other file.
 func dataFile(state, item, step string) string {
-	return stepFile(state, inputsFolder, item, step)
+	return filepath.Join(state, inputsFolder, model.SafeName(item)+"."+model.SafeName(step), "data.json")
 }
 
 // dataFileOf is the data file of the call, or "" for a call with no data.
@@ -283,7 +284,8 @@ func (s *script) promptOf(a *agentArgs, name, login string) (string, error) {
 }
 
 // recall reads the sandbox and the output file that the render step recorded. The output file is the one that the recorded prompt names,
-// whatever the name function gives today. A record made before the path was pinned keeps the computed path.
+// whatever the name function gives today. A record made before the path was pinned keeps the computed path. A recorded prompt that names a data file other than
+// the file that the phase writes for this item and step stops the call, because the agent would read a file that the engine did not write.
 func (a *agentArgs) recall(outputs map[string]any) (err error) {
 	a.file = recalledOutputFile(outputs, a.file)
 	a.startHead, _ = outputs[recordedStartHead].(string) //nolint:errcheck // a record made before the start head was kept has none
@@ -292,7 +294,11 @@ func (a *agentArgs) recall(outputs map[string]any) (err error) {
 		return err
 	}
 
-	a.dataFile, a.record = given.File, given.Text
+	if given.File != "" && given.File != a.dataFile {
+		return fmt.Errorf("the recorded prompt names the data file %s, and the data file of this item and step is %s. The step did not start. Start a new run", given.File, a.dataFile)
+	}
+
+	a.record = given.Text
 
 	if err = os.MkdirAll(filepath.Dir(a.file), outputsMode); err != nil {
 		return fmt.Errorf("make the folder of the output file: %w", err)
@@ -383,7 +389,7 @@ func (a agentArgs) phase(in ItemInput, login, prompt, treeStart string) PhaseInp
 		Item: in.Item, Project: in.Project, Login: login, Prompt: prompt,
 		Resume: a.resume, Model: a.model, Timeout: a.timeout, IdleTimeout: a.idleTimeout, Forbid: a.forbid, Protect: a.protect, MaxBudget: a.maxBudget,
 		NoEdits: !a.edits, OutputFile: a.file, Outputs: a.declared, Sandbox: a.box, StartHead: a.startHead, TreeStart: treeStart, Base: in.Base,
-		DataFile: a.dataFile, Data: a.record,
+		Data: a.record,
 	}
 }
 

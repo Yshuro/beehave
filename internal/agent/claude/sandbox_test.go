@@ -295,3 +295,21 @@ func countOf(list []string, item string) int {
 
 	return n
 }
+
+func TestSandbox_PassesEachReadFolderAsAWorkingDirectoryByTheAddDirFlag(t *testing.T) {
+	t.Parallel()
+
+	p := plan()
+	p.ReadDirs = []string{"/state/inputs/1.plan"}
+
+	args := claude.New(nil).Sandbox(p, "", "/run").Args
+
+	flags, parsed := settingsOf(t, args)
+	assert.Equal(t, []string{"--setting-sources", "", "--strict-mcp-config", "--disallowedTools", "WebFetch", "WebSearch", "--add-dir", "/state/inputs/1.plan"}, flags,
+		"an allow rule does not lift blockReadsOutsideWorkingDirectories, a working directory does")
+	assert.NotContains(t, parsed["permissions"], "additionalDirectories", "one mechanism: the flag, not the settings key")
+	assert.NotContains(t, parsed["permissions"], "allow", "no Read allow rule: the docs say no allow rule lets the file tools through the block")
+
+	none, _ := settingsOf(t, claude.New(nil).Sandbox(plan(), "", "/run").Args)
+	assert.NotContains(t, none, "--add-dir", "a plan with no read folder passes no flag")
+}
