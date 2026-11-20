@@ -287,6 +287,63 @@ func TestClaimWrites_AStepThatRunsAProgramAfterTheLossNeverRunsIt(t *testing.T) 
 	}
 }
 
+// lapseCommand is the program name that makes the fake command runner move the lease clock past the trust limit, with no tick and so no loss.
+const lapseCommand = "lapse"
+
+func TestClaimWrites_AStepThatRunsAProgramAfterTheLeaseLapsedWithNoTickNeverRunsIt(t *testing.T) {
+	t.Parallel()
+
+	mark := `["` + markCommand + `"]`
+	calls := map[string]string{
+		"command":         `command(name = "after", run = ` + mark + `)`,
+		"write":           `write(name = "after", run = ` + mark + `)`,
+		"write_read_back": `write(name = "after", run = ["other"], read_back = ` + mark + `)`,
+	}
+
+	for step, call := range calls {
+		for name, lapsed := range map[string]bool{"the_claim_is_trusted": false, "the_lease_lapsed": true} {
+			t.Run(step+"/"+name, func(t *testing.T) {
+				t.Parallel()
+
+				lapsedStep(t, call, lapsed)
+			})
+		}
+	}
+}
+
+// lapsedStep runs call after a command that moves the lease clock past the trust limit when lapsed is true. No tick runs, so the context of the run stays live.
+func lapsedStep(t *testing.T, call string, lapsed bool) {
+	t.Helper()
+
+	h := newHarness(t)
+	clk := &leaseClock{now: time.Unix(1_000_000, 0)}
+	h.commands.before = func(_ context.Context, request CommandRequest) error {
+		if request.Run[0] == lapseCommand {
+			clk.advance(trustLimit)
+		}
+
+		return nil
+	}
+	engine := launchedWith(t, h, func(deps *Deps) { clk.install(&deps.Clock) })
+
+	before := `command(name = "before", run = ["keep"])`
+	if lapsed {
+		before = `command(name = "before", run = ["` + lapseCommand + `"])`
+	}
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, bodyFlow(before+"\n"+call)))
+
+	if !lapsed {
+		require.NoError(t, err)
+		assert.Contains(t, h.commands.ran(), markCommand, "control: the program of the step runs while the claim is trusted")
+
+		return
+	}
+
+	require.ErrorIs(t, err, errClaimLost)
+	assert.NotContains(t, h.commands.ran(), markCommand, "the step reads the claim at the program start: the context of the run is still live, so only that read sees the lapse")
+}
+
 func TestClaimWrites_ACommandChildOfARunThatLostItsClaimNeverRunsItsProgram(t *testing.T) {
 	t.Parallel()
 
