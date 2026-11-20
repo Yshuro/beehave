@@ -49,7 +49,7 @@ const (
 func TestMain(m *testing.M) {
 	// The test binary acts as the upload-pack helper of the push, as beehave does in main.
 	std := helperIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}
-	if code, helper := runUploadPack(context.Background(), os.Args, config.ProcessEnv(), chooseEnforcer, std); helper {
+	if code, helper := runUploadPack(context.Background(), os.Args, config.ProcessEnv(), machineTools(), std); helper {
 		os.Exit(code)
 	}
 

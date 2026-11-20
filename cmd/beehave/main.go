@@ -23,7 +23,7 @@ const privateUmask = 0o077
 func main() {
 	// A copy of beehave that git starts as upload-pack runs it under the sandbox enforcer and exits.
 	std := helperIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}
-	if code, helper := runUploadPack(context.Background(), os.Args, config.ProcessEnv(), chooseEnforcer, std); helper {
+	if code, helper := runUploadPack(context.Background(), os.Args, config.ProcessEnv(), machineTools(), std); helper {
 		os.Exit(code)
 	}
 
