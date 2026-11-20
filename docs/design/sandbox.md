@@ -124,6 +124,10 @@ Not proven: a real `claude` run that prints `env` in the shell must show that th
 
 The child environment holds no proxy variable and no `SSH_AUTH_SOCK`. It sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, because the base denies `~/.gitconfig`. A step that needs a proxy of the owner sets `sandbox = None`.
 
+The scrub drops `GIT_CONFIG_GLOBAL` by name. The engine writes the git variables to a file `sandbox-env.sh` in the run folder and names it in `CLAUDE_ENV_FILE`; the CLI sources the file in its shell after the scrub. That file is the one path of the run folder that the sandbox may read.
+
+With no global config, the clone has no `user.name` or `user.email`. The engine reads both with its own git at the worktree and sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in the child environment and in the env file. If either value is empty, the step does not start, and the note names `git config user.email`. The shell gets no credential: a push from the shell still fails.
+
 ## When the step does not start
 
 The step ends as `not-started`, with a note, when:
@@ -131,7 +135,8 @@ The step ends as `not-started`, with a note, when:
 - the adapter of the runner has no sandbox;
 - the system is Windows (Claude Code runs commands there with no sandbox);
 - the Claude Code version is below the minimum;
-- the version cannot be read.
+- the version cannot be read;
+- git has no `user.name` or no `user.email` at the worktree.
 
 A Claude Code that does not know a sandbox key ignores it and exits with code 0, so the minimum version is the only guard.
 

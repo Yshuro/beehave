@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,9 +31,59 @@ func newSandboxRig(t *testing.T) *sandboxRig {
 	f := newAgentFixture("session=s1\n", agent.Result{Outcome: agent.OutcomeExited})
 	f.agents.trees = treeAt(work)
 	f.agents.home = func() (string, error) { return home, nil }
+	f.agents.identity = func(context.Context, string) agent.GitIdentity { return rigIdentity() }
 	f.agents.runners = []model.Runner{{Name: "main", Agent: model.Agent("fake"), ConfigDir: filepath.Join(home, "login")}}
 
 	return &sandboxRig{f: f, home: home, work: work}
+}
+
+func rigIdentity() agent.GitIdentity {
+	return agent.GitIdentity{Name: "Rig Owner", Email: "rig@example.com"}
+}
+
+func TestSandboxPlan_TheIdentityIsTheGitIdentityOfTheEngineAtTheWorktree(t *testing.T) {
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	require.NoError(t, os.WriteFile(global, []byte("[user]\n\tname = Global Owner\n\temail = global@example.com\n"), 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	r := newSandboxRig(t)
+	r.f.agents.identity = newAgents(config.Config{}, flow.Options{}, treeAt(r.work), newAdapters(nil, nil, nil)).identity
+	runGit(t, r.work, "init", "-q")
+	runGit(t, r.work, "config", "user.email", "worktree@example.com")
+
+	req := request()
+	req.Sandbox = &model.Sandbox{}
+	_, err := r.f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	require.NotNil(t, r.f.spec.Sandbox)
+	assert.Equal(t, agent.GitIdentity{Name: "Global Owner", Email: "worktree@example.com"}, r.f.spec.Sandbox.Identity,
+		"the email of the worktree config wins, and the name comes from the global config")
+}
+
+func TestSandboxPlan_AStepWithNoGitIdentityDoesNotStartAndNamesTheGitConfigCommand(t *testing.T) {
+	t.Parallel()
+
+	for name, identity := range map[string]agent.GitIdentity{
+		"no_email": {Name: "Owner"}, "no_name": {Email: "owner@example.com"}, "neither": {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newSandboxRig(t)
+			r.f.agents.identity = func(context.Context, string) agent.GitIdentity { return identity }
+			req := request()
+			req.Sandbox = &model.Sandbox{}
+
+			got, err := r.f.agents.Run(t.Context(), req)
+
+			require.NoError(t, err)
+			assert.Equal(t, agent.OutcomeNotStarted, got.Outcome)
+			assert.Contains(t, got.Note, "git config user.email")
+			assert.Nil(t, r.f.spec.Sandbox)
+		})
+	}
 }
 
 func (r *sandboxRig) touch(t *testing.T, path string) {
