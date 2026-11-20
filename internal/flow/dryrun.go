@@ -139,6 +139,12 @@ func dryPrepare(ctx context.Context, root, item, file string, chosen dryChoice) 
 
 	chosen.skills = workflow.RequiredSkills(file)
 
+	for _, key := range workflow.RequiredSkillVars(file) {
+		if name, named := chosen.vars[key].(string); named {
+			chosen.skills = append(chosen.skills, name)
+		}
+	}
+
 	return dryDeps(tree, head, item, chosen), nil
 }
 

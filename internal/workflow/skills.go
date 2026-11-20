@@ -5,6 +5,9 @@ import "go.starlark.net/syntax"
 // skillsField is the field of the result of an agent step that lists the skills the agent called.
 const skillsField = "skills"
 
+// varsField is the field of the facts of a project that holds its vars.
+const varsField = "vars"
+
 // failName is the builtin that stops a run with a message.
 const failName = "fail"
 
@@ -14,12 +17,37 @@ const failName = "fail"
 // A test that fails when the skill is present is a forbid check and requires nothing. It runs no workflow code.
 // A file that cannot be read or parsed gives no skills: the run reports that error.
 func RequiredSkills(file string) []string {
-	return scan(file).skills
+	return needsOf(scan(file).skills, false)
+}
+
+// RequiredSkillVars returns the keys of the project vars that name a required skill, in the order of the text.
+// A skill is named by a key where the text of the test is `<expression>.vars["key"]`, so the project, not the workflow, names the skill.
+func RequiredSkillVars(file string) []string {
+	return needsOf(scan(file).skills, true)
+}
+
+// skillNeed is one required skill: the literal text of its name, or the key of the project vars that holds the name.
+type skillNeed struct {
+	name     string
+	fromVars bool
+}
+
+// needsOf returns the names of the needs that are read from the vars of the project, or the names that are literal text.
+func needsOf(needs []skillNeed, fromVars bool) []string {
+	var names []string
+
+	for _, need := range needs {
+		if need.fromVars == fromVars {
+			names = append(names, need.name)
+		}
+	}
+
+	return names
 }
 
 // skillChecks returns the skills that the functions of a parsed file require, in the order of the text. Each function is a scope of its own.
-func skillChecks(parsed *syntax.File) []string {
-	var found []string
+func skillChecks(parsed *syntax.File) []skillNeed {
+	var found []skillNeed
 
 	syntax.Walk(parsed, func(n syntax.Node) bool {
 		if def, ok := n.(*syntax.DefStmt); ok {
@@ -33,15 +61,15 @@ func skillChecks(parsed *syntax.File) []string {
 }
 
 // scopeChecks returns the skills that one function requires. A nested function is a scope of its own and is not read here.
-func scopeChecks(def *syntax.DefStmt) []string {
+func scopeChecks(def *syntax.DefStmt) []skillNeed {
 	aliases := skillAliases(def)
 
-	var found []string
+	var found []skillNeed
 
 	inScope(def.Body, func(n syntax.Node) {
 		if test, ok := n.(*syntax.IfStmt); ok {
-			if name, required := requirement(test, aliases); required {
-				found = append(found, name)
+			if need, required := requirement(test, aliases); required {
+				found = append(found, need)
 			}
 		}
 	})
@@ -121,15 +149,15 @@ func markNames(expr syntax.Expr, set map[string]bool) {
 
 // requirement returns the skill that an if requires: its test is a membership of a text literal in a skills list, through not and parentheses,
 // and a statement of the branch that runs when the skill is missing is a call of fail.
-func requirement(test *syntax.IfStmt, aliases map[string]bool) (string, bool) {
+func requirement(test *syntax.IfStmt, aliases map[string]bool) (skillNeed, bool) {
 	member, negations := membership(test.Cond)
 	if member == nil || !isSkillList(member.Y, aliases) {
-		return "", false
+		return skillNeed{}, false
 	}
 
-	name, isText := skillName(member.X)
-	if !isText {
-		return "", false
+	need, isName := skillName(member.X)
+	if !isName {
+		return skillNeed{}, false
 	}
 
 	missing := test.False
@@ -137,7 +165,7 @@ func requirement(test *syntax.IfStmt, aliases map[string]bool) (string, bool) {
 		missing = test.True
 	}
 
-	return name, callsFail(missing)
+	return need, callsFail(missing)
 }
 
 // membership returns the in or not in test under any parentheses and not around the condition, and how many negations the condition holds.
@@ -163,13 +191,22 @@ func membership(cond syntax.Expr) (*syntax.BinaryExpr, int) {
 	return nil, 0
 }
 
-// skillName returns the text of a string literal under any parentheses. ok is false for any other expression.
-func skillName(expr syntax.Expr) (string, bool) {
-	if paren, ok := expr.(*syntax.ParenExpr); ok {
-		return skillName(paren.X)
+// skillName returns the need that the expression names, under any parentheses: a string literal, or `<expression>.vars["key"]` with a literal key.
+// ok is false for any other expression.
+func skillName(expr syntax.Expr) (skillNeed, bool) {
+	switch e := expr.(type) {
+	case *syntax.ParenExpr:
+		return skillName(e.X)
+	case *syntax.IndexExpr:
+		holder, isDot := e.X.(*syntax.DotExpr)
+		key, isText := literal(e.Y)
+
+		return skillNeed{name: key, fromVars: true}, isDot && holder.Name.Name == varsField && isText
 	}
 
-	return literal(expr)
+	name, isText := literal(expr)
+
+	return skillNeed{name: name}, isText
 }
 
 // callsFail reports whether a statement of the branch is a call of fail.

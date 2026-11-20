@@ -26,11 +26,73 @@ func TestExample_AnImplementStepWhoseAgentReportsNoSkillStopsTheItemBeforeTheGat
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "REFUSE")
-	assert.Contains(t, err.Error(), "did not call the skill "+exampleSkill(t))
+	assert.Contains(t, err.Error(), "did not call the skill "+exampleSkill)
 	assert.Contains(t, err.Error(), "run beehave resume "+testItem+", then beehave cancel "+testItem+", then beehave run "+testItem, "the text names the steps that start the item again")
 	assert.NotContains(t, err.Error(), "skill, then run beehave resume", "a plain resume replays the stop and is not the instruction")
 	assert.Zero(t, rig.h.gate.calls, "no gate runs when the implement step reported no skill")
 	assert.Equal(t, []string{"opus", "sonnet"}, rig.models(), "the plan step and the implement step ran, and no review ran after them")
+}
+
+// ownSkill is a skill that a project names in vars.review_skill in place of exampleSkill.
+const ownSkill = "the-own-review-skill"
+
+func TestExample_AProjectThatNamesAnotherSkillIsRefusedWhenItsAgentCallsOnlyTheOldOne(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	rig.project.Vars["review_skill"] = ownSkill
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "did not call the skill "+ownSkill)
+	assert.Contains(t, err.Error(), "vars.review_skill", "the refusal names the setting")
+	assert.NotContains(t, err.Error(), exampleSkill)
+	assert.Zero(t, rig.h.gate.calls, "no gate runs when the agent called only the skill of another project")
+}
+
+func TestExample_AProjectThatNamesAnotherSkillPassesWhenItsAgentCallsIt(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	rig.project.Vars["review_skill"] = ownSkill
+
+	reporting := rig.h.agents.result
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		result := reporting(request)
+		result.Skills = []string{ownSkill}
+
+		return result
+	}
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.NoError(t, err)
+	assert.Positive(t, rig.h.gate.calls, "the item reached the gate")
+}
+
+func TestExample_AProjectWithNoUsableReviewSkillIsRefusedBeforeAnyAgentStarts(t *testing.T) {
+	t.Parallel()
+
+	for name, value := range map[string]any{"a missing key": nil, "a blank text": "  ", "a number": 3, "a list": []any{exampleSkill}} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rig, file := exampleRig(t, func(int) string { return "approve" })
+			if value == nil {
+				delete(rig.project.Vars, "review_skill")
+			} else {
+				rig.project.Vars["review_skill"] = value
+			}
+
+			_, err := runPipeline(rig.h.engine(t), file)
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "vars.review_skill")
+			assert.Contains(t, err.Error(), "project file")
+			assert.Empty(t, rig.h.agents.requests, "the refusal comes before the plan agent")
+		})
+	}
 }
 
 func TestExample_AFullReviewThatApprovesWithAnOpenFindingIsAChangesVerdictAndSendsTheRunToAFix(t *testing.T) {

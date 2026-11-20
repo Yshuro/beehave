@@ -32,7 +32,7 @@ var dryPipeline = WithEntry("pipeline")
 var dryRound = WithVars(with(roundVars(map[string]any{
 	"base": "integration", "owner": "owner", "owner_email": "owner@example.com", "source_checkout": "/own/checkout", "merge": false,
 	"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round",
-}), map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}}))
+}), map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}, "review_skill": exampleSkill}))
 
 func dryFile(t *testing.T, text string) string {
 	t.Helper()
@@ -767,4 +767,18 @@ func TestDryRun_TheDryItemCarriesEveryFieldThatAWorkflowCanRead(t *testing.T) {
 	for _, name := range model.ItemFields() {
 		assert.Contains(t, fields, name)
 	}
+}
+
+func TestDryRun_AProjectWithNoReviewSkillInItsVarsReportsNoSkillAndTheExampleRefusesIt(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	vars := with(roundVars(map[string]any{
+		"base": "integration", "owner": "owner", "lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round",
+	}), map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}})
+
+	err := DryRun(t.Context(), dryRoundFile, "12", nil, &out, dryPipeline, WithVars(vars))
+
+	require.ErrorContains(t, err, "vars.review_skill")
 }

@@ -681,6 +681,7 @@ No undo runs:
 - The result of the call has the field `skills`: the list of the skills that the agent called, in the order of the calls. A workflow that needs a skill tests it, for example `"lint-pass" not in implement.skills`, and stops the item itself.
 - In a dry run, the fake agent reports each skill that the workflow requires. The dry run reads the syntax tree of the workflow file and of the files it loads, and runs no code. It parses these files again for this: it does not reuse the parse of `beehave check workflow`.
 - A skill is required when an `if` tests a text literal with `in` or `not in` against `<expression>.skills`, and the branch that runs when the skill is missing has a call of `fail(...)` as one of its own statements. Either quote style, `not`, `not not` and parentheses around the test count. The two usual forms are `"x" not in r.skills` with `fail` in the `if` branch, and `"x" in r.skills` with `fail` in the `else` branch. A name that the same function binds only from `<expression>.skills` (`called = r.skills`) counts in place of `<expression>.skills`. Each function is its own scope: a name from another function, a parameter, a loop variable and a name that the function binds again to something else do not count. A test inside a helper function counts.
+- The tested name can also be `<expression>.vars["key"]` with a text literal as the key. The dry run then reports the text that the key holds in the vars of the dry run, and no skill when the key is missing or holds no text.
 - A forbid check does not count: `if "x" in r.skills: fail(...)` requires nothing, so the fake agent does not report `x`.
 - The dry run does not follow these forms, and a workflow that needs the skill through one of them stops the dry run with its own refusal: a bool bound to the membership (`ok = "x" in r.skills`), `r.skills.count("x")`, a comprehension over the skills, an index such as `r["skills"]`, a skill name held in a constant (`n = "x"`), two tests joined with `and` or `or`, a `fail` that is not a statement of the branch itself (for example inside a deeper `if`), and a helper that takes the name as an argument (`def need(r, name)`). Write the literal in the test of the `if`: `"lint-pass" not in r.skills`.
 - A check under `if False` still counts. A check in a loaded function that the step never calls still counts. The dry run reads the text of the functions and does not follow calls.
@@ -728,6 +729,14 @@ One workflow written in this form, with five prompt files. The method lives in t
 4. A wait for the owner.
 5. A settle step.
 6. A merge step.
+
+#### The review skill of the implement step of `examples/remediation/`
+
+The workflow names no skill. The project names it.
+
+- The project file sets `vars.review_skill`: the name of a skill, such as `"your-review-skill"`. A run with no such key, or a value that is not a text that is not blank, is refused before the first agent starts. The message names the key.
+- After the implement step, the example refuses the item when the agent did not call that skill. The message names the skill and the key.
+- The test is `if project.vars["review_skill"] not in implement.skills:` with a `fail` call in its branch, so a dry run reads the key from the vars of the project and reports that skill from its fake agent.
 
 #### The mutation step of `examples/remediation/`
 

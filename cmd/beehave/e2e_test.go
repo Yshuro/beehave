@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -505,9 +503,13 @@ const e2eProject = `project(
     vars = {
         "round": {"base": "integration", "owner": "owner", "lane_cap": 1, "fix_rounds": 5, "source_checkout": "/own/checkout", "label": "round"},
         "mutation_command": ["sh", "mutation.sh"],
+        "review_skill": "` + e2eSkill + `",
     },
 )
 `
+
+// e2eSkill is the skill that the project of the scripts names in vars.review_skill and that the fake claude calls.
+const e2eSkill = "the-review-skill"
 
 // exampleMain is the one entry of the example that the scripts replace.
 const exampleMain = "def main(item):"
@@ -520,19 +522,6 @@ func oneItemCopy(example string) (string, error) {
 	}
 
 	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
-}
-
-// exampleSkillCheck matches the check of the example that the implement step called a skill: "name" not in implement.skills.
-var exampleSkillCheck = regexp.MustCompile(`"([^"]+)" not in implement\.skills`)
-
-// exampleSkill is the skill that the implement step of the example text must call. The example is the one place that names it.
-func exampleSkill(example string) (string, error) {
-	match := exampleSkillCheck.FindStringSubmatch(example)
-	if match == nil {
-		return "", errors.New("the example holds no check of the skills of the implement step")
-	}
-
-	return match[1], nil
 }
 
 // e2eFile is a file of the work folder of a script; a program is a file that the script starts.
@@ -574,14 +563,9 @@ func e2eSetup(env *testscript.Env) error {
 		return err
 	}
 
-	skill, err := exampleSkill(string(example))
-	if err != nil {
-		return err
-	}
-
 	// The fake claude keeps a transcript where the adapter looks for it: the agent of the scripts runs in the work folder with the work folder as its login folder.
 	transcripts := filepath.Dir(newAdapters(nil, nil, nil).agent(claude.Name).TranscriptPath(work, work, "session"))
-	fake := strings.NewReplacer("%SKILL%", skill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
+	fake := strings.NewReplacer("%SKILL%", e2eSkill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
 
 	files := map[string]e2eFile{
 		"bin/claude":                {fake, true},

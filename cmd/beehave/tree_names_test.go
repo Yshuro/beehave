@@ -39,12 +39,9 @@ var forbiddenNames = []*regexp.Regexp{
 // methodExample is the example that holds the method. The guard skips it.
 const methodExample = "examples/remediation"
 
-// methodScript drives examples/remediation and must name its required skill. The guard skips this one path, not its folder.
-const methodScript = "cmd/beehave/testdata/e2e/round-full-landing.txt"
-
-// exempt is true for the files of the method example and for the script that drives it.
+// exempt is true for the files of the method example.
 func exempt(rel string) bool {
-	return rel == methodScript || rel == methodExample || strings.HasPrefix(rel, methodExample+"/")
+	return rel == methodExample || strings.HasPrefix(rel, methodExample+"/")
 }
 
 // localExample is the example for a project with no method. Its files use no word of the method either.
@@ -112,15 +109,14 @@ func TestNamesIn_RefusesMethodWordsOnlyInTheLocalExample(t *testing.T) {
 	}
 }
 
-func TestExempt_HoldsTheMethodExampleAndOneScriptOnly(t *testing.T) {
+func TestExempt_HoldsTheMethodExampleOnly(t *testing.T) {
 	t.Parallel()
 
 	for rel, want := range map[string]bool{
-		methodScript:                                               true,
-		"examples/remediation/workflow.star":                       true,
-		"cmd/beehave/testdata/e2e/other.txt":                       false,
-		"cmd/beehave/testdata/e2e/round-full.txt":                  false,
-		"cmd/beehave/testdata/e2e/" + "round-full-landing.txt.bak": false,
+		"examples/remediation/workflow.star":               true,
+		"cmd/beehave/testdata/e2e/other.txt":               false,
+		"cmd/beehave/testdata/e2e/round-full-landing.txt":  false,
+		"cmd/beehave/testdata/e2e/" + "round-full.txt.bak": false,
 	} {
 		require.Equal(t, want, exempt(rel), rel)
 	}

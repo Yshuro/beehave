@@ -119,3 +119,41 @@ func TestRequiredSkills_FindsNothingInAFileThatCannotBeRead(t *testing.T) {
 
 	assert.Empty(t, RequiredSkills(filepath.Join(t.TempDir(), "missing.star")))
 }
+
+func writeWorkflow(t *testing.T, source string) string {
+	t.Helper()
+
+	file := filepath.Join(t.TempDir(), "workflow.star")
+	require.NoError(t, os.WriteFile(file, []byte(source+"\nr, project, key = None, None, ''\n"), 0o600))
+
+	return file
+}
+
+func TestRequiredSkillVars_FindsTheKeyOfAVarsTestAndNoLiteralSkill(t *testing.T) {
+	t.Parallel()
+
+	file := writeWorkflow(t, "def main(item):\n    if project.vars[\"review\"] not in r.skills:\n        fail('m')\n    if (project.vars['again']) in r.skills:\n        pass\n    else:\n        fail('m')\n")
+
+	assert.Equal(t, []string{"review", "again"}, RequiredSkillVars(file))
+	assert.Empty(t, RequiredSkills(file), "a key is not a skill name")
+}
+
+func TestRequiredSkillVars_FindsNothingThatIsNotAVarsKeyTestWithAFail(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"a dict that is not the vars": "def main(item):\n    if project.facts[\"x\"] not in r.skills:\n        fail('m')\n",
+		"a name for the dict":         "def main(item):\n    if vars[\"x\"] not in r.skills:\n        fail('m')\n",
+		"a key that is not a literal": "def main(item):\n    if project.vars[key] not in r.skills:\n        fail('m')\n",
+		"a test with no fail":         "def main(item):\n    if project.vars[\"x\"] not in r.skills:\n        pass\n",
+		"a forbid check on the key":   "def main(item):\n    if project.vars[\"x\"] in r.skills:\n        fail('m')\n",
+	}
+
+	for name, source := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Empty(t, RequiredSkillVars(writeWorkflow(t, source)))
+		})
+	}
+}
