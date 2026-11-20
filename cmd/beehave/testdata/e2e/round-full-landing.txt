@@ -68,6 +68,9 @@ grep -count=2 '^review$' calls.log
 grep -count=1 '^sync land ' remedy.log
 grep -count=1 '^MergePR ' forge/calls.log
 grep -count=1 '^integration/s1$' forge/opened-1
+# The child branch starts at the tip of the round branch after the sync land, not at the trunk branch.
+exec git --git-dir=remote.git rev-parse 432^
+cmp stdout s1-after-sync
 exec git --git-dir=remote.git show integration/s1:432.txt
 stdout '^432$'
 exec git --git-dir=remote.git show integration/s1:moved.txt
