@@ -52,9 +52,10 @@ func (c *committingRig) commit(t *testing.T) {
 	c.heads = append(c.heads, head)
 
 	// The gate of the rig judges the head that the last commit made, as a real gate judges the head it is given.
+	// A rig with fewer gate results than commits reruns its last result, so that result takes the head too.
 	c.h.gate.mu.Lock()
 	for i := range c.h.gate.results {
-		if i >= len(c.heads)-1 {
+		if i >= min(len(c.heads), len(c.h.gate.results))-1 {
 			c.h.gate.results[i].Head = head
 		}
 	}
