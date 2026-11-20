@@ -39,6 +39,14 @@ var forbiddenNames = []*regexp.Regexp{
 // methodExample is the example that holds the method. The guard skips it.
 const methodExample = "examples/remediation"
 
+// methodScript drives examples/remediation and must name its required skill. The guard skips this one path, not its folder.
+const methodScript = "cmd/beehave/testdata/e2e/round-full-landing.txt"
+
+// exempt is true for the files of the method example and for the script that drives it.
+func exempt(rel string) bool {
+	return rel == methodScript || rel == methodExample || strings.HasPrefix(rel, methodExample+"/")
+}
+
 // localExample is the example for a project with no method. Its files use no word of the method either.
 const localExample = "examples/local/"
 
@@ -104,6 +112,25 @@ func TestNamesIn_RefusesMethodWordsOnlyInTheLocalExample(t *testing.T) {
 	}
 }
 
+func TestExempt_HoldsTheMethodExampleAndOneScriptOnly(t *testing.T) {
+	t.Parallel()
+
+	for rel, want := range map[string]bool{
+		methodScript:                                               true,
+		"examples/remediation/workflow.star":                       true,
+		"cmd/beehave/testdata/e2e/other.txt":                       false,
+		"cmd/beehave/testdata/e2e/round-full.txt":                  false,
+		"cmd/beehave/testdata/e2e/" + "round-full-landing.txt.bak": false,
+	} {
+		require.Equal(t, want, exempt(rel), rel)
+	}
+
+	sibling := fstest.MapFS{"cmd/beehave/testdata/e2e/other.txt": {Data: []byte("skill blast" + "-radius-" + "review")}}
+	hits, err := namesIn(sibling, "cmd/beehave/testdata/e2e/other.txt")
+	require.NoError(t, err)
+	require.NotEmpty(t, hits, "another script of the folder that names the skill is still caught")
+}
+
 func TestTrackedFiles_CoversTheExamplesButTheMethod(t *testing.T) {
 	t.Parallel()
 
@@ -127,7 +154,7 @@ func trackedFiles(t *testing.T, root string) []string {
 	require.NoError(t, err)
 	var files []string
 	for _, rel := range strings.Split(string(out), "\x00") {
-		if rel == "" || rel == methodExample || strings.HasPrefix(rel, methodExample+"/") {
+		if rel == "" || exempt(rel) {
 			continue
 		}
 		files = append(files, rel)

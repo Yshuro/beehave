@@ -52,7 +52,7 @@ func TestMain(m *testing.M) {
 		os.Exit(code)
 	}
 
-	testscript.Main(m, map[string]func(){"beehave": e2eBeehave, "beehavereal": e2eReal, "beehaveswarm": e2eSwarm})
+	testscript.Main(m, map[string]func(){"beehave": e2eBeehave, "beehavereal": e2eReal, "beehaveswarm": e2eSwarm, "beehaveround": e2eRound})
 }
 
 // e2eBeehave is the beehave command of the scripts. It matches main, with the fake collaborators.
