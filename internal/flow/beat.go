@@ -58,13 +58,18 @@ func (h *holds) hold(ctx dbos.Context, project, owner string) (string, func()) {
 		return "", func() {}
 	}
 
-	h.add(id, claimHold{project: project, owner: owner})
-
-	return id, func() { h.drop(id) }
+	return id, h.keep(id, project, owner)
 }
 
-// add records the claim of a run and gives it its context. A claim that the run already holds ends: its context is done, so no agent keeps running under a row that no longer exists.
-func (h *holds) add(id string, row claimHold) {
+// keep records the claim of a run and returns the function that forgets that claim and no later one of the same run id.
+func (h *holds) keep(id, project, owner string) func() {
+	claim := h.add(id, claimHold{project: project, owner: owner})
+
+	return func() { h.dropOwn(claim, id) }
+}
+
+// add records the claim of a run and gives it its context, which it returns. A claim that the run already holds ends: its context is done, so no agent keeps running under a row that no longer exists.
+func (h *holds) add(id string, row claimHold) context.Context {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -78,6 +83,18 @@ func (h *holds) add(id string, row claimHold) {
 
 	row.ctx, row.cancel = context.WithCancel(context.Background())
 	h.rows[id] = row
+
+	return row.ctx
+}
+
+// dropOwn forgets the claim of a run when claim is still the context of its row. A run that resumed under the same id holds a newer row, and the ending of the earlier attempt leaves it alone.
+func (h *holds) dropOwn(claim context.Context, id string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.rows[id].ctx == claim {
+		h.release(id)
+	}
 }
 
 // drop forgets the claim of a run, stops its timer and ends its context, so the agents of the run stop with it.

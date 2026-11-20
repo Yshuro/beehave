@@ -79,6 +79,25 @@ func TestHolds_ACallOutsideAWorkflowHoldsAndTracksNothing(t *testing.T) {
 	require.ErrorIs(t, runCtx.Err(), context.Canceled)
 }
 
+func TestHolds_TheEndOfAnEarlierAttemptKeepsTheClaimOfTheResumedRun(t *testing.T) {
+	t.Parallel()
+
+	var held holds
+
+	forgetEarlier := held.keep("run-1", testProject, testOwner)
+	forgetResumed := held.keep("run-1", testProject, testOwner)
+
+	forgetEarlier()
+	assert.Contains(t, held.rows, "run-1", "the earlier attempt does not forget the claim that the resumed run holds")
+	require.NoError(t, held.rows["run-1"].ctx.Err(), "the claim of the resumed run stays live")
+
+	forgetResumed()
+	assert.NotContains(t, held.rows, "run-1", "the resumed run forgets its own claim")
+
+	forgetResumed()
+	assert.Empty(t, held.rows, "a second forget finds nothing")
+}
+
 func TestHolds_FailKeepsTheReasonAndASnapshotDropsTheLostClaim(t *testing.T) {
 	t.Parallel()
 
