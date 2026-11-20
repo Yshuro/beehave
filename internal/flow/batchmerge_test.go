@@ -116,6 +116,17 @@ func TestBatchMerge_TheGateOfTheUnionRunsOnTheHostThatTheRunChose(t *testing.T) 
 	}
 }
 
+func TestBatchMerge_TheGateOfTheUnionReadsThePinFileAtTheBaseOfTheCallAndRunsNoCandidateCheck(t *testing.T) {
+	t.Parallel()
+
+	rig := newBatchRig(t)
+
+	_, err := rig.walk(t, rig.call("1 3", ""))
+
+	require.NoError(t, err)
+	assert.Equal(t, [][2]string{{"", "main"}}, rig.gate.submittedBases(), "one gate of the union: no base for the checks, the base of the call for the pin file")
+}
+
 func TestBatchMerge_TheProjectGateReportsTheTreeOfTheUnionItRanOn(t *testing.T) {
 	t.Parallel()
 

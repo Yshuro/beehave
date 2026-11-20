@@ -371,7 +371,7 @@ func stepSignatures() map[string][]Param {
 		},
 		writeName: writeParams(),
 		gateName: {
-			words(runWord), opt("host", KindText), ruled("timeout", KindText, durationRule("timeout")), opt("head", KindText), opt("base", KindText), label,
+			words(runWord), opt("host", KindText), ruled("timeout", KindText, durationRule("timeout")), opt("head", KindText), opt("base", KindText), opt("pin_base", KindText), label,
 		},
 		waitName:         waitParams(),
 		earlierCallsName: {req("call", KindText), label},

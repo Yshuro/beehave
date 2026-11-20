@@ -16,9 +16,9 @@ import (
 
 // roundGate is the gate of the engine.
 type roundGate interface {
-	Submit(ctx context.Context, project, item, host, base string) (flow.GateJob, error)
+	Submit(ctx context.Context, project, item, host, base, _ string) (flow.GateJob, error)
 	Run(ctx context.Context, project, item, host string, job flow.GateJob) (flow.GateResult, error)
-	Key(ctx context.Context, project, item, host, base string) (flow.GateKey, error)
+	Key(ctx context.Context, project, item, host, base, _ string) (flow.GateKey, error)
 }
 
 // checkedGate gives the gate of a candidate, the gate with a base, a clean record of the host checks: one new test, a clean secret scan, and a revert run in which the test fails.

@@ -167,6 +167,9 @@ type fakeGate struct {
 	bases []string
 	// keyBases are the base branches that Key was given, in order.
 	keyBases []string
+	// pinBases and keyPinBases are the pin bases that Submit and Key were given, in order.
+	pinBases    []string
+	keyPinBases []string
 	// checks is the check record that Run gives a passed result with none, or nil for no record.
 	checks *GateChecks
 }
@@ -180,12 +183,13 @@ func (g *fakeGate) gatedOn() []string {
 }
 
 // Key answers from keys in order, the last repeating. With no keys it gives an empty key, so no gate reuses a pass.
-func (g *fakeGate) Key(_ context.Context, _, _, host, base string) (GateKey, error) {
+func (g *fakeGate) Key(_ context.Context, _, _, host, base, pinBase string) (GateKey, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
 	g.hosts = append(g.hosts, host)
 	g.keyBases = append(g.keyBases, base)
+	g.keyPinBases = append(g.keyPinBases, pinBase)
 
 	if len(g.keys) == 0 {
 		return GateKey{}, g.keyErr
@@ -199,35 +203,36 @@ func (g *fakeGate) Key(_ context.Context, _, _, host, base string) (GateKey, err
 
 // The gates below run a tree of their own and give no key, so the engine never reuses a pass for them.
 
-func (*treeGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (*treeGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (packageGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (packageGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (hostDiedGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (hostDiedGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (zeroTestGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (zeroTestGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (deadlineGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (deadlineGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (slowGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (slowGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
 // Submit counts the host jobs that it started and gives each one an id.
-func (g *fakeGate) Submit(_ context.Context, _, _, host, base string) (GateJob, error) {
+func (g *fakeGate) Submit(_ context.Context, _, _, host, base, pinBase string) (GateJob, error) {
 	g.mu.Lock()
 	g.hosts = append(g.hosts, host)
 	g.bases = append(g.bases, base)
+	g.pinBases = append(g.pinBases, pinBase)
 	g.mu.Unlock()
 
 	return GateJob{ID: fmt.Sprintf("job-%d", g.submits.Add(1)), Head: gatedHead}, nil

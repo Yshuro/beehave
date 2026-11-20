@@ -27,11 +27,11 @@ type headGate struct {
 	runs atomic.Int32
 }
 
-func (*headGate) Key(context.Context, string, string, string, string) (GateKey, error) {
+func (*headGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
 	return GateKey{}, nil
 }
 
-func (g *headGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (g *headGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{ID: "job-" + strconv.Itoa(int(g.jobs.Add(1)))}, nil
 }
 

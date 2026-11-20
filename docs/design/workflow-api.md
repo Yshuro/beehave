@@ -86,6 +86,7 @@ The Change column says how the pair differs from the contract that the five piec
 | `gate` | `head` | unchanged | 1: `examples/remediation/workflow.star` |
 | `gate` | `host` | unchanged | 1: `examples/remediation/workflow.star` |
 | `gate` | `name` | unchanged | 5: `examples/local/workflow.star`, `examples/maintenance/bump.star` and 3 more |
+| `gate` | `pin_base` | unchanged | 1: `examples/remediation/workflow.star` |
 | `gate` | `run` | unchanged | 2: `examples/remediation/workflow.star`, `examples/research-desk/workflow.star` |
 | `gate` | `timeout` | unchanged | 1: `examples/remediation/workflow.star` |
 | `gather` | `-` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
