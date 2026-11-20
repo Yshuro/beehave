@@ -130,7 +130,7 @@ func TestWorktrees_EnsureWithNoStartRefusesAKeptRoundWorktreeWithChangesAndNames
 	t.Parallel()
 
 	for _, test := range []struct{ name, file string }{
-		{"untracked_file", "base-reds.md"},
+		{"untracked_file", "stray.txt"},
 		{"tracked_edit", "TIP"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

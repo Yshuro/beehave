@@ -113,7 +113,7 @@ func TestRound_TheSettingsGiveEveryKeyAndTheDefaultsOfTheKeysTheFileLeavesOut(t 
 	require.NoError(t, err)
 	for _, want := range []string{
 		`"base": "integration/s1"`, `"owner": "tobocop2"`, `"lane_cap": 4`, `"fix_rounds": 5`, `"label": "beehave-round"`,
-		`"lane_kind": "impl"`, `"base_reds_file": "base-reds.md"`, `"wait_hours": 24`, `"integration_pr": 0`, `"merge": False`, `"hand_off": False`, `"items": []`,
+		`"lane_kind": "impl"`, `"base_reds_file": "../base-reds-integration_2Fs1.md"`, `"wait_hours": 24`, `"integration_pr": 0`, `"merge": False`, `"hand_off": False`, `"items": []`,
 	} {
 		assert.Contains(t, shown, want)
 	}
@@ -192,6 +192,19 @@ func TestRound_BadValuesAreRefusedWithTheKeyAndTheFix(t *testing.T) {
 	} {
 		assert.Contains(t, refusalOf(t, roundVars(with(roundSettings(), test.change))), test.want, name)
 	}
+}
+
+func TestRound_TheDefaultRecordOfTheBaseRedsIsNamedByTheBaseOfTheRound(t *testing.T) {
+	t.Parallel()
+
+	one, err := settingsOf(t, roundVars(with(roundSettings(), map[string]any{"base": "integration/r1"})))
+	require.NoError(t, err)
+
+	two, err := settingsOf(t, roundVars(with(roundSettings(), map[string]any{"base": "integration/r2"})))
+	require.NoError(t, err)
+
+	assert.Contains(t, one, `"base_reds_file": "../base-reds-integration_2Fr1.md"`)
+	assert.Contains(t, two, `"base_reds_file": "../base-reds-integration_2Fr2.md"`)
 }
 
 func TestRound_ARoundThatIsNotADictIsRefused(t *testing.T) {
