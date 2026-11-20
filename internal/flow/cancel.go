@@ -18,7 +18,8 @@ const (
 )
 
 // attempt is one execution of a run. A resumed run reuses the run id and gets a new attempt, so the pointer, not the id, names the attempt.
-// cancel ends its context, ended closes when its workflow function returns, and owner is the token of its claim, read only after ended closes.
+// cancel ends its context, and ended closes when its workflow function returns. owner is the token of its claim: the item body sets it after the take
+// and a give-back reads it after ended closes, and an attempt made from a cancel marker carries the token of the marker.
 type attempt struct {
 	id     string
 	in     ItemInput
@@ -247,8 +248,8 @@ func (e *Engine) giveBackStrayCancels() {
 		return
 	}
 
-	for id, in := range pending {
-		if a := (&attempt{id: id, in: in}); e.cancels.begin(a) {
+	for id, mark := range pending {
+		if a := mark.attempt(id); e.cancels.begin(a) {
 			e.tickRun.Go(func() { e.giveBackStray(a) })
 		}
 	}
@@ -320,15 +321,16 @@ func (e *Engine) giveBackWhenEnded(a *attempt, stop <-chan struct{}) {
 	}
 }
 
-// giveBack forgets the agent groups of a canceled run, removes its worktree and releases its claim with the token the run holds now.
+// giveBack forgets the agent groups of a canceled attempt, removes its worktree and releases its claim with the token of the attempt.
 func (e *Engine) giveBack(ctx context.Context, a *attempt) {
 	e.endGroups(a)
 	e.giveBackClaim(ctx, a)
 }
 
-// giveBackClaim removes the worktree of a canceled item and releases its claim. A run that never claimed has nothing to give back.
+// giveBackClaim removes the worktree of a canceled item and releases the claim of the attempt. A run that never claimed has nothing to give back.
+// The files of the run go only while they name the token of the attempt: a resume can take the item once the release frees it.
 func (e *Engine) giveBackClaim(ctx context.Context, a *attempt) {
-	owner, err := currentOwner(e.ctx, e.dir, a.id)
+	owner, err := releaseOwner(e.ctx, a)
 	if err == nil {
 		err = ReleaseDeps{Lifecycle: e.deps.Lifecycle, Trees: e.deps.Trees, Clock: e.deps.Clock, Repository: e.deps.Repository}.giveBack(ctx, e.logger, a.in.Project, a.in.Item, owner)
 	}
@@ -339,5 +341,5 @@ func (e *Engine) giveBackClaim(ctx context.Context, a *attempt) {
 		return
 	}
 
-	e.forget(a.id)
+	e.forgetAttempt(a.id, owner)
 }

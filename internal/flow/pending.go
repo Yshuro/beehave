@@ -19,7 +19,7 @@ import (
 
 const cancelsDir = "canceled"
 
-// A cancel marker is a file named for a run, in the canceled folder of the state folder. It holds the item and the project of the run.
+// A cancel marker is a file named for a run, in the canceled folder of the state folder. It holds the item and the project of the run, and the claim token the run held at the cancel.
 // beehave cancel writes it before it cancels the run. The marker ends when the release of the worktree and the claim ends.
 // A marker that is still there at the next start shows a release that no process finished.
 
@@ -36,23 +36,35 @@ func runOfFile(name string) (string, error) { return url.PathUnescape(name) }
 // tempPrefix starts the name of a marker that is not complete. The sweep skips such a file.
 const tempPrefix = "."
 
+// cancelMark is what a cancel marker holds: the item and the project of the run, and the token of the claim that the run held at the cancel, or none.
+type cancelMark struct {
+	ItemInput
+
+	Owner string `json:"owner,omitempty"`
+}
+
+// attempt returns the attempt that the give-back of the marker releases: the run of the marker with the token of the marker.
+func (m cancelMark) attempt(id string) *attempt {
+	return &attempt{id: id, in: m.ItemInput, owner: m.Owner}
+}
+
 // markCancel writes the cancel marker of a run. It writes a temporary file in the same folder, then renames it, so a crash leaves no half marker.
-func markCancel(dir, id string, in ItemInput) error {
-	if err := writeMarker(dir, id, in); err != nil {
+func markCancel(dir, id string, mark cancelMark) error {
+	if err := writeMarker(dir, id, mark); err != nil {
 		return fmt.Errorf("mark the cancel of run %s: %w", id, err)
 	}
 
 	return nil
 }
 
-func writeMarker(dir, id string, in ItemInput) error {
+func writeMarker(dir, id string, mark cancelMark) error {
 	folder := filepath.Join(dir, cancelsDir)
 
 	if err := os.MkdirAll(folder, ownersMode); err != nil {
 		return err
 	}
 
-	data, err := json.Marshal(in)
+	data, err := json.Marshal(mark)
 	if err == nil {
 		err = atomicfile.Write(cancelPath(dir, id), append(data, '\n'), ownerMode)
 	}
@@ -61,7 +73,7 @@ func writeMarker(dir, id string, in ItemInput) error {
 }
 
 // pendingCancels reads every cancel marker, by run id. A marker that cannot be read is logged and skipped: it must not stop the sweep of the other runs.
-func pendingCancels(dir string, logger *slog.Logger) (map[string]ItemInput, error) {
+func pendingCancels(dir string, logger *slog.Logger) (map[string]cancelMark, error) {
 	entries, err := os.ReadDir(filepath.Join(dir, cancelsDir))
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("read the cancel markers: %w", err)
@@ -70,61 +82,78 @@ func pendingCancels(dir string, logger *slog.Logger) (map[string]ItemInput, erro
 	return readMarkers(dir, entries, logger), nil
 }
 
-func readMarkers(dir string, entries []os.DirEntry, logger *slog.Logger) map[string]ItemInput {
-	pending := make(map[string]ItemInput, len(entries))
+func readMarkers(dir string, entries []os.DirEntry, logger *slog.Logger) map[string]cancelMark {
+	pending := make(map[string]cancelMark, len(entries))
 
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), tempPrefix) {
 			continue
 		}
 
-		id, in, err := readMarker(dir, entry.Name())
+		id, mark, err := readMarker(dir, entry.Name())
 		if err != nil {
 			logger.Warn("skipped a cancel marker", "error", err)
 
 			continue
 		}
 
-		pending[id] = in
+		pending[id] = mark
 	}
 
 	return pending
 }
 
 // readMarker reads the cancel marker with this file name and returns the run id it holds.
-func readMarker(dir, name string) (string, ItemInput, error) {
+func readMarker(dir, name string) (string, cancelMark, error) {
 	id, err := runOfFile(name)
 	if err != nil {
-		return "", ItemInput{}, fmt.Errorf("bad file name: %w", err)
+		return "", cancelMark{}, fmt.Errorf("bad file name: %w", err)
 	}
 
-	in, err := readCancel(dir, id)
+	mark, err := readCancel(dir, id)
 	if err != nil {
-		return "", ItemInput{}, fmt.Errorf("cannot be read: %w", err)
+		return "", cancelMark{}, fmt.Errorf("cannot be read: %w", err)
 	}
 
-	return id, in, nil
+	return id, mark, nil
 }
 
 // readCancel reads the cancel marker of one run.
-func readCancel(dir, id string) (ItemInput, error) {
-	var in ItemInput
+func readCancel(dir, id string) (cancelMark, error) {
+	var mark cancelMark
 
 	data, err := os.ReadFile(cancelPath(dir, id))
 	if err == nil {
-		err = json.Unmarshal(data, &in)
+		err = json.Unmarshal(data, &mark)
 	}
 
 	if err != nil {
-		return ItemInput{}, fmt.Errorf("read the cancel marker of run %s: %w", id, err)
+		return cancelMark{}, fmt.Errorf("read the cancel marker of run %s: %w", id, err)
 	}
 
-	return in, nil
+	return mark, nil
 }
 
-// forgetRun removes the files that belong to one run: its token file and its cancel marker. A missing file is not an error.
+// forgetRun removes the files that belong to one run that the store deleted: its token file and its cancel marker. A missing file is not an error.
 func forgetRun(dir, id string) error {
 	return errors.Join(removeFile(ownerPath(dir, id)), removeFile(cancelPath(dir, id)))
+}
+
+// forgetAttempt removes the files of a run that belong to the claim token owner: the token file when it holds owner, and the cancel marker when it names owner
+// or no token. A token that a later resume saved, and the marker of a later cancel, stay.
+func forgetAttempt(dir, id, owner string) error {
+	return underOwners(dir, func() error {
+		return errors.Join(removeOwnedToken(dir, id, owner), removeOwnedMarker(dir, id, owner))
+	})
+}
+
+// removeOwnedMarker removes the cancel marker of a run unless it names a token other than owner. The caller holds the owners lock.
+func removeOwnedMarker(dir, id, owner string) error {
+	if mark, err := readCancel(dir, id); err == nil && mark.Owner != "" && mark.Owner != owner {
+		return nil
+	}
+
+	return removeFile(cancelPath(dir, id))
 }
 
 func removeFile(path string) error {
@@ -138,6 +167,23 @@ func removeFile(path string) error {
 // forget removes the files of a run and logs a failure: the run is over, so the failure stops nothing.
 func (e *Engine) forget(id string) {
 	e.warnOn(forgetRun(e.dir, id), id)
+}
+
+// forgetAttempt removes the files of a run that belong to the claim token owner and logs a failure.
+func (e *Engine) forgetAttempt(id, owner string) {
+	e.warnOn(forgetAttempt(e.dir, id, owner), id)
+}
+
+// markRunCancel writes the cancel marker of a run with the token of the claim that the run holds now. A run that recorded no claim gets a marker with no token.
+func markRunCancel(client dbos.Client, dir, id string, in ItemInput) (cancelMark, error) {
+	owner, err := currentOwner(client, dir, id)
+	if err != nil && !errors.Is(err, errNoOwner) {
+		return cancelMark{}, fmt.Errorf("mark the cancel of run %s: %w", id, err)
+	}
+
+	mark := cancelMark{ItemInput: in, Owner: owner}
+
+	return mark, markCancel(dir, id, mark)
 }
 
 // warnOn logs a failure to remove a file of a run.
@@ -162,8 +208,8 @@ func (e *Engine) sweepCancels() {
 	ctx, cancel := ReleaseDeps{Clock: e.deps.Clock}.limit(context.WithoutCancel(e.ctx))
 	defer cancel()
 
-	for id, in := range pending {
-		e.sweepOne(ctx, &attempt{id: id, in: in}, true)
+	for id, mark := range pending {
+		e.sweepOne(ctx, mark.attempt(id), true)
 	}
 }
 
@@ -176,7 +222,7 @@ func (e *Engine) sweepOne(ctx context.Context, a *attempt, atStart bool) {
 	case err != nil:
 		e.logger.WarnContext(ctx, "cannot read a canceled run", "run", a.id, "error", err)
 	case state.superseded || (!state.canceled && (atStart || !state.open)):
-		e.warnOn(removeFile(cancelPath(e.dir, a.id)), a.id)
+		e.warnOn(underOwners(e.dir, func() error { return removeOwnedMarker(e.dir, a.id, a.owner) }), a.id)
 	case !state.canceled:
 		// beehave cancel writes the marker before it cancels the run, so the cancel may still come.
 	default:

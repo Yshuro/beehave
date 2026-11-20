@@ -63,6 +63,9 @@ func (e *Engine) item(parent dbos.Context, in ItemInput) (ItemResult, error) {
 			return ItemResult{}, err
 		}
 
+		// The give-back of a cancel reads the token after the attempt ends, so the write needs no lock.
+		a.owner = owner
+
 		result, workErr := e.workHolding(ctx, a, login, claimTake{owner: owner, took: took})
 
 		// A run whose context ended is canceled, interrupted or without its claim. A canceled run is released by the tick; an interrupted run keeps its claim and continues at the next beehave run.
@@ -71,7 +74,7 @@ func (e *Engine) item(parent dbos.Context, in ItemInput) (ItemResult, error) {
 			return result, workErr
 		}
 
-		return result, errors.Join(workErr, e.finish(ctx, in, owner))
+		return result, errors.Join(workErr, e.finish(ctx, a))
 	})
 }
 
@@ -187,11 +190,12 @@ func (e *Engine) firstRenewal(ctx context.Context, a *attempt, owner string) err
 	}
 }
 
-// finish releases an item. The token file of the run ends with a release that worked: a later run that reuses the run id must not read a dead token.
-func (e *Engine) finish(ctx dbos.Context, in ItemInput, owner string) error {
-	err := e.release(ctx, in, owner)
+// finish releases the item of an attempt. The token file of the run ends with a release that worked, while it still holds the token of the attempt:
+// a later run that reuses the run id must not read a dead token, and the token of a later resume stays.
+func (e *Engine) finish(ctx dbos.Context, a *attempt) error {
+	err := e.release(ctx, a.in, a.owner)
 	if err == nil {
-		e.forget(workflowID(ctx))
+		e.forgetAttempt(a.id, a.owner)
 	}
 
 	return err

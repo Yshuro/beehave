@@ -206,11 +206,11 @@ func TestGiveBack_ARunThatNeverClaimedHasNothingToRelease(t *testing.T) {
 	engine := harness.engine(t)
 	client := harness.client(t, testVersion)
 
-	require.NoError(t, client.giveBack(testProject, testItem, "item-99-r1"))
+	require.NoError(t, client.giveBack(&attempt{id: "item-99-r1", in: ItemInput{Item: testItem, Project: testProject}}))
 	engine.giveBack(t.Context(), &attempt{id: "item-99-r1", in: ItemInput{Item: testItem, Project: testProject}})
 
 	require.NoError(t, os.MkdirAll(ownerPath(harness.opts.StateDir, "item-98-r1"), ownersMode))
-	require.ErrorContains(t, client.giveBack(testProject, testItem, "item-98-r1"), "read the claim of run item-98-r1")
+	require.ErrorContains(t, client.giveBack(&attempt{id: "item-98-r1", in: ItemInput{Item: testItem, Project: testProject}}), "read the claim of run item-98-r1")
 
 	assert.Empty(t, harness.life.seen())
 }

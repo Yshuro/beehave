@@ -274,7 +274,7 @@ func TestLaunch_DropsTheMarkerOfARunThatIsNotCancelled(t *testing.T) {
 	t.Parallel()
 
 	harness := newHarness(t)
-	require.NoError(t, markCancel(harness.opts.StateDir, "item-99-r1", ItemInput{Item: "99", Project: testProject}))
+	require.NoError(t, markCancel(harness.opts.StateDir, "item-99-r1", cancelMark{ItemInput: ItemInput{Item: "99", Project: testProject}}))
 
 	harness.engine(t)
 
@@ -325,7 +325,7 @@ func TestPendingCancels_SkipsAMarkerThatIsNotCompleteAndSaysNothing(t *testing.T
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, markCancel(dir, testRun, ItemInput{Item: testItem, Project: testProject}))
+	require.NoError(t, markCancel(dir, testRun, cancelMark{ItemInput: ItemInput{Item: testItem, Project: testProject}}))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, cancelsDir, tempPrefix+"123"), []byte(`{"Item"`), ownerMode))
 
 	var out bytes.Buffer
@@ -333,7 +333,7 @@ func TestPendingCancels_SkipsAMarkerThatIsNotCompleteAndSaysNothing(t *testing.T
 	pending, err := pendingCancels(dir, newLogger(&out))
 
 	require.NoError(t, err)
-	assert.Equal(t, map[string]ItemInput{testRun: {Item: testItem, Project: testProject}}, pending)
+	assert.Equal(t, map[string]cancelMark{testRun: {ItemInput: ItemInput{Item: testItem, Project: testProject}}}, pending)
 	assert.Empty(t, out.String(), "a temporary file is not a marker, so it is not a warning")
 }
 
@@ -341,7 +341,7 @@ func TestPendingCancels_LogsAndSkipsAMarkerThatCannotBeRead(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, markCancel(dir, testRun, ItemInput{Item: testItem, Project: testProject}))
+	require.NoError(t, markCancel(dir, testRun, cancelMark{ItemInput: ItemInput{Item: testItem, Project: testProject}}))
 	require.NoError(t, os.WriteFile(cancelPath(dir, "aaa-corrupt"), nil, ownerMode))
 
 	var out bytes.Buffer
@@ -358,7 +358,7 @@ func TestMarkCancel_WritesTheMarkerWithModeOwnerOnly(t *testing.T) {
 
 	dir := t.TempDir()
 
-	require.NoError(t, markCancel(dir, testRun, ItemInput{Item: testItem, Project: testProject}))
+	require.NoError(t, markCancel(dir, testRun, cancelMark{ItemInput: ItemInput{Item: testItem, Project: testProject}}))
 
 	info, err := os.Stat(cancelPath(dir, testRun))
 	require.NoError(t, err)
@@ -369,9 +369,9 @@ func TestMarkCancel_LeavesNoTemporaryFileAndAFolderThatCannotBeWrittenIsAnError(
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, markCancel(dir, testRun, ItemInput{Item: testItem, Project: testProject}))
+	require.NoError(t, markCancel(dir, testRun, cancelMark{ItemInput: ItemInput{Item: testItem, Project: testProject}}))
 	require.NoError(t, os.Mkdir(cancelPath(dir, "blocked"), ownersMode))
-	require.Error(t, markCancel(dir, "blocked", ItemInput{}), "the rename onto a folder fails")
+	require.Error(t, markCancel(dir, "blocked", cancelMark{}), "the rename onto a folder fails")
 
 	entries, err := os.ReadDir(filepath.Join(dir, cancelsDir))
 	require.NoError(t, err)
@@ -384,7 +384,7 @@ func TestMarkCancel_LeavesNoTemporaryFileAndAFolderThatCannotBeWrittenIsAnError(
 	require.NoError(t, exectest.ChmodFolder(folder, 0o500)) // the test makes its own folder read-only
 	t.Cleanup(func() { require.NoError(t, exectest.ChmodFolder(folder, ownersMode)) })
 
-	require.ErrorContains(t, markCancel(dir, "item-13-r1", ItemInput{}), "mark the cancel of run item-13-r1")
+	require.ErrorContains(t, markCancel(dir, "item-13-r1", cancelMark{}), "mark the cancel of run item-13-r1")
 }
 
 func TestSweepCancels_DropsTheMarkerOfARunWhenTheItemHasANewerRun(t *testing.T) {
@@ -402,7 +402,7 @@ func TestSweepCancels_DropsTheMarkerOfARunWhenTheItemHasANewerRun(t *testing.T) 
 	_ = runInBackground(engine, testItem)
 	waitOn(t, condition(func() bool { return harness.agents.running() == 1 }))
 
-	require.NoError(t, markCancel(harness.opts.StateDir, testRun, ItemInput{Item: testItem, Project: testProject}))
+	require.NoError(t, markCancel(harness.opts.StateDir, testRun, cancelMark{ItemInput: ItemInput{Item: testItem, Project: testProject}}))
 
 	engine.sweepCancels()
 
@@ -435,7 +435,7 @@ func TestSweepCancels_AllTheMarkersShareOneReleaseTimeout(t *testing.T) {
 	waitOn(t, condition(func() bool { return len(harness.life.releasedBy()) == markers }))
 
 	for _, item := range items {
-		require.NoError(t, markCancel(harness.opts.StateDir, runID(item, 1), ItemInput{Item: item, Project: testProject}))
+		require.NoError(t, markCancel(harness.opts.StateDir, runID(item, 1), cancelMark{ItemInput: ItemInput{Item: item, Project: testProject}}))
 	}
 
 	harness.life.mu.Lock()
@@ -481,11 +481,31 @@ func TestMarkCancel_ReportsAFolderAndAFileThatCannotBeWritten(t *testing.T) {
 
 	blocked := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(blocked, cancelsDir), nil, ownerMode))
-	require.ErrorContains(t, markCancel(blocked, testRun, ItemInput{}), "mark the cancel of run "+testRun)
+	require.ErrorContains(t, markCancel(blocked, testRun, cancelMark{}), "mark the cancel of run "+testRun)
 
 	taken := t.TempDir()
 	require.NoError(t, os.MkdirAll(cancelPath(taken, testRun), ownersMode))
-	require.ErrorContains(t, markCancel(taken, testRun, ItemInput{}), "mark the cancel of run "+testRun)
+	require.ErrorContains(t, markCancel(taken, testRun, cancelMark{}), "mark the cancel of run "+testRun)
+}
+
+func TestMarkRunCancel_ATokenFileThatCannotBeReadStopsTheMarker(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(ownerPath(dir, testRun), ownersMode))
+
+	_, err := markRunCancel(nil, dir, testRun, ItemInput{Item: testItem, Project: testProject})
+
+	require.ErrorContains(t, err, "read the claim of run "+testRun)
+	assert.NoFileExists(t, cancelPath(dir, testRun))
+}
+
+func TestSaveOwner_ReportsAStateFolderThatCannotHoldTheOwnersLock(t *testing.T) {
+	t.Parallel()
+
+	dir := filepath.Join(t.TempDir(), "missing")
+
+	require.ErrorContains(t, saveOwner(dir, testRun, testOwner), "lock "+ownersLockName)
 }
 
 func TestCancel_RefusesToCancelWhenItCannotWriteTheMarker(t *testing.T) {
@@ -515,7 +535,7 @@ func TestSweepCancels_LeavesTheMarkerWhenTheStoreCannotBeRead(t *testing.T) {
 	harness := newHarness(t)
 	engine, err := NewEngine(t.Context(), harness.opts, harness.deps())
 	require.NoError(t, err)
-	require.NoError(t, markCancel(harness.opts.StateDir, testRun, ItemInput{Item: testItem, Project: testProject}))
+	require.NoError(t, markCancel(harness.opts.StateDir, testRun, cancelMark{ItemInput: ItemInput{Item: testItem, Project: testProject}}))
 	require.NoError(t, engine.Shutdown())
 
 	engine.sweepCancels()
@@ -659,7 +679,7 @@ func TestPendingCancels_LogsAndSkipsAMarkerWhoseFileNameIsNotAnEscapedRunId(t *t
 	t.Parallel()
 
 	dir := t.TempDir()
-	require.NoError(t, markCancel(dir, testRun, ItemInput{Item: testItem, Project: testProject}))
+	require.NoError(t, markCancel(dir, testRun, cancelMark{ItemInput: ItemInput{Item: testItem, Project: testProject}}))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, cancelsDir, "%zz"), nil, ownerMode))
 
 	var out bytes.Buffer

@@ -94,7 +94,7 @@ func TestCancel_AMarkerOfARunThatIsOpenAndNotCanceledYetStaysForTheCancelThatIsA
 	waitOn(t, ownerAsks(t, harness))
 
 	in := ItemInput{Item: testItem, Project: testProject}
-	require.NoError(t, markCancel(engine.dir, testRun, in))
+	require.NoError(t, markCancel(engine.dir, testRun, cancelMark{ItemInput: in}))
 
 	engine.giveBackStray(&attempt{id: testRun, in: in})
 
@@ -112,7 +112,7 @@ func TestCancel_AMarkerOfARunThatEndedWithoutACancelIsDropped(t *testing.T) {
 	require.NoError(t, err)
 
 	in := ItemInput{Item: testItem, Project: testProject}
-	require.NoError(t, markCancel(engine.dir, testRun, in))
+	require.NoError(t, markCancel(engine.dir, testRun, cancelMark{ItemInput: in}))
 
 	engine.giveBackStray(&attempt{id: testRun, in: in})
 

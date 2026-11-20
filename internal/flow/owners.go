@@ -18,6 +18,8 @@ const (
 	ownersDir  = "owners"
 	ownersMode = 0o700
 	ownerMode  = 0o600
+	// ownersLockName names the lock that every process holds while it writes a token file, or compares a token file or a cancel marker with a token and removes it.
+	ownersLockName = "owners.lock"
 )
 
 // errNoOwner is returned when a run recorded no claim.
@@ -28,17 +30,60 @@ func ownerPath(dir, id string) string {
 	return filepath.Join(dir, ownersDir, runFile(id))
 }
 
-// saveOwner records the token of a fresh claim for a run. The run replays its recorded claim step, whose token was released, so the fresh token wins.
-func saveOwner(dir, id, owner string) error {
-	if err := os.MkdirAll(filepath.Join(dir, ownersDir), ownersMode); err != nil {
-		return fmt.Errorf("save the claim of run %s: %w", id, err)
+// underOwners runs f while it holds the owners lock, so a compare and the removal that follows it are one step for every process.
+func underOwners(dir string, f func() error) error {
+	held := lockFile(dir, ownersLockName)
+	if err := held.Lock(); err != nil {
+		return fmt.Errorf("lock %s: %w", ownersLockName, err)
 	}
 
-	if err := atomicfile.Write(ownerPath(dir, id), []byte(owner), ownerMode); err != nil {
+	return errors.Join(f(), held.Unlock())
+}
+
+// saveOwner records the token of a fresh claim for a run. The run replays its recorded claim step, whose token was released, so the fresh token wins.
+func saveOwner(dir, id, owner string) error {
+	err := underOwners(dir, func() error {
+		if err := os.MkdirAll(filepath.Join(dir, ownersDir), ownersMode); err != nil {
+			return err
+		}
+
+		return atomicfile.Write(ownerPath(dir, id), []byte(owner), ownerMode)
+	})
+	if err != nil {
 		return fmt.Errorf("save the claim of run %s: %w", id, err)
 	}
 
 	return nil
+}
+
+// removeOwnedToken removes the token file of a run when it holds owner. A token that a later resume saved stays. The caller holds the owners lock.
+func removeOwnedToken(dir, id, owner string) error {
+	saved, err := savedOwner(dir, id)
+	if err != nil || saved != owner {
+		return err
+	}
+
+	return removeFile(ownerPath(dir, id))
+}
+
+// dropOwner removes the token file of a run when it still holds owner.
+func dropOwner(dir, id, owner string) error {
+	return underOwners(dir, func() error { return removeOwnedToken(dir, id, owner) })
+}
+
+// releaseOwner returns the token that the give-back of an attempt releases: the token of its claim, else the one of the recorded claim step.
+// It never reads the token file, which belongs to the attempt that beehave resume made last.
+func releaseOwner(client dbos.Client, a *attempt) (string, error) {
+	if a.owner != "" {
+		return a.owner, nil
+	}
+
+	recorded, err := recordedClaim(client, a.id)
+	if err == nil && recorded == "" {
+		err = fmt.Errorf("%w: %s", errNoOwner, a.id)
+	}
+
+	return recorded, err
 }
 
 // savedOwner returns the token that beehave resume saved for a run, or an empty text when it saved none.
@@ -76,12 +121,7 @@ func currentOwner(client dbos.Client, dir, id string) (string, error) {
 		return saved, err
 	}
 
-	recorded, err := recordedClaim(client, id)
-	if err == nil && recorded == "" {
-		err = fmt.Errorf("%w: %s", errNoOwner, id)
-	}
-
-	return recorded, err
+	return releaseOwner(client, &attempt{id: id})
 }
 
 // recordedClaim returns the token that the claim step of a run recorded, or an empty text when that step has no result: it did not run or it failed.

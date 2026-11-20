@@ -1,6 +1,8 @@
 package flow
 
 import (
+	"context"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -172,4 +174,84 @@ func TestAttempt_AFailedRenewalOfTheEarlierAttemptLeavesTheResumedClaimWithoutAF
 
 	require.Empty(t, resumed.failure, "the resumed claim held no failure inside the renewal")
 	require.Empty(t, claimRowOf(engine, testRun).failure, "the failed renewal of the earlier attempt wrote its failure into the claim of the resumed run")
+}
+
+// resumingLifecycle runs resume once, right after the first release frees the claim: beehave resume of another process takes the item in that window.
+type resumingLifecycle struct {
+	lifecycle
+
+	resume func()
+	calls  atomic.Int32
+}
+
+func (r *resumingLifecycle) Release(ctx context.Context, project, item, owner string) error {
+	err := r.lifecycle.Release(ctx, project, item, owner)
+	if r.calls.Add(1) == 1 {
+		r.resume()
+	}
+
+	return err
+}
+
+func TestAttempt_TheGiveBackOfTheEarlierAttemptKeepsTheTokenThatResumeSavedForTheResumedRun(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.flowIs(t, waitFlow)
+
+	client := harness.client(t, testVersion)
+
+	resumed := make(chan error, 1)
+
+	engine := harness.engineWith(t, func(e *Engine) {
+		e.deps.Lifecycle = &resumingLifecycle{lifecycle: e.deps.Lifecycle, resume: func() { resumed <- client.Resume(testItem) }}
+	})
+
+	done := runInBackground(engine, testItem)
+	waitOn(t, ownerAsks(t, harness))
+
+	require.NoError(t, client.Cancel(testItem))
+	harness.tick(t)
+	require.Error(t, receive(t, done).err, "the first attempt ended at its cancel")
+	require.NoError(t, receive(t, resumed), "beehave resume took the item once the give-back freed it")
+
+	// The give-back ends with the removal of the cancel marker.
+	soon(t, func() bool { return !fileExists(cancelPath(engine.dir, testRun)) }, "the give-back of the earlier attempt ends")
+
+	saved, err := os.ReadFile(ownerPath(engine.dir, testRun))
+	require.NoError(t, err, "the give-back of the earlier attempt removed the token that beehave resume saved for the resumed run")
+	require.Equal(t, testOwner+testItem+"#2", string(saved))
+}
+
+func TestAttempt_TheGiveBackOfACancelMarkerKeepsTheTokenAndTheMarkerOfTheResumedRun(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	engine := idleEngine(t, harness)
+
+	in := ItemInput{Item: testItem, Project: testProject}
+	require.NoError(t, saveOwner(engine.dir, testRun, "owner-1"))
+	require.NoError(t, markCancel(engine.dir, testRun, cancelMark{ItemInput: in, Owner: "owner-1"}))
+
+	// The sweep and the stray give-back make their attempt from the marker they read, and give it back. Inside the release, beehave resume saves a fresh token
+	// and a cancel of the resumed run writes its marker.
+	pending, err := pendingCancels(engine.dir, engine.logger)
+	require.NoError(t, err)
+
+	engine.deps.Lifecycle = &resumingLifecycle{lifecycle: engine.deps.Lifecycle, resume: func() {
+		require.NoError(t, saveOwner(engine.dir, testRun, "owner-2"))
+		require.NoError(t, markCancel(engine.dir, testRun, cancelMark{ItemInput: in, Owner: "owner-2"}))
+	}}
+
+	engine.giveBack(t.Context(), pending[testRun].attempt(testRun))
+
+	assert.Equal(t, []string{"owner-1"}, harness.life.releasedBy(), "the sweep releases the token of its marker")
+
+	saved, err := savedOwner(engine.dir, testRun)
+	require.NoError(t, err)
+	assert.Equal(t, "owner-2", saved, "the sweep removed the token that beehave resume saved for the resumed run")
+
+	mark, err := readCancel(engine.dir, testRun)
+	require.NoError(t, err, "the sweep removed the cancel marker of the resumed run")
+	assert.Equal(t, "owner-2", mark.Owner)
 }
