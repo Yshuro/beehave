@@ -223,5 +223,5 @@ func TestAgents_TheFakeAgentWritesItsOutputFileUnderTheRealSandboxSettings(t *te
 	require.NoError(t, err)
 	assert.Equal(t, "shell wrote "+file+"\ntool wrote "+file+"\nshell refused "+sibling+"\ntool refused "+sibling+"\n", string(log))
 	assert.NoFileExists(t, sibling)
-	assert.Equal(t, []agent.Denial{{Tool: "Write", Target: sibling}}, result.Denials, "the result carries the refused Write call")
+	assert.Equal(t, []agent.Denial{{Tool: "Write", Target: sibling, Edit: true}}, result.Denials, "the result carries the refused Write call")
 }

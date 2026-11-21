@@ -62,7 +62,7 @@ Stdout is the transcript. A line writer redacts each line before it reaches the 
 
 ### Permission flags of the Claude adapter
 
-The Claude adapter starts each step with `--allowedTools Bash`. It adds `--permission-mode acceptEdits` unless the step sets `edits = False`.
+The Claude adapter starts each step with `--allowedTools Bash`. It adds `--permission-mode acceptEdits` unless the step sets `edits = False`. A sandboxed run forces the mode `default` from CLI 2.1.329, so its settings open the work folder by an allow rule instead (see [The edit rule of the work folder](sandbox.md#the-edit-rule-of-the-work-folder)).
 
 Print mode cannot ask for permission. Without these flags, Claude Code refuses a file edit and a shell command ("Claude requested permissions to write to ..., but you haven't granted it yet"), and an implement step can do no work. Sources:
 

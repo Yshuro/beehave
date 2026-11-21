@@ -552,6 +552,58 @@ func TestAgentStep_AMissingOutputFileNamesTheRefusedWriteOfThatFile(t *testing.T
 	assert.NotContains(t, err.Error(), "Bash", "a refusal of another target is left out")
 }
 
+// refusedWorkEdits makes the fake agent end with refused edits of two work files, one refused edit outside the work folder and a refused shell call.
+// With body, it also writes the output file.
+func (r *agentRig) refusedWorkEdits(body string) {
+	r.h.agents.result = func(request AgentRequest) agent.Result {
+		if body != "" {
+			r.put(outputPath(request.Prompt), body)
+		}
+
+		denied := exited
+		denied.Stderr = "⚠ Permission mode forced to default\n"
+		denied.Denials = []agent.Denial{
+			{Tool: "Edit", Target: filepath.Join(r.dir, "internal", "config", "files.go"), Edit: true},
+			{Tool: "Write", Target: filepath.Join(r.dir, "internal", "config", "buildhosts_test.go"), Edit: true},
+			{Tool: "Edit", Target: "/elsewhere/x.go", Edit: true},
+			{Tool: "Bash", Target: filepath.Join(r.dir, "run.sh")},
+		}
+
+		return denied
+	}
+}
+
+func TestAgentStep_RefusedEditsOfWorkFilesFailTheStepAtOnceAndNameTheFiles(t *testing.T) {
+	t.Parallel()
+
+	for name, body := range map[string]string{"empty_output_file": "", "written_output_file": `{"verdict":"ok"}`} {
+		rig := newAgentRig(t)
+		rig.refusedWorkEdits(body)
+
+		_, err := rig.run(t, outputsFlow("3"), "Write to {{ .output_file }}\n")
+
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "the permission check of the agent CLI refused the edits of "+
+			filepath.Join(rig.dir, "internal", "config", "buildhosts_test.go")+" and "+filepath.Join(rig.dir, "internal", "config", "files.go"), name)
+		assert.Contains(t, err.Error(), "The agent CLI wrote on its error stream: ⚠ Permission mode forced to default", name)
+		assert.NotContains(t, err.Error(), "/elsewhere", "%s: an edit outside the work folder is left out", name)
+		assert.NotContains(t, err.Error(), "run.sh", "%s: a refused shell call is left out", name)
+		assert.Len(t, rig.h.agents.seen(), 1, "%s: a refused edit refuses again, so no try follows", name)
+	}
+}
+
+func TestAgentStep_RefusedEditsInAStepWithoutEditsKeepTheOutputCheck(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.refusedWorkEdits("")
+
+	_, err := rig.run(t, bodyFlow("a = "+agentCallText(`outputs = ["verdict"], edits = False, `)+"\n"), "Write to {{ .output_file }}\n")
+
+	require.ErrorContains(t, err, "the agent wrote no output file")
+	assert.NotContains(t, err.Error(), "refused the edits of")
+}
+
 func TestAgentStep_OutputTriesRunTheAgentThatManyTimesInAllBeforeFailing(t *testing.T) {
 	t.Parallel()
 

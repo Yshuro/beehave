@@ -143,6 +143,16 @@ These gaps stay open:
 
 The CLI keeps `CLAUDE_CODE_OAUTH_TOKEN` for its own calls. A sandboxed run sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. The documentation of Claude Code says this strips credentials, by name or by value, from the environment of the shell and of other subprocesses.
 
+### The edit rule of the work folder
+
+From Claude Code 2.1.329, the scrub variable also forces the permission mode `default`. The CLI ignores `--permission-mode acceptEdits` and writes on stderr: "Permission mode forced to default", then "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set (allowed_non_write_users hardening). Declare allowedTools explicitly, or set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0 to opt out." In print mode, the default mode refuses each Edit and Write call.
+
+The run keeps the scrub. For a step that may edit, the settings add one allow rule, `Edit(//<work folder>/**)`. An `Edit` rule covers every file tool that writes. A deny rule wins over an allow rule, so the closed paths and the credential paths stay refused. A step with `edits = False` gets no such rule. The data folder stays read only, and the output file keeps its own rule by its exact path.
+
+A probe of CLI 2.1.330 with the full launch arguments measured this. With the rule, Write created a file at the top of the work folder and one in a subfolder. It refused `.git/hooks/pre-commit`, `.claude/settings.json` and a file outside the work folder. The bare tool names in `--allowedTools` let the write outside the work folder through, so the rule names the folder. The mode in the init line stays `default` and the stderr line stays, so the engine does not check the mode.
+
+The engine checks the result instead. A step that may edit fails when the CLI reports a refused Edit, Write or NotebookEdit call on a file of the work folder. The failure names each refused file and quotes the stderr of the CLI. The step gets no second try, because the same rules refuse the same edit again.
+
 Not proven: a real `claude` run that prints `env` in the shell must show that the token is gone. Until then, the shell may read the token and, with a non-empty `network` list, send it out.
 
 The child environment holds no proxy variable and no `SSH_AUTH_SOCK`. It sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, because the base denies `~/.gitconfig`. A step that needs a proxy of the owner sets `sandbox = None`.

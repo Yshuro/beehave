@@ -152,10 +152,11 @@ type Call struct {
 }
 
 // Denial is one tool call that the permission check of the CLI refused, by a rule or by the permission mode: the name of the tool and its target, the file path of a file tool or the
-// command of a shell call.
+// command of a shell call. Edit is true for a call of a file tool that writes its target.
 type Denial struct {
 	Tool   string `json:"tool"`
 	Target string `json:"target"`
+	Edit   bool   `json:"edit,omitempty"`
 }
 
 // Seen is what one output line holds.
