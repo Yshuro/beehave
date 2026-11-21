@@ -378,7 +378,7 @@ func (p pushRepo) run(ctx context.Context, args ...string) (string, error) {
 func (w worktrees) holds(ctx context.Context, project config.Project, clone, item, start string) error {
 	if err := w.run(ctx, clone, "cat-file", "-e", start+"^{commit}"); err != nil {
 		return fmt.Errorf("the clone of project %s does not hold the commit %s that the worktree of item %s was made at, so the worktree cannot be made again. "+
-			"Start the item again: beehave run %s: %w", project.Name, start, item, item, err)
+			"End the failed run first: beehave cancel %s. Start the item again: beehave run %s: %w", project.Name, start, item, item, item, err)
 	}
 
 	return nil
