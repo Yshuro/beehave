@@ -22,8 +22,9 @@ The default is off. A project opts in with `sandbox = "on"` in its project file.
 The sandbox loads no settings file, so the agent sees no skill of the runner. A step that needs one names it in `skills`, such as `skills = [project.vars["review_skill"]]`. A name is a folder name: no path, no `..`.
 
 - The engine finds each skill at `<config folder of the runner>/skills/<name>`. If that folder holds no `SKILL.md`, or the runner names no config folder, the step does not start, and the message names the skill and the folder.
-- The Claude adapter copies each named skill into a plugin folder in the run folder, `skills-plugin`, beside a manifest with the name `beehave-skills`. It passes the folder with `--plugin-dir`. The setting sources stay empty, so no other user skill, plugin or hook loads. A folder passed with `--add-dir` does not load its skills, so the adapter does not use that form.
-- The shell can read the plugin folder. The sandbox and the permission rules deny its write. The config folder of the runner stays denied.
+- If a skill folder holds a symbolic link, the step does not start, and the message names the skill and the link. A copy keeps a link as a link, and its target can be a file of the config folder. The skill folder itself can be a link: the copy reads through it.
+- The Claude adapter copies each named skill into a plugin folder in the run folder, `skills-plugin`, beside a manifest with the name `beehave-skills`. It passes the folder with `--plugin-dir`, which loads the skills. The setting sources stay empty, so no other user skill, plugin or hook loads.
+- The adapter also passes the plugin folder with `--add-dir`, as it does the folder of the data file. The flag loads no skill from the folder; it makes the folder a working directory, so `blockReadsOutsideWorkingDirectories` lets the Read tool and the shell read the files of a skill. The sandbox and the permission rules deny the write of the folder. The config folder of the runner stays denied.
 - The CLI names a plugin skill `beehave-skills:<name>`. The adapter records it as `<name>`. A skill of any other plugin keeps its prefix, so it never counts as the named skill.
 - A skill counts as called only when the CLI answers its Skill call with no error. A call that the CLI answers with `Unknown skill` does not count.
 

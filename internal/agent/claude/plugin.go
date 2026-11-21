@@ -47,12 +47,15 @@ func skillsPlugin(skills []string, runDir string) plugin {
 	}
 }
 
-// confine returns the plan with the plugin folder readable by the shell and closed to writes, so the agent reads the skills and cannot change them.
+// confine returns the plan with the plugin folder readable and closed to writes, so the agent reads the skills and cannot change them.
+// The folder is a working directory, as the folder of the data file is: the CLI blocks the reads outside the working directories, for the Read tool
+// and the shell, and an allow rule does not lift that block. The write deny of the sandbox and the Edit deny rule keep it read only.
 func (p plugin) confine(plan agent.SandboxPlan) agent.SandboxPlan {
 	if p.dir == "" {
 		return plan
 	}
 
+	plan.ReadDirs = slices.Concat(plan.ReadDirs, []string{p.dir})
 	plan.Read = slices.Concat(plan.Read, []string{p.dir})
 	plan.DenyWrite = slices.Concat(plan.DenyWrite, []string{p.dir})
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -84,4 +85,45 @@ func TestSandboxPlan_ASkillOnARunnerWithNoConfigFolderStopsTheStep(t *testing.T)
 	assert.Equal(t, agent.OutcomeNotStarted, got.Outcome)
 	assert.Contains(t, got.Note, "skill review")
 	assert.Contains(t, got.Note, "config folder")
+}
+
+func TestSandboxPlan_ASkillThatHoldsALinkStopsTheStepBeforeItStarts(t *testing.T) {
+	t.Parallel()
+
+	for _, link := range []string{"link-out.txt", filepath.Join("references", "deep-link")} {
+		r := newSandboxRig(t)
+		skill := filepath.Join(r.home, "login", "skills", "review")
+		r.touch(t, filepath.Join(skill, "SKILL.md"))
+		r.touch(t, filepath.Join(skill, "references", "note.md"))
+		require.NoError(t, os.Symlink(filepath.Join(r.home, "login", "settings.json"), filepath.Join(skill, link)))
+
+		req := request()
+		req.Sandbox = &model.Sandbox{Skills: []string{"review"}}
+
+		got, err := r.f.agents.Run(t.Context(), req)
+
+		require.NoError(t, err)
+		assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, link)
+		assert.Contains(t, got.Note, "skill review", link)
+		assert.Contains(t, got.Note, filepath.Join(skill, link), "the note names the link: %s", link)
+		assert.Equal(t, (*agent.SandboxPlan)(nil), r.f.spec.Sandbox, "the CLI does not start: %s", link)
+	}
+}
+
+func TestSandboxPlan_ASkillFolderThatIsItselfALinkIsCopied(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	source := filepath.Join(r.home, "shared", "review")
+	r.touch(t, filepath.Join(source, "SKILL.md"))
+	require.NoError(t, os.MkdirAll(filepath.Join(r.home, "login", "skills"), 0o700))
+	require.NoError(t, os.Symlink(source, filepath.Join(r.home, "login", "skills", "review")))
+
+	req := request()
+	req.Sandbox = &model.Sandbox{Skills: []string{"review"}}
+
+	_, err := r.f.agents.Run(t.Context(), req)
+	require.NoError(t, err)
+	require.NotNil(t, r.f.spec.Sandbox, "an installed skill is often a link to its checkout")
+	assert.Equal(t, []string{filepath.Join(r.home, "login", "skills", "review")}, r.f.spec.Sandbox.Skills)
 }

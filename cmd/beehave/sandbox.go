@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -65,10 +66,32 @@ func skillFolders(names []string, configDir, home string) ([]string, string) {
 			return nil, fmt.Sprintf("the step names the skill %s, and %s holds no %s. The step did not start. Install the skill there, or remove it from the skills of the sandbox.", name, folder, skillFile)
 		}
 
+		if link := linkIn(folder); link != "" {
+			return nil, fmt.Sprintf("the step names the skill %s, and its folder holds the link %s. A copy of the skill would keep the link, and its target can be outside the skill. The step did not start. Replace the link with the file it points to.", name, link)
+		}
+
 		folders = append(folders, folder)
 	}
 
 	return folders, ""
+}
+
+// linkIn returns the first symbolic link inside a skill folder, or "" for none. The folder itself may be a link: the copy reads through it.
+// A folder that cannot be read is left to the copy: it reads the same tree, and its error stops the launch.
+func linkIn(folder string) string {
+	found := ""
+
+	_ = fs.WalkDir(os.DirFS(folder), ".", func(name string, entry fs.DirEntry, _ error) error { //nolint:errcheck // an unreadable folder fails the copy instead
+		if entry != nil && entry.Type()&fs.ModeSymlink != 0 {
+			found = filepath.Join(folder, name)
+
+			return fs.SkipAll
+		}
+
+		return nil
+	})
+
+	return found
 }
 
 // outputWrites returns the output file of a step that declares outputs, the one path of the state folder that the agent writes, or none.

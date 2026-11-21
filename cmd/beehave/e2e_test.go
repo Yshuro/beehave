@@ -451,9 +451,7 @@ fi
 # The fake claude calls the skill that the example requires, so the session reports it.
 # When the file no-skill exists, the fake reports no skill call, as a CLI that does not report them.
 # The result of the call follows on a user line: with the file unknown-skill, the error that the CLI gives for a skill it did not load.
-# With the file plugin-skill, the call names the skill with the prefix of the plugin that the engine builds for a sandboxed step.
 skill=%SKILL%
-if [ -e plugin-skill ]; then skill="beehave-skills:%SKILL%"; fi
 if [ ! -e no-skill ]; then
   echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_skill","name":"Skill","input":{"skill":"'"$skill"'"}}]}}'
   if [ -e unknown-skill ]; then

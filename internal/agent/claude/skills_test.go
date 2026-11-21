@@ -77,8 +77,8 @@ func TestSandbox_APlanWithSkillsPassesAPluginFolderThatHoldsOnlyThoseSkills(t *t
 	launch := claude.New(nil).Sandbox(p, "", "/run")
 	flags, settings := settingsOf(t, launch.Args)
 
-	assert.Equal(t, []string{"--setting-sources", "", "--strict-mcp-config", "--disallowedTools", "WebFetch", "WebSearch", "--plugin-dir", "/run/skills-plugin"}, flags,
-		"the setting sources stay empty: the plugin folder is the only source of skills")
+	assert.Equal(t, []string{"--setting-sources", "", "--strict-mcp-config", "--disallowedTools", "WebFetch", "WebSearch", "--add-dir", "/run/skills-plugin", "--plugin-dir", "/run/skills-plugin"}, flags,
+		"the setting sources stay empty: the plugin folder is the only source of skills, and a working directory, so the Read tool and the shell read its files")
 	assert.Equal(t, map[string]string{
 		"skills-plugin/skills/review": "/home/o/login/skills/review",
 		"skills-plugin/skills/oracle": "/home/o/login/skills/oracle",

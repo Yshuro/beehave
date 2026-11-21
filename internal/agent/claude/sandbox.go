@@ -82,10 +82,12 @@ type permissions struct {
 // The git variables of the plan reach the shell through the env file, the only file in the run folder. Its allowRead entry keeps it readable when the
 // run folder is under the home folder.
 // The skills of the plan reach the CLI as one plugin folder in the run folder (--plugin-dir), since the empty setting sources load no skill of the runner.
+// The plugin folder is also a working directory (--add-dir), so the agent reads the files of a skill; the settings deny its write.
 func (Adapter) Sandbox(plan agent.SandboxPlan, guard, runDir string) agent.Launch {
 	envPath := filepath.Join(runDir, envFile)
 	skills := skillsPlugin(plan.Skills, runDir)
-	settings := settingsOf(skills.confine(plan), envPath)
+	plan = skills.confine(plan)
+	settings := settingsOf(plan, envPath)
 
 	if guard != "" {
 		hooks := guardHooks(guard)
