@@ -49,7 +49,7 @@ The file stays in the state folder. The temporary folders are shared by every ru
 
 The engine resolves the state folder to its real path once, when it opens the folder, so the output file, the data file, the prompt and the grant all hold one spelling. The sandbox compares real paths, so a grant that holds a link opens nothing.
 
-On Linux, the sandbox ignores a write path that does not exist when the run starts. Before each try, the engine removes the old output file and makes a new empty one, so the exact grant names a file that exists. An empty output file counts as no output file.
+On Linux, the sandbox ignores a write path that does not exist when the run starts. Before each try of a call that declares outputs, the engine removes the old output file and makes a new empty one, so the exact grant names a file that exists. An empty output file counts as no output file.
 
 ### Forge data for a sandboxed step
 
@@ -142,6 +142,18 @@ These gaps stay open:
 ### Environment
 
 The CLI keeps `CLAUDE_CODE_OAUTH_TOKEN` for its own calls. A sandboxed run sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. The documentation of Claude Code says this strips credentials, by name or by value, from the environment of the shell and of other subprocesses.
+
+### The edit rule of the work folder
+
+From Claude Code 2.1.329, the scrub variable also forces the permission mode `default`. The CLI ignores `--permission-mode acceptEdits` and writes on stderr: "Permission mode forced to default", then "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set (allowed_non_write_users hardening). Declare allowedTools explicitly, or set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0 to opt out." In print mode, the default mode refuses each Edit and Write call.
+
+The run keeps the scrub. For a step that may edit, the settings add one allow rule, `Edit(//<work folder>/**)`. An `Edit` rule covers every file tool that writes. A deny rule wins over an allow rule, so the closed paths and the credential paths stay refused. A step with `edits = False` gets no such rule. The data folder stays read only, and the output file keeps its own rule by its exact path.
+
+A probe of CLI 2.1.330 with the full launch arguments measured this. With the rule, Write created a file at the top of the work folder and one in a subfolder. It refused `.git/hooks/pre-commit`, `.claude/settings.json` and a file outside the work folder. The bare tool names in `--allowedTools` let the write outside the work folder through, so the rule names the folder. The mode in the init line stays `default` and the stderr line stays, so the engine does not check the mode.
+
+The rule is a pattern, so a glob character in the path of the work folder would change what it opens: a probe with the work folder `w[ab]` refused the folder itself and opened its sibling `wa`. A step that may edit, in a work folder whose path holds a glob character, does not start, as for the state files. A space in the path works.
+
+The engine checks the result instead of the mode. A step that may edit fails when the CLI reports a refused Edit, Write or NotebookEdit call on a file of the work folder that no deny rule of the plan covers. That refusal means the rule of the work folder did not apply. The failure names each refused file and quotes the stderr of the CLI. The step gets no second try, because the same launch refuses the same edit again. A refused edit that a deny rule covers, such as a hook, an agent settings file or a `.env` file, is the rule at work: the step goes on, and its output decides it. The engine decides what a deny rule covers by the one test that the other sandbox checks use: a rule covers its own path, each path that its pattern matches and each path below either, without case and again with every link resolved. So `.ENV` and `.envs/dev.yaml` count as covered by the `.env*` rule.
 
 Not proven: a real `claude` run that prints `env` in the shell must show that the token is gone. Until then, the shell may read the token and, with a non-empty `network` list, send it out.
 

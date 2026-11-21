@@ -64,6 +64,24 @@ func TestRunner_ASandboxedRunGetsTheSandboxArgumentsInOneSettingsObject(t *testi
 	assert.Equal(t, 1, countWord(args, "--settings"))
 }
 
+func TestRunner_ASandboxedRunThatMayEditAllowsTheFileToolsInItsWorkFolder(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	for name, noEdits := range map[string]bool{"edits": false, "no_edits": true} {
+		f := boxed(t)
+		f.spec.NoEdits = noEdits
+
+		got := agent.Runner{Version: seen("2.1.330 (Claude Code)\n")}.Run(context.Background(), f.spec)
+
+		require.Equal(t, agent.OutcomeExited, got.Outcome, got.Note)
+
+		rule := `"Edit(/` + f.work + `/**)"`
+		if noEdits {
+			assert.NotContains(t, record(t, f.records, "args"), rule, name)
+		} else {
+			assert.Contains(t, record(t, f.records, "args"), rule, name)
+		}
+	}
+}
+
 func TestRunner_ARunWithNoSandboxGetsNoSandboxArguments(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	f := newFixture(t, "claude", claude.Name, "")
 

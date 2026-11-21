@@ -21,7 +21,9 @@ import (
 type stepResult struct {
 	Outputs map[string]any `json:"outputs,omitempty"`
 	Note    string         `json:"note,omitempty"`
-	Stopped *Stopped       `json:"stopped,omitempty"`
+	// Final is true for a Note that a new try of the agent cannot cure, so the step fails with no other try.
+	Final   bool     `json:"final,omitempty"`
+	Stopped *Stopped `json:"stopped,omitempty"`
 }
 
 // UnmarshalJSON reads a recorded step with each number kept as a json.Number, so that a replay holds the digits and the int or float kind

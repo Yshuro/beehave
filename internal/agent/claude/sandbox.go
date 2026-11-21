@@ -77,7 +77,8 @@ type permissions struct {
 // A permission path is written as //absolute. The settings never set excludedCommands, allowLocalBinding, allowAllUnixSockets or allowAppleEvents,
 // and never put the shared git directory in allowWrite: a linked work tree gets it, and an explicit entry could open hooks and config.
 // The settings set no allowWrite list. Each write file of the plan gets one Edit allow rule by its exact path, and Claude Code merges that path into the
-// write paths of the sandbox too, so the one rule opens the file to the shell and to the file tools.
+// write paths of the sandbox too, so the one rule opens the file to the shell and to the file tools. A plan that may edit gets one more Edit allow
+// rule, of the work folder with a /** tail; the deny rules still win over it.
 // The git variables of the plan reach the shell through the env file, the only file in the run folder. Its allowRead entry keeps it readable when the
 // run folder is under the home folder.
 func (Adapter) Sandbox(plan agent.SandboxPlan, guard, runDir string) agent.Launch {
@@ -136,7 +137,7 @@ func settingsOf(plan agent.SandboxPlan, envPath string) sandboxSettings {
 			Network: network{AllowedDomains: join(plan.Network), StrictAllowlist: true},
 		},
 		Permissions: permissions{
-			BlockReadsOutsideWorkingDirectories: true, Allow: patternEditRules(plan.Write),
+			BlockReadsOutsideWorkingDirectories: true, Allow: slices.Concat(patternEditRules(plan.Write), workEditRule(plan)),
 			Deny: slices.Concat(webTools(), fileRules(plan.Deny, plan.DenyPatterns), editRules(plan.DenyWrite), patternEditRules(plan.DenyWritePatterns)),
 		},
 	}
@@ -178,6 +179,16 @@ func patternEditRules(patterns []string) []string {
 	}
 
 	return rules
+}
+
+// workEditRule returns the Edit allow rule of the work folder, as //absolute with a /** tail, for a plan that may edit, or none.
+// The CLI forces the permission mode default while the subprocess scrub is on, so this rule and not --permission-mode opens the file tools.
+func workEditRule(plan agent.SandboxPlan) []string {
+	if !plan.Edits {
+		return nil
+	}
+
+	return editRules([]string{plan.Work})
 }
 
 func readEdit(pattern string) []string {

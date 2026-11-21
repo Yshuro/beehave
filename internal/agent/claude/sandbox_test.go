@@ -215,6 +215,31 @@ func TestSandbox_OpensEachWriteFileByOneEditAllowRuleOfItsExactPath(t *testing.T
 	assert.Contains(t, parsed.Permissions.Deny, "Edit(//home/o/.ssh/**)", "the deny rules stay")
 }
 
+func TestSandbox_AnEditPlanAllowsTheFileToolsInTheWorkFolderByOneRule(t *testing.T) {
+	t.Parallel()
+
+	for name, edits := range map[string]bool{"edits": true, "no_edits": false} {
+		p := plan()
+		p.Write, p.Edits = []string{"/state/outputs/1.review.json"}, edits
+
+		args := claude.New(nil).Sandbox(p, "", "/run").Args
+
+		var parsed struct {
+			Permissions struct{ Allow, Deny []string }
+		}
+
+		require.NoError(t, json.Unmarshal([]byte(args[len(args)-1]), &parsed), name)
+
+		want := []string{"Edit(//state/outputs/1.review.json)"}
+		if edits {
+			want = append(want, "Edit(//work/tree/**)")
+		}
+
+		assert.Equal(t, want, parsed.Permissions.Allow, name)
+		assert.Contains(t, parsed.Permissions.Deny, "Edit(//home/o/.ssh/**)", "%s: the deny rules stay, and a deny rule wins over an allow rule", name)
+	}
+}
+
 func TestSandbox_AnEmptyPlanWritesEmptyListsAndNeverNull(t *testing.T) {
 	t.Parallel()
 

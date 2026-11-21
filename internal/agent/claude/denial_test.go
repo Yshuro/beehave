@@ -18,12 +18,16 @@ func TestCalls_TheResultLineReportsEachToolCallThatThePermissionRulesRefused(t *
 		`{"tool_name":"NotebookEdit","tool_use_id":"t2","tool_input":{"notebook_path":"/w/a.ipynb"}},` +
 		`{"tool_name":"Bash","tool_use_id":"t3","tool_input":{"command":"git push"}},` +
 		`{"tool_use_id":"t4","tool_input":{"file_path":"/no/tool"}},` +
+		`{"tool_name":"Edit","tool_use_id":"t5","tool_input":{"file_path":"/w/files.go"}},` +
+		`{"tool_name":"Read","tool_use_id":"t6","tool_input":{"file_path":"/w/secret"}},` +
 		`"not an object"]}`
 
 	assert.Equal(t, []agent.Denial{
-		{Tool: "Write", Target: "/state/outputs/1.review.json"},
-		{Tool: "NotebookEdit", Target: "/w/a.ipynb"},
+		{Tool: "Write", Target: "/state/outputs/1.review.json", Edit: true},
+		{Tool: "NotebookEdit", Target: "/w/a.ipynb", Edit: true},
 		{Tool: "Bash", Target: "git push"},
+		{Tool: "Edit", Target: "/w/files.go", Edit: true},
+		{Tool: "Read", Target: "/w/secret"},
 	}, claude.New(nil).Calls(line).Denials)
 }
 

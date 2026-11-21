@@ -762,8 +762,10 @@ A failed step shows its error. The last line is `run`: the state of the run (run
 - A run whose process was killed shows `running` until `beehave run` or `beehave resume` continues it.
 - A step that runs shows as running with its elapsed time.
 - A command records its row when it ends. While a command runs, the last line is `step in progress`, with the time since the last row.
+- While the run waits for a spawned child, the last line is `step in progress` with no start time and no duration, and the field `waits_on` names the runs of the children that have not ended.
+- A step with no recorded start or end shows an empty column. A duration is never shown for an end that is before its start.
 
-`--json` prints one object for scripts. Its fields are `run`, `state`, `error` (left out when empty) and `steps`. Each step has `name`, `state`, `duration_seconds` and, when it has them, `started`, `ended`, `error`, `exit_code`, `label`, `login`, `model`, `stop`, `verdict`, `head`, `passed` and `gate` (a list of `name` and `status`).
+`--json` prints one object for scripts. Its fields are `run`, `state`, `error` (left out when empty) and `steps`. Each step has `name`, `state` and, when it has them, `duration_seconds`, `waits_on`, `started`, `ended`, `error`, `exit_code`, `label`, `login`, `model`, `stop`, `verdict`, `head`, `passed` and `gate` (a list of `name` and `status`).
 
 #### `beehave status --item <item>`: the lanes of one item
 
