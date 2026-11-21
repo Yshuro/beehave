@@ -748,7 +748,8 @@ The engine has no cleanup builtin. The project owns the clean command and the wo
 
 - The project file can set `vars.clean_command`: a list of words, such as `["sh", "scripts/clean-lane.sh"]`. A value that is not a list of words that are not blank is refused before the first agent starts. The message names the key.
 - When a lane ends, the child run calls `sweep`. It runs `vars.clean_command` as the step `sweep-clean`, then `docker volume prune -f` as the step `sweep-prune`. Both run with `host`, so they run on the build host.
-- The sweep runs for each end of the lane: an approval, a rejection, a hold and a ruling of the owner. A lane that ends with an error ends the run before the sweep.
+- The sweep runs for each end of the lane that returns a value: an approval, a rejection, a hold and a ruling of the owner. It also runs before each of the two `fail` calls of the lane (the skipped review skill and the missing changelog entry).
+- A workflow file cannot catch an error. A lane that a builtin error ends, such as a host that is gone, gets no sweep. A sweep that raises, such as a host lost at the sweep, fails the lane, and the round does not land its head. A fix needs an engine setting for `command` that returns such a failure as a result.
 - With no `vars.clean_command`, the sweep runs the prune only.
 - The sweep does not fail the lane. A failed clean does not skip the prune.
 - The value that the lane returns holds the field `sweep`: one line for each step, `clean: rc=<n>` or `clean: not run, vars.clean_command is not set`, then `prune: rc=<n>`.

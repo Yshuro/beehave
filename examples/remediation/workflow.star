@@ -1144,7 +1144,8 @@ def sweep(project):
 def pipeline(item):
     """The child entry: the pipeline of one item. The round starts one child for each item with spawn(entry = "pipeline").
     It returns item_value to the round, which lands the approved heads in one batch. The child never merges.
-    The sweep runs when the lane ends, whatever its end: the value that the lane returns carries the sweep result as `sweep`. A lane that fails with an error ends the run before the sweep."""
+    The sweep runs when the lane ends: after each verdict, and before each of the two fail calls of the lane. The value that the lane returns carries the sweep result as `sweep`.
+    A lane that a builtin error ends (a host that is gone) gets no sweep, and a sweep that raises fails the lane: Starlark has no way to catch an error."""
     # The facts of the project file (the plumbing fields and the vars that hold the people, rules, limits, traps and the round settings). The step records them, so a resume keeps the facts the run started with.
     # Each agent of the example gets them as the input `facts`; no agent reads a path for them.
     project = facts()
@@ -1225,6 +1226,7 @@ def _lane(item, project, round_settings):
 
     # The implementer must run the skill that vars.review_skill names. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
     if project.vars["review_skill"] not in implement.skills:
+        sweep(project)
         fail("REFUSE: the implement step did not call the skill %s, which vars.review_skill names. Check that the runner has the skill and reports its calls. %s" % (project.vars["review_skill"], restart_steps(item)))
 
     # The agent of a sandboxed step has no credential, so the engine pushes its head to the branch of the item, the branch of its worktree. This is the first push of the branch in the run:
@@ -1344,6 +1346,7 @@ def _lane(item, project, round_settings):
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.
     missing = changelog_missing(project.vars.get("changelog", ""), base, loop.gate.head, item.id)
     if missing != "":
+        sweep(project)
         fail(missing)
 
     # The approval is on the pull request, with the plan that the review judged the change against. The key makes a replay after a crash post it once.

@@ -7,6 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/agent"
 )
 
 // These tests run the sweep step of the example: after a lane ends, the build host runs the clean command of the project and prunes the Docker volumes.
@@ -159,4 +161,50 @@ func TestExample_ACleanCommandThatIsNotAListOfWordsIsRefusedBeforeAnyAgentStarts
 			assert.Empty(t, rig.h.agents.requests, "no agent started")
 		})
 	}
+}
+
+func TestExample_ALaneThatEndsWithTheRefusalOfASkippedSkillIsSweptBeforeTheErrorGoesUp(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	rig.project.Vars["clean_command"] = []any{"clean-lane"}
+
+	reporting := rig.h.agents.result
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		result := reporting(request)
+		result.Skills = nil
+
+		return result
+	}
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.ErrorContains(t, err, "did not call the skill "+exampleSkill, "the lane still fails with its own error")
+	assert.Len(t, sweepRequests(rig), 2, "the sweep ran before the error went up")
+}
+
+func TestExample_ALaneThatEndsWithAMissingChangelogEntryIsSweptBeforeTheErrorGoesUp(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	rig.project.Vars["clean_command"] = []any{"clean-lane"}
+	rig.project.Vars["changelog"] = "CHANGELOG.md"
+
+	previous := rig.h.commands.reply
+	rig.h.commands.reply = func(request CommandRequest) (CommandOutput, error) {
+		if len(request.Run) > 1 && request.Run[1] == "diff" {
+			return CommandOutput{Stdout: "one.txt\n"}, nil
+		}
+
+		if previous != nil {
+			return previous(request)
+		}
+
+		return CommandOutput{}, nil
+	}
+
+	_, err := runPipeline(rig.h.engine(t), file)
+
+	require.ErrorContains(t, err, "the project declares the changelog CHANGELOG.md", "the lane still fails with its own error")
+	assert.Len(t, sweepRequests(rig), 2, "the sweep ran before the error went up")
 }
