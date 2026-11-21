@@ -522,6 +522,7 @@ Nobody merges their own work, and our pull requests merge only on a verdict that
 - With `until="any"`, the wait ends when at least one run is no longer open, and `results` holds only the runs that ended, in the order of the call. Any other `until` value is refused.
 - A second `until="any"` call on the same list returns an ended run again, so a loop removes the ended runs from its list before the next call.
 - If `fail="raise"` and a run failed, the call waits for every run, as `until="all"` does.
+- A run that this run did not spawn is refused with `run <id> is not a child of this run`. `gather` accepts only the runs that a `spawn` call of this run returned, including a run that `spawn` reused because it had finished. The check reads no store: the plan of each `spawn` is a recorded step, so a replay or a fork of this run lists the same runs. The dry run and `beehave check workflow` cannot see this, because the runs exist only at run time.
 - Each result has the fields `item`, `ok`, `error`, `merge`, `sent_back`, `closed`, `stopped` and `value`.
 - The wait is one recorded step that reads the rows of all the runs, so the record does not depend on the order in which the children end.
 - With `fail="raise"`, the step cancels the runs that are still open when it sees a run that failed, and records all the outcomes. The call then fails with the error of that run.

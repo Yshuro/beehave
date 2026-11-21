@@ -100,7 +100,30 @@ func (s *script) spawn(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 		return nil, err
 	}
 
+	s.spawned = append(s.spawned, plan...)
+
 	return runsValue(plan), nil
+}
+
+// childRuns reads the arguments of a gather call and refuses a run that this run did not spawn.
+func (s *script) childRuns(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (gatherCall, []spawnedRun, error) {
+	call, refs, err := unpackGather(b, args, kwargs)
+	if err != nil {
+		return call, nil, err
+	}
+
+	return call, refs, s.checkChildren(refs)
+}
+
+// checkChildren refuses a run that no spawn call of this run returned. It reads no store: the plan of each spawn is a recorded step, so a replay of this run lists the same runs.
+func (s *script) checkChildren(refs []spawnedRun) error {
+	for _, ref := range refs {
+		if !slices.ContainsFunc(s.spawned, func(one spawnedRun) bool { return one.Item == ref.Item && one.Run == ref.Run }) {
+			return fmt.Errorf("run %s is not a child of this run. Pass the runs that spawn returned", ref.Run)
+		}
+	}
+
+	return nil
 }
 
 // spawnCall is the arguments of a spawn call.
@@ -299,7 +322,7 @@ func runsValue(plan []spawnedRun) *starlarkstruct.Struct {
 // the workflow, so the step ids of this run do not depend on how a child ended. With fail="raise" the step cancels the runs that are still open when it sees a run that failed,
 // returns all the outcomes, and the call raises after the step.
 func (s *script) gather(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
-	call, refs, err := unpackGather(b, args, kwargs)
+	call, refs, err := s.childRuns(b, args, kwargs)
 	if err != nil {
 		return nil, err
 	}

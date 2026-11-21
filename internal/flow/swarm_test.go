@@ -558,16 +558,16 @@ func TestSpawnGather_ARefusedCallNamesTheProblemAndTheFix(t *testing.T) {
 	})
 }
 
-func TestSpawnGather_ARunThatIsNotInTheStoreIsAFailedOutcomeAndAnEmptyCallReturnsAtOnce(t *testing.T) {
+func TestSpawnGather_AnEmptyCallReturnsAtOnce(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	flow := bodyFlow("none = gather(spawn(items = []))\ndone = gather([struct(item = \"9\", run = \"item-9-r1\")])\ncommand(name = \"after\", run = [\"after\", str(len(none.results)), done.results[0].error])")
+	flow := bodyFlow("none = gather(spawn(items = []))\ncommand(name = \"after\", run = [\"after\", str(len(none.results))])")
 
 	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, flow))
 
 	require.NoError(t, err)
-	assert.Equal(t, []string{"after 0 run item-9-r1 is not in the store"}, h.commands.ranBy(testItem))
+	assert.Equal(t, []string{"after 0"}, h.commands.ranBy(testItem))
 }
 
 func TestSpawnGather_FiveChildrenRunAtMostMaxConcurrentAtOnce(t *testing.T) {

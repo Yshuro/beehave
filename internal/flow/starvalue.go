@@ -77,6 +77,9 @@ type script struct {
 	// value is the JSON text that the entry function of a run that spawn started returned.
 	value json.RawMessage
 
+	// spawned holds the runs that the spawn calls of this run returned, started or reused. gather accepts only these.
+	spawned []spawnedRun
+
 	// hostStarted is true once a host_up call of this run launched the host. host_teardown stops no other host.
 	hostStarted bool
 
