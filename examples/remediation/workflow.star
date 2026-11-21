@@ -890,6 +890,9 @@ def sync_land(item, project, round_settings, line, n):
     if landed.get("state", "") not in SYNC_LAND_STATES:
         fail("REFUSE: the landing of the sync pull request %s gave the fields %r. Read the pull request. %s" % (line["pr"], landed, restart_steps(item)))
 
+    if landed["state"] == "landed":
+        round_integration(project, round_settings, "round-integration-sync-%d" % n)
+
     return sync_end("", losses)
 
 def sync_trunk(item, project, round_settings, n):
@@ -946,11 +949,12 @@ def round_question(reason, seen, idle):
 
     return "The round did not merge the trunk into the round branch: %s. %s Then answer CONTINUE to check the trunk again." % (reason, SYNC_REASONS[reason])
 
-def round_integration(project, round_settings):
-    """Finds or creates the integration pull request from the round branch into the trunk, and returns its number and state.
-    The tool `remedy integration` uses vars.round.integration_pr when it is not 0, and prints `pr=<n> state=<state>`. The tool counts the rows of the table itself, with the count rules of `remedy recount`."""
+def round_integration(project, round_settings, name = "round-integration"):
+    """Finds or creates the integration pull request from the round branch into the trunk, and returns its number and state. `name` is the name of the step.
+    The tool `remedy integration` uses vars.round.integration_pr when it is not 0, and prints `pr=<n> state=<state>`. The tool makes the whole body again from the pull requests merged into the round branch, so a merge of an item or of a sync is never missing from it.
+    The round runs it after each landing of items (round-integration-land-<n>), after each landing of a sync (round-integration-sync-<n>) and when the round has nothing to move."""
     out = command(
-        name = "round-integration",
+        name = name,
         run = ["remedy", "integration", "--base", round_settings["base"], "--into", project.base_branch, "--pr", str(round_settings["integration_pr"])],
         stop_on_rc = [2],
     )
@@ -1112,6 +1116,7 @@ def round(item):
             if len(approved) > 0:
                 seen = max(seen, land(approved, project, round_settings, n))
                 approved = []
+                round_integration(project, round_settings, "round-integration-land-%d" % n)
 
             continue
 
