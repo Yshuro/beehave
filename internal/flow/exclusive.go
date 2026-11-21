@@ -117,15 +117,16 @@ func (e *Engine) trackGate(parent dbos.Context, in ExclusiveInput) (dbos.Context
 
 	run, cancel := dbos.WithCancel(parent)
 
-	ended := make(chan struct{})
+	a := &attempt{cancel: cancel, ended: make(chan struct{}), gate: true}
 
 	if id, err := dbos.GetWorkflowID(parent); err == nil {
-		e.cancels.add(id, openRun{id: id, cancel: cancel, ended: ended, gate: true})
+		a.id = id
+		e.cancels.add(a)
 	}
 
 	return run, func() {
 		cancel()
-		close(ended)
+		close(a.ended)
 	}
 }
 
@@ -170,7 +171,9 @@ func (e *Engine) reuseBeforeHost(ctx dbos.Context, in ExclusiveInput, out *Exclu
 // queuedClaim is the claim read of an exclusive call: it waits for the claim of the run that queued the call.
 func (e *Engine) queuedClaim(in ExclusiveInput) func(context.Context) (context.Context, error) {
 	return func(ctx context.Context) (context.Context, error) {
-		return e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.RunItem})
+		claim, _, err := e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.RunItem})
+
+		return claim, err
 	}
 }
 

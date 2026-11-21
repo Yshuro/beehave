@@ -94,9 +94,9 @@ func TestCancel_AMarkerOfARunThatIsOpenAndNotCanceledYetStaysForTheCancelThatIsA
 	waitOn(t, ownerAsks(t, harness))
 
 	in := ItemInput{Item: testItem, Project: testProject}
-	require.NoError(t, markCancel(engine.dir, testRun, in))
+	require.NoError(t, markCancel(engine.dir, testRun, cancelMark{ItemInput: in}))
 
-	engine.giveBackStray(openRun{id: testRun, in: in})
+	engine.giveBackStray(&attempt{id: testRun, in: in})
 
 	assert.FileExists(t, cancelPath(engine.dir, testRun), "the run is open, so the cancel may still come")
 	assert.Empty(t, harness.life.releasedBy())
@@ -112,9 +112,9 @@ func TestCancel_AMarkerOfARunThatEndedWithoutACancelIsDropped(t *testing.T) {
 	require.NoError(t, err)
 
 	in := ItemInput{Item: testItem, Project: testProject}
-	require.NoError(t, markCancel(engine.dir, testRun, in))
+	require.NoError(t, markCancel(engine.dir, testRun, cancelMark{ItemInput: in}))
 
-	engine.giveBackStray(openRun{id: testRun, in: in})
+	engine.giveBackStray(&attempt{id: testRun, in: in})
 
 	assert.NoFileExists(t, cancelPath(engine.dir, testRun), "the run ended, so no cancel comes and the tick reads the store for it no more")
 }
@@ -135,7 +135,7 @@ func TestCancel_TheReleaseRecordOfACanceledLocalRunEndsWithItsGiveBack(t *testin
 	require.Error(t, receive(t, done).err)
 	soon(t, func() bool { return countOf(harness.life.seen(), "release") == 1 }, "the give-back of the canceled run releases the item")
 
-	soon(t, func() bool { return engine.cancels.begin(testRun) }, "a later begin of the same run id is refused for ever when the give-back leaves its record")
+	soon(t, func() bool { return engine.cancels.begin(&attempt{id: testRun}) }, "a later begin of the same run id is refused for ever when the give-back leaves its record")
 }
 
 func TestCancels_BeginRefusesARunThatThisProcessExecutesOrReleases(t *testing.T) {
@@ -143,24 +143,28 @@ func TestCancels_BeginRefusesARunThatThisProcessExecutesOrReleases(t *testing.T)
 
 	var list cancels
 
-	list.add("local", openRun{id: "local", cancel: func() {}})
+	local := &attempt{id: "local", cancel: func() {}}
+	list.add(local)
 
-	assert.False(t, list.begin("local"), "a local run is released by its own give-back")
-	assert.True(t, list.begin("stray"))
-	assert.False(t, list.begin("stray"), "a release under way is not started twice")
+	assert.False(t, list.begin(&attempt{id: "local"}), "a local run is released by its own give-back")
 
-	list.finish("stray")
+	stray := &attempt{id: "stray"}
+	assert.True(t, list.begin(stray))
+	assert.False(t, list.begin(&attempt{id: "stray"}), "a release under way is not started twice")
 
-	assert.True(t, list.begin("stray"))
+	list.finish(stray)
 
-	cut := list.cancel([]attempt{{id: "local"}})
+	assert.True(t, list.begin(&attempt{id: "stray"}))
+
+	cut := list.cancel([]*attempt{local})
 
 	require.Len(t, cut, 1)
-	assert.False(t, list.begin("local"), "a cut run is released until its give-back ends")
+	assert.False(t, list.begin(&attempt{id: "local"}), "a cut run is released until its give-back ends")
 
-	list.add("gate", openRun{id: "gate", cancel: func() {}, gate: true})
-	require.Len(t, list.cancel([]attempt{{id: "gate"}}), 1)
-	assert.True(t, list.begin("gate"), "a gate has no give-back, so a cut gate is not held")
+	gate := &attempt{id: "gate", cancel: func() {}, gate: true}
+	list.add(gate)
+	require.Len(t, list.cancel([]*attempt{gate}), 1)
+	assert.True(t, list.begin(&attempt{id: "gate"}), "a gate has no give-back, so a cut gate is not held")
 }
 
 func TestCancel_AnUnreadableCancelFolderIsLoggedAndTheTickGoesOn(t *testing.T) {

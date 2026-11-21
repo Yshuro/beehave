@@ -61,22 +61,24 @@ func TestHolds_ACallOutsideAWorkflowHoldsAndTracksNothing(t *testing.T) {
 
 	engine := idleEngine(t, newHarness(t))
 
-	id, forget := engine.holds.hold(engine.ctx, testProject, testOwner)
+	forget := engine.holds.hold(&attempt{}, testProject, testOwner)
 	forget()
 
-	assert.Empty(t, id)
-	assert.Empty(t, engine.holds.snapshot())
+	assert.Empty(t, engine.holds.rows)
 
 	var runCtx dbos.Context
 
-	_, err := engine.track(engine.ctx, ItemInput{}, func(ctx dbos.Context) (ItemResult, error) {
+	_, err := engine.track(engine.ctx, ItemInput{}, func(ctx dbos.Context, a *attempt) (ItemResult, error) {
 		runCtx = ctx
+
+		assert.Empty(t, a.id, "a call outside a workflow has no run id")
 
 		return ItemResult{}, nil
 	})
 	require.NoError(t, err)
 
 	require.ErrorIs(t, runCtx.Err(), context.Canceled)
+	assert.Empty(t, engine.cancels.attempts(), "a call outside a workflow is not listed")
 }
 
 func TestHolds_TheEndOfAnEarlierAttemptKeepsTheClaimOfTheResumedRun(t *testing.T) {
@@ -84,15 +86,24 @@ func TestHolds_TheEndOfAnEarlierAttemptKeepsTheClaimOfTheResumedRun(t *testing.T
 
 	var held holds
 
-	forgetEarlier := held.keep("run-1", testProject, testOwner)
-	forgetResumed := held.keep("run-1", testProject, testOwner)
+	earlier, resumed := &attempt{id: "run-1"}, &attempt{id: "run-1"}
+
+	forgetEarlier := held.hold(earlier, testProject, testOwner)
+	earlierClaim := held.rows[earlier].ctx
+	forgetResumed := held.hold(resumed, testProject, testOwner)
+
+	require.ErrorIs(t, earlierClaim.Err(), context.Canceled, "the claim of the resumed run ends the claim of the earlier attempt")
+	_, found := held.rows[earlier]
+	assert.False(t, found, "one run id holds one claim row")
 
 	forgetEarlier()
-	assert.Contains(t, held.rows, "run-1", "the earlier attempt does not forget the claim that the resumed run holds")
-	require.NoError(t, held.rows["run-1"].ctx.Err(), "the claim of the resumed run stays live")
+	_, found = held.rows[resumed]
+	assert.True(t, found, "the earlier attempt does not forget the claim that the resumed run holds")
+	require.NoError(t, held.rows[resumed].ctx.Err(), "the claim of the resumed run stays live")
 
 	forgetResumed()
-	assert.NotContains(t, held.rows, "run-1", "the resumed run forgets its own claim")
+	_, found = held.rows[resumed]
+	assert.False(t, found, "the resumed run forgets its own claim")
 
 	forgetResumed()
 	assert.Empty(t, held.rows, "a second forget finds nothing")
@@ -103,19 +114,23 @@ func TestHolds_FailKeepsTheReasonAndASnapshotDropsTheLostClaim(t *testing.T) {
 
 	var held holds
 
-	held.add("run-1", claimHold{project: testProject, owner: testOwner, renewed: time.Unix(100, 0)})
-	held.add("run-3", claimHold{renewed: time.Unix(100, 0)})
+	first, third := &attempt{id: "run-1"}, &attempt{id: "run-3"}
+	held.add(first, claimHold{project: testProject, owner: testOwner, renewed: time.Unix(100, 0)})
+	held.add(third, claimHold{renewed: time.Unix(100, 0)})
 
-	claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
+	_, claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
 	require.NoError(t, claim.Err(), "a claim that is trusted has a live context")
 
-	held.fail("run-1", "the tracker said no")
-	held.fail("run-2", "no such run")
+	held.fail(&attempt{id: "run-1"}, "an earlier attempt")
+	require.NoError(t, claim.Err(), "an attempt that holds no row leaves the claim of the run alone")
+	assert.Empty(t, held.rows[first].lost)
+
+	held.fail(first, "the tracker said no")
 
 	require.ErrorIs(t, claim.Err(), context.Canceled, "a loss ends the context of the claim")
 	assert.Len(t, held.snapshot(), 1)
-	assert.Equal(t, "the tracker said no", held.rows["run-1"].lost)
-	assert.NotContains(t, held.rows, "run-2")
+	assert.Equal(t, "the tracker said no", held.rows[first].lost)
+	assert.Len(t, held.rows, 2)
 }
 
 func TestHolds_DropEndsTheContextOfTheClaimAndForgetsIt(t *testing.T) {
@@ -123,12 +138,13 @@ func TestHolds_DropEndsTheContextOfTheClaimAndForgetsIt(t *testing.T) {
 
 	var held holds
 
-	held.add("run-1", claimHold{renewed: time.Unix(100, 0)})
+	first := &attempt{id: "run-1"}
+	held.add(first, claimHold{renewed: time.Unix(100, 0)})
 
-	claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
+	_, claim, _, _ := held.distrust("run-1", clock{Now: func() time.Time { return time.Unix(100, 0) }})
 
-	held.drop("run-1")
-	held.drop("run-2")
+	held.dropOwn(first)
+	held.dropOwn(&attempt{id: "run-2"})
 
 	require.ErrorIs(t, claim.Err(), context.Canceled, "the end of the run ends the agents of the run")
 	assert.Empty(t, held.rows)
@@ -158,13 +174,14 @@ func TestHolds_DistrustNamesWhyARunHoldsNoTrustedClaim(t *testing.T) {
 
 			var held holds
 
-			held.add("run-1", tc.row)
+			held.add(&attempt{id: "run-1"}, tc.row)
 
-			claim, reason, early := held.distrust(cmp.Or(tc.find, "run-1"), clock{Now: func() time.Time { return now }})
+			holder, claim, reason, early := held.distrust(cmp.Or(tc.find, "run-1"), clock{Now: func() time.Time { return now }})
 
 			assert.Contains(t, reason, tc.reason)
 			assert.Equal(t, tc.early, early)
 			assert.Equal(t, tc.reason == "", claim != nil, "a trusted claim comes with its context, and nothing else does")
+			assert.Equal(t, tc.reason == "", holder != nil, "a trusted claim comes with the attempt that holds it, and nothing else does")
 		})
 	}
 }
@@ -175,13 +192,13 @@ func TestHolds_ASnapshotSkipsAClaimThatHasNoFirstTrustYet(t *testing.T) {
 	var held holds
 
 	held.mu.Lock()
-	held.rows = map[string]claimHold{"run-1": {project: testProject, owner: testOwner}}
+	held.rows = map[*attempt]claimHold{{id: "run-1"}: {project: testProject, owner: testOwner}}
 	held.mu.Unlock()
 
 	assert.Empty(t, held.snapshot())
 }
 
-func TestHolds_RenewMovesTheStartOfTheTrustOfTheNamedRunOnlyAndSwapsItsTimer(t *testing.T) {
+func TestHolds_RenewMovesTheStartOfTheTrustOfTheNamedAttemptOnlyAndSwapsItsTimer(t *testing.T) {
 	t.Parallel()
 
 	var held holds
@@ -189,17 +206,19 @@ func TestHolds_RenewMovesTheStartOfTheTrustOfTheNamedRunOnlyAndSwapsItsTimer(t *
 	start := time.Unix(100, 0)
 	stopped := 0
 
+	first, lost := &attempt{id: "run-1"}, &attempt{id: "run-3"}
+
 	held.mu.Lock()
-	held.rows = map[string]claimHold{"run-1": {project: testProject, owner: testOwner, failure: "old", stop: func() { stopped++ }}, "run-3": {lost: "gone"}}
+	held.rows = map[*attempt]claimHold{first: {project: testProject, owner: testOwner, failure: "old", stop: func() { stopped++ }}, lost: {lost: "gone"}}
 	held.mu.Unlock()
 
-	assert.True(t, held.renew("run-1", start, func() {}))
-	assert.False(t, held.renew("run-2", start, func() {}))
-	assert.False(t, held.renew("run-3", start, func() {}), "a lost claim is not renewed")
+	assert.True(t, held.renew(first, start, func() {}))
+	assert.False(t, held.renew(&attempt{id: "run-1"}, start, func() {}), "another attempt of the run holds no row")
+	assert.False(t, held.renew(lost, start, func() {}), "a lost claim is not renewed")
 
-	assert.Equal(t, start, held.rows["run-1"].renewed)
-	assert.Empty(t, held.rows["run-1"].failure, "a good renewal forgets the earlier failure")
-	assert.NotContains(t, held.rows, "run-2")
+	assert.Equal(t, start, held.rows[first].renewed)
+	assert.Empty(t, held.rows[first].failure, "a good renewal forgets the earlier failure")
+	assert.Len(t, held.rows, 2)
 	assert.Equal(t, 1, stopped, "the timer of the earlier renewal stops")
 }
 
@@ -210,37 +229,41 @@ func TestHolds_ExpiredNamesTheClaimOnlyForTheStampThatArmedTheTimer(t *testing.T
 
 	start := time.Unix(100, 0)
 
+	first, lost := &attempt{id: "run-1"}, &attempt{id: "run-2"}
+
 	held.mu.Lock()
-	held.rows = map[string]claimHold{"run-1": {renewed: start}, "run-2": {renewed: start, lost: "gone"}}
+	held.rows = map[*attempt]claimHold{first: {renewed: start}, lost: {renewed: start, lost: "gone"}}
 	held.mu.Unlock()
 
-	_, expired := held.expired("run-1", start)
+	_, expired := held.expired(first, start)
 	assert.True(t, expired)
 
-	_, expired = held.expired("run-1", start.Add(time.Second))
+	_, expired = held.expired(first, start.Add(time.Second))
 	assert.False(t, expired, "a later renewal makes the timer void")
 
-	_, expired = held.expired("run-2", start)
+	_, expired = held.expired(lost, start)
 	assert.False(t, expired)
 
-	_, expired = held.expired("run-3", start)
-	assert.False(t, expired)
+	_, expired = held.expired(&attempt{id: "run-1"}, start)
+	assert.False(t, expired, "another attempt of the run holds no row")
 }
 
-func TestHolds_NoteKeepsTheFailureOfTheNamedRunOnly(t *testing.T) {
+func TestHolds_NoteKeepsTheFailureOfTheNamedAttemptOnly(t *testing.T) {
 	t.Parallel()
 
 	var held holds
 
+	first := &attempt{id: "run-1"}
+
 	held.mu.Lock()
-	held.rows = map[string]claimHold{"run-1": {}}
+	held.rows = map[*attempt]claimHold{first: {}}
 	held.mu.Unlock()
 
-	held.note("run-1", "down")
-	held.note("run-2", "down")
+	held.note(first, "down")
+	held.note(&attempt{id: "run-1"}, "late")
 
-	assert.Equal(t, "down", held.rows["run-1"].failure)
-	assert.NotContains(t, held.rows, "run-2")
+	assert.Equal(t, "down", held.rows[first].failure, "another attempt of the run writes no failure into the row")
+	assert.Len(t, held.rows, 1)
 }
 
 func TestClock_AgeCountsTheLargerOfTheMonotonicAndTheWallTime(t *testing.T) {
@@ -302,22 +325,6 @@ func TestClock_AfterStartsTheFunctionAndItsStopFunctionCancelsIt(t *testing.T) {
 	stop()
 }
 
-func TestCancels_StopCancelsTheRunAndKeepsItListed(t *testing.T) {
-	t.Parallel()
-
-	var runs cancels
-
-	stopped := 0
-
-	runs.add("run-1", openRun{id: "run-1", cancel: func() { stopped++ }, in: ItemInput{Item: testItem}})
-
-	runs.stop("run-1")
-	runs.stop("run-2")
-
-	assert.Equal(t, 1, stopped, "this process does not execute run-2")
-	assert.Contains(t, runs.runs, "run-1")
-}
-
 func TestTick_TheRealTickerRenewsAHeldClaim(t *testing.T) {
 	t.Parallel()
 
@@ -327,7 +334,7 @@ func TestTick_TheRealTickerRenewsAHeldClaim(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
 
-	engine.holds.add("run-1", claimHold{project: testProject, owner: testOwner + testItem, renewed: time.Now()})
+	holdClaim(engine, "run-1", claimHold{project: testProject, owner: testOwner + testItem, renewed: time.Now()})
 
 	stop := make(chan struct{})
 	ended := make(chan struct{})
@@ -363,8 +370,7 @@ func TestShutdown_StopsTheTrustTimerOfAClaimThatIsStillHeld(t *testing.T) {
 	engine, err := NewEngine(t.Context(), harness.opts, deps)
 	require.NoError(t, err)
 
-	engine.holds.add("run-1", claimHold{renewed: time.Now()})
-	engine.trust("run-1", time.Now())
+	engine.trust(holdClaim(engine, "run-1", claimHold{renewed: time.Now()}), time.Now())
 
 	require.NoError(t, engine.Shutdown())
 
@@ -379,7 +385,7 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, engine.Shutdown())
 
-	engine.cancels.add("item-12-r1", openRun{id: "item-12-r1", ended: make(chan struct{})})
+	engine.cancels.add(&attempt{id: "item-12-r1", ended: make(chan struct{})})
 	engine.cancelCancelled(nil)
 
 	require.ErrorContains(t, engine.deleteOldRuns(), "list the finished runs")
@@ -389,7 +395,7 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 	require.ErrorContains(t, err, "list the runs of item 12")
 
 	// Outside a workflow the run id is empty: hold a trusted claim under it, so the guard on the phase start passes.
-	engine.holds.add("", claimHold{renewed: time.Now()})
+	holdClaim(engine, "", claimHold{renewed: time.Now()})
 
 	_, err = engine.queuePhase(engine.ctx, PhaseInput{Item: testItem, Project: testProject, Login: testLogin})
 	require.ErrorContains(t, err, "queue the agent step of item 12")
@@ -397,7 +403,7 @@ func TestEngine_AStoreThatIsShutDownRefusesEachRead(t *testing.T) {
 	_, err = engine.runOpen(testItem)
 	require.ErrorContains(t, err, "read run 12")
 
-	_, err = engine.awaitClaim(t.Context(), PhaseInput{Run: "run-gone", Item: testItem})
+	_, _, err = engine.awaitClaim(t.Context(), PhaseInput{Run: "run-gone", Item: testItem})
 	require.ErrorContains(t, err, "read run run-gone")
 }
 
@@ -427,7 +433,7 @@ func TestPhase_AListOfEarlierStartsThatCannotBeReadFailsThePhaseAfterItsLookAtTh
 	engine := newHarness(t).engineWith(t, func(e *Engine) {
 		store = e.ctx
 		e.ctx = &stepsOfOneFail{Context: e.ctx, id: phaseID}
-		e.holds.add(runID(testItem, 1), claimHold{renewed: time.Now()})
+		holdClaim(e, runID(testItem, 1), claimHold{renewed: time.Now()})
 	})
 
 	handle, err := dbos.RunWorkflow(engine.ctx, engine.phase, PhaseInput{Run: runID(testItem, 1), Item: testItem, Project: testProject, Login: testLogin},

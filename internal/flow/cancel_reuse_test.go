@@ -38,7 +38,11 @@ func endedOf(engine *Engine, id string) chan struct{} {
 	engine.cancels.mu.Lock()
 	defer engine.cancels.mu.Unlock()
 
-	return engine.cancels.runs[id].ended
+	if a, found := engine.cancels.runs[id]; found {
+		return a.ended
+	}
+
+	return nil
 }
 
 func isClosed(ch chan struct{}) bool {
@@ -70,6 +74,13 @@ func resumeRig(t *testing.T, before bool) (*harness, *Engine, *Client, *listHook
 // resumeAndList resumes the run of the item and waits until the engine lists the resumed attempt under the run id of the earlier one.
 func resumeAndList(t *testing.T, engine *Engine, client *Client, earlier chan struct{}) chan struct{} {
 	t.Helper()
+
+	// The attempt ends before the store records the end of the run, and resume reads the store.
+	assert.Eventually(t, func() bool {
+		rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterWorkflowIDs(testRun), dbos.WithFilterStatus(endedStatuses...))
+
+		return err == nil && len(rows) == 1
+	}, soonBound, pollEvery, "the store records the end of the earlier attempt")
 
 	if err := client.Resume(testItem); err != nil {
 		t.Error(err)
@@ -132,7 +143,7 @@ func TestCancel_ACancelRowOfTheEarlierAttemptDoesNotStopTheResumedRun(t *testing
 
 	// The first attempt ends and the run resumes after the tick read the canceled row and before it acts on it.
 	hook.run = func() {
-		engine.cancels.stop(testRun)
+		stopRun(engine, testRun)
 		assert.Eventually(t, func() bool { return isClosed(earlier) }, soonBound, pollEvery, "the first attempt ends")
 
 		later = resumeAndList(t, engine, client, earlier)

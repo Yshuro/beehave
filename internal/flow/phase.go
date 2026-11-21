@@ -103,7 +103,7 @@ type PhaseOutput struct {
 
 // phase waits for a trusted claim of its run, looks at the caps, then runs the agent as a step; a cap stop ends it with the stop and no agent run.
 func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
-	claim, err := e.awaitClaim(ctx, in)
+	claim, holder, err := e.awaitClaim(ctx, in)
 	if err != nil {
 		return PhaseOutput{}, err
 	}
@@ -117,16 +117,16 @@ func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 		return PhaseOutput{}, err
 	}
 
-	return e.agentStep(ctx, claim, in, cmp.Or(lost, in.Limited))
+	return e.agentStep(ctx, claim, holder, in, cmp.Or(lost, in.Limited))
 }
 
-// agentStep runs the agent of the phase as a step. A failed step returns no output, so it leaves the cost of the failed run in an event that the queuing run reads.
-// lost is the lost or limited run that the start follows, or nil.
-func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
+// agentStep runs the agent of the phase as a step, under the claim of the attempt holder. A failed step returns no output, so it leaves the cost of the failed run
+// in an event that the queuing run reads. lost is the lost or limited run that the start follows, or nil.
+func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, holder *attempt, in PhaseInput, lost *LostRun) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
 	var spent agent.Spend
 
 	out, err := runStep(e, ctx, agentStepName, func(c context.Context) (PhaseOutput, error) {
-		ran, runErr := e.runAgent(c, claim, in, lost)
+		ran, runErr := e.runAgent(c, claim, holder, in, lost)
 		spent = ran.Spend
 
 		return ran, runErr
@@ -142,13 +142,13 @@ func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInpu
 // runAgent starts the agent of one phase under the context of the claim of its run, and waits for it. The agent dies with its process group when
 // the claim ends, or when the phase is canceled, times out or ends. A loss of the claim either comes first, and the start finds its context done,
 // or comes after, and the end of the context kills the group: no lock and no list of groups to kill on a loss.
-// ctx is the context of the step, which saves each session id that the agent names.
-func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) {
+// ctx is the context of the step, which saves each session id that the agent names. holder is the attempt whose claim the agent runs under: its process rows are its own.
+func (e *Engine) runAgent(ctx, claim context.Context, holder *attempt, in PhaseInput, lost *LostRun) (PhaseOutput, error) {
 	agentCtx, cancel := context.WithCancelCause(claim)
 	defer cancel(nil)
 
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)) })()
-	defer e.endGroups(in.Run)
+	defer e.endGroups(holder)
 
 	data, err := e.writeData(in)
 	if err != nil {
@@ -158,7 +158,7 @@ func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostR
 	saver := e.saveSession(ctx, in)
 	defer saver.finish()
 
-	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, data, lost, saver.name))
+	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, holder, in, data, lost, saver.name))
 
 	out, err := e.judgePhase(ctx, in, result, err)
 	out.ResumeOf = lost.session()
@@ -183,10 +183,11 @@ func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Res
 	return out, phaseEnd(in, out, e.deps.Clock.wall())
 }
 
-// agentRequest is the request for the agent of a phase. data is the data file of the phase, and named receives each new session id that the agent names.
-func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, data string, lost *LostRun, named func(session string)) AgentRequest {
+// agentRequest is the request for the agent of a phase. Its process groups are rows of the attempt holder. data is the data file of the phase,
+// and named receives each new session id that the agent names.
+func (e *Engine) agentRequest(ctx context.Context, holder *attempt, in PhaseInput, data string, lost *LostRun, named func(session string)) AgentRequest {
 	return AgentRequest{
-		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: named, Lost: lost,
+		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, holder, in), Named: named, Lost: lost,
 		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
 		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
 		DataFile: data,
@@ -319,19 +320,19 @@ func (s *sessionSaver) finish() {
 	<-s.done
 }
 
-// recordGroup returns the function that writes the process group of an agent to the process file, under the id of the run. A failed write is logged.
-// The file serves the next start of beehave run: the next worker kills the groups that a crash left.
-func (e *Engine) recordGroup(ctx context.Context, in PhaseInput) func(pid int) {
+// recordGroup returns the function that writes the process group of an agent to the process file, under the attempt whose claim the agent runs under.
+// A failed write is logged. The file serves the next start of beehave run: the next worker kills the groups that a crash left.
+func (e *Engine) recordGroup(ctx context.Context, a *attempt, in PhaseInput) func(pid int) {
 	return func(pid int) {
-		if err := e.procs.add(ctx, in.Run, pid); err != nil {
+		if err := e.procs.add(ctx, a, pid); err != nil {
 			e.logger.WarnContext(ctx, "cannot record the agent process", "item", in.Item, "error", err)
 		}
 	}
 }
 
-// endGroups forgets the agent groups of one run in the process file.
-func (e *Engine) endGroups(run string) {
-	if err := e.procs.release(run); err != nil {
+// endGroups forgets the agent groups of one attempt in the process file.
+func (e *Engine) endGroups(a *attempt) {
+	if err := e.procs.release(a); err != nil {
 		e.logger.Warn("cannot update the agent process file", "error", err)
 	}
 }
