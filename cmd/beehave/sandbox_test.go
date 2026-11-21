@@ -398,6 +398,26 @@ func TestSandboxPlan_ASandboxReadPathMayNotOpenTheHomeFolderTheFileSystemOrACred
 	assert.Equal(t, []string{"/opt/tools", filepath.Join(r.home, "sdk")}, r.f.spec.Sandbox.Read)
 }
 
+func TestSandboxPlan_ASandboxReadPatternThatMatchesACredentialPathStopsTheStep(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	req := request()
+	req.Sandbox = &model.Sandbox{}
+
+	for _, pattern := range []string{"~/.ss*", "~/.s?h", "/srv/ke*"} {
+		r.f.spec.Sandbox = nil
+		r.f.agents.projects = map[string]config.Project{"p": {Project: model.Project{SandboxRead: []string{pattern}, SandboxDeny: []string{"/srv/keys"}}}}
+
+		got, err := r.f.agents.Run(t.Context(), req)
+
+		require.NoError(t, err)
+		assert.Equal(t, agent.OutcomeNotStarted, got.Outcome, pattern)
+		assert.Contains(t, got.Note, "sandbox_read path", pattern)
+		assert.Nil(t, r.f.spec.Sandbox, "the agent never ran for "+pattern)
+	}
+}
+
 func TestSandboxPlan_TheProjectFileExtendsTheReadBaseAndTheCredentialListAndNeverShrinksThem(t *testing.T) {
 	t.Parallel()
 
