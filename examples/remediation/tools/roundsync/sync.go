@@ -256,7 +256,7 @@ func (s *syncer) open(ctx context.Context, branch, baseTip string, number int) (
 	return Result{State: Synced, Branch: branch, PR: number, Head: head, BaseTip: baseTip}, nil
 }
 
-// closeOlder closes each open pull request of the round base whose branch is a sync branch of another trunk tip, with a comment that names the pull request that replaces it.
+// closeOlder closes every other open sync pull request into the round base, not only older ones: branch names carry no order. The match is the prefix sync/<base>/, and the comment names the pull request that replaces it.
 // It runs on every call that reaches the open pull request, so a close that failed is tried again by the next call. A failed close is an error.
 func (s *syncer) closeOlder(ctx context.Context, branch string, replacement int) error {
 	rows, err := s.forge.PRList(ctx, scanLimit, "--state", "open", "--base", s.req.Base, "--json", "number,headRefName")

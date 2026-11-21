@@ -714,3 +714,22 @@ func TestLand_AMissingBranchIsAnError(t *testing.T) {
 
 	require.ErrorContains(t, err, "cannot find branch "+syncName)
 }
+
+func TestCheck_ABranchThatOnlySharesTheStartOfTheSyncPrefixIsNotClosed(t *testing.T) {
+	t.Parallel()
+
+	w := newWorld()
+	w.open = []model.PullRequest{
+		openSync(15, "sync/integration/r10/deadbeef"),
+		openSync(16, "sync/integration/r1"),
+	}
+
+	_, err := check(t, w)
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{
+		"branch " + syncName + " " + baseTip,
+		"merge " + syncName + " " + trunk,
+		"pr " + syncName + " " + base + " Merge main into integration/r1",
+	}, w.writes, "round r10 and a branch with no slash after the base are not sync pull requests of round r1")
+}
