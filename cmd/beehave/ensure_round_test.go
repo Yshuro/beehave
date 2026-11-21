@@ -437,7 +437,7 @@ func TestWorktrees_EnsureStopsWithAPlainErrorWhenTheCloneMadeAgainLacksTheStartC
 	again, err := rig.trees.Ensure(t.Context(), "p", roundItem, start, "")
 
 	require.ErrorContains(t, err, "the clone of project p does not hold the commit "+start+" that the worktree of item "+roundItem+" was made at")
-	require.ErrorContains(t, err, "Start the item again: beehave run "+roundItem)
+	require.ErrorContains(t, err, "End the failed run first: beehave cancel "+roundItem+". Start the item again: beehave run "+roundItem)
 	assert.Empty(t, again)
 	assert.NoDirExists(t, dir)
 }

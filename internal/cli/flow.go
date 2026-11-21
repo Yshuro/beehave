@@ -184,7 +184,7 @@ const runLong = "Take one item through its workflow.\nName the project when the 
 	"beehave checks the file first and refuses on any problem. If no file is named and the folder has none, beehave run refuses, unless the item has an open run.\n\n" +
 	"If an earlier run of the item is open, beehave run continues it with the file that the run pinned. Press Ctrl-C to stop the command: the run stays open, and beehave run continues it. A second Ctrl-C during the stop exits at once with code 130. " +
 	"If the run has already ended when the stop begins, the next Ctrl-C exits at once with the exit code of the run: 0 for a finished run, 1 for a failed or stopped run.\n" +
-	"If the last run failed, beehave run refuses and names the step that failed. Run beehave resume, then beehave run.\n" +
+	"If the last run failed, beehave run refuses and names the step that failed. Run beehave resume, then beehave run. If the resume refuses the run, run beehave cancel, then beehave run: the cancel ends the failed run, and the next run starts a new attempt.\n" +
 	"After a finished or a canceled run, beehave run starts a new run.\n\n" +
 	"If another engine holds the state folder, beehave run gives the item to that engine and waits for the result. " +
 	"The engine must be the same build, or the command refuses. The run waits in the items queue, so agents.max_concurrent applies, and its progress shows in the log of that engine. " +

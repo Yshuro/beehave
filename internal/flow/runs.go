@@ -72,8 +72,17 @@ func (r run) failed() bool {
 // failedError tells the owner why a new attempt does not start after a failed one.
 // The error text of the run names the step that failed.
 func failedError(failed run, item string) error {
-	return fmt.Errorf("%w: %s failed: %s. Run beehave resume %s to continue it from the last finished step",
-		errRunFailed, failed.Status.ID, fmt.Sprint(failed.Status.Error), item)
+	return fmt.Errorf("%w: %s failed: %s. Run beehave resume %s to continue it from the last finished step. To start a new attempt instead, run beehave cancel %s",
+		errRunFailed, failed.Status.ID, fmt.Sprint(failed.Status.Error), item, item)
+}
+
+// endFailedFirst gives the sentence that sends the owner to beehave cancel when the last run of the item failed, and an empty text for any other run.
+func endFailedFirst(last run, item string) string {
+	if !last.failed() {
+		return ""
+	}
+
+	return fmt.Sprintf("End the failed run first: beehave cancel %s. ", item)
 }
 
 // runID names attempt k of an item. A second start of the same attempt joins the first.

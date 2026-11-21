@@ -39,7 +39,7 @@ To check the plugin files, run `claude plugin validate /path/to/beehave/plugins/
 
 The title of an item and the text of an answer go to beehave as one single-quoted argument, with each `'` written as `'\''`. Item ids and flags pass as they are.
 
-If the last run failed, `beehave run` refuses, and `/beehave:run` offers `beehave resume <item>` and then `beehave run <item>`. After a cancelled run, `beehave run` does not refuse: it starts a new run that repeats the finished steps. `/beehave:run` and `/beehave:cancel` ask the user to choose between resume and a new run.
+If the last run failed, `beehave run` refuses, and `/beehave:run` offers `beehave resume <item>` and then `beehave run <item>`. If the resume refuses the run, it sends the user to `/beehave:cancel <item>` and then `beehave run <item>`. After a cancelled run, `beehave run` does not refuse: it starts a new run that repeats the finished steps. `/beehave:run` and `/beehave:cancel` ask the user to choose between resume and a new run.
 
 If another `beehave run` owns the state folder, the command runs `/beehave:status` and waits. It does not retry. After `/beehave:answer`, the status line keeps the question until the run continues.
 

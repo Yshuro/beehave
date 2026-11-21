@@ -445,7 +445,7 @@ func (c *Client) dropClaim(project, item, id, owner string) error {
 	ctx, cancel := c.give.limit(context.Background())
 	defer cancel()
 
-	return errors.Join(c.give.Lifecycle.Release(ctx, project, item, owner), removeFile(ownerPath(c.dir, id)))
+	return errors.Join(c.give.Lifecycle.Release(ctx, project, item, owner), dropOwner(c.dir, id, owner))
 }
 
 // requireResumable refuses a run that is not canceled or failed, and a run that another version of beehave started.
@@ -580,7 +580,7 @@ func (c *Client) cancelHeld(item string, last run) error {
 
 	// The marker comes first. An engine that stops before its release ends leaves it, and the next start finishes the release.
 	// A marker for a run that stays open is harmless: the engine drops it when the run ends or a newer run replaces it, and the start drops it.
-	project, err := c.markCancel(item, last)
+	mark, err := c.markCancel(item, last)
 	if err != nil {
 		return err
 	}
@@ -589,7 +589,7 @@ func (c *Client) cancelHeld(item string, last run) error {
 		return err
 	}
 
-	return errors.Join(c.releaseUnowned(project, item, last), c.sayStopped(last, stopped))
+	return errors.Join(c.releaseUnowned(mark.attempt(last.Status.ID)), c.sayStopped(last, stopped))
 }
 
 // leftOpen returns the open runs under a canceled run, and refuses a canceled run that has none. It returns nothing for an open run.
@@ -648,19 +648,20 @@ func (c *Client) underProbe(f func() error) error {
 	return errors.Join(f(), probe.Unlock())
 }
 
-// markCancel writes the cancel marker of a run and returns the project of the run.
-func (c *Client) markCancel(item string, last run) (string, error) {
+// markCancel writes the cancel marker of a run and returns what it holds.
+func (c *Client) markCancel(item string, last run) (cancelMark, error) {
 	project, err := last.project()
 	if err != nil {
-		return "", err
+		return cancelMark{}, err
 	}
 
-	return project, markCancel(c.dir, last.Status.ID, ItemInput{Item: item, Project: project})
+	return markRunCancel(c.flow, c.dir, last.Status.ID, ItemInput{Item: item, Project: project})
 }
 
 // releaseUnowned releases the worktree and the claim of a canceled run, under probe.lock, when it takes the engine lock: no engine runs.
 // A running engine does it on its next tick, and an engine that stops first leaves the cancel marker, so the next start does it.
-func (c *Client) releaseUnowned(project, item string, last run) error {
+// a is the attempt of the cancel marker: the run with the token it held at the cancel.
+func (c *Client) releaseUnowned(a *attempt) error {
 	held, err := holdEngine(c.dir)
 	if errors.Is(err, ErrStateBusy) {
 		return nil
@@ -674,24 +675,24 @@ func (c *Client) releaseUnowned(project, item string, last run) error {
 	list := func(opts ...dbos.ListWorkflowsOption) ([]dbos.WorkflowStatus, error) {
 		return dbos.ListWorkflows(c.flow, opts...)
 	}
-	off := disarmCanceled(context.Background(), list, c.give.Merge, last.Status.ID)
+	off := disarmCanceled(context.Background(), list, c.give.Merge, a.id)
 
-	return errors.Join(off, c.giveBack(project, item, last.Status.ID), held.Unlock())
+	return errors.Join(off, c.giveBack(a), held.Unlock())
 }
 
-// giveBack releases the worktree and the claim of a run with the token the run holds, then removes the files of the run.
+// giveBack releases the worktree and the claim of a canceled attempt with its token, then removes the files of the run that hold that token.
 // A run that never claimed has nothing to give back.
-func (c *Client) giveBack(project, item, id string) error {
-	owner, err := currentOwner(c.flow, c.dir, id)
+func (c *Client) giveBack(a *attempt) error {
+	owner, err := releaseOwner(c.flow, a)
 	if err == nil {
-		err = c.give.giveBack(context.Background(), c.logger, project, item, owner)
+		err = c.give.giveBack(context.Background(), c.logger, a.in.Project, a.in.Item, owner)
 	}
 
 	if err != nil && !errors.Is(err, errNoOwner) {
 		return err
 	}
 
-	return forgetRun(c.dir, id)
+	return forgetAttempt(c.dir, a.id, owner)
 }
 
 // PinnedFile returns the workflow file of the open run of the item. It is empty when the item has no open run, or when the open run uses no file.

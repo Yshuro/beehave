@@ -69,6 +69,7 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheModuleThatChan
 	require.ErrorIs(t, err, errStranded)
 	require.ErrorContains(t, err, fmt.Sprintf("agent module at version %d and this build has version %d", agentVersion, agentVersion+1))
 	require.ErrorContains(t, err, "Start the item again")
+	assert.NotContains(t, err.Error(), "End the failed run first", "an open run is not failed, so no cancel is needed")
 
 	row, rowErr := other.row(testRun)
 	require.NoError(t, rowErr)
