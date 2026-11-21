@@ -460,34 +460,47 @@ func TestPrompts_NoPromptOfAStepThatCommitsTellsTheAgentToPush(t *testing.T) {
 
 // readsBuildHost reports whether the parse tree holds the field chain .facts.build_host, in an action, a condition or a range.
 func readsBuildHost(node parse.Node) bool {
+	if field, ok := node.(*parse.FieldNode); ok {
+		return slices.Equal(field.Ident, []string{"facts", "build_host"})
+	}
+
+	return slices.ContainsFunc(childNodes(node), readsBuildHost)
+}
+
+// childNodes lists the nodes that a template node holds: the body of a list, the pipe of an action, the commands of a pipe and the parts of a branch.
+func childNodes(node parse.Node) []parse.Node {
 	switch n := node.(type) {
 	case *parse.ListNode:
 		if n == nil {
-			return false
+			return nil
 		}
 
-		return slices.ContainsFunc(n.Nodes, readsBuildHost)
+		return n.Nodes
 	case *parse.ActionNode:
-		return readsBuildHost(n.Pipe)
+		return []parse.Node{n.Pipe}
 	case *parse.PipeNode:
-		if n == nil {
-			return false
-		}
-
-		return slices.ContainsFunc(n.Cmds, func(c *parse.CommandNode) bool { return readsBuildHost(c) })
+		return commandNodes(n.Cmds)
 	case *parse.CommandNode:
-		return slices.ContainsFunc(n.Args, readsBuildHost)
-	case *parse.FieldNode:
-		return slices.Equal(n.Ident, []string{"facts", "build_host"})
+		return n.Args
 	case *parse.IfNode:
-		return readsBuildHost(n.Pipe) || readsBuildHost(n.List) || readsBuildHost(n.ElseList)
+		return []parse.Node{n.Pipe, n.List, n.ElseList}
 	case *parse.RangeNode:
-		return readsBuildHost(n.Pipe) || readsBuildHost(n.List) || readsBuildHost(n.ElseList)
+		return []parse.Node{n.Pipe, n.List, n.ElseList}
 	case *parse.WithNode:
-		return readsBuildHost(n.Pipe) || readsBuildHost(n.List) || readsBuildHost(n.ElseList)
+		return []parse.Node{n.Pipe, n.List, n.ElseList}
 	default:
-		return false
+		return nil
 	}
+}
+
+// commandNodes converts the commands of a pipe to plain nodes.
+func commandNodes(commands []*parse.CommandNode) []parse.Node {
+	nodes := make([]parse.Node, 0, len(commands))
+	for _, command := range commands {
+		nodes = append(nodes, command)
+	}
+
+	return nodes
 }
 
 // The engine runs the gate and the mutation run, and the sandbox of an agent step denies the build host, so no prompt reads the build host fact.
