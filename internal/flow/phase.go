@@ -196,15 +196,24 @@ func (e *Engine) agentRequest(ctx context.Context, holder *attempt, in PhaseInpu
 	}
 }
 
-// callFiles checks the output file of the phase and writes its data file, which it returns. A phase that declares outputs and names an output file other than
-// the one file of the folder of its call stops before the agent starts, because the sandbox opens the folder of the output file to the agent.
+// callFiles checks the output file of the phase and writes its data file, which it returns.
 func (e *Engine) callFiles(in PhaseInput) (string, error) {
-	if derived := outputFile(e.dir, in.Item, in.Call); len(in.Outputs) > 0 && in.OutputFile != derived {
-		return "", fmt.Errorf("the agent phase of item %s names the output file %s, and the output file of this item and step is %s. The agent did not start. Start a new run",
-			in.Item, in.OutputFile, derived)
+	if err := e.checkOutputFile(in); err != nil {
+		return "", err
 	}
 
 	return e.writeData(in)
+}
+
+// checkOutputFile stops a phase that declares outputs and names an output file other than the one file of the folder of its call,
+// because the sandbox opens the folder of the output file to the agent.
+func (e *Engine) checkOutputFile(in PhaseInput) error {
+	if derived := outputFile(e.dir, in.Item, in.Call); len(in.Outputs) > 0 && in.OutputFile != derived {
+		return fmt.Errorf("the agent phase of item %s names the output file %s, and the output file of this item and step is %s. The agent did not start. Run beehave cancel %s, then start a new run",
+			in.Item, in.OutputFile, derived, in.Item)
+	}
+
+	return nil
 }
 
 // writeData writes the recorded data of the phase, mode 0600, to the data file that the engine derives for the item and the call, and returns that file.

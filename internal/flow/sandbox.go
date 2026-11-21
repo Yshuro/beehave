@@ -25,21 +25,22 @@ type sandboxChoice struct {
 	box *model.Sandbox
 }
 
-// sandbox is the builtin sandbox(network = [...]). It checks the list and returns a value for the sandbox keyword of an agent call.
+// sandbox is the builtin sandbox(network = [...], skills = [...]). It checks the lists and returns a value for the sandbox keyword of an agent call.
 func (s *script) sandbox(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
-	var network starlark.Value
+	var network, skills starlark.Value
 
-	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{"network": &network}); err != nil {
+	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{"network": &network, "skills": &skills}); err != nil {
 		return nil, err
 	}
 
-	box, err := boxOf(network)
+	box, err := boxOf(network, skills)
 	if err != nil {
 		return nil, err
 	}
 
 	return starlarkstruct.FromKeywords(sandboxMark, []starlark.Tuple{
 		{starlark.String("network"), stringList(box.Network)},
+		{starlark.String("skills"), stringList(box.Skills)},
 	}), nil
 }
 
@@ -52,14 +53,19 @@ func stringList(items []string) *starlark.List {
 	return starlark.NewList(values)
 }
 
-// boxOf reads the network list of a sandbox call.
-func boxOf(network starlark.Value) (*model.Sandbox, error) {
+// boxOf reads the network list and the skills list of a sandbox call.
+func boxOf(network, skills starlark.Value) (*model.Sandbox, error) {
 	domains, err := workflow.NetworkDomains(network)
 	if err != nil {
 		return nil, err
 	}
 
-	return &model.Sandbox{Network: domains}, nil
+	names, err := workflow.SkillNames(skills)
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.Sandbox{Network: domains, Skills: names}, nil
 }
 
 // readSandbox reads the sandbox keyword of an agent call. A nil value is a call that leaves the keyword out.
@@ -82,7 +88,7 @@ func sandboxFromStruct(value *starlarkstruct.Struct) (sandboxChoice, error) {
 	fields := starlark.StringDict{}
 	value.ToStringDict(fields)
 
-	box, err := boxOf(fields["network"])
+	box, err := boxOf(fields["network"], fields["skills"])
 
 	return sandboxChoice{set: true, box: box}, err
 }
@@ -120,7 +126,7 @@ const (
 	recordedLabel = "label"
 )
 
-// recalledOutputFile reads the output file that the render step recorded. A record made before the path was pinned has none, and the caller keeps the computed path.
+// recalledOutputFile reads the output file that the render step recorded, which a replay keeps. A record made before the path was pinned has none, and the caller keeps the computed path.
 func recalledOutputFile(outputs map[string]any, computed string) string {
 	if file, ok := outputs[recordedOutputFile].(string); ok && file != "" {
 		return file

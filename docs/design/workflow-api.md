@@ -178,6 +178,7 @@ The Change column says how the pair differs from the contract that the five piec
 | `queue` | `name` | unchanged | 3: `examples/queue/workflow.star`, `examples/remediation/workflow.star` and 1 more |
 | `sandbox` | `-` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
 | `sandbox` | `network` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
+| `sandbox` | `skills` | #775: new, the skills of the runner that a sandboxed step loads from a plugin folder | 1: `examples/remediation/workflow.star` |
 | `spawn` | `-` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
 | `spawn` | `base` | unchanged | 1: `examples/remediation/workflow.star` |
 | `spawn` | `entry` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |

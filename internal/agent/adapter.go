@@ -117,18 +117,20 @@ func (l Limit) Name() string {
 // Args are appended to the command line. Env is added to the environment after the allow-list; it never replaces a login variable or the token.
 // Files maps a path inside the run folder to its content. The runner writes them before the CLI starts, with mode 0600 in a folder of mode 0700.
 // A path must be local: no absolute path and no "..". The runner removes the folder when the run ends.
+// Copies maps a local path inside the run folder to a folder that the runner copies there, with its files, before the CLI starts.
 // Loaded is a local path in the run folder that the hook of the launch creates when it loads. The runner looks for it when the run ends, before it removes
 // the folder, and sets Result.GuardMissing when it is not there. Empty means the launch has no proof of the load.
 type Launch struct {
 	Args   []string
 	Env    map[string]string
 	Files  map[string]string
+	Copies map[string]string
 	Loaded string
 }
 
 // Empty is true when the launch adds nothing to the run.
 func (l Launch) Empty() bool {
-	return len(l.Args) == 0 && len(l.Env) == 0 && len(l.Files) == 0 && l.Loaded == ""
+	return len(l.Args) == 0 && len(l.Env) == 0 && len(l.Files) == 0 && len(l.Copies) == 0 && l.Loaded == ""
 }
 
 // Tokens counts the tokens of a run. Input holds every input token, the cached ones included; Output holds every output token, the reasoning ones included.
@@ -164,6 +166,8 @@ type Denial struct {
 // Seen is what one output line holds.
 // Denials lists the tool calls that the CLI reports on its result line as refused by its permission check, or nil when the line reports none.
 // Refused lists the ids of calls that the CLI refused before they ran, so those calls never ran.
+// Skills lists the skill calls of the line with their ids. Succeeded lists the ids of the calls whose result the line reports with no error; a skill
+// counts as loaded only when its call id is in the Succeeded of a later line.
 // Result is true for the line that ends a run. Invalid is true for a line that the adapter cannot read; an empty line is not invalid.
 // Stop is the cap that the CLI reports on its result line: StopTurns, StopBudget, or empty when the line reports no cap.
 // Failed is the error subtype of a result line that reports an error and no cap, or empty when the line reports none.
@@ -180,20 +184,21 @@ type Denial struct {
 // Denied is the reason why the provider refused more work in a way that no wait cures, such as usage credits that the account does not have or a pause of
 // the organization, or empty when the line reports none. A line with Denied reports no Limit.
 type Seen struct {
-	Cost    float64
-	Spent   float64
-	Usage   Tokens
-	Stop    Stop
-	Failed  string
-	Shell   []Call
-	Skills  []string
-	Refused []string
-	Denials []Denial
-	Result  bool
-	Invalid bool
-	Priced  bool
-	Limit   *Limit
-	Denied  string
+	Cost      float64
+	Spent     float64
+	Usage     Tokens
+	Stop      Stop
+	Failed    string
+	Shell     []Call
+	Skills    []Call
+	Succeeded []string
+	Refused   []string
+	Denials   []Denial
+	Result    bool
+	Invalid   bool
+	Priced    bool
+	Limit     *Limit
+	Denied    string
 }
 
 // Adapter is one agent CLI. The runner calls Profile and, when the spec sets a guard, Guard before it starts a run.
