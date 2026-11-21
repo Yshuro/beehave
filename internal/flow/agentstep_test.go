@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -566,6 +567,8 @@ func (r *agentRig) refusedWorkEdits(body string) {
 			{Tool: "Edit", Target: filepath.Join(r.dir, "internal", "config", "files.go"), Edit: true},
 			{Tool: "Write", Target: filepath.Join(r.dir, "internal", "config", "buildhosts_test.go"), Edit: true},
 			{Tool: "Edit", Target: "/elsewhere/x.go", Edit: true},
+			{Tool: "Edit", Target: r.dir + "2" + string(filepath.Separator) + "x.go", Edit: true},
+			{Tool: "Write", Target: filepath.Join(r.dir, ".git", "hooks", "pre-commit"), Edit: true, Closed: true},
 			{Tool: "Bash", Target: filepath.Join(r.dir, "run.sh")},
 		}
 
@@ -583,13 +586,77 @@ func TestAgentStep_RefusedEditsOfWorkFilesFailTheStepAtOnceAndNameTheFiles(t *te
 		_, err := rig.run(t, outputsFlow("3"), "Write to {{ .output_file }}\n")
 
 		require.Error(t, err, name)
-		assert.Contains(t, err.Error(), "the permission check of the agent CLI refused the edits of "+
-			filepath.Join(rig.dir, "internal", "config", "buildhosts_test.go")+" and "+filepath.Join(rig.dir, "internal", "config", "files.go"), name)
+		assert.Contains(t, err.Error(), "the agent CLI refused the edits of "+
+			filepath.Join(rig.dir, "internal", "config", "buildhosts_test.go")+" and "+filepath.Join(rig.dir, "internal", "config", "files.go")+
+			", files of the work folder that the step may edit", name)
 		assert.Contains(t, err.Error(), "The agent CLI wrote on its error stream: ⚠ Permission mode forced to default", name)
+		assert.NotContains(t, err.Error(), "permission rules", "%s: the rules are not the fault, so the failure does not send the owner to them", name)
 		assert.NotContains(t, err.Error(), "/elsewhere", "%s: an edit outside the work folder is left out", name)
+		assert.NotContains(t, err.Error(), rig.dir+"2", "%s: a sibling folder whose name starts with the work folder is outside it", name)
+		assert.NotContains(t, err.Error(), "pre-commit", "%s: a refusal that a deny rule covers is left out", name)
 		assert.NotContains(t, err.Error(), "run.sh", "%s: a refused shell call is left out", name)
 		assert.Len(t, rig.h.agents.seen(), 1, "%s: a refused edit refuses again, so no try follows", name)
 	}
+}
+
+func TestAgentStep_AnEditThatADenyRuleRefusedLeavesTheOutputToDecide(t *testing.T) {
+	t.Parallel()
+
+	for name, c := range map[string]struct {
+		body, want string
+	}{
+		"valid_output_passes": {`{"verdict":"ok"}`, ""},
+		"empty_output_fails":  {"", "the agent wrote no output file"},
+	} {
+		rig := newAgentRig(t)
+		rig.h.agents.result = func(request AgentRequest) agent.Result {
+			if c.body != "" {
+				rig.put(outputPath(request.Prompt), c.body)
+			}
+
+			denied := exited
+			denied.Denials = []agent.Denial{{Tool: "Write", Target: filepath.Join(rig.dir, ".git", "hooks", "pre-commit"), Edit: true, Closed: true}}
+
+			return denied
+		}
+
+		_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
+
+		if c.want == "" {
+			require.NoError(t, err, name)
+
+			continue
+		}
+
+		require.ErrorContains(t, err, c.want, name)
+		assert.NotContains(t, err.Error(), "refused the edits of", name)
+	}
+}
+
+func TestStepResult_TheRecordedReadKeepsTheNoRetryMark(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(stepResult{Note: "refused", Final: true})
+	require.NoError(t, err)
+
+	var replayed stepResult
+	require.NoError(t, json.Unmarshal(raw, &replayed))
+
+	assert.True(t, replayed.Final, "a replay of the read step keeps the mark, so a recovery runs no other try: %s", raw)
+}
+
+func TestPhaseOutput_TheRecordedRunKeepsTheMarksOfEachDenial(t *testing.T) {
+	t.Parallel()
+
+	denials := []agent.Denial{{Tool: "Write", Target: "/w/.git/hooks/pre-commit", Edit: true, Closed: true}, {Tool: "Edit", Target: "/w/a.go", Edit: true}}
+
+	raw, err := json.Marshal(PhaseOutput{Denials: denials})
+	require.NoError(t, err)
+
+	var replayed PhaseOutput
+	require.NoError(t, json.Unmarshal(raw, &replayed))
+
+	assert.Equal(t, denials, replayed.Denials, "a replay of the run step keeps which refusals a deny rule covers: %s", raw)
 }
 
 func TestAgentStep_RefusedEditsInAStepWithoutEditsKeepTheOutputCheck(t *testing.T) {

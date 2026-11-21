@@ -151,7 +151,9 @@ The run keeps the scrub. For a step that may edit, the settings add one allow ru
 
 A probe of CLI 2.1.330 with the full launch arguments measured this. With the rule, Write created a file at the top of the work folder and one in a subfolder. It refused `.git/hooks/pre-commit`, `.claude/settings.json` and a file outside the work folder. The bare tool names in `--allowedTools` let the write outside the work folder through, so the rule names the folder. The mode in the init line stays `default` and the stderr line stays, so the engine does not check the mode.
 
-The engine checks the result instead. A step that may edit fails when the CLI reports a refused Edit, Write or NotebookEdit call on a file of the work folder. The failure names each refused file and quotes the stderr of the CLI. The step gets no second try, because the same rules refuse the same edit again.
+The rule is a pattern, so a glob character in the path of the work folder would change what it opens: a probe with the work folder `w[ab]` refused the folder itself and opened its sibling `wa`. A step that may edit, in a work folder whose path holds a glob character, does not start, as for the state files. A space in the path works.
+
+The engine checks the result instead of the mode. A step that may edit fails when the CLI reports a refused Edit, Write or NotebookEdit call on a file of the work folder that no deny rule of the plan covers. That refusal means the rule of the work folder did not apply. The failure names each refused file and quotes the stderr of the CLI. The step gets no second try, because the same launch refuses the same edit again. A refused edit that a deny rule covers, such as a hook, an agent settings file or a `.env` file, is the rule at work: the step goes on, and its output decides it.
 
 Not proven: a real `claude` run that prints `env` in the shell must show that the token is gone. Until then, the shell may read the token and, with a non-empty `network` list, send it out.
 

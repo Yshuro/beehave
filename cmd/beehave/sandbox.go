@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
+
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/check/shell"
 	"github.com/tobocop2/beehave/internal/flow"
@@ -35,7 +37,7 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 	closed, err := closedPaths(ctx, git, dir, home)
 	identity, write := a.identity(ctx, git), outputWrites(request)
 
-	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), identityNote(identity, dir)); note != "" {
+	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), workNote(dir, request.NoEdits), identityNote(identity, dir)); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
@@ -215,8 +217,8 @@ const globCharacters = `*?[\`
 // glob character would open more than that file.
 func stateNote(deny []string, files ...string) string {
 	for _, file := range files {
-		if strings.ContainsAny(file, globCharacters) {
-			return fmt.Sprintf("The file %s of the state folder holds a glob character (one of %s), so the sandbox would read its path as a pattern. The step did not start. Move the state folder of beehave to a path with no glob character.", file, globCharacters)
+		if note := globNote("The file "+file+" of the state folder", file, "Move the state folder of beehave"); note != "" {
+			return note
 		}
 
 		if secret := overlap(file, deny); file != "" && secret != "" {
@@ -225,6 +227,46 @@ func stateNote(deny []string, files ...string) string {
 	}
 
 	return ""
+}
+
+// globNote says why a path that a write rule of the sandbox names cannot hold a glob character, or returns "" when it holds none.
+// subject names the path in the text, and move names what to move.
+func globNote(subject, path, move string) string {
+	at := strings.IndexAny(path, globCharacters)
+	if at < 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("%s holds a glob character, %s (one of %s), so the sandbox would read its path as a pattern. The step did not start. %s to a path with no glob character.",
+		subject, path[at:at+1], globCharacters, move)
+}
+
+// workNote says why the work folder of a step that may edit cannot get its write rule, or returns "" when it can.
+func workNote(dir string, noEdits bool) string {
+	if noEdits {
+		return ""
+	}
+
+	return globNote("The work folder "+dir, dir, "Move the work folder")
+}
+
+// markClosed marks each refused edit of a run whose target a deny rule of the sandbox plan covers. A run with no plan has no deny rule.
+func markClosed(denials []agent.Denial, box *agent.SandboxPlan) []agent.Denial {
+	if box == nil {
+		return denials
+	}
+
+	for i := range denials {
+		denials[i].Closed = denials[i].Edit && deniesWrite(*box, denials[i].Target)
+	}
+
+	return denials
+}
+
+// deniesWrite says whether a deny rule of the plan covers a write of path: a credential path or a closed path, or a pattern of either.
+func deniesWrite(plan agent.SandboxPlan, path string) bool {
+	return slices.ContainsFunc(slices.Concat(plan.Deny, plan.DenyWrite), func(denied string) bool { return within(denied, path) }) ||
+		slices.ContainsFunc(slices.Concat(plan.DenyPatterns, plan.DenyWritePatterns), func(pattern string) bool { return doublestar.MatchUnvalidated(pattern, path) })
 }
 
 // credentialPaths returns the absolute credential paths: the engine list expanded under home, the config folder of the runner and the project additions.

@@ -686,7 +686,7 @@ func refusedWrites(file string, denials []agent.Denial) string {
 	return fmt.Sprintf(": the permission check of the agent CLI refused the %s call that writes it", strings.Join(slices.Compact(tools), " and "))
 }
 
-// refusedEdits says which files of the work folder the permission check of the agent CLI refused to edit in a step that may edit, with what the CLI
+// refusedEdits says which files of the work folder the agent CLI refused to edit, though the step may edit them and no deny rule covers them, with what the CLI
 // wrote on its error stream, or returns "" when it refused none.
 func (a agentArgs) refusedEdits(ended PhaseOutput) string {
 	files := a.refusedWorkFiles(ended.Denials)
@@ -694,8 +694,8 @@ func (a agentArgs) refusedEdits(ended PhaseOutput) string {
 		return ""
 	}
 
-	note := fmt.Sprintf("the permission check of the agent CLI refused the edits of %s in the work folder of a step that may edit, so the step stopped. "+
-		"A new try is refused again. Check the permission rules that the agent CLI applies", strings.Join(slices.Compact(files), " and "))
+	note := fmt.Sprintf("the agent CLI refused the edits of %s, files of the work folder that the step may edit, and no deny rule covers them, "+
+		"so the step stopped with no other try", strings.Join(slices.Compact(files), " and "))
 
 	if stderr := strings.TrimSpace(ended.Stderr); stderr != "" {
 		note += ". The agent CLI wrote on its error stream: " + stderr
@@ -704,12 +704,13 @@ func (a agentArgs) refusedEdits(ended PhaseOutput) string {
 	return note
 }
 
-// refusedWorkFiles returns the files of the work folder whose edits the permission check refused, sorted, for a step that may edit, or none.
+// refusedWorkFiles returns the files of the work folder whose edits the permission check refused and no deny rule covers, sorted, for a step that may
+// edit, or none.
 func (a agentArgs) refusedWorkFiles(denials []agent.Denial) []string {
 	var files []string
 
 	for _, denial := range denials {
-		if a.edits && denial.Edit && insideFolder(a.dir, denial.Target) {
+		if a.edits && denial.Edit && !denial.Closed && insideFolder(a.dir, denial.Target) {
 			files = append(files, denial.Target)
 		}
 	}

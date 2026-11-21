@@ -192,7 +192,7 @@ func (a agents) Run(ctx context.Context, request flow.AgentRequest) (agent.Resul
 	tap := newSessionTap(adapter, a.prices, request.Named)
 
 	result, err := endOf(adapter, runner, dir, tap, a.runCosted(ctx, tap, a.specOf(request, runner, dir, adapter, tap, guard, box), request.Model), request.Forbid, protect)
-	result.Resumed = resumed
+	result.Resumed, result.Denials = resumed, markClosed(result.Denials, box)
 
 	return result, err
 }
