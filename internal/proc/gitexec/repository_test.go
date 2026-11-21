@@ -202,6 +202,7 @@ func TestGitexec_PlantedSettingStartsNoProgram(t *testing.T) { //nolint:parallel
 			t.Run(context+"/"+setting.name, func(t *testing.T) {
 				control := newEngineLayout(t)
 				control.plant(t, control.redirect(t, context), startingSettings(control)[i])
+				require.NoError(t, os.WriteFile(filepath.Join(control.tree, "a.txt"), []byte("two modified\n"), 0o600))
 				cmd := exec.CommandContext(t.Context(), "git", "add", "a.txt")
 				cmd.Dir = control.tree
 				_ = cmd.Run() //nolint:errcheck // the control reads the marker, and a failing filter fails the add
@@ -209,6 +210,7 @@ func TestGitexec_PlantedSettingStartsNoProgram(t *testing.T) { //nolint:parallel
 
 				l := newEngineLayout(t)
 				l.plant(t, l.redirect(t, context), startingSettings(l)[i])
+				require.NoError(t, os.WriteFile(filepath.Join(l.tree, "a.txt"), []byte("two modified\n"), 0o600))
 				runner := gitexec.NewRepositories(l.repos).Runner(l.tree, 0)
 
 				for _, call := range engineCalls(l.rev) {
