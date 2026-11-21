@@ -12,15 +12,23 @@ import (
 )
 
 // resumeInsideBeat arms a hook that, inside the first renewal of the tick, stops the first attempt, resumes the run and waits for the resumed claim to be trusted.
-// It returns the claim row of the resumed run as the hook read it.
-func resumeInsideBeat(t *testing.T, harness *harness, engine *Engine, client *Client, earlier chan struct{}) *claimHold {
+// It returns the claim row of the resumed run as the hook read it, and a channel that gets the row as the next renewal of the tick finds it:
+// that tick began after the answer of the earlier attempt, and its own renewal of the resumed claim has not changed the row yet.
+func resumeInsideBeat(t *testing.T, harness *harness, engine *Engine, client *Client, earlier chan struct{}) (*claimHold, <-chan claimHold) {
 	t.Helper()
 
-	var armed atomic.Bool
+	var armed, resumedOnce atomic.Bool
 
 	resumed := &claimHold{}
+	next := make(chan claimHold, 1)
 
 	harness.beats.hook(func() {
+		if resumedOnce.CompareAndSwap(true, false) {
+			next <- claimRowOf(engine, testRun)
+
+			return
+		}
+
 		if !armed.CompareAndSwap(true, false) {
 			return
 		}
@@ -38,10 +46,11 @@ func resumeInsideBeat(t *testing.T, harness *harness, engine *Engine, client *Cl
 		}, soonBound, pollEvery, "the resumed run holds a trusted claim")
 
 		*resumed = claimRowOf(engine, testRun)
+		resumedOnce.Store(true)
 	})
 	armed.Store(true)
 
-	return resumed
+	return resumed, next
 }
 
 func TestAttempt_ALossOfTheEarlierAttemptCancelsThatAttemptAndNotTheResumedOne(t *testing.T) {
@@ -144,13 +153,13 @@ func TestAttempt_AGoodRenewalOfTheEarlierAttemptLeavesTheTrustOfTheResumedClaim(
 	done := runInBackground(engine, testItem)
 	waitOn(t, ownerAsks(t, harness))
 
-	resumed := resumeInsideBeat(t, harness, engine, client, endedOf(engine, testRun))
+	resumed, next := resumeInsideBeat(t, harness, engine, client, endedOf(engine, testRun))
 
 	harness.tick(t)
 	require.Error(t, receive(t, done).err, "the first attempt ended at its stop")
 
 	require.False(t, resumed.renewed.IsZero(), "the resumed claim was trusted inside the renewal")
-	require.Equal(t, resumed.renewed, claimRowOf(engine, testRun).renewed, "the good renewal of the earlier attempt stamped the claim of the resumed run")
+	require.Equal(t, resumed.renewed, receive(t, next).renewed, "the good renewal of the earlier attempt stamped the claim of the resumed run")
 }
 
 func TestAttempt_AFailedRenewalOfTheEarlierAttemptLeavesTheResumedClaimWithoutAFailure(t *testing.T) {
@@ -167,13 +176,13 @@ func TestAttempt_AFailedRenewalOfTheEarlierAttemptLeavesTheResumedClaimWithoutAF
 
 	// Only the token of the first take fails; the resumed run renews under its fresh token.
 	harness.beats.fail(testOwner+testItem, "", errFake)
-	resumed := resumeInsideBeat(t, harness, engine, client, endedOf(engine, testRun))
+	resumed, next := resumeInsideBeat(t, harness, engine, client, endedOf(engine, testRun))
 
 	harness.tick(t)
 	require.Error(t, receive(t, done).err, "the first attempt ended at its stop")
 
 	require.Empty(t, resumed.failure, "the resumed claim held no failure inside the renewal")
-	require.Empty(t, claimRowOf(engine, testRun).failure, "the failed renewal of the earlier attempt wrote its failure into the claim of the resumed run")
+	require.Empty(t, receive(t, next).failure, "the failed renewal of the earlier attempt wrote its failure into the claim of the resumed run")
 }
 
 // resumingLifecycle runs resume once, right after the first release frees the claim: beehave resume of another process takes the item in that window.
