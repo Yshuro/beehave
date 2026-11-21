@@ -3,6 +3,7 @@ package flow
 import (
 	"context"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +28,7 @@ func TestSleep_ReturnsAfterTheDurationWithTheSecondsSlept(t *testing.T) {
 	assert.GreaterOrEqual(t, time.Since(started), 300*time.Millisecond, "the run slept the duration")
 }
 
-func TestSleep_ARunRecordsTheWakeTimeThenTheStep(t *testing.T) {
+func TestSleep_ARunRecordsTheMarkerThenTheLibraryWakeTimeThenTheStep(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
@@ -42,10 +43,12 @@ func TestSleep_ARunRecordsTheWakeTimeThenTheStep(t *testing.T) {
 	var names []string
 
 	for _, step := range steps {
-		names = append(names, step.StepName)
+		if strings.HasPrefix(step.StepName, "sleep") || step.StepName == sleepStep {
+			names = append(names, step.StepName)
+		}
 	}
 
-	assert.Subset(t, names, []string{"sleep:nap#1/wake", "DBOS.sleep", "sleep:nap#1"})
+	assert.Equal(t, []string{"sleep:nap#1/start", sleepStep, "sleep:nap#1"}, names, "one marker, one record of the library, no second copy of the wake time")
 }
 
 func TestSleep_RefusesADurationThatIsNotAboveZero(t *testing.T) {
@@ -96,11 +99,11 @@ func TestSleep_AResumeSleepsOnlyTheTimeLeft(t *testing.T) {
 		ended <- runErr
 	}()
 
-	waitOn(t, waiting[struct{}]{what: "the sleep to record its wake time", read: func() (struct{}, bool, error) {
+	require.Eventually(t, func() bool {
 		steps, stepErr := dbos.GetWorkflowSteps(first.ctx, testRun)
 
-		return struct{}{}, stepErr == nil && hasStep(steps, "DBOS.sleep"), nil
-	}})
+		return stepErr == nil && hasStep(steps, sleepStep)
+	}, 3*time.Second, 20*time.Millisecond, "the library records the wake time of the sleep within seconds")
 
 	started := time.Now()
 
@@ -158,15 +161,16 @@ func TestSleepDeadline_ReadsTheWakeRecordOfTheSleepThatIsLast(t *testing.T) {
 		records []dbos.StepInfo
 		want    time.Time
 	}{
-		"sleeping":                                {[]dbos.StepInfo{record("sleep:nap#1/wake", "1900000000000"), record(sleepStep, "1")}, wake},
-		"a_number_output":                         {[]dbos.StepInfo{record("sleep#2/wake", int64(1_900_000_000_000))}, wake},
-		"before_the_sleep_call":                   {[]dbos.StepInfo{record("sleep:nap#1/wake", "1900000000000")}, wake},
-		"the_sleep_ended":                         {[]dbos.StepInfo{record("sleep:nap#1/wake", "1900000000000"), record(sleepStep, "1"), record("sleep:nap#1", "{}")}, time.Time{}},
-		"a_sleep_of_the_engine":                   {[]dbos.StepInfo{record("agent:work#1", "{}"), record(sleepStep, "1")}, time.Time{}},
-		"a_wake_that_is_no_time":                  {[]dbos.StepInfo{record("sleep:nap#1/wake", "soon"), record(sleepStep, "1")}, time.Time{}},
-		"a_record_of_another_step_ending_in_wake": {[]dbos.StepInfo{record("wait:wake#1/wake", "1900000000000")}, time.Time{}},
-		"no_record":                               {nil, time.Time{}},
-		"only_a_sleep_record":                     {[]dbos.StepInfo{record(sleepStep, "1")}, time.Time{}},
+		"sleeping":                            {[]dbos.StepInfo{record("sleep:nap#1/start", struct{}{}), record(sleepStep, "1900000000000")}, wake},
+		"a_number_output":                     {[]dbos.StepInfo{record("sleep#2/start", nil), record(sleepStep, int64(1_900_000_000_000))}, wake},
+		"before_the_library_records_the_wake": {[]dbos.StepInfo{record("sleep:nap#1/start", nil)}, time.Time{}},
+		"the_sleep_ended":                     {[]dbos.StepInfo{record("sleep:nap#1/start", nil), record(sleepStep, "1900000000000"), record("sleep:nap#1", "{}")}, time.Time{}},
+		"a_sleep_of_the_engine":               {[]dbos.StepInfo{record("agent:work#1", "{}"), record(sleepStep, "1900000000000")}, time.Time{}},
+		"a_wake_that_is_no_time":              {[]dbos.StepInfo{record("sleep:nap#1/start", nil), record(sleepStep, "soon")}, time.Time{}},
+		"a_marker_of_another_step_kind":       {[]dbos.StepInfo{record("wait:wake#1/start", nil), record(sleepStep, "1900000000000")}, time.Time{}},
+		"a_sleep_step_that_is_no_marker":      {[]dbos.StepInfo{record("sleep:nap#1", "{}"), record(sleepStep, "1900000000000")}, time.Time{}},
+		"no_record":                           {nil, time.Time{}},
+		"only_a_sleep_record":                 {[]dbos.StepInfo{record(sleepStep, "1900000000000")}, time.Time{}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()

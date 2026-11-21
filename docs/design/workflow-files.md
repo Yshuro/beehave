@@ -59,7 +59,7 @@ Four cases are not safe today, and a later change fixes each of them.
 | `merge`: each member | Safe. | The step `batch:<name>.intent#<item>` is recorded before the merge of the member. The forge shows the pull request as merged at the gated head, so the step counts it as done. |
 | `spawn` | Safe. It rests on the library. | The child run has a fixed workflow id, and DBOS returns the recorded child for it. A test stops the parent while it waits in `gather`, after `spawn` returned, and shows one child run with the same id after the resume. No test reaches the window inside the start call, between the child row and the record of it in the parent. |
 | `wait` | Safe. It rests on the library, and no test in this table stops a wait. | The deadline is the output of a recorded DBOS sleep, and the answer is a durable receive. A resume waits for the same answer. |
-| `sleep` | Safe. It rests on the library. | The wake time is a recorded step and a DBOS sleep. A test stops the engine in the middle of a sleep, and the resumed run sleeps only the time left. |
+| `sleep` | Safe. It rests on the library. | The wake time is the record of a DBOS sleep. A test stops the engine in the middle of a sleep, and the resumed run sleeps only the time left. |
 | `write` with `read_back` | Safe. | The read-back runs first and finds a write that is done. |
 | `write` with no `read_back` | Not safe today. The program runs again with the same key. | Neither beehave nor the forge can tell if the outside system dropped the repeat. A later change asks the owner before the repeat. |
 | `write` undo | The undo is a recorded step named `undo:<write step>`. A crash during the undos runs the one that has no record again with the same key. | The undo must be safe when nothing happened (see `undo`). A repeat after the effect depends on the program. |
@@ -105,8 +105,8 @@ The reads (`item_read`, `facts`, `now`, `env`, `queue`, `preflight`, `earlier_ca
 `sleep(duration, name="")` pauses the run for the duration and returns a struct with one field, `slept`: the seconds that this execution slept.
 
 - `duration` is required text, such as `"90s"` or `"10m"`. It must be above zero. `beehave check workflow` and the run both refuse zero, a negative value, text that is no duration, and a missing duration.
-- The sleep is the durable sleep of the workflow library. The call records its wake time before it sleeps. A run that stops during the sleep and continues later sleeps only the time left, and a wake time in the past ends the sleep at once.
-- The call records the steps `sleep:<name>#<n>/wake` and `sleep:<name>#<n>`, with the library record `DBOS.sleep` between them. `beehave status` shows `sleeps until <time>` for a run that is in the sleep.
+- The sleep is the durable sleep of the workflow library. The library records the wake time. A run that stops during the sleep and continues later sleeps only the time left, and a wake time in the past ends the sleep at once.
+- The call records the steps `sleep:<name>#<n>/start` (a marker with no value) and `sleep:<name>#<n>`, with the library record `DBOS.sleep` between them. The marker tells the call from the other sleeps of the engine. `beehave status` shows `sleeps until <time>` for a run that is in the sleep.
 - A cancel of the run ends the sleep, as it ends a wait.
 - A dry run sleeps the real duration, as a dry run of `wait` waits its real timeout. Use a short duration in a file that you check with `--dry-run`.
 - `sleep` records `slept` once, so a replay returns the first value. After a stop in the middle of the sleep, `slept` is the time that the second execution slept.

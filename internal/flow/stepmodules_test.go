@@ -82,7 +82,7 @@ func TestStepModules_TheCoreModuleIsAtVersionEight(t *testing.T) {
 	t.Parallel()
 
 	assert.Contains(t, strings.Split(moduleVersions(), "."), "core8", "the facts step records ten fields: the method and board fields moved under vars at core5 and runners came at core6, so a run recorded at core5 replays no facts step, "+
-		"the host job of a command call with a slot class names its run at core7, and the sleep step records its wake time at core8")
+		"the host job of a command call with a slot class names its run at core7, and the sleep step records its marker at core8")
 }
 
 func TestStepModules_TheLandModuleIsAtVersionNine(t *testing.T) {

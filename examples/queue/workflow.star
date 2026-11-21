@@ -8,7 +8,7 @@
 #   1. queue() reads the items and the pull requests again. A merge in an earlier pass shows here, so an item that the merge unblocked is ready now.
 #   2. spawn starts the ready items that fit in the free slots. A held item is never ready, and a failed item is never ready.
 #   3. gather(until = "any") waits until at least one open run ends. The other runs keep their slots, so one item that loops does not stop the rest.
-#   4. The loop removes the ended runs from its list, holds each failed item with a comment, and sleeps after a pass that saw a failure.
+#   4. The loop removes the ended runs from its list, holds each failed item with a comment, and sleeps before it starts runs after a pass that saw a failure.
 # The loop ends when no item is ready and no run is open.
 #
 # One login runs one agent step at a time on each queue: a step with edits = False can run beside a step that edits on the same login. The pick of a login prefers a login with no agent step running or queued, so the items spread over your logins. The parent run holds no login. With one login, the items run one at a time.
@@ -49,6 +49,9 @@ def main(item):
     # The runs that this parent started and has not seen end.
     live = []
 
+    # True after a pass that saw a failed run.
+    pause = False
+
     for n in range(MAX_PASSES):
         q = queue(name = "q-%d" % n, hold = HOLD)
 
@@ -58,6 +61,11 @@ def main(item):
 
         if len(take) == 0 and len(live) == 0:
             break
+
+        # A failure often has a shared cause, such as a provider outage. A durable sleep keeps the loop from starting more runs into it, and a restart during the sleep waits only for the time left.
+        # The loop sleeps only when it is about to start runs, so a loop that has nothing left to start ends at once.
+        if pause and len(take) > 0:
+            sleep(env("PAUSE_AFTER_FAILURE", default = "30s"), name = "pause-%d" % n)
 
         if len(take) > 0:
             live = live + spawn(items = take, entry = "work", name = "s-%d" % n).runs
@@ -73,6 +81,4 @@ def main(item):
                 item_comment(name = "fail-%d-%s" % (n, e.item), id = e.item, key = "failed", text = "The run of this item failed: " + e.error)
                 item_status(name = "hold-%d-%s" % (n, e.item), id = e.item, status = "hold")
 
-        # A failure often has a shared cause, such as a provider outage. A durable sleep keeps the loop from starting more runs into it, and a restart during the sleep waits only for the time left.
-        if any([not e.ok for e in ended]):
-            sleep(env("PAUSE_AFTER_FAILURE", default = "30s"), name = "pause-%d" % n)
+        pause = any([not e.ok for e in ended])

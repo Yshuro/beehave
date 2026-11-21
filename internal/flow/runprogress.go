@@ -216,7 +216,7 @@ func (p *RunProgress) takeHolds(line StepLine) {
 	}
 }
 
-// sleepStep is the name of the step in which the workflow library records the deadline of a receive, as epoch milliseconds, before the receive waits.
+// sleepStep is the name of the step in which the workflow library records the deadline of a receive or of a sleep, as epoch milliseconds, before the call waits.
 // A wait with no timeout receives again in windows of receiveWindow, so a window of that length is no deadline.
 const sleepStep = "DBOS.sleep"
 

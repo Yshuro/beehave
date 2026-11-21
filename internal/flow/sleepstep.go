@@ -15,26 +15,26 @@ import (
 
 const (
 	sleepKind = "sleep"
-	// sleepWake is the sub-step that records the wake time of a sleep call before the sleep starts.
-	sleepWake = "/wake"
+	// sleepMark is the sub-step that marks a sleep call before the sleep starts. It holds no value: the wake time is the record of the library.
+	sleepMark = "/start"
 )
 
-// sleep waits for the duration with the durable sleep of DBOS. The call records its wake time first, so a run that recovers during the sleep waits only
-// for the time left. The result holds the seconds that this execution slept.
+// sleep waits for the duration with the durable sleep of DBOS, which records the wake time itself, so a run that recovers during the sleep waits only
+// for the time left. A marker step before the sleep tells this call from the other sleeps of the engine. The result holds the seconds that this execution slept.
 func (s *script) sleep(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) { //nolint:ireturn // the builtin contract of starlark-go
 	label, length, err := sleepArgs(b, args, kwargs)
 	if err != nil {
 		return nil, err
 	}
 
-	wake, err := runStep(s.e, s.ctx, s.nextName(sleepKind, label)+sleepWake, func(context.Context) (int64, error) {
-		return time.Now().Add(length).UnixMilli(), nil
+	_, err = runStep(s.e, s.ctx, s.nextName(sleepKind, label)+sleepMark, func(context.Context) (struct{}, error) {
+		return struct{}{}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	slept, err := dbos.Sleep(s.ctx, time.Until(time.UnixMilli(wake)))
+	slept, err := dbos.Sleep(s.ctx, length)
 	if err != nil {
 		return nil, fmt.Errorf("sleep of item %s: %w", s.in.Item, err)
 	}
@@ -62,23 +62,19 @@ func sleepOutputs(slept time.Duration) map[string]any {
 	return map[string]any{"slept": slept.Seconds()}
 }
 
-// sleepDeadline reads the wake time of the sleep that an open run is in. The sleep has recorded its wake time, and the sleep or the record of its end is the last record.
-// It is the zero time for a run that does not sleep, and for a record that is not a time.
+// sleepDeadline reads the wake time of the sleep that an open run is in: the record of the library that follows the marker of a sleep call, as the last record.
+// It is the zero time for a run that does not sleep, for a sleep of the engine, and for a record that is not a time.
 func sleepDeadline(records []dbos.StepInfo) time.Time {
-	if len(records) > 0 && records[len(records)-1].StepName == sleepStep {
-		records = records[:len(records)-1]
-	}
-
-	if len(records) == 0 {
+	if len(records) < 2 || records[len(records)-1].StepName != sleepStep {
 		return time.Time{}
 	}
 
-	last := records[len(records)-1]
-	if kind, _ := kindOfStep(last.StepName); kind != sleepKind || !strings.HasSuffix(last.StepName, sleepWake) {
+	mark := records[len(records)-2].StepName
+	if kind, _ := kindOfStep(mark); kind != sleepKind || !strings.HasSuffix(mark, sleepMark) {
 		return time.Time{}
 	}
 
-	millis, err := strconv.ParseInt(strings.Trim(fmt.Sprint(last.Output), `"`), 10, 64)
+	millis, err := strconv.ParseInt(strings.Trim(fmt.Sprint(records[len(records)-1].Output), `"`), 10, 64)
 	if err != nil {
 		return time.Time{}
 	}
