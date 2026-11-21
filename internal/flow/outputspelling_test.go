@@ -193,3 +193,26 @@ func TestRefusedWrites_ARelativePathIsNotTakenAsRelativeToThisProcess(t *testing
 
 	assert.Empty(t, refusedWrites(filepath.Join(here, "out.json"), denials), "the agent does not run in the folder of this process")
 }
+
+func TestRefusedWrites_TheMacStateFolderUnderVarIsTheSameFileAsUnderPrivateVar(t *testing.T) {
+	t.Parallel()
+
+	real, err := filepath.EvalSymlinks("/var/tmp")
+	if err != nil || real == "/var/tmp" {
+		t.Skip("this system has no link from /var to another folder")
+	}
+
+	state, err := os.MkdirTemp("/var/tmp", "spelling")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(state)) })
+
+	require.NoError(t, os.MkdirAll(filepath.Join(state, outputsFolder), 0o700))
+
+	resolved, err := filepath.EvalSymlinks(state)
+	require.NoError(t, err)
+	require.NotEqual(t, state, resolved, "the two spellings differ")
+
+	denials := []agent.Denial{{Tool: "Write", Target: filepath.Join(state, outputsFolder, "out.json")}}
+
+	assert.Contains(t, refusedWrites(filepath.Join(resolved, outputsFolder, "out.json"), denials), "refused the Write call", "the output folder is there and the file is not")
+}

@@ -682,8 +682,7 @@ func refusedWrites(file string, denials []agent.Denial) string {
 	return fmt.Sprintf(": the permission check of the agent CLI refused the %s call that writes it", strings.Join(slices.Compact(tools), " and "))
 }
 
-// samePath says whether two absolute paths name the same file. It cleans both and resolves the links of the folder, so the file need not exist. A path that cannot be resolved equals only a path that is
-// spelled the same.
+// samePath says whether two paths name the same file. It cleans both and resolves the links of their folders, so the file need not exist.
 func samePath(a, b string) bool {
 	a, b = filepath.Clean(a), filepath.Clean(b)
 	if a == b {
@@ -693,7 +692,7 @@ func samePath(a, b string) bool {
 	folderA, errA := filepath.EvalSymlinks(filepath.Dir(a))
 	folderB, errB := filepath.EvalSymlinks(filepath.Dir(b))
 
-	return filepath.IsAbs(a) && errA == nil && errB == nil && folderA == folderB && filepath.Base(a) == filepath.Base(b)
+	return errA == nil && errB == nil && folderA == folderB && filepath.Base(a) == filepath.Base(b)
 }
 
 // stringOutput returns one declared output of the output file. The second result says what is wrong with it.
