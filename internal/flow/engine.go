@@ -70,6 +70,8 @@ type Options struct {
 	MaxRunBudget float64
 	// MaxTreeBudget is agents.max_tree_budget_usd: the dollars that the agent steps of the root run and every run it spawns may spend in all. 0 means no cap.
 	MaxTreeBudget float64
+	// MaxSpawnDepth is the depth of the deepest items queue: the highest max_spawn_depth of the projects. 0 means config.DefaultMaxSpawnDepth.
+	MaxSpawnDepth int
 	// ReviewPoll is the time between two review polls. 0 means no poll.
 	ReviewPoll time.Duration
 	// ReviewLookbackDays is agents.review_lookback_days: the days that the review poll looks back for replies. 0 means config.DefaultReviewLookbackDays.
@@ -184,8 +186,8 @@ type Engine struct {
 	queue dbos.Queue
 	// reviewQueue is the queue of the steps of the kind review.
 	reviewQueue dbos.Queue
-	// itemQueue is the queue of the runs that spawn starts.
-	itemQueue dbos.Queue
+	// itemQueues are the queues of the runs that spawn starts: the queue of depth d is itemQueues[d-1].
+	itemQueues []dbos.Queue
 	// exclusiveQueue is the queue of the gates and the merges: one run for each repository.
 	exclusiveQueue dbos.Queue
 	// hostQueue is the queue of the build jobs of the gates: one job for each build host, whatever the project.
@@ -414,7 +416,7 @@ func (e *Engine) register(opts Options) error {
 
 	return errors.Join(
 		e.registerQueue(queueName, maxConcurrent, &e.queue), e.registerQueue(reviewsQueueName, opts.MaxReviewConcurrent, &e.reviewQueue),
-		e.registerItemQueue(maxConcurrent), e.registerExclusiveQueue(), e.registerHostQueue(),
+		e.registerItemQueues(maxConcurrent, cmp.Or(opts.MaxSpawnDepth, config.DefaultMaxSpawnDepth)), e.registerExclusiveQueue(), e.registerHostQueue(),
 	)
 }
 
@@ -435,19 +437,24 @@ func (e *Engine) registerQueue(name string, limit int, into *dbos.Queue) error {
 	return nil
 }
 
-// registerItemQueue adds the queue of the runs that spawn starts. It has no partition: the agents queue and the one run per login stay the real limit.
-func (e *Engine) registerItemQueue(maxConcurrent int) error {
+// registerItemQueues adds one queue of the runs that spawn starts for each depth from 1 to depth, so that a parent that waits never holds a slot that its children need.
+// A queue has no partition: the agents queue and the one run per login stay the real limit.
+func (e *Engine) registerItemQueues(maxConcurrent, depth int) error {
 	options := []dbos.QueueOption{dbos.WithGlobalConcurrency(maxConcurrent)}
 	if poll := e.deps.Clock.Poll; poll > 0 {
 		options = append(options, dbos.WithQueueBasePollingInterval(poll))
 	}
 
-	queue, err := dbos.RegisterQueue(e.ctx, itemsQueueName, options...)
-	if err != nil {
-		return fmt.Errorf("register the items queue: %w", err)
-	}
+	e.itemQueues = make([]dbos.Queue, depth)
 
-	e.itemQueue = queue
+	for level := range depth {
+		queue, err := dbos.RegisterQueue(e.ctx, itemsQueueOf(level+1), options...)
+		if err != nil {
+			return fmt.Errorf("register the items queue of depth %d: %w", level+1, err)
+		}
+
+		e.itemQueues[level] = queue
+	}
 
 	return nil
 }

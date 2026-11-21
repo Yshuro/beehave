@@ -1,0 +1,230 @@
+package flow
+
+import (
+	"context"
+	"sync/atomic"
+	"testing"
+
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/tobocop2/beehave/internal/model"
+)
+
+// chainFlow is a chain of spawns: the entry lN spawns the item 2N with the entry l<N+1>, and l4 runs the command leaf. main spawns item 21 with the entry top.
+// Each level runs the command at before it spawns. The entry l2 makes the items 21, 23 and 24 run at the depths 1, 2 and 3. The entry l1 adds depth 4.
+func chainFlow(top string) string {
+	return `def down(n):
+    command(name = "at", run = ["at"])
+    r = gather(spawn(items = ["2%d" % n], entry = "l%d" % n)).results[0]
+    if not r.ok:
+        fail(r.error)
+
+def l1(item):
+    down(2)
+
+def l2(item):
+    down(3)
+
+def l3(item):
+    down(4)
+
+def l4(item):
+    command(name = "leaf", run = ["leaf"])
+
+def main(item):
+    r = gather(spawn(items = ["21"], entry = "` + top + `")).results[0]
+    if not r.ok:
+        fail(r.error)
+    command(name = "after", run = ["after"])
+`
+}
+
+// inputOf reads the input of the last run of an item.
+func inputOf(t *testing.T, engine *Engine, item string) (ItemInput, dbos.WorkflowStatus) {
+	t.Helper()
+
+	last, found, err := latestRun(engine.ctx, item)
+	require.NoError(t, err)
+	require.True(t, found, "item %s has a run", item)
+
+	rows, err := dbos.ListWorkflows(engine.ctx, dbos.WithFilterWorkflowIDs(last.Status.ID), dbos.WithFilterLoadInput(true))
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+
+	in, err := run{Status: rows[0]}.input()
+	require.NoError(t, err)
+
+	return in, rows[0]
+}
+
+func TestNestedSpawn_AChainOfSpawnsRunsToDepthThreeWithOneSlotForEachLevel(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.opts.MaxConcurrent, h.opts.MaxReviewConcurrent = 1, 1
+	engine := h.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, chainFlow("l2")))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"leaf"}, h.commands.ranBy("24"), "the run at depth 3 ran once")
+	assert.Equal(t, []string{"after"}, h.commands.ranBy(testItem), "the root saw its child ok")
+}
+
+func TestNestedSpawn_EachRunRecordsItsDepthAndItsParentAndRunsOnTheQueueOfItsDepth(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	engine := h.engine(t)
+
+	_, err := engine.RunFile(testItem, testProject, writeFlow(t, chainFlow("l2")))
+	require.NoError(t, err)
+
+	root, _, err := latestRun(engine.ctx, testItem)
+	require.NoError(t, err)
+
+	parent := root.Status.ID
+
+	for depth, item := range map[int]string{1: "21", 2: "23", 3: "24"} {
+		in, row := inputOf(t, engine, item)
+		assert.Equal(t, depth, in.Depth, "the depth of item %s", item)
+		assert.Equal(t, itemsQueueOf(depth), row.QueueName, "the queue of item %s", item)
+		assert.NotEmpty(t, in.Parent, "item %s names its parent", item)
+	}
+
+	first, _ := inputOf(t, engine, "21")
+	assert.Equal(t, parent, first.Parent, "the child of the root names the root")
+
+	third, _ := inputOf(t, engine, "24")
+	second, _, err := latestRun(engine.ctx, "23")
+	require.NoError(t, err)
+	assert.Equal(t, second.Status.ID, third.Parent, "the run at depth 3 names the run at depth 2")
+	assert.Equal(t, []string{"items", "items.2", "items.3"}, []string{itemsQueueOf(1), itemsQueueOf(2), itemsQueueOf(3)})
+}
+
+func TestNestedSpawn_ASpawnPastTheCapNamesTheDepthAndTheCap(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]struct {
+		top  string
+		cap  int
+		want string
+	}{
+		"default cap of 3": {top: "l1", want: "item 24 would run at depth 4, and the project has a cap of 3. Raise max_spawn_depth in the project file, or spawn fewer levels"},
+		"project cap of 1": {top: "l2", cap: 1, want: "item 23 would run at depth 2, and the project has a cap of 1."},
+	}
+
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			if c.cap > 0 {
+				h.facts = func(string) model.Project { return model.Project{MaxSpawnDepth: c.cap} }
+			}
+
+			_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, chainFlow(c.top)))
+
+			require.ErrorContains(t, err, c.want)
+			assert.Empty(t, h.commands.ranBy("24"), "no run past the cap")
+		})
+	}
+}
+
+func TestNestedSpawn_AnEngineWithTwoLevelsCapsAProjectThatSetsThree(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.opts.MaxSpawnDepth = 2
+
+	_, err := h.engine(t).RunFile(testItem, testProject, writeFlow(t, chainFlow("l2")))
+
+	require.ErrorContains(t, err, "item 24 would run at depth 3, and the project has a cap of 2.")
+}
+
+func TestNestedSpawn_AStartOutsideARunReportsTheRunWithNoID(t *testing.T) {
+	t.Parallel()
+
+	engine := newHarness(t).engine(t)
+	s := &script{e: engine, ctx: engine.ctx, in: ItemInput{Item: testItem}}
+
+	require.ErrorContains(t, s.startRuns(nil, defaultEntry, ""), "read the id of the run of item "+testItem)
+}
+
+func TestNestedSpawn_ResumeOnThisBuildReachesTheRunsAtDepthTwoAndThree(t *testing.T) {
+	t.Parallel()
+
+	for depth, item := range map[int]string{2: "23", 3: "24"} {
+		t.Run(itemsQueueOf(depth), func(t *testing.T) {
+			t.Parallel()
+
+			h := newHarness(t)
+			h.flowIs(t, chainFlow("l2"))
+
+			var healed atomic.Bool
+
+			h.commands.before = func(_ context.Context, request CommandRequest) error {
+				if request.Item == item && !healed.Load() {
+					return errFake
+				}
+
+				return nil
+			}
+
+			engine := h.engine(t)
+			_, err := engine.Run(testItem, testProject)
+			require.Error(t, err)
+			require.NoError(t, engine.Shutdown())
+			healed.Store(true)
+
+			other := h.client(t, otherBuild)
+			require.NoError(t, other.ResumeOnThisBuild(testItem))
+
+			h.opts.Version = otherBuild
+			done := runInBackground(h.engine(t), testItem)
+
+			require.NoError(t, receive(t, done).err)
+			assert.Contains(t, h.commands.ranBy(testItem), "after", "the root ends on the new build")
+		})
+	}
+}
+
+func TestNestedSpawn_ACancelOfTheRootCancelsTheRunAtDepthTwo(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	working := make(chan struct{}) // closed when the run at depth 2 works
+
+	h.commands.before = func(ctx context.Context, request CommandRequest) error {
+		if request.Item != "23" {
+			return nil
+		}
+
+		close(working)
+		receive(t, ctx.Done())
+
+		return ctx.Err()
+	}
+
+	flow := "def grand(item):\n    command(name = \"work\", run = [\"work\"])\n\ndef child(item):\n    gather(spawn(items = [\"23\"], entry = \"grand\"))\n\n" +
+		"def main(item):\n    gather(spawn(items = [\"21\"], entry = \"child\"))\n"
+	engine := h.engine(t)
+	client := h.client(t, testVersion)
+	done := make(chan error, 1)
+	file := writeFlow(t, flow)
+
+	go func() {
+		_, err := engine.RunFile(testItem, testProject, file)
+		done <- err
+	}()
+
+	receive(t, working)
+	require.NoError(t, client.Cancel(testItem))
+	require.Error(t, receive(t, done))
+
+	for _, item := range []string{"21", "23"} {
+		waitOn(t, condition(func() bool { return childStatus(t, engine, item) == dbos.WorkflowStatusCancelled }))
+	}
+}

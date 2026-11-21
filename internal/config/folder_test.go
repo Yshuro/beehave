@@ -1082,6 +1082,22 @@ func TestLoadFolder_ThePerLoginVariableOverlaysTheFileAndIsValidated(t *testing.
 	require.ErrorContains(t, problems[0], "agents.max_concurrent (4)")
 }
 
+func TestLoadFolder_TheMaxSpawnDepthKeyDefaultsToThreeAndOneBelowOneIsRefused(t *testing.T) {
+	t.Parallel()
+
+	project, problems := loadProjectText(t, call(goodProject))
+	require.Empty(t, problems)
+	require.Equal(t, 3, project.MaxSpawnDepth)
+
+	project, problems = loadProjectText(t, call(goodProject+`, max_spawn_depth = 1`))
+	require.Empty(t, problems)
+	require.Equal(t, 1, project.MaxSpawnDepth)
+
+	_, problems = loadProjectText(t, call(goodProject+`, max_spawn_depth = 0`))
+	require.Len(t, problems, 1)
+	require.Contains(t, problems[0].Error(), "max_spawn_depth is 0: set it to 1 or more")
+}
+
 func TestLoadFolder_ThePRLabelKeyDefaultsToMadeByBeehaveAndAnEmptyOneIsRefused(t *testing.T) {
 	t.Parallel()
 
