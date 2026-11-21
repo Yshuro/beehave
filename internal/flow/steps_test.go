@@ -581,6 +581,46 @@ func TestStepLines_AnOpenRunWhoseLastRecordIsAnOpenChildShowsAStepInProgressWith
 	assert.Equal(t, []string{"item-21-r1"}, lines[3].WaitsOn, "only the child that has not ended is waited on")
 }
 
+func TestStepLines_AnOpenRunLeavesOutARecordThatHasNoEndAndIsNoChildFromWaitsOn(t *testing.T) {
+	t.Parallel()
+
+	began := time.Now().Add(-time.Minute)
+	records := []dbos.StepInfo{
+		{StepName: "command:c#1", StartedAt: began},
+		{StepName: "item", StartedAt: began, ChildWorkflowID: "item-21-r1"},
+	}
+
+	lines := stepLines(records, runRunning, true, began.Add(time.Minute))
+
+	require.Len(t, lines, 3)
+	assert.Equal(t, []string{"item-21-r1"}, lines[2].WaitsOn, "a record with no end that names no child is no child to wait for")
+}
+
+func TestStepLines_ARecordThatEndsBeforeItStartsHasNoDuration(t *testing.T) {
+	t.Parallel()
+
+	began := time.Now().Add(-time.Minute)
+	records := []dbos.StepInfo{{StepName: "command:c#1", StartedAt: began, CompletedAt: began.Add(-time.Second)}}
+
+	lines := stepLines(records, runDone, false, began.Add(time.Minute))
+
+	require.Len(t, lines, 1)
+	assert.Nil(t, lines[0].Seconds, "an end before the start is no duration")
+}
+
+func TestStepLines_AStepThatRunsHasNoDurationWhenTheClockIsBeforeItsStart(t *testing.T) {
+	t.Parallel()
+
+	began := time.Now()
+	records := []dbos.StepInfo{{StepName: "agent:a#1/render", StartedAt: began}}
+
+	lines := stepLines(records, runRunning, true, began.Add(-time.Second))
+
+	require.Len(t, lines, 1)
+	assert.Equal(t, "running", lines[0].State)
+	assert.Nil(t, lines[0].Seconds, "the step that the run is in has no duration when now is before its start")
+}
+
 func TestSpanSeconds_ReportsNoSpanForAMissingTimeOrAnEndBeforeTheStart(t *testing.T) {
 	t.Parallel()
 

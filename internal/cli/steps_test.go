@@ -84,6 +84,33 @@ func TestStatus_AStepWithNoStartOrNoDurationPrintsEmptyColumnsAndNamesTheChildIt
 	assert.Equal(t, "item\t2026-10-31T09:00:00Z\t\tdone\nstep in progress\t\t\trunning\twaits_on=item-21-r1,item-22-r1\nrun\trunning\n", stdout)
 }
 
+func TestStatus_JSONLeavesOutTheDurationOfAStepThatHasNoneAndNamesTheChildItWaitsOn(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "running", Steps: []flow.StepLine{
+		{Name: "command:c#1", State: "done", Started: start, Ended: start.Add(time.Minute), Seconds: secs(60)},
+		{Name: "step in progress", State: "running", WaitsOn: []string{"item-21-r1"}},
+	}}
+
+	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1", "--json")
+
+	require.Equal(t, 0, code, stderr)
+
+	var got struct {
+		Steps []map[string]json.RawMessage `json:"steps"`
+	}
+
+	require.NoError(t, json.Unmarshal([]byte(stdout), &got), stdout)
+	require.Len(t, got.Steps, 2)
+	assert.JSONEq(t, "60", string(got.Steps[0]["duration_seconds"]), "a known duration is present")
+	assert.NotContains(t, got.Steps[0], "waits_on")
+	assert.NotContains(t, got.Steps[1], "duration_seconds", "an unknown duration is left out, not null")
+	assert.NotContains(t, got.Steps[1], "started")
+	assert.JSONEq(t, `["item-21-r1"]`, string(got.Steps[1]["waits_on"]))
+}
+
 func TestStatus_AnAgentLineOfARunNamesItsKindAsTheLaneLedger(t *testing.T) {
 	t.Parallel()
 
