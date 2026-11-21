@@ -47,6 +47,8 @@ type Reading interface {
 	Status() ([]flow.RunInfo, error)
 	// Steps lists the steps of one run, in order.
 	Steps(id string) (flow.RunSteps, error)
+	// Published lists the keys that one run published and their last values.
+	Published(id string) ([]flow.PublishedValue, error)
 	// Lanes lists the lanes of one item across all its runs, oldest attempt first.
 	Lanes(item string) (flow.ItemLanes, error)
 	// Poll returns the newest review poll that finished. The second value is false when none has.
@@ -561,24 +563,20 @@ func (f flowCommands) await(engine Runner, item, project, file string) (flow.Ite
 }
 
 func (f flowCommands) statusCommand() *cobra.Command {
-	var (
-		flag   string
-		item   string
-		asJSON bool
-		days   int
-	)
+	var view statusView
 
 	command := &cobra.Command{
 		Use:   "status [run id]",
 		Short: "List the runs, or the steps of one run",
 		Long:  statusHelp,
 		Args:  cobra.MaximumNArgs(1),
-		RunE:  func(cmd *cobra.Command, args []string) error { return f.status(cmd, flag, item, args, asJSON, days) },
+		RunE:  func(cmd *cobra.Command, args []string) error { return f.status(cmd, view, args) },
 	}
-	addConfigFlag(command, &flag)
-	command.Flags().IntVar(&days, daysFlag, defaultDays, "show the per-day figures of this many local days, the current day included (the list only)")
-	command.Flags().StringVar(&item, itemFlag, "", "list the lanes of this item across all its runs")
-	command.Flags().BoolVar(&asJSON, jsonFlag, false, "print the runs, the steps of one run, or the lanes of one item, as JSON for a script")
+	command.Flags().BoolVar(&view.events, eventsFlag, false, "print the keys and values that the run published with publish (a run id is required)")
+	addConfigFlag(command, &view.flag)
+	command.Flags().IntVar(&view.days, daysFlag, defaultDays, "show the per-day figures of this many local days, the current day included (the list only)")
+	command.Flags().StringVar(&view.item, itemFlag, "", "list the lanes of this item across all its runs")
+	command.Flags().BoolVar(&view.asJSON, jsonFlag, false, "print the runs, the steps of one run, or the lanes of one item, as JSON for a script")
 
 	return command
 }
@@ -615,30 +613,48 @@ const statusHelp = "List the runs, the questions that wait for you and the runs 
 	"The JSON list has the same figures in days, one object for each day.\n\n" +
 	"Give a run id to list the steps of that run, one line each: the step name, the start time, the duration, the outcome and the fields that decide the flow. " +
 	"A step that runs now shows as running with its elapsed time. Add --" + jsonFlag + " for one JSON object that a script reads.\n\n" +
+	"Give a run id and --" + eventsFlag + " to print the keys that the run published with publish, one line each: the key, a tab and the last value as JSON. Add --" + jsonFlag + " for one JSON list.\n\n" +
 	"Give --" + itemFlag + " to list the lanes of one item across all its runs, one line each: the run id, the step name, the label of the lane, " +
 	"the outcome and the fields that decide the flow."
 
 // errItemAndRun is returned when status gets both a run id and --item: the two views answer different questions.
 var errItemAndRun = errors.New("give a run id or --" + itemFlag + ", not both")
 
-// status prints the runs of the store, or the steps of the run that the command names.
-func (f flowCommands) status(cmd *cobra.Command, flag, item string, args []string, asJSON bool, days int) error {
+// eventsFlag is the name of the flag that makes status print the published values of a run.
+const eventsFlag = "events"
+
+// errEventsNeedRun is returned when status gets --events with no run id or with --item.
+var errEventsNeedRun = errors.New("--" + eventsFlag + " takes one run id. Run beehave status to see the run ids")
+
+// statusView is what the flags of status chose.
+type statusView struct {
+	flag, item     string
+	asJSON, events bool
+	days           int
+}
+
+// status prints the runs of the store, the steps of the run that the command names, or the values that the run published.
+func (f flowCommands) status(cmd *cobra.Command, view statusView, args []string) error {
 	out := cmd.OutOrStdout()
 
 	switch {
-	case item != "" && len(args) == 1:
+	case view.item != "" && len(args) == 1:
 		return errItemAndRun
-	case item != "":
-		return f.withClient(cmd, flag, func(client Steering) error { return printLanes(out, client, item, asJSON) })
+	case view.events && (view.item != "" || len(args) != 1):
+		return errEventsNeedRun
+	case view.events:
+		return f.withClient(cmd, view.flag, func(client Steering) error { return printPublished(out, client, args[0], view.asJSON) })
+	case view.item != "":
+		return f.withClient(cmd, view.flag, func(client Steering) error { return printLanes(out, client, view.item, view.asJSON) })
 	case len(args) == 1:
-		return f.withClient(cmd, flag, func(client Steering) error { return printSteps(out, client, args[0], asJSON) })
+		return f.withClient(cmd, view.flag, func(client Steering) error { return printSteps(out, client, args[0], view.asJSON) })
 	}
 
-	if days < 1 {
+	if view.days < 1 {
 		return errDaysBelowOne
 	}
 
-	return f.withClient(cmd, flag, func(client Steering) error { return printRuns(out, client, f.clock(), days, asJSON) })
+	return f.withClient(cmd, view.flag, func(client Steering) error { return printRuns(out, client, f.clock(), view.days, view.asJSON) })
 }
 
 // clock returns the clock of the status view.
