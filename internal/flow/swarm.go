@@ -48,6 +48,10 @@ const (
 	maxNewProcessesKeyword = "max_new_processes"
 	// slotsKeyword is the keyword of a command call that names the slot class of its host job.
 	slotsKeyword = "slots"
+	// retriesKeyword, backoffKeyword and failureKeyword are the keywords of the retry policy of a call and of what a command does with an error of its step.
+	retriesKeyword = "retries"
+	backoffKeyword = "backoff"
+	failureKeyword = "failure"
 )
 
 // spawnedRun is what the spawn step records for one item: the run that gather waits for, and whether spawn starts it. A run that finished before is reused, and Start is false.
@@ -58,6 +62,8 @@ type spawnedRun struct {
 	Start bool   `json:"start,omitempty"`
 	// Priority is the place of the run in the items queue. The plan records it, so a replay queues the run with the same place. A plan with none gives 0.
 	Priority uint `json:"priority,omitempty"`
+	// Retries is how many more times gather starts the run of the item again after a failure. The call of spawn sets it, and the run struct carries it to gather.
+	Retries int `json:"retries,omitempty"`
 }
 
 // childOutcome is how one spawned run ended, as the gather step records it. Error is empty for a run that succeeded.
@@ -71,6 +77,8 @@ type childOutcome struct {
 	Stopped  *Stopped `json:"stopped,omitempty"`
 	// Value is the JSON text that the entry function of the run returned. It is empty when the run returned None, and for a run that did not succeed.
 	Value json.RawMessage `json:"value,omitempty"`
+	// Attempts is the number of runs of the item that the gather waited for: 1, and one more for each start again after a failure.
+	Attempts int `json:"attempts,omitempty"`
 }
 
 // gathered is the output of the gather step: the outcome of each run in the order of the call. Failed holds the error that fail="raise" raises after the step.
@@ -79,6 +87,8 @@ type gathered struct {
 	Failed   string         `json:"failed,omitempty"`
 	// Canceled holds the ids of the runs that the raise canceled. A resume of the parent reopens a canceled run only when its id is here.
 	Canceled []string `json:"canceled,omitempty"`
+	// Retry holds the places in the runs of the call of the runs that failed with retries left. The gather starts each one again and waits once more.
+	Retry []int `json:"retry,omitempty"`
 }
 
 // spawn starts the items as runs of the same workflow file and returns their run ids. Each run executes the function entry(item) on the bytes that this run pinned.
@@ -86,12 +96,12 @@ func (s *script) spawn(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 	call := spawnCall{entry: defaultEntry}
 
 	if err := workflow.Unpack(b.Name(), args, kwargs, map[string]any{
-		"items": &call.items, "entry": &call.entry, baseKeyword: &call.base, nameKeyword: &call.label,
+		"items": &call.items, "entry": &call.entry, baseKeyword: &call.base, nameKeyword: &call.label, retriesKeyword: &call.retries,
 	}); err != nil {
 		return nil, err
 	}
 
-	plan, err := s.planRuns(call)
+	plan, err := s.retriedRuns(call)
 	if err != nil {
 		return nil, err
 	}
@@ -132,6 +142,7 @@ type spawnCall struct {
 	// base is the round base that the settings of the workflow name. Empty means that the call names none, and nothing is checked.
 	base         string
 	entry, label string
+	retries      int
 }
 
 // checkBase refuses a spawn whose base is not the base of the round item that calls it. The children are cut at the base of the round item, so another base would cut them at one branch and merge them into another.
@@ -312,7 +323,9 @@ func runsValue(plan []spawnedRun) *starlarkstruct.Struct {
 	runs := make([]starlark.Value, len(plan))
 
 	for i, one := range plan {
-		runs[i] = starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{itemName: starlark.String(one.Item), "run": starlark.String(one.Run)})
+		runs[i] = starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
+			itemName: starlark.String(one.Item), "run": starlark.String(one.Run), retriesKeyword: starlark.MakeInt(one.Retries),
+		})
 	}
 
 	return starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{"runs": starlark.NewList(runs)})
@@ -327,9 +340,12 @@ func (s *script) gather(b *starlark.Builtin, args starlark.Tuple, kwargs []starl
 		return nil, err
 	}
 
-	done, err := countedStep(s, "gather", call.label, func(c context.Context) (gathered, error) {
-		return s.e.gather(c, s.in, refs, call.fail == failRaise, call.until == untilAny)
-	})
+	name, err := s.name("gather", call.label)
+	if err != nil {
+		return nil, err
+	}
+
+	done, err := s.gatherRetried(name, refs, call)
 	if err != nil {
 		return nil, err
 	}
@@ -393,7 +409,19 @@ func oneRef(v starlark.Value) (spawnedRun, error) {
 		return spawnedRun{}, fmt.Errorf("runs must hold the runs that spawn returned, and %s has no item and run", v)
 	}
 
-	return spawnedRun{Item: item, Run: run}, nil
+	return spawnedRun{Item: item, Run: run, Retries: intAttr(holder, retriesKeyword)}, nil
+}
+
+// intAttr reads a field of a struct as a whole number. A missing field and a field that is not a small int give 0.
+func intAttr(holder starlark.HasAttrs, name string) int {
+	value, err := holder.Attr(name)
+	if err != nil || value == nil {
+		return 0
+	}
+
+	n, _ := starlark.AsInt32(value) //nolint:errcheck // a value that is not a small int reads as 0, as a missing field does
+
+	return n
 }
 
 // textAttr reads a field of a struct as text. A missing field and a field that is not text give "".
@@ -422,6 +450,7 @@ func outcomesValue(outcomes []childOutcome) (*starlarkstruct.Struct, error) {
 		results[i] = starlarkstruct.FromStringDict(starlarkstruct.Default, starlark.StringDict{
 			itemName: starlark.String(one.Item), "ok": starlark.Bool(one.OK), "error": starlark.String(one.Error),
 			mergeKey: starlark.String(one.Merge), "sent_back": starlark.String(one.SentBack), "closed": starlark.String(one.Closed), "stopped": stoppedValue(one.Stopped), "value": value,
+			attemptsField: starlark.MakeInt(one.Attempts),
 		})
 	}
 
@@ -479,6 +508,10 @@ func finish(parent string, looks []look, fired raiseResult, first bool) (gathere
 	open := func(l look) bool { return l.open }
 	ended := func(l look) bool { return !l.open }
 
+	if retry := retrying(looks); len(retry) > 0 {
+		return gathered{Retry: retry}, true
+	}
+
 	switch {
 	case !slices.ContainsFunc(looks, open):
 		return settled(parent, looks, fired), true
@@ -497,7 +530,7 @@ type raiseResult struct {
 
 // cancelOnFailure cancels the runs that are still open when a run ended without success. It cancels nothing, and its trigger is -1, when no run failed.
 func (e *Engine) cancelOnFailure(project string, looks []look) (raiseResult, error) {
-	trigger := slices.IndexFunc(looks, func(l look) bool { return !l.open && !l.out.OK })
+	trigger := slices.IndexFunc(looks, func(l look) bool { return !l.open && !l.out.OK && !l.retries() })
 	if trigger < 0 {
 		return raiseResult{trigger: trigger}, nil
 	}

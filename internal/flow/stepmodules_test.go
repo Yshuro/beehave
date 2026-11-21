@@ -74,15 +74,15 @@ func TestStepModuleTable_HoldsTheEightModulesOnceEach(t *testing.T) {
 func TestApplicationVersion_HoldsOneVersionForEachModule(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t, "v1+core7.agent13.tracker2.forge6.land9.gate6.host1.round3", applicationVersion("v1"))
-	assert.Equal(t, "v1+core7.agent13.tracker2.forge6.land9.gate7.host1.round3", versionWithModule("v1", moduleGate, 7))
+	assert.Equal(t, "v1+core8.agent13.tracker2.forge6.land9.gate6.host1.round3", applicationVersion("v1"))
+	assert.Equal(t, "v1+core8.agent13.tracker2.forge6.land9.gate7.host1.round3", versionWithModule("v1", moduleGate, 7))
 }
 
-func TestStepModules_TheCoreModuleIsAtVersionSeven(t *testing.T) {
+func TestStepModules_TheCoreModuleIsAtVersionEight(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, strings.Split(moduleVersions(), "."), "core7", "the facts step records ten fields: the method and board fields moved under vars at core5 and runners came at core6, so a run recorded at core5 replays no facts step, "+
-		"and the host job of a command call with a slot class names its run at core7")
+	assert.Contains(t, strings.Split(moduleVersions(), "."), "core8", "the facts step records ten fields: the method and board fields moved under vars at core5 and runners came at core6, so a run recorded at core5 replays no facts step, "+
+		"the host job of a command call with a slot class names its run at core7, and the result of command and write records attempts at core8")
 }
 
 func TestStepModules_TheLandModuleIsAtVersionNine(t *testing.T) {
