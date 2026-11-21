@@ -359,7 +359,10 @@ func argsOf(spec Spec, p Profile, launch Launch, later []string) []string {
 func launchOf(spec Spec, runDir string) Launch {
 	switch {
 	case spec.Sandbox != nil:
-		return spec.Adapter.Sandbox(*spec.Sandbox, spec.Guard, runDir)
+		plan := *spec.Sandbox
+		plan.Edits = !spec.NoEdits
+
+		return spec.Adapter.Sandbox(plan, spec.Guard, runDir)
 	case spec.Guard != "":
 		return spec.Adapter.Guard(spec.Guard, runDir)
 	}

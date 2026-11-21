@@ -470,7 +470,7 @@ func (s *script) attempts(name string, a agentArgs, in PhaseInput) (stepResult, 
 			return done, err
 		}
 
-		if try >= a.tries {
+		if try >= a.tries || done.Final {
 			return stepResult{}, errors.New(done.Note)
 		}
 	}
@@ -597,6 +597,10 @@ func readAgent(ctx context.Context, a agentArgs, ended PhaseOutput) (stepResult,
 	outputs := agentOutputs(ended.Text, ended.Session, ended.Transcript, head, strings.Join(violations, "\n"), capOf(ended.Outcome), ended.Spend, rewrote, a.startHead != "" && head != a.startHead, ended.Skills)
 
 	// A run that left a bad output file still cost money, so its outputs stay in the result and the run cap counts them.
+	if problem := a.refusedEdits(ended); problem != "" {
+		return stepResult{Note: problem, Final: true, Outputs: spendOutputs(ended.Spend)}, nil
+	}
+
 	if problem := a.readOutputs(outputs, ended.Denials); problem != "" {
 		return stepResult{Note: problem, Outputs: spendOutputs(ended.Spend)}, nil
 	}
@@ -680,6 +684,47 @@ func refusedWrites(file string, denials []agent.Denial) string {
 	slices.Sort(tools)
 
 	return fmt.Sprintf(": the permission check of the agent CLI refused the %s call that writes it", strings.Join(slices.Compact(tools), " and "))
+}
+
+// refusedEdits says which files of the work folder the agent CLI refused to edit, though the step may edit them and no deny rule covers them, with what the CLI
+// wrote on its error stream, or returns "" when it refused none.
+func (a agentArgs) refusedEdits(ended PhaseOutput) string {
+	files := a.refusedWorkFiles(ended.Denials)
+	if len(files) == 0 {
+		return ""
+	}
+
+	note := fmt.Sprintf("the agent CLI refused the edits of %s, files of the work folder that the step may edit, and no deny rule covers them, "+
+		"so the step stopped with no other try", strings.Join(slices.Compact(files), " and "))
+
+	if stderr := strings.TrimSpace(ended.Stderr); stderr != "" {
+		note += ". The agent CLI wrote on its error stream: " + stderr
+	}
+
+	return note
+}
+
+// refusedWorkFiles returns the files of the work folder whose edits the permission check refused and no deny rule covers, sorted, for a step that may
+// edit, or none.
+func (a agentArgs) refusedWorkFiles(denials []agent.Denial) []string {
+	var files []string
+
+	for _, denial := range denials {
+		if a.edits && denial.Edit && !denial.Closed && insideFolder(a.dir, denial.Target) {
+			files = append(files, denial.Target)
+		}
+	}
+
+	slices.Sort(files)
+
+	return files
+}
+
+// insideFolder says whether path is in the folder dir or below it.
+func insideFolder(dir, path string) bool {
+	rel, err := filepath.Rel(dir, path)
+
+	return err == nil && filepath.IsLocal(rel)
 }
 
 // samePath says whether two paths name the same file. It cleans both and resolves the links of their folders, so the file need not exist.

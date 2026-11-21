@@ -9,6 +9,8 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/bmatcuk/doublestar/v4"
+
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/check/shell"
 	"github.com/tobocop2/beehave/internal/flow"
@@ -35,7 +37,7 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 	closed, err := closedPaths(ctx, git, dir, home)
 	identity, write := a.identity(ctx, git), outputWrites(request)
 
-	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), identityNote(identity, dir)); note != "" {
+	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), workNote(dir, request.NoEdits), identityNote(identity, dir)); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
@@ -215,8 +217,8 @@ const globCharacters = `*?[\`
 // glob character would open more than that file.
 func stateNote(deny []string, files ...string) string {
 	for _, file := range files {
-		if strings.ContainsAny(file, globCharacters) {
-			return fmt.Sprintf("The file %s of the state folder holds a glob character (one of %s), so the sandbox would read its path as a pattern. The step did not start. Move the state folder of beehave to a path with no glob character.", file, globCharacters)
+		if note := globNote("The file "+file+" of the state folder", file, "Move the state folder of beehave"); note != "" {
+			return note
 		}
 
 		if secret := overlap(file, deny); file != "" && secret != "" {
@@ -225,6 +227,45 @@ func stateNote(deny []string, files ...string) string {
 	}
 
 	return ""
+}
+
+// globNote says why a path that a write rule of the sandbox names cannot hold a glob character, or returns "" when it holds none.
+// subject names the path in the text, and move names what to move.
+func globNote(subject, path, move string) string {
+	at := strings.IndexAny(path, globCharacters)
+	if at < 0 {
+		return ""
+	}
+
+	return fmt.Sprintf("%s holds a glob character, %s (one of %s), so the sandbox would read its path as a pattern. The step did not start. %s to a path with no glob character.",
+		subject, path[at:at+1], globCharacters, move)
+}
+
+// workNote says why the work folder of a step that may edit cannot get its write rule, or returns "" when it can.
+func workNote(dir string, noEdits bool) string {
+	if noEdits {
+		return ""
+	}
+
+	return globNote("The work folder "+dir, dir, "Move the work folder")
+}
+
+// markClosed marks each refused edit of a run whose target a deny rule of the sandbox plan covers. A run with no plan has no deny rule.
+func markClosed(denials []agent.Denial, box *agent.SandboxPlan) []agent.Denial {
+	if box == nil {
+		return denials
+	}
+
+	for i := range denials {
+		denials[i].Closed = denials[i].Edit && deniesWrite(*box, denials[i].Target)
+	}
+
+	return denials
+}
+
+// deniesWrite says whether a deny rule of the plan covers a write of path: a credential path or a closed path, or a pattern of either.
+func deniesWrite(plan agent.SandboxPlan, path string) bool {
+	return slices.ContainsFunc(slices.Concat(plan.Deny, plan.DenyWrite, plan.DenyPatterns, plan.DenyWritePatterns), func(rule string) bool { return within(rule, path) })
 }
 
 // credentialPaths returns the absolute credential paths: the engine list expanded under home, the config folder of the runner and the project additions.
@@ -314,14 +355,34 @@ func overlap(full string, protected []string) string {
 	return ""
 }
 
-// within reports whether path is parent or inside it, as the names stand and again with every symbolic link resolved. Names compare without case,
-// because the default disk of the owner may not tell .Git from .git. This is stricter than a case-sensitive disk needs, and it is never looser.
+// within reports whether the rule parent covers path, as the names stand and again with every symbolic link resolved. It is the one test of what a
+// rule of the sandbox covers. A rule covers its own name and each path below it. A rule with a glob character also covers each path that matches it
+// and each path below such a match, as the CLI reads a rule. Names compare without case, because the default disk of the owner may not tell .Git from
+// .git. This is stricter than a case-sensitive disk needs, and it is never looser.
 func within(parent, path string) bool {
 	return inside(parent, path) || inside(shell.RealPath(parent), shell.RealPath(path))
 }
 
 func inside(parent, path string) bool {
-	return nameInside(strings.ToLower(parent), strings.ToLower(path))
+	rule, name := strings.ToLower(parent), strings.ToLower(path)
+
+	return nameInside(rule, name) || matchInside(rule, filepath.Clean(name))
+}
+
+// matchInside reports whether path or a folder above it matches the pattern, by name and with case kept. A pattern that does not parse matches nothing.
+func matchInside(pattern, path string) bool {
+	for {
+		if doublestar.MatchUnvalidated(pattern, path) {
+			return true
+		}
+
+		up := filepath.Dir(path)
+		if up == path {
+			return false
+		}
+
+		path = up
+	}
 }
 
 // nameInside reports whether path is parent or lies below it, by name and with case kept. A child named ..x lies below its parent.
