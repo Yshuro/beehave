@@ -374,6 +374,7 @@ func stepSignatures() map[string][]Param {
 			words(runWord), opt("host", KindText), ruled("timeout", KindText, durationRule("timeout")), opt("head", KindText), opt("base", KindText), opt("pin_base", KindText), label,
 		},
 		waitName:         waitParams(),
+		sleepName:        {{Name: "duration", Kind: KindText, Required: true, Rule: deadlineRule("duration"), Why: "The duration is how long the run sleeps, such as \"90s\" or \"10m\"."}, label},
 		earlierCallsName: {req("call", KindText), label},
 		hostTeardownName: {opt("host", KindText), label},
 		hostUpName:       {opt("host", KindText), label},

@@ -69,6 +69,12 @@ func TestCheck_ReportsEachBuiltinCallThatBreaksItsSignature(t *testing.T) {
 		{"spawn text for a list", `spawn("1")`, "items must be a list, not a text."},
 		{"wait unknown keyword", `wait(ask = "q")`, "wait takes no argument ask"},
 		{"wait number for text", `wait(question = 3)`, "question must be a text, not an int."},
+		{"sleep missing duration", `sleep(name = "nap")`, "sleep needs the `duration` keyword"},
+		{"sleep zero duration", `sleep("0s")`, "duration is \"0s\", which must be above zero"},
+		{"sleep negative duration", `sleep("-5s")`, "duration is \"-5s\", which must be above zero"},
+		{"sleep text that is no duration", `sleep("soon")`, "duration is \"soon\", which is not a duration"},
+		{"sleep number for text", `sleep(5)`, "duration must be a text, not an int."},
+		{"sleep unknown keyword", `sleep("1s", until = "x")`, "sleep takes no argument until"},
 	}
 
 	for _, tc := range cases {
@@ -102,6 +108,7 @@ func TestCheck_AcceptsACallThatKeepsItsSignature(t *testing.T) {
 		`item_status("1", "hold")`,
 		`preflight(head = "h", base = "b", hold = "hold", name = "intake")`,
 		`queue(name = "n", hold = "hold", label = "beehave-round")`,
+		`sleep("90s", name = "n")`,
 		`spawn(["1"], name = "n")`,
 		`wait()`,
 	}

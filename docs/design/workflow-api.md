@@ -78,7 +78,7 @@ The Change column says how the pair differs from the contract that the five piec
 | `earlier_calls` | `call` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
 | `earlier_calls` | `name` | unchanged | 1: `internal/workflow/lib/review_fix.star` |
 | `env` | `-` | unchanged | 17: `examples/approvals/audit.star`, `examples/approvals/policy.star` and 15 more |
-| `env` | `default` | unchanged | 10: `examples/approvals/policy.star`, `examples/desk/eval.star` and 8 more |
+| `env` | `default` | unchanged | 11: `examples/approvals/policy.star`, `examples/desk/eval.star` and 9 more |
 | `env` | `name` | unchanged | 17: `examples/approvals/audit.star`, `examples/approvals/policy.star` and 15 more |
 | `facts` | `-` | unchanged | 3: `examples/remediation/workflow.star`, `examples/ticket-pipeline/backfill.star` and 1 more |
 | `gate` | `-` | unchanged | 5: `examples/local/workflow.star`, `examples/maintenance/bump.star` and 3 more |
@@ -179,6 +179,9 @@ The Change column says how the pair differs from the contract that the five piec
 | `sandbox` | `-` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
 | `sandbox` | `network` | unchanged | 2: `examples/queue/workflow.star`, `examples/remediation/workflow.star` |
 | `sandbox` | `skills` | #775: new, the skills of the runner that a sandboxed step loads from a plugin folder | 1: `examples/remediation/workflow.star` |
+| `sleep` | `-` | #590: new, a durable sleep that a recovered run does not start again | 1: `examples/queue/workflow.star` |
+| `sleep` | `duration` | #590: new | 1: `examples/queue/workflow.star` |
+| `sleep` | `name` | #590: new | 1: `examples/queue/workflow.star` |
 | `spawn` | `-` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |
 | `spawn` | `base` | unchanged | 1: `examples/remediation/workflow.star` |
 | `spawn` | `entry` | unchanged | 8: `examples/desk/eval.star`, `examples/desk/workflow.star` and 6 more |

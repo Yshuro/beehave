@@ -98,6 +98,7 @@ func runDefs() []builtinDef {
 		{name: "paths_outside", call: pathsOutside},
 		{name: "queue", call: (*script).queue},
 		{name: "sandbox", call: (*script).sandbox},
+		{name: "sleep", call: (*script).sleep},
 		{name: "spawn", call: (*script).spawn},
 		{name: "struct", call: structCall},
 		{name: "wait", call: (*script).wait},

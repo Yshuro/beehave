@@ -25,6 +25,7 @@ const (
 	reasonField      = "reason"
 	stateField       = "state"
 	waitName         = "wait"
+	sleepName        = "sleep"
 	mergeName        = "merge"
 	preflightName    = "preflight"
 	queueName        = "queue"
@@ -58,6 +59,7 @@ func resultFields() map[string][]string {
 		hostUpName:       {"started", "host"},
 		preflightName:    {"ok", "stop", "code", reasonField},
 		queueName:        {"rows", "free", "pulls"},
+		sleepName:        {"slept"},
 		spawnName:        {"runs"},
 		waitName:         {"answer", "answers", "timed_out"},
 		writeName:        {"stdout", "stderr", "rc", "key", "skipped"},
