@@ -55,6 +55,7 @@ type rawProject struct {
 	GateAllowWrite paths
 
 	SandboxEnforcer text
+	PRLabel         text
 
 	// Vars are the free settings of the workflow. The engine reads no key and no value.
 	Vars vars
@@ -81,7 +82,7 @@ func loadProject(path string, registry Adapters) (Project, error) {
 
 // projectSpec is the schema of the project call. The arguments after the fixed ones are the adapter blocks that the registry declares, each optional and named as its block.
 func projectSpec(declared []Block) spec {
-	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "test_paths?", "notify?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "vars?"}
+	args := []string{"base_branch?", "gate?", "gate_steps?", "repo?", "source?", "tracker?", "claims?", "forge?", "build_host?", "host?", "test_report?", "test_command?", "test_paths?", "notify?", "pin_file?", "visibility?", "sandbox?", "sandbox_read?", "sandbox_deny?", "gate_network?", "gate_allow_write?", "sandbox_enforcer?", "pr_label?", "vars?"}
 
 	for _, block := range declared {
 		args = append(args, block.Name+"?")
@@ -147,7 +148,7 @@ func newProject(at syntax.Position, kwargs []starlark.Tuple, declared []Block) (
 
 	host, held := nested[rawHost]{want: hostSpecName}, holders(declared)
 	dests := []any{
-		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.TestCommand, &raw.TestPaths, &raw.Notify, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer,
+		&raw.BaseBranch, &raw.Gate, &raw.GateSteps, &raw.Repo, &raw.Source, &raw.Tracker, &raw.Claims, &raw.Forge, &raw.BuildHost, &host, &raw.TestReport, &raw.TestCommand, &raw.TestPaths, &raw.Notify, &raw.PinFile, &raw.Visibility, &raw.Sandbox, &raw.SandboxRead, &raw.SandboxDeny, &raw.GateNetwork, &raw.GateAllowWrite, &raw.SandboxEnforcer, &raw.PRLabel,
 		&raw.Vars,
 	}
 
@@ -178,7 +179,7 @@ func profileOf(path string, raw rawProject, registry Adapters) (model.Project, e
 	return model.Project{
 		Name: strings.TrimSuffix(filepath.Base(path), filepath.Ext(path)), Repo: raw.Repo.Value, Source: source, Tracker: names.tracker, Claims: names.claims,
 		Forge: names.forge, Blocks: blocksOf(raw, names), Tools: toolsOf(names), BaseBranch: raw.BaseBranch, Gate: raw.Gate, GateSteps: slices.Clone(raw.GateSteps), BuildHost: host, BuildHosts: declaredHosts(raw.BuildHost), Host: hostTable, TestReport: raw.TestReport.Value, TestCommand: raw.TestCommand.Value,
-		TestPaths: slices.Clone(raw.TestPaths), Notify: slices.Clone(raw.Notify.Words), PinFile: raw.PinFile.Value, Visibility: visibility, Sandbox: sandbox, SandboxRead: slices.Clone(raw.SandboxRead), SandboxDeny: slices.Clone(raw.SandboxDeny), GateNetwork: slices.Clone(raw.GateNetwork), GateAllowWrite: slices.Clone(raw.GateAllowWrite), SandboxEnforcer: raw.SandboxEnforcer.Value, Vars: raw.Vars,
+		TestPaths: slices.Clone(raw.TestPaths), Notify: slices.Clone(raw.Notify.Words), PinFile: raw.PinFile.Value, PRLabel: labelOf(raw), Visibility: visibility, Sandbox: sandbox, SandboxRead: slices.Clone(raw.SandboxRead), SandboxDeny: slices.Clone(raw.SandboxDeny), GateNetwork: slices.Clone(raw.GateNetwork), GateAllowWrite: slices.Clone(raw.GateAllowWrite), SandboxEnforcer: raw.SandboxEnforcer.Value, Vars: raw.Vars,
 	}, nil
 }
 
@@ -202,7 +203,7 @@ func checkKeys(raw rawProject, names adapters) (string, string, error) {
 		return host, source, noRepositoryKeys(raw)
 	}
 
-	return host, source, errors.Join(requireText(raw.At, "base_branch", raw.BaseBranch), gateKeys(raw), testReport(raw), testCommand(raw), testPaths(raw), pinFile(raw))
+	return host, source, errors.Join(requireText(raw.At, "base_branch", raw.BaseBranch), gateKeys(raw), testReport(raw), testCommand(raw), testPaths(raw), pinFile(raw), prLabel(raw))
 }
 
 // testPaths refuses an empty glob in test_paths: git reads it as every path, so the revert run would copy the code of the head too.
@@ -318,6 +319,27 @@ func sandboxKeys(raw rawProject) error {
 	}
 
 	return nil
+}
+
+// DefaultPRLabel is the label of a pull request that the engine opens, for a project that sets no pr_label.
+const DefaultPRLabel = "made-by-beehave"
+
+// prLabel refuses a pr_label that is set and empty. An unset key is allowed and gives DefaultPRLabel.
+func prLabel(raw rawProject) error {
+	if !raw.PRLabel.Set {
+		return nil
+	}
+
+	return requireText(raw.At, "pr_label", raw.PRLabel.Value)
+}
+
+// labelOf returns the pr_label of the project, or DefaultPRLabel when the project sets none.
+func labelOf(raw rawProject) string {
+	if !raw.PRLabel.Set {
+		return DefaultPRLabel
+	}
+
+	return raw.PRLabel.Value
 }
 
 // pinFile refuses a pin_file that is set and empty, absolute or outside the work tree. An unset key is allowed. A gate on a build host checks the pins on the host.

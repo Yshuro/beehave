@@ -38,8 +38,10 @@ type Project struct {
 	// TestPaths are the globs of the test files. The revert run copies the added and changed ones of the head onto the base commit.
 	TestPaths []string
 	// Notify is the program and its arguments that the engine runs when a wait for the owner opens. Empty means no notice.
-	Notify    []string
-	PinFile   string
+	Notify  []string
+	PinFile string
+	// PRLabel is the label that every pull request opened by the engine carries. The config fills it, so it is never empty for a loaded project.
+	PRLabel   string
 	BuildHost string
 	// BuildHosts is every build host that a project with more than one declares, and BuildHost is the first: the default of a run.
 	// It is empty when BuildHost is the only one. Every cluster shares the Host block.

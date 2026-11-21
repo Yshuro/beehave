@@ -14,7 +14,7 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 )
 
-const integrationSyntax = "integration --base <round branch> --into <trunk> [--pr <number>]"
+const integrationSyntax = "integration --base <round branch> --into <trunk> [--pr <number>] [--label <name>]"
 
 // listLimit is the most pull requests that one list call reads.
 const listLimit = 100
@@ -33,8 +33,8 @@ type Integrator interface {
 
 // integrationFlags are the values of the flags of integration.
 type integrationFlags struct {
-	base, into string
-	pr         int
+	base, into, label string
+	pr                int
 }
 
 func parseIntegration(args []string, errOut io.Writer) (integrationFlags, bool) {
@@ -44,6 +44,7 @@ func parseIntegration(args []string, errOut io.Writer) (integrationFlags, bool) 
 	flags.SetOutput(errOut)
 	flags.StringVar(&given.base, "base", "", "the round branch: the head of the integration pull request")
 	flags.StringVar(&given.into, "into", "", "the trunk: the base of the integration pull request")
+	flags.StringVar(&given.label, "label", defaultLabel, "the label of the integration pull request when the tool opens it; empty adds none")
 	flags.IntVar(&given.pr, "pr", 0, "the number of the integration pull request; 0 finds it, and opens it when there is none")
 
 	if flags.Parse(args) != nil || flags.NArg() > 0 || given.base == "" || given.into == "" || given.pr < 0 {
@@ -177,7 +178,7 @@ func openIntegration(ctx context.Context, forge Integrator, given integrationFla
 	body, _ := withRows("", merged)
 	name := given.base[strings.LastIndex(given.base, "/")+1:]
 
-	number, err := forge.CreatePR(ctx, model.NewPull{Head: given.base, Base: given.into, Title: "Integration round " + name, Body: body})
+	number, err := forge.CreatePR(ctx, model.NewPull{Head: given.base, Base: given.into, Title: "Integration round " + name, Body: body, Label: given.label})
 	if err != nil {
 		return 0, "", err
 	}
