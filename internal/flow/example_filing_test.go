@@ -168,3 +168,33 @@ func TestExampleFiling_ABadFindingFilesNothingAndTheRunFailsWithTheReason(t *tes
 		})
 	}
 }
+
+func TestExampleFiling_ParkedTextThatIsNotJSONIsRefusedWithTheSettleOutputAndTheItem(t *testing.T) {
+	t.Parallel()
+
+	_, writer, outcome := parkedRig(t, "not json at all")
+
+	require.ErrorContains(t, outcome.err, `REFUSE: the output parked of the settle step of item `+testItem+` is not valid JSON: "not json at all".`)
+	assert.NotContains(t, outcome.err.Error(), "json.decode", "the raw decoder error is not what the item ends with")
+	assert.Empty(t, writer.created)
+}
+
+func TestExampleFiling_ParkedTextThatIsNotJSONIsQuotedUpTo200CharactersAndTheCutIsMarked(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct{ parked, quoted string }{
+		"an empty text":                  {"", `""`},
+		"200 characters, not cut":        {strings.Repeat("x", 200), `"` + strings.Repeat("x", 200) + `"`},
+		"201 characters, cut and marked": {strings.Repeat("x", 201), `"` + strings.Repeat("x", 200) + `..."`},
+		"300 multibyte characters":       {strings.Repeat("€", 300), `"` + strings.Repeat("€", 200) + `..."`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			_, _, outcome := parkedRig(t, tc.parked)
+
+			require.Error(t, outcome.err)
+			assert.Contains(t, outcome.err.Error(), "is not valid JSON: "+tc.quoted+". Write [] when there is nothing to report")
+		})
+	}
+}
