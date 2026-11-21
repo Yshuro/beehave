@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"bytes"
 	"context"
 	"sync/atomic"
 	"testing"
@@ -289,4 +290,14 @@ func TestNestedSpawn_ACancelOfTheRootCancelsTheRunAtDepthTwo(t *testing.T) {
 	for _, item := range []string{"21", "23"} {
 		waitOn(t, condition(func() bool { return childStatus(t, engine, item) == dbos.WorkflowStatusCancelled }))
 	}
+}
+
+func TestNestedSpawn_ADryRunWithASpawnDepthOfOneRefusesTheRunAtDepthTwo(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	err := DryRun(t.Context(), dryFile(t, chainFlow("l2")), "12", map[string]string{}, &out, WithSpawnDepth(1))
+
+	require.ErrorContains(t, err, "item 23 would run at depth 2, and the project has a cap of 1.")
 }
