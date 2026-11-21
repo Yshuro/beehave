@@ -284,8 +284,9 @@ func (s *script) promptOf(a *agentArgs, name, login string) (string, error) {
 	return rendered.Note, a.recall(rendered.Outputs)
 }
 
-// recall reads the sandbox and the output file that the render step recorded. A replay keeps the recorded path, and a finished step is not run again.
-// A call that still has to run and declares outputs stops before the agent when the recorded path is not the one file of the folder of its call.
+// recall reads the sandbox and the output file that the render step recorded. A replay keeps the recorded path.
+// A call that really starts and declares outputs stops before the step that makes the empty file when the recorded path is not the one file of the folder of its call.
+// A finished call replays from its record and never runs that check.
 // A record made before the path was pinned keeps the computed path. A recorded prompt that names a data file other than
 // the file that the phase writes for this item and step stops the call, because the agent would read a file that the engine did not write.
 func (a *agentArgs) recall(outputs map[string]any) (err error) {
@@ -494,11 +495,7 @@ func (s *script) attempts(name string, a agentArgs, in PhaseInput) (stepResult, 
 func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (stepResult, error) {
 	in.Severity, in.Call = string(s.severity), name
 
-	if err := s.e.checkOutputFile(in); err != nil {
-		return stepResult{}, err
-	}
-
-	if err := s.clearOutput(name, a, try); err != nil {
+	if err := s.clearOutput(name, a, in, try); err != nil {
 		return stepResult{}, err
 	}
 
@@ -575,24 +572,34 @@ func (s *script) countFailedRun(name string, try int, spend agent.Spend) {
 }
 
 // clearOutput makes the output file of an agent call empty in a recorded step: it removes the old file, and a call that declares outputs gets a new empty one.
-func (s *script) clearOutput(name string, a agentArgs, try int) error {
+// A call whose output file is not the one file of its own folder stops first, in the same step, so the stop makes no file and a replay of a finished step does not run it.
+func (s *script) clearOutput(name string, a agentArgs, in PhaseInput, try int) error {
 	_, err := runStep(s.e, s.ctx, name+"/clear"+strconv.Itoa(try), func(context.Context) (stepResult, error) {
-		if rmErr := os.Remove(a.file); rmErr != nil && !errors.Is(rmErr, fs.ErrNotExist) {
-			return stepResult{}, fmt.Errorf("remove the old output file: %w", rmErr)
+		if checkErr := s.e.checkOutputFile(in); checkErr != nil {
+			return stepResult{}, checkErr
 		}
 
-		if len(a.declared) == 0 {
-			return stepResult{}, nil
-		}
-
-		if mkErr := os.WriteFile(a.file, nil, dataMode); mkErr != nil {
-			return stepResult{}, fmt.Errorf("make the empty output file: %w", mkErr)
-		}
-
-		return stepResult{}, nil
+		return stepResult{}, a.emptyOutput()
 	})
 
 	return err
+}
+
+// emptyOutput removes the old output file, and makes a new empty one for a call that declares outputs.
+func (a agentArgs) emptyOutput() error {
+	if err := os.Remove(a.file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove the old output file: %w", err)
+	}
+
+	if len(a.declared) == 0 {
+		return nil
+	}
+
+	if err := os.WriteFile(a.file, nil, dataMode); err != nil {
+		return fmt.Errorf("make the empty output file: %w", err)
+	}
+
+	return nil
 }
 
 // dollars writes an amount of dollars with at most four decimals and no trailing zero.

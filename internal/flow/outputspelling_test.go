@@ -1,6 +1,7 @@
 package flow
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -150,6 +151,35 @@ func TestAgentStep_ARecordedFlatOutputPathStopsTheCallAndLeavesNoFileInTheOutput
 	require.ErrorContains(t, err, "the agent phase of item 12 names the output file "+flat)
 	assert.NoFileExists(t, flat, "the stop makes no empty file at the old path")
 	assert.Empty(t, rig.h.agents.seen())
+}
+
+func TestAgentStep_AReplayOfAFinishedCallWithARecordedFlatOutputPathResumes(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.reply(`{"verdict":"approve"}`, exited)
+
+	fail := true
+	rig.h.commands.before = func(context.Context, CommandRequest) error {
+		if fail {
+			return errors.New("the command fails once")
+		}
+
+		return nil
+	}
+
+	derived := outputFile(rig.h.opts.StateDir, testItem, aStep)
+	first := rig.h.engine(t)
+	_, err := first.RunFile(testItem, testProject, flowFile(t, outputsFlow("1"), "Write to {{ .output_file }}\n"))
+	require.Error(t, err, "the command after the finished agent call fails")
+	require.NoError(t, first.Shutdown())
+
+	renameInRender(t, rig.h, derived, filepath.Join(rig.h.opts.StateDir, outputsFolder, "12.agent_3Aa_231.json"))
+	fail = false
+
+	_, err = resumeAndJoin(t, rig.h.engine(t), rig.h.client(t, testVersion))
+
+	assert.NoError(t, err, "the agent call finished before, and a replay does not run it again")
 }
 
 func TestOpenStoreAt_AFolderThatCannotBeResolvedNamesTheFolderAndOpensNoLog(t *testing.T) {
