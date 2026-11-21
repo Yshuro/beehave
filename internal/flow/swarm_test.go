@@ -763,7 +763,8 @@ func TestSpawnGather_TheItemsQueueReportsAStoreThatIsClosed(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, engine.Shutdown())
 
-	require.ErrorContains(t, engine.registerItemQueues(2, 3), "register the items queue of depth 1")
+	require.ErrorContains(t, engine.registerItemQueues(2, 3), "read the item runs that can run again")
+	require.ErrorContains(t, engine.registerDepths(2, 3), "register the items queue of depth 0")
 }
 
 // pickFails picks a login for every item but one.
@@ -809,7 +810,7 @@ func TestSpawnGather_SpawnReportsAChildTheQueueCannotStart(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	engine := h.engineWith(t, func(e *Engine) { e.itemQueues[0] = nil })
+	engine := h.engineWith(t, func(e *Engine) { e.itemQueues[1] = nil })
 
 	_, err := engine.RunFile(testItem, testProject, writeFlow(t, swarmFile("")))
 

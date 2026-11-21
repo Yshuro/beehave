@@ -186,7 +186,7 @@ type Engine struct {
 	queue dbos.Queue
 	// reviewQueue is the queue of the steps of the kind review.
 	reviewQueue dbos.Queue
-	// itemQueues are the queues of the runs that spawn starts: the queue of depth d is itemQueues[d-1].
+	// itemQueues are the queues of the item runs: the queue of depth d is itemQueues[d], and itemQueues[0] holds the runs that a user started.
 	itemQueues []dbos.Queue
 	// exclusiveQueue is the queue of the gates and the merges: one run for each repository.
 	exclusiveQueue dbos.Queue
@@ -420,6 +420,29 @@ func (e *Engine) register(opts Options) error {
 	)
 }
 
+// deepestKept returns the depth of the deepest item run that can run again: one that is open, or canceled or failed and so open to a resume.
+// A project file that lowered max_spawn_depth must not leave such a run on a queue that no worker reads.
+func (e *Engine) deepestKept() (int, error) {
+	// The depth comes from the input: a canceled row has lost its queue name.
+	states := dbos.WithFilterStatus(dbos.WorkflowStatusPending, dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusCancelled, dbos.WorkflowStatusError)
+
+	rows, err := dbos.ListWorkflows(e.ctx, dbos.WithFilterName(itemName), states, dbos.WithFilterLoadInput(true))
+	if err != nil {
+		return 0, fmt.Errorf("read the item runs that can run again: %w", err)
+	}
+
+	deepest := 0
+
+	// A run whose input does not decode cannot run again, so it needs no queue.
+	for _, row := range rows {
+		if in, err := (run{Status: row}).input(); err == nil {
+			deepest = max(deepest, in.Depth)
+		}
+	}
+
+	return deepest, nil
+}
+
 // registerQueue adds an agent queue with at most perLogin agents for each login and at most limit in all, and keeps it in into.
 func (e *Engine) registerQueue(name string, limit int, into *dbos.Queue) error {
 	options := []dbos.QueueOption{dbos.WithGlobalConcurrency(limit), dbos.WithPartitionConcurrency(e.perLogin)}
@@ -437,20 +460,30 @@ func (e *Engine) registerQueue(name string, limit int, into *dbos.Queue) error {
 	return nil
 }
 
-// registerItemQueues adds one queue of the runs that spawn starts for each depth from 1 to depth, so that a parent that waits never holds a slot that its children need.
-// A queue has no partition: the agents queue and the one run per login stay the real limit.
+// registerItemQueues adds one queue of item runs for each depth from 0 to depth, or to the deepest run that can run again when that is deeper,
+// so that a parent that waits never holds a slot that its children need. A queue has no partition: the agents queue and the one run per login stay the real limit.
 func (e *Engine) registerItemQueues(maxConcurrent, depth int) error {
+	kept, err := e.deepestKept()
+	if err != nil {
+		return err
+	}
+
+	return e.registerDepths(maxConcurrent, max(depth, kept))
+}
+
+// registerDepths adds the items queues of the depths from 0 to deepest.
+func (e *Engine) registerDepths(maxConcurrent, deepest int) error {
 	options := []dbos.QueueOption{dbos.WithGlobalConcurrency(maxConcurrent)}
 	if poll := e.deps.Clock.Poll; poll > 0 {
 		options = append(options, dbos.WithQueueBasePollingInterval(poll))
 	}
 
-	e.itemQueues = make([]dbos.Queue, depth)
+	e.itemQueues = make([]dbos.Queue, deepest+1)
 
-	for level := range depth {
-		queue, err := dbos.RegisterQueue(e.ctx, itemsQueueOf(level+1), options...)
+	for level := range e.itemQueues {
+		queue, err := dbos.RegisterQueue(e.ctx, itemsQueueOf(level), options...)
 		if err != nil {
-			return fmt.Errorf("register the items queue of depth %d: %w", level+1, err)
+			return fmt.Errorf("register the items queue of depth %d: %w", level, err)
 		}
 
 		e.itemQueues[level] = queue

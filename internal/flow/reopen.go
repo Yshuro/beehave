@@ -130,7 +130,8 @@ func (c *Client) reopenClaimed(row dbos.WorkflowStatus, opts ...dbos.RewindWorkf
 		return err
 	}
 
-	if err := c.reopenAgain(row, itemsQueueOf(in.Depth), opts...); err != nil {
+	// Every run that a step started is a child, at depth 1 or more. A child that an older build started records no depth and ran at depth 1.
+	if err := c.reopenAgain(row, itemsQueueOf(max(in.Depth, 1)), opts...); err != nil {
 		return errors.Join(err, c.dropClaim(in.Project, in.Item, row.ID, owner))
 	}
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -162,26 +163,9 @@ func TestNestedSpawn_ResumeOnThisBuildReachesTheRunsAtDepthTwoAndThree(t *testin
 			t.Parallel()
 
 			h := newHarness(t)
-			h.flowIs(t, chainFlow("l2"))
+			failAt(t, h, chainFlow("l2"), item)
 
-			var healed atomic.Bool
-
-			h.commands.before = func(_ context.Context, request CommandRequest) error {
-				if request.Item == item && !healed.Load() {
-					return errFake
-				}
-
-				return nil
-			}
-
-			engine := h.engine(t)
-			_, err := engine.Run(testItem, testProject)
-			require.Error(t, err)
-			require.NoError(t, engine.Shutdown())
-			healed.Store(true)
-
-			other := h.client(t, otherBuild)
-			require.NoError(t, other.ResumeOnThisBuild(testItem))
+			require.NoError(t, h.client(t, otherBuild).ResumeOnThisBuild(testItem))
 
 			h.opts.Version = otherBuild
 			done := runInBackground(h.engine(t), testItem)
@@ -206,10 +190,10 @@ def main(item):
     command(name = "after", run = ["after"])
 `
 
-func TestNestedSpawn_ResumeOnThisBuildPutsTheRunsAtDepthTwoThatARaiseCanceledBackOnTheirQueue(t *testing.T) {
-	t.Parallel()
+// raiseAtDepthTwo runs raiseBelow until item 22 fails while 21 or 23 works, so the raise cancels runs at depth 2. It shuts the engine down and heals the items.
+func raiseAtDepthTwo(t *testing.T, h *harness) {
+	t.Helper()
 
-	h := newHarness(t)
 	h.opts.MaxConcurrent, h.opts.MaxReviewConcurrent = 3, 3
 	h.flowIs(t, raiseBelow)
 
@@ -243,9 +227,15 @@ func TestNestedSpawn_ResumeOnThisBuildPutsTheRunsAtDepthTwoThatARaiseCanceledBac
 	require.Error(t, err)
 	require.NoError(t, engine.Shutdown())
 	healed.Store(true)
+}
 
-	other := h.client(t, otherBuild)
-	require.NoError(t, other.ResumeOnThisBuild(testItem))
+func TestNestedSpawn_ResumeOnThisBuildPutsTheRunsAtDepthTwoThatARaiseCanceledBackOnTheirQueue(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	raiseAtDepthTwo(t, h)
+
+	require.NoError(t, h.client(t, otherBuild).ResumeOnThisBuild(testItem))
 
 	h.opts.Version = otherBuild
 	done := runInBackground(h.engine(t), testItem)
@@ -254,42 +244,18 @@ func TestNestedSpawn_ResumeOnThisBuildPutsTheRunsAtDepthTwoThatARaiseCanceledBac
 	assert.Contains(t, h.commands.ranBy(testItem), "after", "the root ends on the new build")
 }
 
-func TestNestedSpawn_ACancelOfTheRootCancelsTheRunAtDepthTwo(t *testing.T) {
+func TestNestedSpawn_AResumeOfTheRootPutsTheRunsAtDepthTwoThatARaiseCanceledBackOnTheirQueue(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
-	working := make(chan struct{}) // closed when the run at depth 2 works
+	raiseAtDepthTwo(t, h)
 
-	h.commands.before = func(ctx context.Context, request CommandRequest) error {
-		if request.Item != "23" {
-			return nil
-		}
+	require.NoError(t, h.client(t, testVersion).Resume(testItem))
 
-		close(working)
-		receive(t, ctx.Done())
+	done := runInBackground(h.engine(t), testItem)
 
-		return ctx.Err()
-	}
-
-	flow := "def grand(item):\n    command(name = \"work\", run = [\"work\"])\n\ndef child(item):\n    gather(spawn(items = [\"23\"], entry = \"grand\"))\n\n" +
-		"def main(item):\n    gather(spawn(items = [\"21\"], entry = \"child\"))\n"
-	engine := h.engine(t)
-	client := h.client(t, testVersion)
-	done := make(chan error, 1)
-	file := writeFlow(t, flow)
-
-	go func() {
-		_, err := engine.RunFile(testItem, testProject, file)
-		done <- err
-	}()
-
-	receive(t, working)
-	require.NoError(t, client.Cancel(testItem))
-	require.Error(t, receive(t, done))
-
-	for _, item := range []string{"21", "23"} {
-		waitOn(t, condition(func() bool { return childStatus(t, engine, item) == dbos.WorkflowStatusCancelled }))
-	}
+	require.NoError(t, receive(t, done).err)
+	assert.Contains(t, h.commands.ranBy(testItem), "after", "the root ends")
 }
 
 func TestNestedSpawn_ADryRunWithASpawnDepthOfOneRefusesTheRunAtDepthTwo(t *testing.T) {
@@ -300,4 +266,118 @@ func TestNestedSpawn_ADryRunWithASpawnDepthOfOneRefusesTheRunAtDepthTwo(t *testi
 	err := DryRun(t.Context(), dryFile(t, chainFlow("l2")), "12", map[string]string{}, &out, WithSpawnDepth(1))
 
 	require.ErrorContains(t, err, "item 23 would run at depth 2, and the project has a cap of 1.")
+}
+
+func TestNestedSpawn_ARootThatBeehaveRunQueuesWaitsForItsChainWithOneSlotForEachLevel(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.opts.MaxConcurrent, h.opts.MaxReviewConcurrent = 1, 1
+	engine := h.engine(t)
+	client := h.client(t, testVersion)
+
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
+	defer cancel()
+
+	_, err := client.JoinRun(ctx, testItem, testProject, writeFlow(t, chainFlow("l2")))
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"leaf"}, h.commands.ranBy("24"), "the run at depth 3 ran once")
+
+	_, root := inputOf(t, engine, testItem)
+	assert.Equal(t, rootsQueueName, root.QueueName, "the root has a queue of its own")
+}
+
+// cancelBelow runs the chain to depth 3, waits until item 24 works, cancels one item and returns the engine.
+func cancelBelow(t *testing.T, target string) *Engine {
+	t.Helper()
+
+	h := newHarness(t)
+	working := make(chan struct{}) // closed when the run at depth 3 works
+
+	h.commands.before = func(ctx context.Context, request CommandRequest) error {
+		if request.Item != "24" {
+			return nil
+		}
+
+		close(working)
+		receive(t, ctx.Done())
+
+		return ctx.Err()
+	}
+
+	engine := h.engine(t)
+	client := h.client(t, testVersion)
+	done := make(chan error, 1)
+	file := writeFlow(t, chainFlow("l2"))
+
+	go func() {
+		_, err := engine.RunFile(testItem, testProject, file)
+		done <- err
+	}()
+
+	receive(t, working)
+	require.NoError(t, client.Cancel(target))
+	require.Error(t, receive(t, done))
+
+	return engine
+}
+
+func TestNestedSpawn_ACancelOfTheRootCancelsTheRunsAtDepthTwoAndThree(t *testing.T) {
+	t.Parallel()
+
+	engine := cancelBelow(t, testItem)
+
+	for _, item := range []string{"21", "23", "24"} {
+		waitOn(t, condition(func() bool { return childStatus(t, engine, item) == dbos.WorkflowStatusCancelled }))
+	}
+}
+
+func TestNestedSpawn_ACancelOfAMiddleRunCancelsTheRunsBelowItAndNothingAbove(t *testing.T) {
+	t.Parallel()
+
+	engine := cancelBelow(t, "23")
+
+	waitOn(t, condition(func() bool { return childStatus(t, engine, "24") == dbos.WorkflowStatusCancelled }))
+	waitOn(t, condition(func() bool { return childStatus(t, engine, "21") == dbos.WorkflowStatusError }))
+
+	_, root := inputOf(t, engine, testItem)
+	assert.Equal(t, dbos.WorkflowStatusError, root.Status, "the root fails and is not canceled")
+}
+
+// failAt runs the chain to depth 3 with item fails failing, shuts the engine down and heals the item.
+func failAt(t *testing.T, h *harness, flow, fails string) {
+	t.Helper()
+
+	var healed atomic.Bool
+
+	h.commands.before = func(_ context.Context, request CommandRequest) error {
+		if request.Item == fails && !healed.Load() {
+			return errFake
+		}
+
+		return nil
+	}
+
+	h.flowIs(t, flow)
+	engine := h.engine(t)
+	_, err := engine.Run(testItem, testProject)
+	require.Error(t, err)
+	require.NoError(t, engine.Shutdown())
+	healed.Store(true)
+}
+
+func TestNestedSpawn_AnEngineThatStartsWithALowerCapStillRunsARunThatWaitsAtDepthThree(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	failAt(t, h, chainFlow("l2"), "24")
+
+	require.NoError(t, h.client(t, testVersion).Resume(testItem))
+
+	h.opts.MaxSpawnDepth = 1
+	done := runInBackground(h.engine(t), testItem)
+
+	require.NoError(t, receive(t, done).err)
+	assert.Contains(t, h.commands.ranBy(testItem), "after", "the root ends")
 }

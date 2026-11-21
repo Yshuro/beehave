@@ -22,6 +22,8 @@ const (
 	// itemsQueueName is the queue of the items that spawn starts at depth 1. Each deeper level has a queue of its own, items.<depth>.
 	// Each has the cap agents.max_concurrent, so N children do not start N claims and N gates at once.
 	itemsQueueName = "items"
+	// rootsQueueName is the queue of the runs that a user started, at depth 0, with the same cap.
+	rootsQueueName = "roots"
 	// defaultEntry is the function that runs an item: main for an item that a user started, and the default entry of spawn.
 	defaultEntry = "main"
 	// finishEntry is the optional function that the engine calls after main on every end of the run except a cancel.
@@ -149,9 +151,12 @@ func (s *script) planRuns(call spawnCall) ([]spawnedRun, error) {
 	return countedStep(s, "spawn", call.label, func(c context.Context) ([]spawnedRun, error) { return s.e.planSpawn(c, s.in, ids) })
 }
 
-// itemsQueueOf is the name of the items queue of the runs at a depth. A run that a user started is at depth 0 and shares the queue of depth 1.
+// itemsQueueOf is the name of the items queue of the runs at a depth. A run that a user started is at depth 0 and has the queue roots, so no parent shares a queue with its children.
 func itemsQueueOf(depth int) string {
-	if depth <= 1 {
+	switch {
+	case depth <= 0:
+		return rootsQueueName
+	case depth == 1:
 		return itemsQueueName
 	}
 
@@ -216,7 +221,7 @@ func (e *Engine) planSpawn(ctx context.Context, in ItemInput, ids []string) ([]s
 
 // spawnCap is the deepest level at which a run of the project may start: its max_spawn_depth, at most the depth of the deepest items queue of the engine.
 func (e *Engine) spawnCap(project string) int {
-	return min(cmp.Or(e.facts(project).MaxSpawnDepth, config.DefaultMaxSpawnDepth), len(e.itemQueues))
+	return min(cmp.Or(e.facts(project).MaxSpawnDepth, config.DefaultMaxSpawnDepth), len(e.itemQueues)-1)
 }
 
 // planOne plans one item. An open run is refused, as a joined run has no parent row and a cancel of the parent would not reach it.
@@ -297,7 +302,7 @@ func (s *script) startRuns(plan []spawnedRun, entry, base string) error {
 
 		in := ItemInput{Item: one.Item, Project: s.in.Project, File: s.in.File, Files: s.in.Files, Login: one.Login, Entry: entry, Base: base, Depth: s.in.Depth + 1, Parent: parent}
 
-		if _, err := dbos.RunWorkflow(s.ctx, s.e.item, in, dbos.WithQueue(s.e.itemQueues[s.in.Depth]), dbos.WithWorkflowID(one.Run), dbos.WithPriority(one.Priority)); err != nil {
+		if _, err := dbos.RunWorkflow(s.ctx, s.e.item, in, dbos.WithQueue(s.e.itemQueues[s.in.Depth+1]), dbos.WithWorkflowID(one.Run), dbos.WithPriority(one.Priority)); err != nil {
 			return fmt.Errorf("start the run of item %s: %w", one.Item, err)
 		}
 	}

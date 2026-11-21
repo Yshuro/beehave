@@ -503,8 +503,10 @@ Nobody merges their own work, and our pull requests merge only on a verdict that
 
 - Each child run executes the function `entry(item)` on the bytes that the parent pinned, as a child workflow of the parent on the items queue of its depth. The queue holds at most `agents.max_concurrent` runs.
 - A run that `spawn` started may call `spawn`. A run that a user started is at depth 0, and each child is one level deeper than its parent. The project key `max_spawn_depth` caps the depth, 3 by default.
-- Each depth has its own items queue: `items` for depth 1, then `items.2`, `items.3` and so on. The engine registers one queue for each depth up to the highest `max_spawn_depth` of the projects when it starts. A parent that waits in `gather` holds a slot of its own level only, so its children always find slots.
-- The tree cost cap `agents.max_tree_budget_usd` sums every level of the tree, and `beehave cancel` of the root cancels every level.
+- Each depth has its own queue: `roots` for the runs that `beehave run` starts, `items` for depth 1, then `items.2`, `items.3` and so on. A parent that waits in `gather` holds a slot of its own level only, so its children always find slots.
+- Each queue has the cap `agents.max_concurrent`, and the caps add up: with `max_spawn_depth` 3, at most 4 times `max_concurrent` item runs are open at once. The agent queues still cap the agent steps.
+- At start, the engine registers one queue for each depth up to the highest `max_spawn_depth` of the projects. If a run that can run again (open, canceled or failed) sits deeper, the engine registers the queues down to that run too. A project file that lowers the cap does not strand a run on a queue that no worker reads.
+- The tree cost cap `agents.max_tree_budget_usd` sums every level of the tree. `beehave cancel` of the root cancels every level. A cancel of a run in the middle cancels the runs below it, and its parent sees a child that did not finish.
 - A child of a round item is cut at the base of the round item, `round/<base>`. A workflow that has a round base setting passes it as `base`, and `spawn` checks that it equals the base of the round item.
 - A child run that finished with success is reused and does not run again.
 - A cancelled run, or no run, starts the next attempt.
