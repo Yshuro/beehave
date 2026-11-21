@@ -20,6 +20,7 @@ import (
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/preflight"
+	"github.com/tobocop2/beehave/internal/proc"
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/step"
@@ -139,6 +140,12 @@ func dryPrepare(ctx context.Context, root, item, file string, chosen dryChoice) 
 
 	chosen.skills = workflow.RequiredSkills(file)
 
+	for _, key := range workflow.RequiredSkillVars(file) {
+		if name, named := chosen.vars[key].(string); named {
+			chosen.skills = append(chosen.skills, name)
+		}
+	}
+
 	return dryDeps(tree, head, item, chosen), nil
 }
 
@@ -255,9 +262,7 @@ func dryRepoSteps(dir, remote string) []dryGitStep {
 // dryGit runs one git command in a folder and returns its output.
 // The command ignores the global and system git config of the user, so a hook path, a template or a signing setting cannot run or fail.
 func dryGit(ctx context.Context, dir string, args []string) (string, error) {
-	runner := gitexec.New(dir, 0)
-	runner.Env = []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1"}
-	result := runner.Run(ctx, args)
+	result := dryRunner(dir).Run(ctx, args)
 	out := strings.TrimSpace(result.Stdout + result.Stderr)
 
 	if result.ExitCode != 0 {
@@ -325,10 +330,12 @@ type dryAgents struct {
 
 // outputVerdict is the output of a review call that holds its verdict. verdictChanges is the verdict of a head that needs a commit.
 // outputOpen is the output that holds the open findings of a review as text, empty when none is open.
+// outputUncaused is the output that holds the reds a lane did not cause, as a JSON list.
 const (
 	outputVerdict  = "verdict"
 	verdictChanges = "changes"
 	outputOpen     = "open"
+	outputUncaused = "uncaused"
 )
 
 func (a dryAgents) Run(_ context.Context, request AgentRequest) (agent.Result, error) {
@@ -360,7 +367,7 @@ func (a dryAgents) outputs(declared []string) []byte {
 	return []byte("{" + strings.Join(fields, ",") + "}")
 }
 
-// dryOutput is the fixed value of a declared output in a dry run: a review approves with no open finding, and any other output holds the text 0.
+// dryOutput is the fixed value of a declared output in a dry run: a review approves with no open finding, the reds a lane did not cause are an empty list, and any other output holds the text 0.
 // The text 0 reads as a count of none, so a workflow that reads a count from an output walks the path of an approved item.
 func dryOutput(name string) string {
 	switch name {
@@ -368,6 +375,8 @@ func dryOutput(name string) string {
 		return "approve"
 	case outputOpen:
 		return ""
+	case outputUncaused:
+		return "[]"
 	}
 
 	return "0"
@@ -385,11 +394,13 @@ func newDryGate(dir, head string, red bool) dryGate {
 	return dryGate{dir: dir, head: head, red: red, runs: new(atomic.Int32)}
 }
 
-func (dryGate) Key(context.Context, string, string, string) (GateKey, error) { return GateKey{}, nil }
+func (dryGate) Key(context.Context, string, string, string, string, string) (GateKey, error) {
+	return GateKey{}, nil
+}
 
 // Submit records the base in the plan of the job, as the host gate does. As a fetch of the base would, it points the remote branch of the base
 // at the parent of the head, so the checks before review find a head that descends from the base.
-func (g dryGate) Submit(ctx context.Context, _, _, _, base string) (GateJob, error) {
+func (g dryGate) Submit(ctx context.Context, _, _, _, base, _ string) (GateJob, error) {
 	if base != "" {
 		if _, err := dryGit(ctx, g.dir, []string{"update-ref", "refs/remotes/" + remoteName + "/" + base, g.head + "^"}); err != nil {
 			return GateJob{}, err
@@ -457,6 +468,14 @@ func (dryForge) Open(context.Context, string, string, OpenRequest) (OpenResult, 
 	return OpenResult{Number: dryPull}, nil
 }
 
+// Push shows the head as pushed and writes nothing to the remote.
+func (dryForge) Push(context.Context, string, string, string, string, string) error { return nil }
+
+// History shows an item with no earlier pull request.
+func (dryForge) History(context.Context, string, string) ([]model.PriorPull, error) {
+	return nil, nil
+}
+
 type dryTrees struct{ dir string }
 
 func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) error {
@@ -465,7 +484,27 @@ func (t dryTrees) WithTree(_ context.Context, _, _ string, fn func(string)) erro
 	return nil
 }
 
-func (t dryTrees) Ensure(context.Context, string, string, string) (string, error) { return t.dir, nil }
+// Heads reads the branches of the bare remote that the dry run made, with no global or system git config.
+func (t dryTrees) Heads(ctx context.Context, _ string) (string, error) {
+	return dryGit(ctx, t.dir, []string{"ls-remote", "--heads", remoteName})
+}
+
+func (t dryTrees) Ensure(context.Context, string, string, string, string) (string, error) {
+	return t.dir, nil
+}
+
+// Git runs git in the folder of the dry run with no global or system git config.
+func (dryTrees) Git(dir string) proc.Runner { //nolint:ireturn // the trees contract returns the interface
+	return dryRunner(dir)
+}
+
+// dryRunner is the git runner of the dry run: the folder is a temporary one that the dry run made, and no global or system git config is read.
+func dryRunner(dir string) gitexec.Runner {
+	runner := gitexec.New(dir, 0)
+	runner.Env = []string{"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0"}
+
+	return runner
+}
 
 // dryCommands runs no program: each command call exits with code 0 and prints nothing.
 type dryCommands struct{}

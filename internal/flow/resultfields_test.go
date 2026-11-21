@@ -41,7 +41,7 @@ func TestResultFields_TheOutputsOfEachBuiltinAreTheFieldsOfTheTable(t *testing.T
 	t.Parallel()
 
 	got := map[string][]string{
-		"agent":         keysOf(agentOutputs("", "", "", "", "", "", agent.Spend{}, false, nil)),
+		"agent":         keysOf(agentOutputs("", "", "", "", "", "", agent.Spend{}, false, false, nil)),
 		"command":       keysOf(commandOutputs("", "", 0)),
 		"earlier_calls": keysOf(earlierOutputs(0)),
 		"gate":          keysOf(gateOutputs(true, "", "", "", nil, nil, nil)),
@@ -55,6 +55,7 @@ func TestResultFields_TheOutputsOfEachBuiltinAreTheFieldsOfTheTable(t *testing.T
 		"pr_comment":    keysOf(prCommentOutputs(0)),
 		"pr_open":       keysOf(openOutputs(OpenResult{})),
 		"pr_state":      keysOf(prStateOutputs("")),
+		"pr_history":    keysOf(prHistoryOutputs(nil)),
 		"preflight":     keysOf(preflightOutputs(preflight.Result{})),
 		"wait":          keysOf(answerOutputs("", nil, false)),
 		"write":         keysOf(writeOutputs("", "", 0, "", false)),

@@ -234,7 +234,7 @@ func TestCancel_ReportsAnEngineLockThatCannotOpen(t *testing.T) {
 	client := harness.client(t, testVersion)
 	require.NoError(t, os.MkdirAll(filepath.Join(harness.opts.StateDir, engineLockName), 0o700))
 
-	err := client.releaseUnowned(testProject, testItem, run{})
+	err := client.releaseUnowned(&attempt{in: ItemInput{Item: testItem, Project: testProject}})
 
 	require.ErrorContains(t, err, engineLockName)
 	assert.NotErrorIs(t, err, ErrStateBusy)

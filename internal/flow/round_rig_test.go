@@ -427,12 +427,12 @@ func newRoundRigOf(t *testing.T, items string) *roundRig {
 	rig.repo.must(t, "update-ref", "refs/remotes/origin/main", kids.base)
 	rig.h.logins = fakeLogins{login: testLogin, byItem: loginsOf(members)}
 	trees := &itemTrees{repo: rig.repo, kids: kids, root: t.TempDir(), dirs: map[string]string{}}
-	rig.h.trees = &fakeTrees{per: trees.tree}
+	rig.h.trees = &fakeTrees{per: trees.tree, repos: filepath.Dir(rig.repo.dir)}
 	rig.h.forge.state = review.Standing{Number: testPull, Head: kids.base}
 	rig.h.forge.heads = rig.heads
 
 	agents := &agentRig{h: rig.h}
-	agents.answerLikeTheExample(exampleSkill(t), func(int) string { return "approve" }, func(int) string { return "[]" }, func(int) string { return "" }, "", designReviewLimit)
+	agents.answerLikeTheExample(exampleSkill, func(int) string { return "approve" }, func(int) string { return "[]" }, func(int) string { return "" }, "", designReviewLimit)
 	rig.h.agents.result = kids.afterReview(rig.h.agents.result)
 
 	// A round over items selects them by the item list, so the queue rows need no label. A round over no item keeps the label of the example rig and reads an empty queue.

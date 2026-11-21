@@ -2,10 +2,13 @@ package claude
 
 import (
 	"encoding/json"
+	"maps"
+	"path/filepath"
 	"slices"
 	"strings"
 
 	"github.com/tobocop2/beehave/internal/agent"
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // minSandboxVersion is the oldest Claude Code that knows every key of the sandbox settings below. The newest key is allowUnsandboxedCommands
@@ -19,6 +22,12 @@ const homeFolder = "~/"
 // subprocessScrub is the variable that makes the CLI strip credentials, by name or by value, from the environment of the subprocesses that it starts,
 // such as the Bash tool. The CLI keeps the token for its own calls. The docs describe it; no real run has shown that the token is gone from `env`.
 const subprocessScrub = "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB"
+
+// envFileVar names a file that the CLI sources in its shell after the scrub, so a variable that the scrub drops, such as GIT_CONFIG_GLOBAL, still reaches git.
+const envFileVar = "CLAUDE_ENV_FILE"
+
+// envFile is the launch file in the run folder that exports the git variables of the plan.
+const envFile = "sandbox-env.sh"
 
 // Tools that the settings deny by name. The sandbox covers the Bash tool; these two reach the network without it.
 func webTools() []string { return []string{"WebFetch", "WebSearch"} }
@@ -51,6 +60,7 @@ type network struct {
 
 type permissions struct {
 	BlockReadsOutsideWorkingDirectories bool     `json:"blockReadsOutsideWorkingDirectories"`
+	Allow                               []string `json:"allow,omitempty"`
 	Deny                                []string `json:"deny"`
 }
 
@@ -60,13 +70,20 @@ type permissions struct {
 // settings file, so an excludedCommands entry or an allow rule in one of them has no effect. --strict-mcp-config with no --mcp-config loads no MCP
 // server, and a local one runs with the access of the owner. --disallowedTools removes WebFetch and WebSearch, which ignore the domain list.
 //
-// One --settings JSON holds the rest. The base is deny by default: the home folder is unreadable, and only the work folder, the shared git
-// directories and the extra read paths are readable. The credential paths are denied again for read and write, in the sandbox and in the
-// permission rules of the file tools (a path in the sandbox alone leaves the Read tool open, and the reverse leaves cat open).
+// One --settings JSON holds the rest. The base denies the home folder: in it, only the work folder, the shared git directories and the extra read
+// paths are readable. The sandbox reads every path outside the home folder by default; there, the settings deny only the credential paths. The
+// credential paths are denied again for read and write, in the sandbox and in the permission rules of the file tools (a path in the sandbox alone
+// leaves the Read tool open, and the reverse leaves cat open).
 // A permission path is written as //absolute. The settings never set excludedCommands, allowLocalBinding, allowAllUnixSockets or allowAppleEvents,
 // and never put the shared git directory in allowWrite: a linked work tree gets it, and an explicit entry could open hooks and config.
-func (Adapter) Sandbox(plan agent.SandboxPlan, guard, _ string) agent.Launch {
-	settings := settingsOf(plan)
+// The settings set no allowWrite list. Each write file of the plan gets one Edit allow rule by its exact path, and Claude Code merges that path into the
+// write paths of the sandbox too, so the one rule opens the file to the shell and to the file tools. A plan that may edit gets one more Edit allow
+// rule, of the work folder with a /** tail; the deny rules still win over it.
+// The git variables of the plan reach the shell through the env file, the only file in the run folder. Its allowRead entry keeps it readable when the
+// run folder is under the home folder.
+func (Adapter) Sandbox(plan agent.SandboxPlan, guard, runDir string) agent.Launch {
+	envPath := filepath.Join(runDir, envFile)
+	settings := settingsOf(plan, envPath)
 
 	if guard != "" {
 		hooks := guardHooks(guard)
@@ -76,29 +93,53 @@ func (Adapter) Sandbox(plan agent.SandboxPlan, guard, _ string) agent.Launch {
 	raw, _ := json.Marshal(settings) //nolint:errcheck,errchkjson // a struct of strings and booleans always encodes
 
 	return agent.Launch{
-		Args: []string{
-			"--setting-sources", "", "--strict-mcp-config",
-			"--disallowedTools", "WebFetch", "WebSearch",
-			"--settings", string(raw),
-		},
-		Env: map[string]string{subprocessScrub: "1"},
+		Args: slices.Concat(
+			[]string{"--setting-sources", "", "--strict-mcp-config", "--disallowedTools", "WebFetch", "WebSearch"},
+			addDirs(plan.ReadDirs), []string{"--settings", string(raw)},
+		),
+		Env:   map[string]string{subprocessScrub: "1", envFileVar: envPath},
+		Files: map[string]string{envFile: exports(plan.GitEnv())},
 	}
 }
 
-// settingsOf returns the settings of the sandbox and of the permission rules for a plan, with no hooks.
-func settingsOf(plan agent.SandboxPlan) sandboxSettings {
+// addDirs returns the --add-dir flag with each folder, which the CLI takes as a working directory, or no argument for no folder.
+func addDirs(dirs []string) []string {
+	if len(dirs) == 0 {
+		return nil
+	}
+
+	return append([]string{"--add-dir"}, dirs...)
+}
+
+// exports returns the POSIX shell lines that export each variable, in name order, with each value quoted.
+func exports(env map[string]string) string {
+	var lines strings.Builder
+
+	for _, name := range slices.Sorted(maps.Keys(env)) {
+		lines.WriteString("export " + name + "=" + model.ShellQuote(env[name]) + "\n")
+	}
+
+	return lines.String()
+}
+
+// settingsOf returns the settings of the sandbox and of the permission rules for a plan, with no hooks. envPath is the env file. The settings allow reading it, and not the
+// run folder, so a run folder under the home folder stays denied except for that file.
+func settingsOf(plan agent.SandboxPlan, envPath string) sandboxSettings {
 	return sandboxSettings{
 		Sandbox: sandboxBlock{
 			Enabled:           true,
 			FailIfUnavailable: true,
 			Filesystem: filesystem{
 				DenyRead:  join([]string{homeFolder}, plan.Deny, plan.DenyPatterns),
-				AllowRead: join([]string{plan.Work}, plan.GitDirs, plan.Read),
+				AllowRead: join([]string{plan.Work}, plan.GitDirs, plan.Read, []string{envPath}),
 				DenyWrite: join(plan.Deny, plan.DenyPatterns, plan.DenyWrite, plan.DenyWritePatterns),
 			},
 			Network: network{AllowedDomains: join(plan.Network), StrictAllowlist: true},
 		},
-		Permissions: permissions{BlockReadsOutsideWorkingDirectories: true, Deny: slices.Concat(webTools(), fileRules(plan.Deny, plan.DenyPatterns), editRules(plan.DenyWrite), patternEditRules(plan.DenyWritePatterns))},
+		Permissions: permissions{
+			BlockReadsOutsideWorkingDirectories: true, Allow: slices.Concat(patternEditRules(plan.Write), workEditRule(plan)),
+			Deny: slices.Concat(webTools(), fileRules(plan.Deny, plan.DenyPatterns), editRules(plan.DenyWrite), patternEditRules(plan.DenyWritePatterns)),
+		},
 	}
 }
 
@@ -129,7 +170,7 @@ func editRules(paths []string) []string {
 	return rules
 }
 
-// patternEditRules returns the Edit deny rule of each pattern, as //absolute.
+// patternEditRules returns the Edit rule of each pattern or exact file, as //absolute with no tail.
 func patternEditRules(patterns []string) []string {
 	rules := make([]string, 0, len(patterns))
 
@@ -138,6 +179,16 @@ func patternEditRules(patterns []string) []string {
 	}
 
 	return rules
+}
+
+// workEditRule returns the Edit allow rule of the work folder, as //absolute with a /** tail, for a plan that may edit, or none.
+// The CLI forces the permission mode default while the subprocess scrub is on, so this rule and not --permission-mode opens the file tools.
+func workEditRule(plan agent.SandboxPlan) []string {
+	if !plan.Edits {
+		return nil
+	}
+
+	return editRules([]string{plan.Work})
 }
 
 func readEdit(pattern string) []string {

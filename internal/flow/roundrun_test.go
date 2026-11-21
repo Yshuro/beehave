@@ -284,3 +284,85 @@ func TestRoundRun_CancelRunRefusesAnOpenRunWhoseInputIsNotAnItemInput(t *testing
 	err = harness.client(t, testVersion).CancelRun(testPassID)
 	require.ErrorContains(t, err, "read the input of run "+testPassID)
 }
+
+// roundTracker is a harness whose tracker takes only issue numbers.
+func roundTracker(t *testing.T) (*harness, *fakeReader) {
+	t.Helper()
+
+	h, r := readerHarness(t)
+	h.items.numbersOnly = true
+	r.numbersOnly = true
+
+	return h, r
+}
+
+func TestRoundRun_TheStartOfARoundItemReadsNoFieldsFromTheTracker(t *testing.T) {
+	t.Parallel()
+
+	h, _ := roundTracker(t)
+
+	_, err := h.engine(t).RunFile(testRound, testProject, writeFlow(t, bodyFlow(`command(run = ["main", item.id])`)))
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"main " + testRound}, h.commands.ran(), "main gets the round id as the id of its item")
+	assert.Zero(t, h.items.reads.Load(), "a round item has no tracker issue to read")
+}
+
+func TestRoundRun_ARealItemStillReadsItsFieldsFromTheTracker(t *testing.T) {
+	t.Parallel()
+
+	h, _ := roundTracker(t)
+
+	_, err := walkBody(t, h, `command(run = ["main", item.title])`)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"main a title"}, h.commands.ran())
+	assert.Equal(t, int32(1), h.items.reads.Load())
+}
+
+func TestRoundRun_ATrackerRefusalOfARealNonNumberItemStillFailsTheRun(t *testing.T) {
+	t.Parallel()
+
+	h, _ := roundTracker(t)
+
+	_, err := h.engine(t).RunFile("bd-7", testProject, writeFlow(t, bodyFlow(`command(run = ["main"])`)))
+	require.ErrorContains(t, err, `read the fields of item bd-7: REFUSE: "bd-7" is not an issue number`)
+	assert.Empty(t, h.commands.ran())
+}
+
+func TestRoundRun_ItemReadOfARoundItemFindsNothingAndAsksNoTracker(t *testing.T) {
+	t.Parallel()
+
+	for _, of := range []string{"self", "parent"} {
+		t.Run(of, func(t *testing.T) {
+			t.Parallel()
+
+			h, r := roundTracker(t)
+
+			_, err := h.engine(t).RunFile(testRound, testProject, writeFlow(t, bodyFlow(`r = item_read(of = "`+of+`", name = "up")
+command(run = [str(r.found), "[" + r.id + "]", str(len(r.fields)), str(len(r.comments))])`)))
+			require.NoError(t, err)
+
+			assert.Equal(t, []string{"False [] 0 0"}, h.commands.ran())
+			assert.Zero(t, r.reads("comments")+r.reads("parent"), "no read reached the tracker")
+		})
+	}
+}
+
+func TestRoundRun_SpawnOfARoundItemPlacesItWithoutATrackerRead(t *testing.T) {
+	t.Parallel()
+
+	h, _ := roundTracker(t)
+
+	_, err := walkText(t, h, `def worker(item):
+    command(name = "w", run = ["w", item.id])
+
+def main(item):
+    runs = spawn(items = ["round/next"], entry = "worker", name = "fan")
+    gather(runs, name = "fan")
+`)
+	require.NoError(t, err)
+
+	assert.Equal(t, []string{"w round/next"}, h.commands.ran())
+	assert.Equal(t, int32(1), h.items.reads.Load(), "only the item of the run read the tracker")
+}

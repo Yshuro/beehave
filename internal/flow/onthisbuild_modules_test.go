@@ -69,6 +69,7 @@ func TestClient_ResumeOnThisBuildRefusesARunThatRecordedAStepOfTheModuleThatChan
 	require.ErrorIs(t, err, errStranded)
 	require.ErrorContains(t, err, fmt.Sprintf("agent module at version %d and this build has version %d", agentVersion, agentVersion+1))
 	require.ErrorContains(t, err, "Start the item again")
+	assert.NotContains(t, err.Error(), "End the failed run first", "an open run is not failed, so no cancel is needed")
 
 	row, rowErr := other.row(testRun)
 	require.NoError(t, rowErr)
@@ -262,7 +263,7 @@ func TestClient_ResumeOnThisBuildRefusesARoundRunOfABuildWithAnOlderRoundModuleA
 	err := other.ResumeOnThisBuild(testRound)
 
 	require.ErrorIs(t, err, errStranded)
-	require.ErrorContains(t, err, "round module at version 1, and this build has version 2")
+	require.ErrorContains(t, err, fmt.Sprintf("round module at version 1, and this build has version %d", roundVersion))
 	require.ErrorContains(t, err, `the step "make worktree"`)
 	require.ErrorContains(t, err, "Finish the run on the build that started it, or start the item again: beehave run "+testRound)
 	require.NotContains(t, err.Error(), "UnexpectedStep")

@@ -32,7 +32,7 @@ func TestFirstRenewal_AStoppedEngineEndsTheWaitWithACancelThatKeepsTheCause(t *t
 	stopped := assert.AnError
 	stop(stopped)
 
-	err := engine.firstRenewal(ctx, "run-a", ItemInput{Item: testItem, Project: testProject}, "owner-a")
+	err := engine.firstRenewal(ctx, &attempt{id: "run-a", in: ItemInput{Item: testItem, Project: testProject}}, "owner-a")
 
 	require.ErrorIs(t, err, context.Canceled, "the library records a stopped run, not a failed one")
 	require.ErrorIs(t, err, stopped)

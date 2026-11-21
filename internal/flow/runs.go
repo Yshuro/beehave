@@ -59,9 +59,9 @@ func (r run) terminal() bool {
 	return false
 }
 
-// cancelable reports whether a cancel reaches the run: an open run, or a canceled one, whose children a cancel that stopped between two levels of the tree left open.
+// cancelable reports whether a cancel reaches the run: an open run, a failed one, or a canceled one, whose children a cancel that stopped between two levels of the tree left open.
 func (r run) cancelable() bool {
-	return !r.terminal() || r.Status.Status == dbos.WorkflowStatusCancelled
+	return !r.terminal() || r.Status.Status == dbos.WorkflowStatusCancelled || r.failed()
 }
 
 // failed reports whether the attempt ended with an error. Only beehave resume continues it.
@@ -72,8 +72,17 @@ func (r run) failed() bool {
 // failedError tells the owner why a new attempt does not start after a failed one.
 // The error text of the run names the step that failed.
 func failedError(failed run, item string) error {
-	return fmt.Errorf("%w: %s failed: %s. Run beehave resume %s to continue it from the last finished step",
-		errRunFailed, failed.Status.ID, fmt.Sprint(failed.Status.Error), item)
+	return fmt.Errorf("%w: %s failed: %s. Run beehave resume %s to continue it from the last finished step. To start a new attempt instead, run beehave cancel %s",
+		errRunFailed, failed.Status.ID, fmt.Sprint(failed.Status.Error), item, item)
+}
+
+// endFailedFirst gives the sentence that sends the owner to beehave cancel when the last run of the item failed, and an empty text for any other run.
+func endFailedFirst(last run, item string) string {
+	if !last.failed() {
+		return ""
+	}
+
+	return fmt.Sprintf("End the failed run first: beehave cancel %s. ", item)
 }
 
 // runID names attempt k of an item. A second start of the same attempt joins the first.

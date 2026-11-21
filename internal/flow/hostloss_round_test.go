@@ -106,6 +106,30 @@ func TestRound_AHostLossOnTheSyncGateRerunsAndIsNeverSyncRed(t *testing.T) {
 	assert.NotContains(t, rig.questions[0], holdQuestion, "one loss is below the limit")
 }
 
+func TestRound_EveryGateOfTheRoundThatHasNoBaseReadsThePinFileAtTheRoundBaseAlsoTheRerunOfALostSyncGate(t *testing.T) {
+	t.Parallel()
+
+	rig := newRoundRig(t, "")
+	script := &syncScript{lines: []string{"synced", "state=current"}}
+	withSync(t, rig, script)
+	rig.gate.loseAt = []int{1}
+
+	runLosing(t, rig, nil)
+
+	names := stepNames(t, rig.last)
+	require.GreaterOrEqual(t, at(names, "gate:sync-gate-1-host-1#"), 0, "the lost sync gate ran again")
+
+	var noBase []string
+
+	for _, submitted := range rig.gate.submittedBases() {
+		if submitted[0] == "" {
+			noBase = append(noBase, submitted[1])
+		}
+	}
+
+	assert.Equal(t, []string{syncRoundBase, syncRoundBase}, noBase, "the sync gate and its rerun read the pin file at the round base, and no other gate has no base")
+}
+
 func TestRound_AnAnswerToTheHostLossHoldWaitsAgainOnlyAfterANewLoss(t *testing.T) {
 	t.Parallel()
 

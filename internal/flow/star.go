@@ -37,13 +37,22 @@ func (e *Engine) runStar(ctx dbos.Context, in ItemInput, login, treeStart string
 	e.progress.say("run %s workflow %s item %s", workflowID(ctx), in.File, in.Item)
 
 	fields, err := runStep(e, ctx, "item", func(c context.Context) (map[string]string, error) {
-		return e.deps.Items.Fields(c, in.Project, in.Item)
+		return e.itemFields(c, in.Project, in.Item)
 	})
 	if err != nil {
 		return ItemResult{}, fmt.Errorf("read the fields of item %s: %w", in.Item, err)
 	}
 
 	return e.playScript(&script{e: e, ctx: ctx, in: in, login: login, treeStart: treeStart, severity: severityOfItem(fields), counts: map[string]int{}}, sources, fields)
+}
+
+// itemFields reads the fields of an item from the tracker. A round item has no tracker issue, so it gets its id as its only field and no read.
+func (e *Engine) itemFields(ctx context.Context, project, item string) (map[string]string, error) {
+	if model.ItemKind(item) == model.KindRound {
+		return map[string]string{"id": item}, nil
+	}
+
+	return e.deps.Items.Fields(ctx, project, item)
 }
 
 // playScript runs main, then the finish of the workflow file, and returns what the item came to.
@@ -150,8 +159,9 @@ func (s *script) hasRepository() bool {
 }
 
 // tree returns the worktree of the item and makes it when it is missing. A round item gets it at the commit that the recorded step made it at.
+// A child item of a round gets it cut at the base of the round.
 func (s *script) tree(ctx context.Context) (string, error) {
-	return s.e.deps.Trees.Ensure(ctx, s.in.Project, s.in.Item, s.treeStart)
+	return s.e.deps.Trees.Ensure(ctx, s.in.Project, s.in.Item, s.treeStart, s.in.Base)
 }
 
 // hasRepository reports whether the project has a repository. A nil Deps.Repository means every project has one.

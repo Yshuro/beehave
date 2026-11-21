@@ -33,26 +33,49 @@ The project file also takes these keys. Each path is absolute or starts with `~/
 
 The record of a step stores the sandbox that the step runs with, in the `/render` step beside the prompt. A replay reads the record and never the current default of the project. A record without the value replays as a step with no sandbox.
 
+### The data file
+
+A step with the `data` keyword gets one file in the state folder (see [Agent runs](agent-runs.md#the-setting-data)). The file is the only file of a folder of its own, `<state>/inputs/<item>.<step>/data.json`. The plan adds that one path to the read paths, after the check of the `sandbox_read` paths. It also passes that folder to the CLI with `--add-dir`, which makes it a working directory, and denies the write of the folder in the sandbox and in the permission rules. The phase derives the path from the state folder of the engine, the item and the step before each start of the agent, also for a queued or recovered phase. No record carries the path to the phase or the plan. A phase with data and no step name, from an older build, starts no agent. The recorded prompt names the path in its text, so a replay whose recorded prompt names another path stops with an error that says to start a new run. Such paths are the file of a run recorded at an older build, a `data.json` in another folder, and the file of this item and step under another state folder. It never adds the inputs folder or the state folder, which holds `dbos.db`. The sandbox denies the home folder, so the default state folder under `~/.local/state` stays closed except for this file. A data file inside a credential path stops the step. The permission rules keep `blockReadsOutsideWorkingDirectories`. A `Read` allow rule does not lift that block: the Claude Code settings reference says "No allow rule lets Claude's file tools through either block", and that a working directory does. So the folder of the data file is a working directory, and the agent reads the file with the Read tool or the shell. The file holds what the workflow passed and no credential.
+
+### The output file
+
+A step that declares `outputs` writes them to one file in the state folder. The file is the only file of a folder of its own, `<state>/outputs/<item>.<step>/output.json`. The plan adds the file to the read paths and passes its folder to the CLI with `--add-dir`, which makes it a working directory. The Write tool of Claude Code refuses to overwrite a file that the session has not read, and `blockReadsOutsideWorkingDirectories` refuses the Read of a file outside the working directories, so the output file must be in one. The folder holds no other file, so the CLI still blocks the read of the output of every other call, and the plan never adds the outputs folder. A phase that declares outputs and names an output file other than the one the engine derives for the item and the step, such as the file of a run recorded at an older build, starts no agent, makes no file at the old path, and says to run `beehave cancel` and then start a new run. A call with no outputs gets no folder. The plan opens that one file for write, by its exact path, and nothing else outside the work folder. The adapter writes the path as one `Edit` allow rule with no `/**` tail. The Write tool obeys the rule, and Claude Code merges its path into the write paths of the sandbox, so the shell can write the file too. The adapter sets no `allowWrite` list. A step with `edits = False` runs in the default permission mode, which refuses every other write of the file tools, so the agent still edits no file of the work folder. The outputs folder and the state folder stay closed, so a step cannot write the output of another step or the state of the engine. An output file inside a credential path stops the step.
+
+Claude Code does not escape the paths of its rules. So a data file or an output file whose path holds a glob character (`*`, `?`, `[` or `\`) stops the step, because its rule would open more than the one file.
+
+If the agent ends with no output file, the error names each call on that file that the permission check of the CLI refused, by a rule or by the permission mode: a file tool that writes it, a file tool that reads it, and a shell call whose command names it as a whole word. The adapter reads these calls from the `permission_denials` list of the result line.
+
+The file stays in the state folder. The temporary folders are shared by every run, so one step could write the output of another there. The work folder is tracked by git, so the file would dirty the tree of the item. The Write tool refuses a path in either folder without an allow rule.
+
+The engine resolves the state folder to its real path once, when it opens the folder, so the output file, the data file, the prompt and the grant all hold one spelling. The sandbox compares real paths, so a grant that holds a link opens nothing.
+
+On Linux, the sandbox ignores a write path that does not exist when the run starts. Before each try of a call that declares outputs, the engine removes the old output file and makes a new empty one, so the exact grant names a file that exists. An empty output file counts as no output file. Because the file exists, the Write tool asks for a Read of it first, and the folder of the output file, a working directory, lets that Read through.
+
+### Forge data for a sandboxed step
+
+In the sandbox, gh cannot read its config, and no forge credential may reach the agent. So no sandboxed step reads the forge itself. The engine reads the forge outside the sandbox, and the workflow passes the answer through the `data` keyword. In the remediation example, `queue` gives the queue audit the rows and the open pull requests of the pass, and `pr_history` gives the plan and the implementer the earlier pull requests of the item with their closing comments. The plan and the queue audit then need no network.
+
 ## What the Claude adapter sets
 
 ### Isolation flags
 
-The adapter passes three flags:
+The adapter passes three flags, and `--add-dir <data folder>` for a step with a data file:
 
 | Flag | Effect |
 |---|---|
 | `--setting-sources ""` | Loads no user, project or local settings file, so a planted `excludedCommands`, allow rule or hook has no effect. |
 | `--strict-mcp-config` | Loads no MCP server, because a local server runs with the access of the owner. |
 | `--disallowedTools WebFetch WebSearch` | Removes the two tools that ignore the domain list. |
+| `--add-dir <folder>` | Makes the folder of the data file a working directory, so the file tools and the shell read it. The CLI reference says the flag adds "additional working directories for Claude to read and edit files". |
 
 It passes one `--settings` JSON that holds the sandbox object, the permission rules and, for a step with `forbid_commands`, the hook.
 
 ### The sandbox object and the permission rules
 
 - The sandbox object sets `enabled`, `failIfUnavailable` and `allowUnsandboxedCommands: false`.
-- The base is deny by default. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory and the `sandbox_read` paths.
+- The base denies the home folder. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory, the `sandbox_read` paths, the env file, the data file and the output file of the step. Outside the home folder, the sandbox reads every path that is not a credential path.
 - The network list sets `allowedDomains` with `strictAllowlist`.
-- The permission rules set `blockReadsOutsideWorkingDirectories` and deny `WebFetch` and `WebSearch`.
+- The permission rules set `blockReadsOutsideWorkingDirectories`, deny the write of the data folder, and deny `WebFetch` and `WebSearch`. For a step with outputs, they allow `Edit` of the output file alone.
 
 The adapter does not set `excludedCommands`, `allowLocalBinding`, `allowAllUnixSockets` or `allowAppleEvents`. It sets no `allowWrite` list, so it never puts the shared git directory in it. Claude Code makes it writable for a linked work tree and keeps `hooks` and `config` read-only, and an explicit entry could open them.
 
@@ -120,9 +143,33 @@ These gaps stay open:
 
 The CLI keeps `CLAUDE_CODE_OAUTH_TOKEN` for its own calls. A sandboxed run sets `CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1`. The documentation of Claude Code says this strips credentials, by name or by value, from the environment of the shell and of other subprocesses.
 
+### The edit rule of the work folder
+
+From Claude Code 2.1.329, the scrub variable also forces the permission mode `default`. The CLI ignores `--permission-mode acceptEdits` and writes on stderr: "Permission mode forced to default", then "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB is set (allowed_non_write_users hardening). Declare allowedTools explicitly, or set CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=0 to opt out." In print mode, the default mode refuses each Edit and Write call.
+
+The run keeps the scrub. For a step that may edit, the settings add one allow rule, `Edit(//<work folder>/**)`. An `Edit` rule covers every file tool that writes. A deny rule wins over an allow rule, so the closed paths and the credential paths stay refused. A step with `edits = False` gets no such rule. The data folder stays read only, and the output file keeps its own rule by its exact path.
+
+A probe of CLI 2.1.330 with the full launch arguments measured this. With the rule, Write created a file at the top of the work folder and one in a subfolder. It refused `.git/hooks/pre-commit`, `.claude/settings.json` and a file outside the work folder. The bare tool names in `--allowedTools` let the write outside the work folder through, so the rule names the folder. The mode in the init line stays `default` and the stderr line stays, so the engine does not check the mode.
+
+The rule is a pattern, so a glob character in the path of the work folder would change what it opens: a probe with the work folder `w[ab]` refused the folder itself and opened its sibling `wa`. A step that may edit, in a work folder whose path holds a glob character, does not start, as for the state files. A space in the path works.
+
+The engine checks the result instead of the mode. A step that may edit fails when the CLI reports a refused Edit, Write or NotebookEdit call on a file of the work folder that no deny rule of the plan covers. That refusal means the rule of the work folder did not apply. The failure names each refused file and quotes the stderr of the CLI. The step gets no second try, because the same launch refuses the same edit again. A refused edit that a deny rule covers, such as a hook, an agent settings file or a `.env` file, is the rule at work: the step goes on, and its output decides it. The engine decides what a deny rule covers by the one test that the other sandbox checks use: a rule covers its own path, each path that its pattern matches and each path below either, without case and again with every link resolved. So `.ENV` and `.envs/dev.yaml` count as covered by the `.env*` rule.
+
 Not proven: a real `claude` run that prints `env` in the shell must show that the token is gone. Until then, the shell may read the token and, with a non-empty `network` list, send it out.
 
 The child environment holds no proxy variable and no `SSH_AUTH_SOCK`. It sets `GIT_CONFIG_GLOBAL=/dev/null` and `GIT_CONFIG_NOSYSTEM=1`, because the base denies `~/.gitconfig`. A step that needs a proxy of the owner sets `sandbox = None`.
+
+The scrub drops `GIT_CONFIG_GLOBAL` by name. The engine writes the git variables to a file `sandbox-env.sh` in the run folder and names it in `CLAUDE_ENV_FILE`; the CLI sources the file in its shell after the scrub. The run folder holds only that file. The run folder is in the temporary folder of the engine, which the sandbox reads by default; the `allowRead` entry for the file matters only when the run folder is under the home folder.
+
+With no global config, the clone has no `user.name` or `user.email`. The engine reads both with its own git at the worktree and sets `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` in the child environment and in the env file. If either value is empty, the step does not start, and the note names `git config user.email`. The shell gets no credential: a push from the shell still fails.
+
+### The git of the engine
+
+An agent can write the `.git` file of its worktree, the `commondir` file of its record and the git config of the clone. Every git call of the engine in a clone or a worktree therefore sets `GIT_DIR`, `GIT_COMMON_DIR` and `GIT_WORK_TREE` from the engine layout: `<state>/repos/<project>/.git` for a clone, and the record under `.git/worktrees` whose `gitdir` file names the worktree for a worktree. In a project with a source or a forge, and in a project that the config does not hold, a folder that no clone holds a record of runs no git. A project that the config holds with neither has no clone: the engine runs git in its folder as the owner's git does, with the hooks off and local transports only, and the gate copy of such a folder takes its git folders from git in the copy before the gate command starts. A sandboxed step cannot write the `.git` of that folder, because `.git` is a closed name. A rewritten `.git` or `commondir` file does not move a call to another repository. The plans of a step and of a gate take the shared git folder of a worktree from the same records, so a rewritten `.git` file does not add a folder to the read list of the next step. A record that `worktree.useRelativePaths` writes names the worktree with a relative path, and the engine reads it from the record folder.
+
+Before each call, the engine lists the keys of the clone config with `git config --file <clone>/.git/config --list --name-only --null --no-includes`, which starts no program. It refuses the clone when a key is outside the allow list, and the call does not run. The allow list holds the keys that `git clone`, `git worktree add` and a local identity write: `core.repositoryformatversion`, `core.filemode`, `core.bare`, `core.logallrefupdates`, `core.ignorecase`, `core.precomposeunicode`, `core.symlinks`, `extensions.objectformat`, `extensions.refstorage`, `extensions.relativeworktrees`, `user.name`, `user.email`, `remote.<name>.url`, `remote.<name>.fetch`, `branch.<name>.remote` and `branch.<name>.merge`. An include, a hooks folder, a filter, an fsmonitor and every key that a later git adds are refused. `core.hooksPath=/dev/null` stays on every call.
+
+The global and the system config of the owner still apply, so a filter that the owner set there runs as before. The listing and the call are two processes, so a write to the clone config between them is not seen; the sandbox keeps the clone config read-only to the step, which closes that window for a sandboxed step only.
 
 ## When the step does not start
 
@@ -131,7 +178,9 @@ The step ends as `not-started`, with a note, when:
 - the adapter of the runner has no sandbox;
 - the system is Windows (Claude Code runs commands there with no sandbox);
 - the Claude Code version is below the minimum;
-- the version cannot be read.
+- the version cannot be read;
+- git has no `user.name` or no `user.email` at the worktree.
+- the git config of the clone holds a setting outside the allow list (see [The git of the engine](#the-git-of-the-engine)). The note names each setting and the `git config --unset` command that removes it. A plan without the deny of the hooks folder never starts.
 
 A Claude Code that does not know a sandbox key ignores it and exits with code 0, so the minimum version is the only guard.
 
@@ -164,7 +213,7 @@ The project file keeps two lists for the gate, and `beehave` records them. The e
 
 ### Choice of the enforcer
 
-The project key `sandbox_enforcer` names the enforcer. It holds for the enforcer of the gate, not for the sandbox of Claude Code in an agent step.
+The project key `sandbox_enforcer` names the enforcer. It holds for the enforcer of the gate and of the copy of the head that the engine push makes (see [push](workflow-files.md#push)), not for the sandbox of Claude Code in an agent step.
 
 | Value | Meaning |
 |---|---|
@@ -184,7 +233,7 @@ Platform support:
 The `seatbelt` enforcer runs the command under `sandbox-exec` with a Seatbelt profile that beehave generates from the plan. The profile:
 
 - denies everything by default;
-- allows reads and writes by path;
+- allows reads and writes by the paths of the plan, and reads of the folders of macOS that every program loads from (`/System`, `/Library/Apple` and the shared cache of the libraries). It adds no other folder: a plan that needs `/usr`, `/etc` or `/opt` names them, as the plan of a gate does;
 - allows TCP connect to the port of the proxy on localhost only;
 - grants no unix socket;
 - allows a Mach service lookup by name only, for the few services that the system libraries need (user and group names, logging, preferences, notifications). A command cannot reach launchd or any other service to start a job.
@@ -266,7 +315,7 @@ Removal:
 
 ### When no enforcer can run
 
-When no enforcer can run here, `beehave` runs no gate command outside a sandbox that the project asked for, and the gate does not run. The refusal text ends with the reason of the enforcer.
+When no enforcer can run here, `beehave` runs no gate command outside a sandbox that the project asked for, and the gate does not run. The refusal text ends with the reason of the enforcer. The engine push is refused too, in every project, because its copy of the head always runs under an enforcer.
 
 The same holds, even in a project that builds on a host, for:
 

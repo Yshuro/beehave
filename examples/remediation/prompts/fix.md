@@ -15,7 +15,7 @@ table must change, stop and report it: a wider rule is the owner's decision.
 
 ## Before you write
 
-**Check for an existing pull request, at the start and again before you push.**
+**Check for an existing pull request, at the start and again before your last commit.**
 **Repeat-offender check:** `git log -S` and `gh pr list --state all --search`, reading the CLOSING comment
 rather than the commits. A closed pull request is not a record of work that landed.
 **Re-derive every cited site at the tip you branch from.** Line numbers move.
@@ -55,7 +55,7 @@ test name). A red that the base tree has too is not counted: print `BASE-RED <na
 **A result counts only with the number of tests that ran.** Write "10 of 10 runs passed, <n> tests in each run",
 never "10 of 10". A run with 0 tests is not a pass.
 **A mutation run is its own job after the gate**, never a gate step. Start it when the gate steps are done.
-**Before each push, search the diff for `TODO` and `FIXME`.** Each one that the change adds names its author, as `TODO(name)`.
+**Before each commit, search the diff for `TODO` and `FIXME`.** Each one that the change adds names its author, as `TODO(name)`.
 **Capture the exit code before any pipe**: `cmd > out 2>&1; rc=$?; grep ... out`. After a pipe, `$?` is the exit code of the last stage.
 **A `while read` loop gives its stdin to every command inside it.** Read the list on fd 3 (`while read -r x <&3; do ...; done 3< list`) or put `</dev/null` on the inner command, and assert the loop count against the input count.
 **A regeneration is evidence for its own tree only.** Compare the output with a fresh tree of the same commit. A regeneration that wrote nothing looks the same as one that wrote identical bytes.
@@ -134,6 +134,7 @@ subset of the union of the two parents' versions of that file; the control is th
 parent alone, which must be nonzero.
 Restore a mutated file from a snapshot and **assert the blob**; `git checkout -- <file>` resets to HEAD and
 silently discards other uncommitted edits.
+**A claim that two changes are disjoint carries the SHA it was measured at.** A list of changed paths from one tip is stale after two merges: measure again at the tip you merge to.
 
 ## Brief rules
 
@@ -144,9 +145,27 @@ silently discards other uncommitted edits.
 
 ## Merge rules
 
-**Push every commit at once.** The pull request of the item is open already, and a commit that stays local is lost with the lane. Do not edit the body of the pull request or link a stack: the engine owns both.
+**Commit every change at once.** The pull request of the item is open already, and a change that is not committed is lost with the lane. Do not push: the engine pushes the head of the branch after this step. Do not edit the body of the pull request or link a stack: the engine owns both.
 **Never use the merge queue of GitHub.** The orchestrator merges a pinned head with `gh pr merge`. Never run `gh pr merge --auto` and never add a pull request to a queue.
-**Known base reds are in one file.** The run names the file. Read it, and re-derive each red at the tip you branch from. Never copy the list into a report or a brief.
+**Known base reds are in one file.** The known base reds are the list `base_reds` in the data file {{ .data_file }}, which the engine wrote for this step. Read it with the shell (`cat` or `jq`), and re-derive each red at the tip you branch from. Never copy the list into a report or a brief. If the data file is missing or cannot be read, stop and refuse: say so, and do not guess the base reds.
+**A base-red entry names the command that CI runs, not the test target.** The same target under another runner is another measurement. Follow the CI task to its command before you record a red.
+**The exclusion list of a guard is a decision that expires.** State what a guard covers, not only that it passed. When the defect recurs inside an exclusion, justify the exclusion again before you add a case.
+**Do not edit a branch that a pending merge depends on.** That is a branch with an approved head that waits to merge, or the parent of an open stack. File the finding that survives as an issue first, and fix it in a later pull request.
+
+## Lane boundaries
+
+**Each lane has one item, one worktree, one branch and one pull request.** Never take a second item into the tree you were given, however related it looks. Two items in one tree cannot be reviewed, reverted or merged alone. Never touch the worktree of another lane.
+**An item is the scope of one pull request, not one issue.** **The scope of the item is fixed at the first review.** Until then, fix a defect of the same class that you find on the way on this branch. After it, name the defect in your report so that it becomes a later item.
+**Never merge, never comment on the forge, and never file an issue.** The engine and the orchestrator do these. Name a finding that you will not fix in your report, so that an issue is filed for it.
+{{ if .facts.build_host }}**Run every build, test and lint on the build host.** Never run one on this machine.
+{{ else }}This project has no build host: run builds and tests on this machine.
+{{ end }}
+## Skills
+
+**Invoke each skill that the rules name with the Skill tool, by name.** Reading the file of a skill instead is a skipped step, and a report with no Skill call goes back unread. If the Skill tool answers `unknown skill`, read the skill file and follow it: that answer is about the registry and is never permission to skip the step.
+**Run the skills in order.** `plan-vs-conventions` for a change past one file, `cross-cutting-api-change` for a new variant, field or entry point, then `blast-radius-review` iterated to zero before the gate, with the round count in the report.
+**`blast-radius-review` is the floor of every lane, never the whole answer.** Choose the other skills from what the item is, not from habit: a change of output, of a dependency floor or of a harness each asks for more.
+**A ruling of the owner binds the item.** Read the rulings file that the run names. Never reverse a ruling: if you think that it is wrong, stop and report it with your evidence.
 
 ## Project rules
 
@@ -187,13 +206,18 @@ Measured traps and ownership rules:
 
 ## Report
 
-**Write the full report to the report file that the run names for this lane FIRST**: every measurement, every
-control, every arm you discarded. That file is the record and it is read.
+**Write the full report as the output `report`**: every measurement, every
+control, every arm you discarded. The run checks the output before any full review: each row of `## Claims` names your final head commit, and a line says "no background commands left".
+Write it to {{ .output_file }} as JSON, as a text, for example `{"report":"# Report\n...","uncaused":"[]"}`.
+
+**Write the output `uncaused` as a text that holds a JSON list.** Each gate red that your change did not cause is one entry: a red that the base has too and that no hunk of yours touches. Write `[]` when there is none.
+The run files one item for each id before the merge. An entry has the fields `id` (words in lower case joined by hyphens, the same for the same red), `title`, `body`, `found` (the commit and the exact command), `severity` (`P0` to `P3`) and `operator` (`true` when an operator hits it in normal use).
+The run refuses the whole list when one entry is bad, and it never files the same id twice.
 
 **The report carries four tables.** A report that lacks one goes back to you unread.
 
 - `## Claims`: every claim in the title, body, commit messages, changelog entry, new comments, assertion
-  messages and closing keywords, with its evidence and the head it was verified at. Every push makes the
+  messages and closing keywords, with its evidence and the head it was verified at. Every commit makes the
   table stale, so re-verify it at the new head.
 - `## Hunks`: every changed production hunk, the arm that removes it, and the red line a test printed.
 - `## Inputs`: every input class the changed code accepts or refuses, what the base does, what the head does,
@@ -215,7 +239,7 @@ thing not to redo; and these lines:
 ## Lane layout
 
 **A fix lane is not a proof lane and not a review lane.** The gate is the proof and a fresh review lane judges the change. You write the change; you do not review it as the verdict, and you do not approve it.
-**Run the scoped tests, not the full gate.** Before you push, run the red test of each finding and the tests of the packages that your diff reaches. The loop runs the full gate once for each candidate, after a scoped review approves.
+**Run the scoped tests, not the full gate.** Before your last commit, run the red test of each finding and the tests of the packages that your diff reaches. The loop runs the full gate once for each candidate, after a scoped review approves.
 **A rise in the regression count blocks the lane.** End your report with the line `Regressions of this pull request so far: <n>`. If n is higher than in the handoff you started from, write REGRESSION RISE on the verdict line and do not push. The run holds the item.
 **Patch rounds are bounded for each pull request.** After the last round, no fix lane starts for this pull request. A person rules on each open finding, and then one settle lane applies the ruling. The settle lane is the only edit after the last round: it runs once, no review follows it, and nothing merges. Do not start a second fix lane for a pull request yourself.
 

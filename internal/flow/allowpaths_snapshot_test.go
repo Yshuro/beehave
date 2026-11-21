@@ -27,7 +27,7 @@ func (r *agentRig) leavesFilesBeforeTheRun(t *testing.T) {
 func markOf(t *testing.T, dir string) startMark {
 	t.Helper()
 
-	mark, err := takeMark(t.Context(), dir)
+	mark, err := takeMark(t.Context(), engineGit(dir))
 	require.NoError(t, err)
 
 	return mark
@@ -36,16 +36,16 @@ func markOf(t *testing.T, dir string) startMark {
 func TestScope_TheStartMarkNamesTheErrorWhenGitCannotListTheFolder(t *testing.T) {
 	t.Parallel()
 
-	_, err := others(t.Context(), t.TempDir())
+	_, err := others(t.Context(), engineGit(t.TempDir()))
 	require.ErrorContains(t, err, "find the root of the item folder")
 
 	dir, _ := gitTree(t)
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "index"), []byte("not an index"), 0o600))
 
-	_, err = takeMark(t.Context(), dir)
+	_, err = takeMark(t.Context(), engineGit(dir))
 	require.ErrorContains(t, err, "with git ls-files")
 
-	_, err = scopeOf(t, "papers/**").outside(t.Context(), dir, startMark{Head: "HEAD"})
+	_, err = scopeOf(t, "papers/**").outside(t.Context(), engineGit(dir), startMark{Head: "HEAD"})
 	require.ErrorContains(t, err, "with git ls-files")
 }
 

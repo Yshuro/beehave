@@ -17,7 +17,7 @@ subst flow/round.star
 exec beehavereal item add local round/integration/r1 --title 'The round' --body-file body.txt
 exec beehavereal run round/integration/r1 local --workflow flow/round.star
 stdout 'item round/integration/r1 finished'
-exists state/trees/local/round_2Fintegration_2Fr1/base-reds.md
+exists state/trees/local/round_2Fintegration_2Fr1/stray.txt
 exec cat run.head
 cp stdout first
 
@@ -29,7 +29,7 @@ exec git -C origin checkout -q main
 ! exec beehavereal run round/integration/r1 local --workflow flow/round.star
 stderr 'the worktree .*round_2Fintegration_2Fr1 of item round/integration/r1 holds changes'
 stderr 'worktree remove --force .*round_2Fintegration_2Fr1'
-exists state/trees/local/round_2Fintegration_2Fr1/base-reds.md
+exists state/trees/local/round_2Fintegration_2Fr1/stray.txt
 exec git -C state/trees/local/round_2Fintegration_2Fr1 rev-parse HEAD
 cmp stdout first
 
@@ -43,4 +43,4 @@ base marker
 moved
 -- flow/round.star --
 def main(item):
-    command(name = "work", run = ["sh", "-c", "git rev-parse HEAD > @WORK@/run.head; echo red > base-reds.md"])
+    command(name = "work", run = ["sh", "-c", "git rev-parse HEAD > @WORK@/run.head; echo red > stray.txt"])

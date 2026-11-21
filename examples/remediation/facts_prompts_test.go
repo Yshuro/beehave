@@ -45,9 +45,9 @@ func factsLanes() []string {
 func promptData(facts map[string]any) map[string]any {
 	return map[string]any{
 		"item": map[string]any{"id": "1", "title": "t", "body": "b"}, "plan": "p", "round": 1, "findings": "f", "violations": "", "facts": facts,
-		"output_file": "/out.json", "mechanism": "m", "fixes": 1, "pr": "9", "ruling": "r",
+		"output_file": "/out.json", "data_file": "/in.json", "mechanism": "m", "fixes": 1, "pr": "9", "ruling": "r",
 		"base": "integration", "acceptance": "", "base_result": "", "pass": 1, "scope": "the diff of the last fix",
-		"branch": "sync/integration/abcd1234", "source": "main", "head": "abc",
+		"branch": "sync/integration/abcd1234", "source": "main", "head": "abc", "since": "origin/integration",
 	}
 }
 
@@ -152,5 +152,26 @@ func TestPrompts_AnEmptyFactRendersAsEmptyNotMissing(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, tmpl.Execute(&bytes.Buffer{}, promptData(empty)), name)
+	}
+}
+
+func TestPrompts_TheLanesReadTheBaseRedsFromTheDataFileAndRefuseWithoutIt(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{implement, fix, review} {
+		raw, err := fs.ReadFile(os.DirFS("prompts"), name+".md")
+		require.NoError(t, err)
+
+		tmpl, err := template.New(name).Option("missingkey=error").Parse(string(raw))
+		require.NoError(t, err)
+
+		var out bytes.Buffer
+
+		require.NoError(t, tmpl.Execute(&out, promptData(facts())), name)
+
+		text := out.String()
+		require.Contains(t, text, "the list `base_reds` in the data file /in.json", "prompts/%s.md names the data file of the step", name)
+		require.Contains(t, text, "If the data file is missing or cannot be read, stop and refuse", "prompts/%s.md refuses without the file", name)
+		require.NotContains(t, text, "The run names the file", "prompts/%s.md names no file that the run never passes", name)
 	}
 }

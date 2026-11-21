@@ -32,7 +32,7 @@ var dryPipeline = WithEntry("pipeline")
 var dryRound = WithVars(with(roundVars(map[string]any{
 	"base": "integration", "owner": "owner", "owner_email": "owner@example.com", "source_checkout": "/own/checkout", "merge": false,
 	"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round",
-}), map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}}))
+}), map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}, "review_skill": exampleSkill}))
 
 func dryFile(t *testing.T, text string) string {
 	t.Helper()
@@ -113,6 +113,18 @@ func TestDryRun_TheWritesToAPullRequestAndAnItemAreShownAndChangeNothing(t *test
 	assert.Contains(t, out.String(), "pr_comment:c#1")
 	assert.Contains(t, out.String(), "pr_open:o#1")
 	assert.Contains(t, out.String(), "item_create:i#1")
+}
+
+func TestDryRun_APushIsShownAndReturnsTheHeadWithNoPush(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	body := "def main(item):\n    pushed = push(branch = \"b\", head = \"abc\", name = \"p\")\n    command(run = [pushed.head], name = \"seen\")\n"
+	require.NoError(t, DryRun(t.Context(), dryFile(t, body), "12", map[string]string{}, &out), out.String())
+
+	assert.Contains(t, out.String(), "push:p#1")
+	assert.Contains(t, out.String(), "command:seen#1")
 }
 
 func TestDryRun_AStepThatTheDryRunDoesNotFakeIsNotRunAndIsNotAnError(t *testing.T) {
@@ -286,15 +298,15 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleIsComplete(t *testing.T) {
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
+		"claim", "item", "facts#1", "preflight:intake#1", "pr_history:history#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
-		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "push:push-implement#1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
 		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "facts#2", "command:candidate-before-review-ancestor#1", "command:candidate-before-review-keywords#2",
-		"host_job", "DBOS.getResult", "command:mutation#3", "preflight:before-review-1#3",
+		"command:candidate-lane-report#3", "host_job", "DBOS.getResult", "command:mutation#4", "preflight:before-review-1#3",
 		"agent:candidate-review#4/render", "agent:candidate-review#4/clear1", "phase", "DBOS.getResult", "agent:candidate-review#4/read1", "pr_comment:approved#1",
-		"worktree", "release",
+		"command:sweep-prune#5", "worktree", "release",
 	}, remediationStepNames(t))
 }
 
@@ -302,19 +314,19 @@ func TestDryRun_TheStepListOfThePipelineOfTheExampleWithARedGateHoldsTheFixRound
 	t.Parallel()
 
 	assert.Equal(t, []string{
-		"claim", "item", "facts#1", "preflight:intake#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
+		"claim", "item", "facts#1", "preflight:intake#1", "pr_history:history#1", "earlier_calls:spent-fix-scoped-1#1", "earlier_calls:spent-scoped-review-implement#2", "item_read:parent#1", "login#1",
 		"agent:plan#1/render", "agent:plan#1/clear1", "phase", "DBOS.getResult", "agent:plan#1/read1",
-		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "pr_open:draft#1",
+		"agent:implement#2/render", "agent:implement#2/clear1", "phase", "DBOS.getResult", "agent:implement#2/read1", "push:push-implement#1", "pr_open:draft#1",
 		"preflight:before-scoped-review-1#2",
 		"agent:scoped-review-implement#3/render", "agent:scoped-review-implement#3/clear1", "phase", "DBOS.getResult", "agent:scoped-review-implement#3/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "scope:candidate-gate#1", "gate:candidate-gate#1", "preflight:before-fix-2#3",
-		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1",
+		"agent:fix-scoped-1#4/render", "agent:fix-scoped-1#4/clear1", "phase", "DBOS.getResult", "agent:fix-scoped-1#4/read1", "push:push-fix-1#2",
 		"preflight:before-scoped-review-2#4",
 		"agent:scoped-review-1#5/render", "agent:scoped-review-1#5/clear1", "phase", "DBOS.getResult", "agent:scoped-review-1#5/read1",
 		"gate:tip", "exclusive", "gate:stop", "DBOS.getResult", "gate:candidate-gate#2", "facts#2", "command:candidate-before-review-ancestor#1", "command:candidate-before-review-keywords#2",
-		"host_job", "DBOS.getResult", "command:mutation#3", "preflight:before-review-2#5",
+		"command:candidate-lane-report#3", "host_job", "DBOS.getResult", "command:mutation#4", "preflight:before-review-2#5",
 		"agent:candidate-review#6/render", "agent:candidate-review#6/clear1", "phase", "DBOS.getResult", "agent:candidate-review#6/read1", "pr_comment:approved#1",
-		"worktree", "release",
+		"command:sweep-prune#5", "worktree", "release",
 	}, remediationStepNames(t, WithRedGate()))
 }
 
@@ -527,7 +539,7 @@ func TestDryGate_ASubmitWithABasePointsTheRemoteBranchOfTheBaseAtTheParentOfTheH
 
 	gate := newDryGate(dir, head, false)
 
-	job, err := gate.Submit(t.Context(), "p", "i", "", "integration")
+	job, err := gate.Submit(t.Context(), "p", "i", "", "integration", "")
 	require.NoError(t, err)
 	assert.Equal(t, "integration", job.Plan.Base)
 
@@ -537,11 +549,11 @@ func TestDryGate_ASubmitWithABasePointsTheRemoteBranchOfTheBaseAtTheParentOfTheH
 	require.NoError(t, err)
 	assert.Equal(t, parent, base)
 
-	landing, err := newDryGate(filepath.Join(dir, "none"), head, false).Submit(t.Context(), "p", "i", "", "")
+	landing, err := newDryGate(filepath.Join(dir, "none"), head, false).Submit(t.Context(), "p", "i", "", "", "")
 	require.NoError(t, err, "a gate with no base touches no repository")
 	assert.Empty(t, landing.Plan.Base)
 
-	_, err = newDryGate(dir, "no-such-commit", false).Submit(t.Context(), "p", "i", "", "integration")
+	_, err = newDryGate(dir, "no-such-commit", false).Submit(t.Context(), "p", "i", "", "integration", "")
 	require.ErrorContains(t, err, "git exited")
 }
 
@@ -573,6 +585,19 @@ func TestDryAgents_WriteTheDeclaredOutputsOfTheRequestWhateverThePromptSays(t *t
 	raw, err := os.ReadFile(file) //nolint:gosec // the test names its own output file
 	require.NoError(t, err)
 	assert.JSONEq(t, `{"verdict":"approve","summary":"0","open":""}`, string(raw), "a review approves with no open finding, and any other output is 0")
+}
+
+func TestDryAgents_TheUncausedOutputIsAnEmptyList(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "out.json")
+
+	_, err := dryAgents{}.Run(t.Context(), AgentRequest{OutputFile: file, Outputs: []string{"report", "uncaused"}})
+	require.NoError(t, err)
+
+	raw, err := os.ReadFile(file) //nolint:gosec // the test names its own output file
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"report":"0","uncaused":"[]"}`, string(raw), "the text 0 is no JSON list, so a dry run would refuse in the filing of the workflow")
 }
 
 func TestDryAgents_WriteNoFileForACallWithNoDeclaredOutputs(t *testing.T) {
@@ -623,12 +648,13 @@ func TestDryRun_ARoundRunsWithNoEnvironmentVariables(t *testing.T) {
 	var out bytes.Buffer
 
 	// The round reads every setting from the project vars, so the run has no environment at all. It ends early at the read of the queue, which the dry run does not fake.
+	// The queue audit judges the rows of that read, so it comes after it and the dry run does not reach it.
 	err := DryRun(t.Context(), dryRoundFile, "12", nil, &out, dryRound)
 
 	require.ErrorIs(t, err, ErrDryRunEndedEarly, out.String())
 	assert.Contains(t, out.String(), "host_up:round-host#1")
-	assert.Contains(t, out.String(), "agent:queue-audit-1#1")
 	assert.Contains(t, out.String(), "not run in a dry run: read the open work of the project")
+	assert.NotContains(t, out.String(), "agent:queue-audit-1#1")
 	assert.NotContains(t, out.String(), "FAILED")
 	assert.NotContains(t, out.String(), "env:")
 }
@@ -687,13 +713,29 @@ func TestDryFakes_AnswerWithoutTouchingAnything(t *testing.T) {
 	assert.True(t, created)
 	assert.Equal(t, "dry-1", id)
 
-	dir, err := dryTrees{dir: "/t"}.Ensure(ctx, "p", "1", "")
+	dir, err := dryTrees{dir: "/t"}.Ensure(ctx, "p", "1", "", "")
 	require.NoError(t, err)
 	assert.Equal(t, "/t", dir)
 
 	out, err := dryCommands{}.Run(ctx, CommandRequest{})
 	require.NoError(t, err)
 	assert.Equal(t, CommandOutput{}, out)
+}
+
+func TestDryTrees_HeadsReadsTheBranchesOfTheBareRemoteOfTheDryRun(t *testing.T) {
+	t.Parallel()
+
+	dir, remote := filepath.Join(t.TempDir(), "tree"), filepath.Join(t.TempDir(), "remote")
+	head, err := dryRepo(t.Context(), dir, remote)
+	require.NoError(t, err)
+
+	_, err = dryGit(t.Context(), dir, []string{"push", "-q", remoteName, "HEAD:refs/heads/item-1"})
+	require.NoError(t, err)
+
+	heads, err := dryTrees{dir: dir}.Heads(t.Context(), "p")
+
+	require.NoError(t, err)
+	assert.Contains(t, heads, head+"\trefs/heads/item-1")
 }
 
 func countStep(names []string, prefix string) int {
@@ -754,4 +796,18 @@ func TestDryRun_TheDryItemCarriesEveryFieldThatAWorkflowCanRead(t *testing.T) {
 	for _, name := range model.ItemFields() {
 		assert.Contains(t, fields, name)
 	}
+}
+
+func TestDryRun_AProjectWithNoReviewSkillInItsVarsReportsNoSkillAndTheExampleRefusesIt(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+
+	vars := with(roundVars(map[string]any{
+		"base": "integration", "owner": "owner", "lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round",
+	}), map[string]any{"mutation_command": []any{"sh", "scripts/mutation-pr.sh"}})
+
+	err := DryRun(t.Context(), dryRoundFile, "12", nil, &out, dryPipeline, WithVars(vars))
+
+	require.ErrorContains(t, err, "vars.review_skill")
 }

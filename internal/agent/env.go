@@ -30,9 +30,13 @@ func sandboxDropped() []string {
 	}
 }
 
-// sandboxEnv lists the variables that a sandboxed run sets, so that git reads no config file of the owner. The sandbox denies the home folder.
-func sandboxEnv() map[string]string {
-	return map[string]string{"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+// GitEnv returns the git variables of a sandboxed run: git reads no config file of the owner, which the sandbox denies, and commits carry the identity of the plan.
+func (p SandboxPlan) GitEnv() map[string]string {
+	return map[string]string{
+		"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1",
+		"GIT_AUTHOR_NAME": p.Identity.Name, "GIT_AUTHOR_EMAIL": p.Identity.Email,
+		"GIT_COMMITTER_NAME": p.Identity.Name, "GIT_COMMITTER_EMAIL": p.Identity.Email,
+	}
 }
 
 // allowed returns the variables of base that an agent may inherit.
@@ -55,7 +59,7 @@ func LoginEnv(base map[string]string, p Profile, dir string) []string {
 }
 
 // envFor returns the environment of one run: the allowlisted names, the login folder and the token.
-// A sandboxed run gets no proxy variable and no agent socket, and sets the two git variables.
+// A sandboxed run gets no proxy variable and no agent socket, and sets the git variables of its plan: no config file of the owner, and the commit identity.
 // The variables of the launch come after the allow-list. The variables that turn editing off (NoEditEnv) come after those. The git variables of a sandboxed run, the login folder and the token come after them, so a launch cannot change those.
 func envFor(spec Spec, p Profile, launch map[string]string) []string {
 	env := allowed(spec.Env)
@@ -73,7 +77,7 @@ func envFor(spec Spec, p Profile, launch map[string]string) []string {
 	}
 
 	if spec.Sandbox != nil {
-		maps.Copy(env, sandboxEnv())
+		maps.Copy(env, spec.Sandbox.GitEnv())
 	}
 
 	return list(env, p, spec.Runner.ConfigDir, spec.Token)

@@ -40,8 +40,11 @@ const (
 
 // ExclusiveInput is one gate or one merge of a repository, or the host job of a command call with a slot class. Kind is "gate", "merge", "batch_gate" or "command".
 // Request belongs to a command call. Request and Head belong to a gate. Head and Settings belong to a merge. Commit and GateRun belong to a batch gate.
+// Run is the id of the run that queued the merge or the command, and RunItem is the item whose claim that run holds. A call with no Run is refused.
 type ExclusiveInput struct {
 	Kind    string `json:"kind"`
+	Run     string `json:"run,omitempty"`
+	RunItem string `json:"run_item,omitempty"`
 	Project string `json:"project"`
 	Item    string `json:"item"`
 	// BuildHost is the build host that the run recorded in host_up, for a batch gate. A gate carries it in Request.
@@ -55,7 +58,9 @@ type ExclusiveInput struct {
 	Priority uint `json:"priority,omitempty"`
 	// HostKey is the partition of the host queue that holds the build job of the gate. It is set when the gate is queued, so a replay uses the host that the first
 	// run chose even when the project file changed since. It is empty for a gate that runs on this machine. A reopened job goes back to the same partition.
-	HostKey  string         `json:"host_key,omitempty"`
+	HostKey string `json:"host_key,omitempty"`
+	// PinBase is the base of the merge call, for a batch gate: the pin file is read at that branch. A gate carries it in Request.
+	PinBase  string         `json:"pin_base,omitempty"`
 	Commit   string         `json:"commit,omitempty"`
 	GateRun  []string       `json:"gate_run,omitempty"`
 	Request  CommandRequest `json:"request"`
@@ -112,15 +117,16 @@ func (e *Engine) trackGate(parent dbos.Context, in ExclusiveInput) (dbos.Context
 
 	run, cancel := dbos.WithCancel(parent)
 
-	ended := make(chan struct{})
+	a := &attempt{cancel: cancel, ended: make(chan struct{}), gate: true}
 
 	if id, err := dbos.GetWorkflowID(parent); err == nil {
-		e.cancels.add(id, openRun{id: id, cancel: cancel, ended: ended, gate: true})
+		a.id = id
+		e.cancels.add(a)
 	}
 
 	return run, func() {
 		cancel()
-		close(ended)
+		close(a.ended)
 	}
 }
 
@@ -162,19 +168,48 @@ func (e *Engine) reuseBeforeHost(ctx dbos.Context, in ExclusiveInput, out *Exclu
 	return true, nil
 }
 
+// queuedClaim is the claim read of an exclusive call: it waits for the claim of the run that queued the call.
+func (e *Engine) queuedClaim(in ExclusiveInput) func(context.Context) (context.Context, error) {
+	return func(ctx context.Context) (context.Context, error) {
+		claim, _, err := e.awaitClaim(ctx, PhaseInput{Run: in.Run, Item: in.RunItem})
+
+		return claim, err
+	}
+}
+
+// claimedMerge merges under the claim of the run that queued the merge.
+func (e *Engine) claimedMerge(ctx context.Context, in ExclusiveInput) (result merge.Result, err error) {
+	err = claimedCall(ctx, e.queuedClaim(in), func(c context.Context) error {
+		result, err = e.deps.Merge.Merge(c, in.Project, in.Item, in.Head, in.Settings)
+
+		return err
+	})
+
+	return result, err
+}
+
+// claimedCommand runs the program of a command job under the claim of the run that queued it.
+func (e *Engine) claimedCommand(ctx context.Context, in ExclusiveInput) (out CommandOutput, err error) {
+	err = claimedCall(ctx, e.queuedClaim(in), func(c context.Context) error {
+		out, err = e.deps.Commands.Run(c, in.Request)
+
+		return err
+	})
+
+	return out, err
+}
+
 // runCall runs the call of one kind as recorded steps and stores its result in out.
 func (e *Engine) runCall(ctx dbos.Context, in ExclusiveInput, out *ExclusiveOutput) (err error) {
 	switch in.Kind {
 	case kindGate:
 		out.Outputs, err = e.gateCall(ctx, in, out)
 	case kindMerge:
-		out.Merge, err = runStep(e, ctx, mergeStep, func(c context.Context) (merge.Result, error) {
-			return e.deps.Merge.Merge(c, in.Project, in.Item, in.Head, in.Settings)
-		})
+		out.Merge, err = runStep(e, ctx, mergeStep, func(c context.Context) (merge.Result, error) { return e.claimedMerge(c, in) })
 	case kindBatchGate:
 		out.Batch, err = e.batchGateCall(ctx, in, out)
 	case kindCommand:
-		out.Command, err = runStep(e, ctx, kindCommand, func(c context.Context) (CommandOutput, error) { return e.deps.Commands.Run(c, in.Request) })
+		out.Command, err = runStep(e, ctx, kindCommand, func(c context.Context) (CommandOutput, error) { return e.claimedCommand(c, in) })
 	default:
 		err = fmt.Errorf("an exclusive run has no kind %q", in.Kind) //nolint:err113 // a fault of the engine, not a state that a caller tests
 	}

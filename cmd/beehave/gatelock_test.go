@@ -51,7 +51,7 @@ func TestDisposableTree_AddsTheCopyOfTheGateWhileItHoldsTheLockOfTheClone(t *tes
 
 	var spans []lockSpan
 
-	_, release, err := disposableTree(t.Context(), dir, t.TempDir(), recordingLock(t, dir, &spans))
+	_, release, err := disposableTree(t.Context(), dir, t.TempDir(), gateCloneOf(dir, recordingLock(t, dir, &spans)))
 	require.NoError(t, err)
 
 	defer release()
@@ -66,7 +66,7 @@ func TestDisposableTree_RemovesTheRecordOfTheCopyWhileItHoldsTheLockOfTheClone(t
 
 	var spans []lockSpan
 
-	_, release, err := disposableTree(t.Context(), dir, t.TempDir(), recordingLock(t, dir, &spans))
+	_, release, err := disposableTree(t.Context(), dir, t.TempDir(), gateCloneOf(dir, recordingLock(t, dir, &spans)))
 	require.NoError(t, err)
 
 	spans = nil
@@ -84,12 +84,12 @@ func TestDiscard_ForgetsTheRecordOfTheCopyWhileItHoldsTheLockOfTheClone(t *testi
 
 	var spans []lockSpan
 
-	_, _, err := disposableTree(t.Context(), dir, tmp, recordingLock(t, dir, &spans))
+	_, _, err := disposableTree(t.Context(), dir, tmp, gateCloneOf(dir, recordingLock(t, dir, &spans)))
 	require.NoError(t, err)
 
 	spans = nil
 
-	assert.Empty(t, discard(t.Context(), tmp, dir, recordingLock(t, dir, &spans)))
+	assert.Empty(t, discard(t.Context(), tmp, dir, gateCloneOf(dir, recordingLock(t, dir, &spans))))
 	assert.Equal(t, []lockSpan{{before: 1, after: 0}}, spans, "the git worktree remove of the discard ran outside the lock of the clone")
 }
 
@@ -98,7 +98,7 @@ func TestGateSandbox_ARunWaitsWhileTheLockOfTheCloneIsHeldAndThenTouchesTheClone
 
 	repo := repoWithCommit(t)
 	fake := &fakeEnforcer{}
-	sb := sandboxFor(t, fake, nil)
+	sb := sandboxFor(t, fake, nil).cloneOf(repo)
 
 	held, release := make(chan struct{}), make(chan struct{})
 	holder := make(chan error, 1)

@@ -1,7 +1,9 @@
 package flow
 
 import (
+	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -120,7 +122,7 @@ func (r *agentRig) run(t *testing.T, flow, prompt string) (ItemResult, error) {
 }
 
 // crashAfterThePhaseEnded runs the flow on an engine that stops after the phase of the agent ended and before the read step is recorded.
-// The read step runs git rev-parse HEAD in the item folder. The folder config includes a named pipe, so git blocks on the pipe until a writer opens it:
+// The read step runs git rev-parse HEAD in the item folder. The HEAD file of the folder is a named pipe, so git blocks on the pipe until a writer opens it:
 // the open of the writer returns only when the read is in flight. The phase has ended by then. The engine stops while the read waits.
 //
 // Every resource has a cleanup registered before it exists, so a failed assertion or a timeout leaves nothing running or open.
@@ -135,7 +137,7 @@ func (r *agentRig) crashAfterThePhaseEnded(t *testing.T, file string) {
 func (r *agentRig) crashItemAfterThePhaseEnded(t *testing.T, item, file string) {
 	t.Helper()
 
-	// The render step reads HEAD before the agent starts, so the pipe goes into the folder config when the agent ends: the first git command that blocks is the read.
+	// The render step reads HEAD before the agent starts, so the pipe takes the place of the HEAD file when the agent ends: the first git command that blocks is the read.
 	r.crashItemAfterThePhaseEndedArmedBy(t, item, file, func(arm func()) {
 		prior := r.h.agents.result
 
@@ -152,13 +154,16 @@ func (r *agentRig) crashItemAfterThePhaseEnded(t *testing.T, item, file string) 
 	})
 }
 
-// crashItemAfterThePhaseEndedArmedBy is crashItemAfterThePhaseEnded with a choice of when the pipe goes into the folder config.
+// crashItemAfterThePhaseEndedArmedBy is crashItemAfterThePhaseEnded with a choice of when the pipe takes the place of the HEAD file.
 // It hands the arming function to armBy before the engine starts. A git command that runs after the arming blocks on the pipe, so a caller that arms
 // from inside the fake agent lets the steps before the phase run free.
 func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file string, armBy func(arm func())) {
 	t.Helper()
 
-	gate := filepath.Join(t.TempDir(), "gate")
+	// The arming moves the pipe onto the HEAD file. It is not an include of the folder config: the engine refuses a config with an include and runs no git there.
+	gate, headFile := filepath.Join(t.TempDir(), "gate"), filepath.Join(r.dir, ".git", "HEAD")
+	head, err := os.ReadFile(headFile) //nolint:gosec // a file of the test
+	require.NoError(t, err)
 	require.NoError(t, syscall.Mkfifo(gate, 0o600))
 
 	var (
@@ -168,8 +173,10 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 
 	// A writer blocked in its open returns when a reader opens the pipe. A non-blocking read open does that and never blocks itself.
 	t.Cleanup(func() {
-		if reader, err := os.OpenFile(filepath.Clean(gate), os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
-			_ = reader.Close()
+		for _, path := range []string{gate, headFile} {
+			if reader, err := os.OpenFile(filepath.Clean(path), os.O_RDONLY|syscall.O_NONBLOCK, 0); err == nil {
+				_ = reader.Close()
+			}
 		}
 
 		routines.Wait()
@@ -181,7 +188,12 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 		}
 	})
 
-	armBy(func() { gitIn(t, r.dir, "config", "--local", "include.path", gate) })
+	// A later engine of the test calls the arming again; only the first call moves the pipe.
+	var armed sync.Once
+
+	armBy(func() {
+		armed.Do(func() { assert.NoError(t, os.Rename(gate, headFile)) })
+	})
 
 	crashed, err := NewEngine(t.Context(), r.h.opts, r.h.deps())
 	require.NoError(t, err)
@@ -204,7 +216,12 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 	go func() {
 		defer routines.Done()
 
+		// When the arming has moved the pipe already, the pipe is the HEAD file.
 		pipe, openErr := os.OpenFile(filepath.Clean(gate), os.O_WRONLY, 0)
+		if errors.Is(openErr, fs.ErrNotExist) {
+			pipe, openErr = os.OpenFile(filepath.Clean(headFile), os.O_WRONLY, 0)
+		}
+
 		assert.NoError(t, openErr)
 		held <- pipe
 	}()
@@ -218,7 +235,8 @@ func (r *agentRig) crashItemAfterThePhaseEndedArmedBy(t *testing.T, item, file s
 	require.Error(t, receive(t, ran), "the stopped engine ends the run before it records the read step")
 
 	require.NoError(t, pipe.Close())
-	require.NoError(t, os.Remove(gate), "the replay reads HEAD with no gate")
+	require.NoError(t, os.Remove(headFile))
+	require.NoError(t, os.WriteFile(headFile, head, 0o600), "the replay reads HEAD with no gate") //nolint:gosec // a file of the test
 }
 
 const writeTo = "Write to {{ .output_file }}\nFix {{ .what }}.\n"
@@ -361,7 +379,7 @@ func TestAgentStep_AnOldOutputFileThatCannotBeRemovedFailsTheStep(t *testing.T) 
 	rig := newAgentRig(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(outputFile(rig.h.opts.StateDir, testItem, aStep), "inside"), 0o700))
 
-	_, err := rig.run(t, agentFlow(""), "Write to {{ .output_file }}\n")
+	_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
 
 	require.ErrorContains(t, err, "remove the old output file")
 	assert.Empty(t, rig.h.agents.seen())
@@ -374,10 +392,23 @@ func TestAgentStep_AFolderForTheOutputFileThatCannotBeMadeFailsTheStep(t *testin
 	require.NoError(t, os.MkdirAll(rig.h.opts.StateDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(rig.h.opts.StateDir, outputsFolder), nil, 0o600))
 
-	_, err := rig.run(t, agentFlow(""), "Write to {{ .output_file }}\n")
+	_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
 
 	require.ErrorContains(t, err, "make the folder of the output file")
 	assert.Empty(t, rig.h.agents.seen())
+}
+
+func TestAgentStep_ACallWithNoOutputsNeverTouchesTheOutputsFolder(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	require.NoError(t, os.MkdirAll(rig.h.opts.StateDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(rig.h.opts.StateDir, outputsFolder), nil, 0o600), "a file where the outputs folder would be")
+
+	_, err := rig.run(t, agentFlow(""), "Write to {{ .output_file }}\n")
+
+	require.NoError(t, err)
+	assert.Len(t, rig.h.agents.seen(), 1)
 }
 
 func TestAgentStep_TheOutputFileIsInTheStateFolderAndTheWorktreeStaysClean(t *testing.T) {
@@ -400,7 +431,7 @@ func TestAgentStep_TheOutputFileIsInTheStateFolderAndTheWorktreeStaysClean(t *te
 	assert.JSONEq(t, `{"verdict":"ok"}`, string(written))
 }
 
-func TestOutputFile_ASeparatorOrADotInAnItemOrAStepNeverMakesTwoPairsShareAFile(t *testing.T) {
+func TestOutputFile_ASeparatorOrADotInAnItemOrAStepNeverMakesTwoPairsShareAFolder(t *testing.T) {
 	t.Parallel()
 
 	state := t.TempDir()
@@ -409,10 +440,10 @@ func TestOutputFile_ASeparatorOrADotInAnItemOrAStepNeverMakesTwoPairsShareAFile(
 	for _, pair := range [][2]string{{"a/b", "c"}, {"a", "b/c"}, {"a.b", "c"}, {"a", "b.c"}, {"..", "a#1"}, {"a", "a#1"}} {
 		path := outputFile(state, pair[0], pair[1])
 
-		assert.Equal(t, filepath.Join(state, outputsFolder), filepath.Dir(path), "one folder holds every output file")
-		assert.False(t, seen[path], "%v shares a file", pair)
+		assert.Equal(t, filepath.Join(state, outputsFolder), filepath.Dir(filepath.Dir(path)), "the outputs folder holds the folder of every call")
+		assert.False(t, seen[filepath.Dir(path)], "%v shares a folder", pair)
 
-		seen[path] = true
+		seen[filepath.Dir(path)] = true
 	}
 }
 
@@ -425,7 +456,7 @@ func TestOutputFile_TheVerdictPathHoldsOnlyLettersDigitsAndFewMarks(t *testing.T
 	rel, err := filepath.Rel(state, path)
 	require.NoError(t, err)
 	assert.Regexp(t, `^[A-Za-z0-9._/-]+$`, rel)
-	assert.Equal(t, outputsFolder, filepath.Dir(rel), "one folder holds every output file")
+	assert.Equal(t, outputsFolder, filepath.Dir(filepath.Dir(rel)), "the outputs folder holds the folder of every call")
 }
 
 func TestAgentStep_APinOnAFolderThatIsNotARepositoryFailsTheStep(t *testing.T) {
@@ -515,6 +546,142 @@ func TestAgentStep_AMissingOrIllTypedOutputNamesTheStepAndTheOutput(t *testing.T
 
 	_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
 	require.ErrorContains(t, err, "the agent wrote no output file")
+}
+
+func TestAgentStep_AMissingOutputFileNamesTheRefusedWriteOfThatFile(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.h.agents.result = func(request AgentRequest) agent.Result {
+		denied := exited
+		denied.Denials = []agent.Denial{{Tool: "Bash", Target: "rm -rf /"}, {Tool: "Write", Target: request.OutputFile, Edit: true}, {Tool: "Write", Target: request.OutputFile + ".tmp", Edit: true}}
+
+		return denied
+	}
+
+	_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
+
+	require.Error(t, err)
+	assert.Regexp(t, `the agent wrote no output file at (\S+\.json): the permission check of the agent CLI refused the Write call that writes it`, err.Error())
+	assert.NotContains(t, err.Error(), "Bash", "a refusal of another target is left out")
+}
+
+// refusedWorkEdits makes the fake agent end with refused edits of two work files, one refused edit outside the work folder and a refused shell call.
+// With body, it also writes the output file.
+func (r *agentRig) refusedWorkEdits(body string) {
+	r.h.agents.result = func(request AgentRequest) agent.Result {
+		if body != "" {
+			r.put(outputPath(request.Prompt), body)
+		}
+
+		denied := exited
+		denied.Stderr = "⚠ Permission mode forced to default\n"
+		denied.Denials = []agent.Denial{
+			{Tool: "Edit", Target: filepath.Join(r.dir, "internal", "config", "files.go"), Edit: true},
+			{Tool: "Write", Target: filepath.Join(r.dir, "internal", "config", "buildhosts_test.go"), Edit: true},
+			{Tool: "Edit", Target: "/elsewhere/x.go", Edit: true},
+			{Tool: "Edit", Target: r.dir + "2" + string(filepath.Separator) + "x.go", Edit: true},
+			{Tool: "Write", Target: filepath.Join(r.dir, ".git", "hooks", "pre-commit"), Edit: true, Closed: true},
+			{Tool: "Bash", Target: filepath.Join(r.dir, "run.sh")},
+		}
+
+		return denied
+	}
+}
+
+func TestAgentStep_RefusedEditsOfWorkFilesFailTheStepAtOnceAndNameTheFiles(t *testing.T) {
+	t.Parallel()
+
+	for name, body := range map[string]string{"empty_output_file": "", "written_output_file": `{"verdict":"ok"}`} {
+		rig := newAgentRig(t)
+		rig.refusedWorkEdits(body)
+
+		_, err := rig.run(t, outputsFlow("3"), "Write to {{ .output_file }}\n")
+
+		require.Error(t, err, name)
+		assert.Contains(t, err.Error(), "the agent CLI refused the edits of "+
+			filepath.Join(rig.dir, "internal", "config", "buildhosts_test.go")+" and "+filepath.Join(rig.dir, "internal", "config", "files.go")+
+			", files of the work folder that the step may edit", name)
+		assert.Contains(t, err.Error(), "The agent CLI wrote on its error stream: ⚠ Permission mode forced to default", name)
+		assert.NotContains(t, err.Error(), "permission rules", "%s: the rules are not the fault, so the failure does not send the owner to them", name)
+		assert.NotContains(t, err.Error(), "/elsewhere", "%s: an edit outside the work folder is left out", name)
+		assert.NotContains(t, err.Error(), rig.dir+"2", "%s: a sibling folder whose name starts with the work folder is outside it", name)
+		assert.NotContains(t, err.Error(), "pre-commit", "%s: a refusal that a deny rule covers is left out", name)
+		assert.NotContains(t, err.Error(), "run.sh", "%s: a refused shell call is left out", name)
+		assert.Len(t, rig.h.agents.seen(), 1, "%s: a refused edit refuses again, so no try follows", name)
+	}
+}
+
+func TestAgentStep_AnEditThatADenyRuleRefusedLeavesTheOutputToDecide(t *testing.T) {
+	t.Parallel()
+
+	for name, c := range map[string]struct {
+		body, want string
+	}{
+		"valid_output_passes": {`{"verdict":"ok"}`, ""},
+		"empty_output_fails":  {"", "the agent wrote no output file"},
+	} {
+		rig := newAgentRig(t)
+		rig.h.agents.result = func(request AgentRequest) agent.Result {
+			if c.body != "" {
+				rig.put(outputPath(request.Prompt), c.body)
+			}
+
+			denied := exited
+			denied.Denials = []agent.Denial{{Tool: "Write", Target: filepath.Join(rig.dir, ".git", "hooks", "pre-commit"), Edit: true, Closed: true}}
+
+			return denied
+		}
+
+		_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
+
+		if c.want == "" {
+			require.NoError(t, err, name)
+
+			continue
+		}
+
+		require.ErrorContains(t, err, c.want, name)
+		assert.NotContains(t, err.Error(), "refused the edits of", name)
+	}
+}
+
+func TestStepResult_TheRecordedReadKeepsTheNoRetryMark(t *testing.T) {
+	t.Parallel()
+
+	raw, err := json.Marshal(stepResult{Note: "refused", Final: true})
+	require.NoError(t, err)
+
+	var replayed stepResult
+	require.NoError(t, json.Unmarshal(raw, &replayed))
+
+	assert.True(t, replayed.Final, "a replay of the read step keeps the mark, so a recovery runs no other try: %s", raw)
+}
+
+func TestPhaseOutput_TheRecordedRunKeepsTheMarksOfEachDenial(t *testing.T) {
+	t.Parallel()
+
+	denials := []agent.Denial{{Tool: "Write", Target: "/w/.git/hooks/pre-commit", Edit: true, Closed: true}, {Tool: "Edit", Target: "/w/a.go", Edit: true}}
+
+	raw, err := json.Marshal(PhaseOutput{Denials: denials})
+	require.NoError(t, err)
+
+	var replayed PhaseOutput
+	require.NoError(t, json.Unmarshal(raw, &replayed))
+
+	assert.Equal(t, denials, replayed.Denials, "a replay of the run step keeps which refusals a deny rule covers: %s", raw)
+}
+
+func TestAgentStep_RefusedEditsInAStepWithoutEditsKeepTheOutputCheck(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	rig.refusedWorkEdits("")
+
+	_, err := rig.run(t, bodyFlow("a = "+agentCallText(`outputs = ["verdict"], edits = False, `)+"\n"), "Write to {{ .output_file }}\n")
+
+	require.ErrorContains(t, err, "the agent wrote no output file")
+	assert.NotContains(t, err.Error(), "refused the edits of")
 }
 
 func TestAgentStep_OutputTriesRunTheAgentThatManyTimesInAllBeforeFailing(t *testing.T) {
@@ -1011,23 +1178,23 @@ func TestAgentStep_TheStartMarkIsTheHeadOfTheFolderAndAMarkThatGitCannotWriteIsA
 
 	dir, head := gitTree(t)
 
-	got, err := agentArgs{dir: dir}.writeStartMark(t.Context())
+	got, err := agentArgs{dir: dir, git: engineGit(dir)}.writeStartMark(t.Context())
 
 	require.NoError(t, err)
 	assert.Equal(t, head, got)
 	assert.Equal(t, head, strings.TrimSpace(gitIn(t, dir, "for-each-ref", "--format=%(objectname)", callStartRef)), "the folder holds the mark at its head")
 
-	got, err = agentArgs{dir: t.TempDir(), plain: true}.writeStartMark(t.Context())
+	got, err = agentArgs{git: engineGit(t.TempDir()), plain: true}.writeStartMark(t.Context())
 	require.NoError(t, err)
 	assert.Empty(t, got, "a plain folder has no head and no mark")
 
-	_, err = agentArgs{dir: t.TempDir()}.writeStartMark(t.Context())
+	_, err = agentArgs{git: engineGit(t.TempDir())}.writeStartMark(t.Context())
 	require.ErrorContains(t, err, "read HEAD of the item folder")
 
 	// A lock file of the ref makes git refuse the write.
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, ".git", "refs", "worktree", "beehave"), 0o750))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, ".git", "refs", "worktree", "beehave", "call-start.lock"), nil, 0o600))
 
-	_, err = agentArgs{dir: dir}.writeStartMark(t.Context())
+	_, err = agentArgs{dir: dir, git: engineGit(dir)}.writeStartMark(t.Context())
 	require.ErrorContains(t, err, "write the start mark of the item folder")
 }

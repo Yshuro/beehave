@@ -2,12 +2,10 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strings"
 	"syscall"
@@ -28,6 +26,7 @@ import (
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/preflight"
 	"github.com/tobocop2/beehave/internal/proc"
+	"github.com/tobocop2/beehave/internal/proc/gitexec"
 	"github.com/tobocop2/beehave/internal/review"
 	"github.com/tobocop2/beehave/internal/sandbox/landlock"
 )
@@ -47,12 +46,18 @@ const (
 )
 
 func TestMain(m *testing.M) {
+	// The test binary acts as the upload-pack helper of the push, as beehave does in main.
+	std := helperIO{stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr}
+	if code, helper := runUploadPack(context.Background(), os.Args, config.ProcessEnv(), machineTools(), std); helper {
+		os.Exit(code)
+	}
+
 	// The test binary also acts as the Landlock helper, as beehave does in main, for the test that runs a gate under the real enforcer.
 	if code, helper := landlock.RunHelper(os.Args, os.Stderr); helper {
 		os.Exit(code)
 	}
 
-	testscript.Main(m, map[string]func(){"beehave": e2eBeehave, "beehavereal": e2eReal, "beehaveswarm": e2eSwarm})
+	testscript.Main(m, map[string]func(){"beehave": e2eBeehave, "beehavereal": e2eReal, "beehaveswarm": e2eSwarm, "beehaveround": e2eRound})
 }
 
 // e2eBeehave is the beehave command of the scripts. It matches main, with the fake collaborators.
@@ -160,6 +165,10 @@ func (e2eFiles) Open(context.Context, string, string, flow.OpenRequest) (flow.Op
 	return flow.OpenResult{}, nil
 }
 
+func (e2eFiles) Push(context.Context, string, string, string, string, string) error { return nil }
+
+func (e2eFiles) History(context.Context, string, string) ([]model.PriorPull, error) { return nil, nil }
+
 func (f e2eFiles) Release(_ context.Context, _, item, _ string) error {
 	return f.event("release", item)
 }
@@ -176,8 +185,16 @@ func (e2eFiles) WithTree(_ context.Context, _, _ string, fn func(string)) error 
 	return nil
 }
 
+// Git runs git in the folder that e2eSetup makes, as the clone of a repos folder.
+func (e2eFiles) Git(dir string) proc.Runner {
+	return gitexec.NewRepositories(filepath.Dir(dir)).Runner(dir, 0)
+}
+
+// Heads is never read: WithTree gives no worktree.
+func (e2eFiles) Heads(context.Context, string) (string, error) { return "", nil }
+
 // Ensure gives the git folder that e2eSetup makes. The gate reads the commit of that folder.
-func (f e2eFiles) Ensure(context.Context, string, string, string) (string, error) {
+func (f e2eFiles) Ensure(context.Context, string, string, string, string) (string, error) {
 	return filepath.Join(f.dir, "tree"), nil
 }
 
@@ -209,7 +226,7 @@ func e2eHeadOf(ctx context.Context, dir string) (string, error) {
 // and a revert run in which the new test fails on the base code.
 type e2eGate struct{ dir string }
 
-func (e2eGate) Submit(_ context.Context, _, _, _, base string) (flow.GateJob, error) {
+func (e2eGate) Submit(_ context.Context, _, _, _, base, _ string) (flow.GateJob, error) {
 	return flow.GateJob{Plan: gate.Plan{Base: base}}, nil
 }
 
@@ -224,7 +241,7 @@ func (g e2eGate) Run(ctx context.Context, _, _, _ string, job flow.GateJob) (flo
 	return result, err
 }
 
-func (g e2eGate) Key(context.Context, string, string, string) (flow.GateKey, error) {
+func (g e2eGate) Key(context.Context, string, string, string, string, string) (flow.GateKey, error) {
 	return flow.GateKey{}, nil
 }
 
@@ -355,8 +372,8 @@ const e2eClaude = `#!/bin/sh
 # When the file obey-hook exists, the fake obeys --settings as Claude Code does: it runs the hook command of the settings before each Bash call.
 # A hook that exits with code 2 blocks the call: the fake adds a line to blocked.log and prints the tool_result of the refusal.
 # The implement step also makes one Bash call for each line of the file cmds, when it exists.
-# When the file edit-file exists, the implement step writes edited.txt with the Write tool. As with the real claude in print mode,
-# the write is refused unless the start arguments hold --permission-mode acceptEdits: the fake adds a line to refused.log and prints the tool_result of the refusal.
+# When the file edit-file exists, the implement step writes edited.txt with the Write tool. As with the documented mode acceptEdits of the real claude
+# in a run with no sandbox, the write is refused unless the start arguments hold --permission-mode acceptEdits: the fake adds a line to refused.log and prints the tool_result of the refusal.
 # When the file hang-session exists, the call that blocks first names the session of that file in an init line and writes the transcript of the session:
 # the prompt, under the transcript folder of the login. A call with --resume <id> adds its prompt to resumed.log.
 # A resumed call whose prompt names no step (the continue prompt) reads the prompt of the session from its transcript, as the real claude continues a session that holds its brief.
@@ -426,6 +443,10 @@ fi
 if [ "$step" = settle ]; then
   printf '{"parked":"[]"}\n' > "$(field write)"
 fi
+# A lane answers the two outputs the example declares for it: its report and the reds it did not cause. The report check of the scripts is answered by e2eCommands.
+if [ "$step" = implement ] || [ "$step" = fix ]; then
+  printf '{"report":"# Report\\n","uncaused":"[]"}\n' > "$(field write)"
+fi
 # The tool calls arrive as assistant lines of the stream, as with the real claude.
 # The fake claude calls the skill that the example requires, so the session reports it.
 # When the file no-skill exists, the fake reports no skill call, as a CLI that does not report them.
@@ -467,9 +488,9 @@ func (e2eLogins) Reset(context.Context, string, string) (time.Time, bool, error)
 // e2ePrompts replace the prompts of the example in the work folder. The workflow file is the example itself.
 var e2ePrompts = map[string]string{
 	"plan":      "step=plan\nwrite={{ .output_file }}\n",
-	"implement": "step=implement\n",
+	"implement": "step=implement\nwrite={{ .output_file }}\n",
 	"review":    "step=review\nwrite={{ .output_file }}\nseen={{ .violations }}\n",
-	"fix":       "step=fix\nround={{ .round }}\nfound={{ .findings }}\n",
+	"fix":       "step=fix\nround={{ .round }}\nwrite={{ .output_file }}\nfound={{ .findings }}\n",
 	"settle":    "step=settle\nwrite={{ .output_file }}\nruling={{ .ruling }}\n",
 	"audit":     "step=audit\nseen={{ .seen }}\n",
 }
@@ -495,9 +516,13 @@ const e2eProject = `project(
     vars = {
         "round": {"base": "integration", "owner": "owner", "lane_cap": 1, "fix_rounds": 5, "source_checkout": "/own/checkout", "label": "round"},
         "mutation_command": ["sh", "mutation.sh"],
+        "review_skill": "` + e2eSkill + `",
     },
 )
 `
+
+// e2eSkill is the skill that the project of the scripts names in vars.review_skill and that the fake claude calls.
+const e2eSkill = "the-review-skill"
 
 // exampleMain is the one entry of the example that the scripts replace.
 const exampleMain = "def main(item):"
@@ -510,19 +535,6 @@ func oneItemCopy(example string) (string, error) {
 	}
 
 	return strings.Replace(example, exampleMain, "def round_main(item):", 1) + "\n" + exampleMain + "\n    return pipeline(item)\n", nil
-}
-
-// exampleSkillCheck matches the check of the example that the implement step called a skill: "name" not in implement.skills.
-var exampleSkillCheck = regexp.MustCompile(`"([^"]+)" not in implement\.skills`)
-
-// exampleSkill is the skill that the implement step of the example text must call. The example is the one place that names it.
-func exampleSkill(example string) (string, error) {
-	match := exampleSkillCheck.FindStringSubmatch(example)
-	if match == nil {
-		return "", errors.New("the example holds no check of the skills of the implement step")
-	}
-
-	return match[1], nil
 }
 
 // e2eFile is a file of the work folder of a script; a program is a file that the script starts.
@@ -564,14 +576,9 @@ func e2eSetup(env *testscript.Env) error {
 		return err
 	}
 
-	skill, err := exampleSkill(string(example))
-	if err != nil {
-		return err
-	}
-
 	// The fake claude keeps a transcript where the adapter looks for it: the agent of the scripts runs in the work folder with the work folder as its login folder.
 	transcripts := filepath.Dir(newAdapters(nil, nil, nil).agent(claude.Name).TranscriptPath(work, work, "session"))
-	fake := strings.NewReplacer("%SKILL%", skill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
+	fake := strings.NewReplacer("%SKILL%", e2eSkill, "%TRANSCRIPTS%", transcripts).Replace(e2eClaude)
 
 	files := map[string]e2eFile{
 		"bin/claude":                {fake, true},

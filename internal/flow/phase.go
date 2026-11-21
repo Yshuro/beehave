@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -51,6 +53,10 @@ type PhaseInput struct {
 	OutputFile string   `json:"output_file,omitempty"`
 	Outputs    []string `json:"outputs,omitempty"`
 
+	// Data is the JSON text of the data keyword that the render step recorded, which the phase writes to the data file of the item and the call before each start
+	// of the agent. It is left out of a recorded phase for a call with no data.
+	Data string `json:"data,omitempty"`
+
 	// ResetPassed is true for the rerun after a provider limit whose reset time had passed. A rerun that a limit with a past reset time stops again fails.
 	// It is left out of a recorded phase for any other run.
 	ResetPassed bool `json:"reset_passed,omitempty"`
@@ -65,6 +71,9 @@ type PhaseInput struct {
 	// TreeStart is the commit that the run made the worktree of a round item at. The diff of a lost start makes a removed worktree again there.
 	// It is left out of a recorded phase for any other item.
 	TreeStart string `json:"tree_start,omitempty"`
+
+	// Base is the base branch of the round that spawned the run. A worktree that someone removed is cut there again. It is left out for any other run.
+	Base string `json:"base,omitempty"`
 }
 
 // PhaseOutput records how the agent of a phase ended. Session, Transcript, Text, Skills and Violations describe the session that ended.
@@ -78,6 +87,10 @@ type PhaseOutput struct {
 	Text       string        `json:"text,omitempty"`
 	Skills     []string      `json:"skills,omitempty"`
 	Violations []string      `json:"violations,omitempty"`
+	// Denials lists the tool calls that the permission check of the agent CLI refused. It is left out of a recorded phase that has none.
+	Denials []agent.Denial `json:"denials,omitempty"`
+	// Stderr is the redacted tail of the error stream of the agent CLI. It is left out of a recorded phase whose CLI wrote none.
+	Stderr string `json:"stderr,omitempty"`
 	// Spend is the cost of the run: the dollars that the agent CLI reported, or an estimate that beehave made from the tokens, or the mark that the cost is unknown.
 	agent.Spend
 	// Limit is the provider limit that stopped a run that ended as limited. It is left out of a recorded phase for any other run, so a stored phase keeps its form.
@@ -92,7 +105,7 @@ type PhaseOutput struct {
 
 // phase waits for a trusted claim of its run, looks at the caps, then runs the agent as a step; a cap stop ends it with the stop and no agent run.
 func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
-	claim, err := e.awaitClaim(ctx, in)
+	claim, holder, err := e.awaitClaim(ctx, in)
 	if err != nil {
 		return PhaseOutput{}, err
 	}
@@ -106,16 +119,16 @@ func (e *Engine) phase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 		return PhaseOutput{}, err
 	}
 
-	return e.agentStep(ctx, claim, in, cmp.Or(lost, in.Limited))
+	return e.agentStep(ctx, claim, holder, in, cmp.Or(lost, in.Limited))
 }
 
-// agentStep runs the agent of the phase as a step. A failed step returns no output, so it leaves the cost of the failed run in an event that the queuing run reads.
-// lost is the lost or limited run that the start follows, or nil.
-func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
+// agentStep runs the agent of the phase as a step, under the claim of the attempt holder. A failed step returns no output, so it leaves the cost of the failed run
+// in an event that the queuing run reads. lost is the lost or limited run that the start follows, or nil.
+func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, holder *attempt, in PhaseInput, lost *LostRun) (PhaseOutput, error) { //nolint:revive // ctx of the workflow first, then the context of the claim
 	var spent agent.Spend
 
 	out, err := runStep(e, ctx, agentStepName, func(c context.Context) (PhaseOutput, error) {
-		ran, runErr := e.runAgent(c, claim, in, lost)
+		ran, runErr := e.runAgent(c, claim, holder, in, lost)
 		spent = ran.Spend
 
 		return ran, runErr
@@ -131,18 +144,23 @@ func (e *Engine) agentStep(ctx dbos.Context, claim context.Context, in PhaseInpu
 // runAgent starts the agent of one phase under the context of the claim of its run, and waits for it. The agent dies with its process group when
 // the claim ends, or when the phase is canceled, times out or ends. A loss of the claim either comes first, and the start finds its context done,
 // or comes after, and the end of the context kills the group: no lock and no list of groups to kill on a loss.
-// ctx is the context of the step, which saves each session id that the agent names.
-func (e *Engine) runAgent(ctx, claim context.Context, in PhaseInput, lost *LostRun) (PhaseOutput, error) {
+// ctx is the context of the step, which saves each session id that the agent names. holder is the attempt whose claim the agent runs under: its process rows are its own.
+func (e *Engine) runAgent(ctx, claim context.Context, holder *attempt, in PhaseInput, lost *LostRun) (PhaseOutput, error) {
 	agentCtx, cancel := context.WithCancelCause(claim)
 	defer cancel(nil)
 
 	defer context.AfterFunc(ctx, func() { cancel(context.Cause(ctx)) })()
-	defer e.endGroups(in.Run)
+	defer e.endGroups(holder)
+
+	data, err := e.callFiles(in)
+	if err != nil {
+		return PhaseOutput{}, err
+	}
 
 	saver := e.saveSession(ctx, in)
 	defer saver.finish()
 
-	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, in, lost, saver.name))
+	result, err := e.deps.Agents.Run(agentCtx, e.agentRequest(ctx, holder, in, data, lost, saver.name))
 
 	out, err := e.judgePhase(ctx, in, result, err)
 	out.ResumeOf = lost.session()
@@ -167,20 +185,63 @@ func (e *Engine) judgePhase(ctx context.Context, in PhaseInput, result agent.Res
 	return out, phaseEnd(in, out, e.deps.Clock.wall())
 }
 
-// agentRequest is the request for the agent of a phase. named receives each new session id that the agent names.
-func (e *Engine) agentRequest(ctx context.Context, in PhaseInput, lost *LostRun, named func(session string)) AgentRequest {
+// agentRequest is the request for the agent of a phase. Its process groups are rows of the attempt holder. data is the data file of the phase,
+// and named receives each new session id that the agent names.
+func (e *Engine) agentRequest(ctx context.Context, holder *attempt, in PhaseInput, data string, lost *LostRun, named func(session string)) AgentRequest {
 	return AgentRequest{
-		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, in), Named: named, Lost: lost,
+		Item: in.Item, Project: in.Project, Login: in.Login, Started: e.recordGroup(ctx, holder, in), Named: named, Lost: lost,
 		Prompt: in.Prompt, Resume: in.Resume, Model: in.Model, Timeout: in.Timeout, IdleTimeout: in.IdleTimeout,
 		Forbid: in.Forbid, Protect: in.Protect, MaxBudget: in.MaxBudget, NoEdits: in.NoEdits, Sandbox: in.Sandbox, OutputFile: in.OutputFile, Outputs: in.Outputs,
+		DataFile: data,
 	}
+}
+
+// callFiles checks the output file of the phase and writes its data file, which it returns.
+func (e *Engine) callFiles(in PhaseInput) (string, error) {
+	if err := e.checkOutputFile(in); err != nil {
+		return "", err
+	}
+
+	return e.writeData(in)
+}
+
+// checkOutputFile stops a phase that declares outputs and names an output file other than the one file of the folder of its call,
+// because the sandbox opens the folder of the output file to the agent.
+func (e *Engine) checkOutputFile(in PhaseInput) error {
+	if derived := outputFile(e.dir, in.Item, in.Call); len(in.Outputs) > 0 && in.OutputFile != derived {
+		return fmt.Errorf("the agent phase of item %s names the output file %s, and the output file of this item and step is %s. The agent did not start. Run beehave cancel %s, then start a new run",
+			in.Item, in.OutputFile, derived, in.Item)
+	}
+
+	return nil
+}
+
+// writeData writes the recorded data of the phase, mode 0600, to the data file that the engine derives for the item and the call, and returns that file.
+// A phase with no data writes nothing and returns "". A phase with data and no call name stops before the agent starts.
+func (e *Engine) writeData(in PhaseInput) (string, error) {
+	if in.Data == "" {
+		return "", nil
+	}
+
+	if in.Call == "" {
+		return "", fmt.Errorf("the agent phase of item %s has data and no step name, so beehave cannot find its data file. The agent did not start. Start a new run", in.Item)
+	}
+
+	file := dataFile(e.dir, in.Item, in.Call)
+
+	err := errors.Join(os.MkdirAll(filepath.Dir(file), outputsMode), os.WriteFile(file, []byte(in.Data), dataMode), os.Chmod(file, dataMode))
+	if err != nil {
+		return "", fmt.Errorf("write the data file %s of the step: %w", file, err)
+	}
+
+	return file, nil
 }
 
 // phaseOutput records how the agent of a phase ended.
 func phaseOutput(result agent.Result) PhaseOutput {
 	return PhaseOutput{
 		Outcome: result.Outcome, ExitCode: result.ExitCode, Note: result.Note, Session: result.Session, Transcript: result.Transcript,
-		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Spend: result.Spend, Limit: result.Limit, Resumed: result.Resumed,
+		Text: result.Text, Skills: result.Skills, Violations: result.Violations, Denials: result.Denials, Stderr: result.Stderr, Spend: result.Spend, Limit: result.Limit, Resumed: result.Resumed,
 	}
 }
 
@@ -281,19 +342,19 @@ func (s *sessionSaver) finish() {
 	<-s.done
 }
 
-// recordGroup returns the function that writes the process group of an agent to the process file, under the id of the run. A failed write is logged.
-// The file serves the next start of beehave run: the next worker kills the groups that a crash left.
-func (e *Engine) recordGroup(ctx context.Context, in PhaseInput) func(pid int) {
+// recordGroup returns the function that writes the process group of an agent to the process file, under the attempt whose claim the agent runs under.
+// A failed write is logged. The file serves the next start of beehave run: the next worker kills the groups that a crash left.
+func (e *Engine) recordGroup(ctx context.Context, a *attempt, in PhaseInput) func(pid int) {
 	return func(pid int) {
-		if err := e.procs.add(ctx, in.Run, pid); err != nil {
+		if err := e.procs.add(ctx, a, pid); err != nil {
 			e.logger.WarnContext(ctx, "cannot record the agent process", "item", in.Item, "error", err)
 		}
 	}
 }
 
-// endGroups forgets the agent groups of one run in the process file.
-func (e *Engine) endGroups(run string) {
-	if err := e.procs.release(run); err != nil {
+// endGroups forgets the agent groups of one attempt in the process file.
+func (e *Engine) endGroups(a *attempt) {
+	if err := e.procs.release(a); err != nil {
 		e.logger.Warn("cannot update the agent process file", "error", err)
 	}
 }
@@ -320,7 +381,7 @@ func (e *Engine) agentQueue(noEdits bool) dbos.Queue { //nolint:ireturn // the q
 func (e *Engine) queuePhase(ctx dbos.Context, in PhaseInput) (PhaseOutput, error) {
 	in.Run = workflowID(ctx)
 
-	if err := e.claimCheck(in.Run, in.Item); err != nil {
+	if _, err := e.claimed(in.Run, in.Item); err != nil {
 		return PhaseOutput{}, err
 	}
 

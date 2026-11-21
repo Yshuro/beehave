@@ -177,17 +177,17 @@ func TestClientDays_ReadsTheRunsOfTheWindowWithTheirSpend(t *testing.T) {
 	require.Error(t, err)
 
 	client := rig.h.client(t, testVersion)
-	now := time.Now()
 
-	days, err := client.Days(DaysSince(now, 1))
+	days, err := daysFromTheRun(t, client)
 	require.NoError(t, err)
-	require.Len(t, days, 1)
-	assert.Equal(t, 1, days[0].Started)
-	assert.Equal(t, 1, days[0].Failed)
-	assert.InDelta(t, 0.75, days[0].Spent.Cost, 0)
-	assert.True(t, days[0].Spent.Estimated)
 
-	later, err := client.Days(now.Add(time.Hour))
+	total := totalOfDays(days)
+	assert.Equal(t, 1, total.Started)
+	assert.Equal(t, 1, total.Failed)
+	assert.InDelta(t, 0.75, total.Spent.Cost, 0)
+	assert.True(t, total.Spent.Estimated)
+
+	later, err := client.Days(time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	assert.Empty(t, later, "a window after the run reads no run")
 }

@@ -40,8 +40,8 @@ const (
 
 // coreVersion is the version of the core module. Version 2 added the vars field to the result of facts. Version 3 removed the round_* fields from it.
 // Version 4 records the wait:notify step at every wait, before the receive of the answer. Version 5 removed the method and board fields from the result of facts.
-// Version 6 adds the runners field to the result of facts.
-const coreVersion = 6
+// Version 6 adds the runners field to the result of facts. Version 7 adds the run and run_item fields to the input of the host job of a command call with a slot class.
+const coreVersion = 7
 
 // agentVersion is the version of the agent module. Version 2 added the limit field to the phase output, and the limit step and the later looks at the caps
 // that an agent call records when a provider limit stops its run. Version 3 added the start_head field to the phase input, the session and diff_stat fields
@@ -51,7 +51,10 @@ const coreVersion = 6
 // Version 8 added the note field to the limit record, the limited field to the phase input and the resume_of field to the phase output, so the rerun after a provider limit resumes the limited session.
 // Version 9 adds the skills field to the result of an agent call, and records the label of the call in place of its kind.
 // Version 10 removed the allow_write list from the recorded sandbox of an agent call.
-const agentVersion = 10
+// Version 11 adds the data keyword: the prompt_data output of the render step and the data and data_file fields of the phase input.
+// Version 12 adds the committed field to the result of an agent call.
+// Version 13 puts the data file in a folder of its own and removes the data_file field of the phase input: the phase derives the path.
+const agentVersion = 13
 
 // landVersion is the version of the land module. Version 2 added the approved field to each member in the recorded input of the batch steps.
 // Version 3 added the refusal field to the result of a merge, which the reason of a batch member reads.
@@ -61,14 +64,15 @@ const agentVersion = 10
 // Version 6 records the scope check of each member (batch:<call>.scope#<item>) before its intent.
 // Version 7 adds the moved field to the result of merge, and the hand-off steps batch:<call>.ready#<item> and batch:<call>.watch#<item>@<round>.
 // Version 8 removed the foreign, pr, head and author fields from the record of the preflight step.
-const landVersion = 8
+// Version 9 adds the run and run_item fields to the input of the merge of a member.
+const landVersion = 9
 
 // trackerVersion is the version of the tracker module. Version 2 retires the kind item_assign, which version 1 recorded. item_create takes an assignee.
 const trackerVersion = 2
 
 // forgeVersion is the version of the forge module. Version 2 added the pr_state step. Version 3 retires the kind pr_assign, which version 2 recorded.
-// Version 4 retires the kind board_sync, which version 3 recorded.
-const forgeVersion = 4
+// Version 4 retires the kind board_sync, which version 3 recorded. Version 5 adds the push step. Version 6 adds the pr_history step.
+const forgeVersion = 6
 
 // gateVersion is the version of the gate module. Version 3 records a lost host job in the gate step, then the wait for its proof (gate:lost-start, gate:lost-look.<k>
 // with a wait field), and in the item run the read of the proof after each answer of the owner (<call>/lost-ask.<n>).
@@ -80,7 +84,8 @@ const gateVersion = 6
 
 // roundVersion is the version of the round module. Version 2 added the step of the engine that makes the worktree at the start of every round item.
 // No builtin records that step, so a move to this build compares the round module for every run of a round item (requireSameRoundModule).
-const roundVersion = 2
+// Version 3 adds the pulls field to the result of queue and the labels field to each of its rows.
+const roundVersion = 3
 
 // stepModule is one module of the table: its version, the step kinds that it records, and the whole step names that it records with no kind in front.
 // The kinds are the kinds of its builtins. The engine kinds are kinds that the engine records for a builtin of the module, under a name that no builtin has.
@@ -108,7 +113,7 @@ func moduleTable() []stepModule {
 		},
 		{name: moduleAgent, version: agentVersion, kinds: []string{agentStepName, loginStepName}},
 		{name: moduleTracker, version: trackerVersion, kinds: []string{"item_comment", "item_create", "item_read", "item_status"}, retired: []string{"item_assign"}},
-		{name: moduleForge, version: forgeVersion, kinds: []string{"pr_comment", "pr_open", prStateKind}, retired: []string{"board_sync", "pr_assign"}},
+		{name: moduleForge, version: forgeVersion, kinds: []string{"pr_comment", prHistoryKind, "pr_open", prStateKind, pushKind}, retired: []string{"board_sync", "pr_assign"}},
 		{name: moduleLand, version: landVersion, kinds: []string{kindBatch, kindPreflight}, retired: []string{"merge"}},
 		{name: moduleGate, version: gateVersion, kinds: []string{kindGate}, retired: []string{"before_review"}},
 		{name: moduleHost, version: 1, kinds: []string{"host_teardown", "host_up"}},
@@ -127,7 +132,7 @@ func moduleOfKind(kind string) (string, bool) {
 	return "", false
 }
 
-// moduleVersions is the list of module versions of this build, such as core6.agent10.tracker2.forge4.land8.gate6.host1.round2.
+// moduleVersions is the list of module versions of this build, such as core7.agent12.tracker2.forge6.land9.gate6.host1.round3.
 func moduleVersions() string {
 	table := moduleTable()
 	parts := make([]string, len(table))

@@ -139,7 +139,7 @@ func (s *script) slotCommand(request CommandRequest, stops []int, label string) 
 
 // runCommand runs the program of a command call and records its output. A code in stops adds the stop to the record.
 func (s *script) runCommand(ctx context.Context, name string, request CommandRequest, stops []int) (stepResult, error) {
-	out, err := s.e.deps.Commands.Run(ctx, request)
+	out, err := s.writes().Run(ctx, request)
 	if err != nil {
 		return stepResult{}, err
 	}
@@ -163,18 +163,18 @@ var errStopped = errors.New("a command stopped the item")
 // gateCall unpacks the arguments of the gate builtin: the request, the head and the label.
 func (s *script) gateCall(b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (request CommandRequest, head, label string, err error) {
 	var (
-		host, timeout, base string
-		run                 starlark.Value
+		host, timeout, base, pinBase string
+		run                          starlark.Value
 	)
 
 	if err = workflow.Unpack(b.Name(), args, kwargs, map[string]any{
-		runKeyword: &run, hostKeyword: &host, timeoutKeyword: &timeout, headKeyword: &head, baseKeyword: &base, nameKeyword: &label,
+		runKeyword: &run, hostKeyword: &host, timeoutKeyword: &timeout, headKeyword: &head, baseKeyword: &base, pinBaseKeyword: &pinBase, nameKeyword: &label,
 	}); err != nil {
 		return request, head, label, err
 	}
 
 	request, err = s.request(run, host, timeout)
-	request.Base = base
+	request.Base, request.PinBase = base, pinBase
 
 	return request, head, label, err
 }
@@ -275,7 +275,7 @@ func (e *Engine) startProjectGate(ctx context.Context, request CommandRequest) (
 		return start, err
 	}
 
-	start.Job, err = e.deps.Gate.Submit(ctx, request.Project, request.Item, request.BuildHost, request.Base)
+	start.Job, err = e.deps.Gate.Submit(ctx, request.Project, request.Item, request.BuildHost, request.Base, request.PinBase)
 	start.Required = e.requiredOf(start.Job, request.Project)
 
 	return start, err
@@ -321,7 +321,7 @@ func (e *Engine) remakeTree(ctx context.Context, request CommandRequest) error {
 		return nil
 	}
 
-	if _, err := e.deps.Trees.Ensure(ctx, request.Project, request.Item, request.TreeStart); err != nil {
+	if _, err := e.deps.Trees.Ensure(ctx, request.Project, request.Item, request.TreeStart, ""); err != nil {
 		return fmt.Errorf("find the folder of item %s: %w", request.Item, err)
 	}
 
@@ -330,7 +330,7 @@ func (e *Engine) remakeTree(ctx context.Context, request CommandRequest) error {
 
 // gateKey reads the key of the project gate. A key that cannot be read is an empty key: the gate then runs and reports the same problem.
 func (e *Engine) gateKey(ctx context.Context, request CommandRequest) GateKey {
-	key, err := e.deps.Gate.Key(ctx, request.Project, request.Item, request.BuildHost)
+	key, err := e.deps.Gate.Key(ctx, request.Project, request.Item, request.BuildHost, request.Base, request.PinBase)
 	if err != nil {
 		return GateKey{}
 	}

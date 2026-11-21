@@ -119,7 +119,7 @@ func flowFactoryFrom(build func(context.Context, config.Config, flow.Options) (*
 			// The client never reads usage, so the table needs no environment.
 			table := newAdapters(proc.NewExecRunner("bd", ""), stateFolder(opts.StateDir), nil)
 
-			client, err := flow.OpenClient(ctx, opts, releaseDeps(newLife(cfg, table), cfg.Projects, opts))
+			client, err := flow.OpenClient(ctx, opts, releaseDeps(cfg, opts, table))
 			if err != nil {
 				return nil, err
 			}
@@ -169,7 +169,7 @@ func newEngineOn(ctx context.Context, cfg config.Config, opts flow.Options, read
 // depsOn builds the deps of the engine over a pool pick and a table of adapters.
 func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) flow.Deps {
 	trees := newWorktrees(cfg.Projects, opts, table.forge)
-	life := newLife(cfg, table)
+	life := newLife(cfg, table, trees)
 	commands := newPrograms(cfg, trees, cloneLock{repos: trees.repos}, table)
 
 	return flow.Deps{
@@ -177,7 +177,7 @@ func depsOn(cfg config.Config, opts flow.Options, picks logins, table adapters) 
 		Commands: commands, Items: trackerItems{projects: cfg.Projects, tracker: table.tracker},
 		Writer: trackerWriter{projects: cfg.Projects, tracker: table.tracker},
 		Reader: trackerReader{projects: cfg.Projects, tracker: table.tracker},
-		Batch:  batchHost{pulls: life.pulls, programs: commands},
+		Batch:  batchHost{pulls: life.pulls, programs: commands, base: trees},
 		Hosts:  hostStop{programs: commands},
 		Queue:  queueReads{items: trackerItems{projects: cfg.Projects, tracker: table.tracker}, pulls: life.pulls},
 		Poll:   pollReads{projects: cfg.Projects, pulls: life.pulls},
@@ -230,14 +230,18 @@ func repositoryOf(projects map[string]config.Project) func(string) bool {
 }
 
 // releaseDeps builds what the client needs: the claim to take and give back, the lease reader of a move to this build, and the worktrees.
-// The projects tell the worktrees and the release which projects have no repository, so a release never reads git in a plain folder.
-func releaseDeps(life itemLife, projects map[string]config.Project, opts flow.Options) flow.ReleaseDeps {
-	return flow.ReleaseDeps{Lifecycle: life, Beats: life, Trees: newWorktrees(projects, opts, nil), Repository: repositoryOf(projects), Merge: life}
+// The projects tell the worktrees and the release which projects have no repository, so a release never reads git in a plain folder. The forge of the
+// table gives the address at which the release reads the branches of the remote.
+func releaseDeps(cfg config.Config, opts flow.Options, table adapters) flow.ReleaseDeps {
+	trees := newWorktrees(cfg.Projects, opts, table.forge)
+	life := newLife(cfg, table, trees)
+
+	return flow.ReleaseDeps{Lifecycle: life, Beats: life, Trees: trees, Repository: repositoryOf(cfg.Projects), Merge: life}
 }
 
 // newLife builds the claim, the renewal and the forge calls of the merge step. The pull request of an item is on the branch named for the item.
-// The same value is the merger of a merge step with `merge = true`. The runners of the config count as own identities there.
-func newLife(cfg config.Config, table adapters) itemLife {
+// The same value is the merger of a merge step with `merge = true`. The runners of the config count as own identities there. A push runs in a worktree of trees.
+func newLife(cfg config.Config, table adapters, trees worktrees) itemLife {
 	runners := make([]string, len(cfg.Runners))
 	for i, runner := range cfg.Runners {
 		runners[i] = runner.Name
@@ -245,32 +249,47 @@ func newLife(cfg config.Config, table adapters) itemLife {
 
 	return itemLife{
 		leases: leases{projects: cfg.Projects, rows: table.leases, owner: ownerToken},
-		pulls:  pulls{projects: cfg.Projects, forge: table.forge, runners: runners},
+		pulls:  pulls{projects: cfg.Projects, forge: table.forge, runners: runners, trees: trees, copier: newHeadCopy()},
 	}
 }
 
 // newWorktrees finds item worktrees in the trees folder of the state folder. It adds a missing one from the clone of the project in the repos folder.
 // The client of the commands only reads worktrees; it passes the projects so that it knows which have no repository.
-// Every git call sets GIT_TERMINAL_PROMPT=0, so a private repository fails and never waits for a password.
+// Every git call sets GIT_TERMINAL_PROMPT=0, so a private repository fails and never waits for a password. A git call in the clone or a worktree is
+// local (see gitexec), so no setting in the clone config can send it to the network.
 func newWorktrees(projects map[string]config.Project, opts flow.Options, forges func(model.Project) (forge.Forge, error)) worktrees {
-	return worktrees{
-		root: filepath.Join(opts.StateDir, "trees"), repos: filepath.Join(opts.StateDir, "repos"), projects: projects, forge: forges,
-		git: func(dir string) proc.Runner {
-			runner := gitexec.New(dir, proc.DefaultTimeout)
-			runner.Env = []string{"GIT_TERMINAL_PROMPT=0"}
+	repos := reposFolder(opts.StateDir)
+	found := gitexec.NewRepositories(repos)
 
-			return runner
-		},
+	return worktrees{
+		root: filepath.Join(opts.StateDir, "trees"), repos: repos, projects: projects, forge: forges,
+		git:    func(dir string) proc.Runner { return noPrompt(found.Runner(dir, proc.DefaultTimeout)) },
+		remote: func(dir string) proc.Runner { return noPrompt(gitexec.NewRemote(dir, proc.DefaultTimeout)) },
 	}
 }
 
-// localRunner runs a program with the environment of the process. A git call runs with the hooks of the repository off.
-func localRunner(binary, dir string, timeout time.Duration) proc.Runner { //nolint:ireturn // programs.local is a func field that returns the interface
-	if binary == gitexec.Binary {
-		return gitexec.New(dir, timeout)
-	}
+// reposFolder returns the folder of the clones of the projects in the state folder.
+func reposFolder(stateDir string) string {
+	return filepath.Join(stateDir, "repos")
+}
 
-	return proc.ExecRunner{Binary: binary, Dir: dir, Timeout: timeout}
+// noPrompt sets GIT_TERMINAL_PROMPT=0 on the runner.
+func noPrompt(runner gitexec.Runner) proc.Runner { //nolint:ireturn // the worktrees take the runner as the interface
+	runner.Env = []string{"GIT_TERMINAL_PROMPT=0"}
+
+	return runner
+}
+
+// localRunner returns the runner of a program of a project with the environment of the process. A git call runs with the hooks of the repository off,
+// with the git of the project (see gitOf), and it is local (see gitexec).
+func localRunner(projects map[string]config.Project, found gitexec.Repositories) func(project, binary, dir string, timeout time.Duration) proc.Runner {
+	return func(project, binary, dir string, timeout time.Duration) proc.Runner {
+		if binary == gitexec.Binary {
+			return gitOf(projects, project, found).Runner(dir, timeout)
+		}
+
+		return proc.ExecRunner{Binary: binary, Dir: dir, Timeout: timeout}
+	}
 }
 
 // newPrograms runs command steps in the worktree of the item, or on the host of the project.
@@ -279,7 +298,7 @@ func newPrograms(cfg config.Config, trees programTrees, clones cloneLock, table 
 	return programs{
 		trees:    trees,
 		sandbox:  newGateSandbox(cfg.Projects, clones),
-		local:    localRunner,
+		local:    localRunner(cfg.Projects, gitexec.NewRepositories(clones.repos)),
 		exec:     func(spec proc.ExecRunner) proc.Runner { return spec },
 		hosts:    func(project, cluster string) (host.Host, error) { return buildHostOf(cfg, table, project, cluster) },
 		declared: func(project, cluster string) (string, error) { return declaredHostOf(cfg, project, cluster) },

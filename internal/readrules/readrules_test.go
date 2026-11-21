@@ -100,6 +100,7 @@ var rules = map[string]rule{
 	"internal/flow.reader.Parent":         {Proof: "TestItemRead_AFailedReadFailsTheStep", Needle: "err"},
 	"internal/flow.orchestrators.Others":  {Proof: "TestRun_FailsWhenTheOtherOrchestratorsCannotBeListed", Needle: "fakeOthers"},
 	"internal/flow.logins.Reset":          {Proof: "TestRateLimit_AFailedUsageReadFailsTheStepAndNamesTheLogin", Needle: "resetErr"},
+	"internal/flow.trees.Heads":           {Proof: "TestRemoveTree_KeepsTheTreeWhenTheBranchesOfTheRemoteCannotBeRead", Needle: "headsErr"},
 
 	"internal/host/skypilot.Queue.Readings": {Proof: "TestStatus_ReportsTheFailureOfSkyStatusAndOfTheQueue", Needle: "err"},
 	"internal/host/skypilot.Queue.Submit":   {Proof: queueReadProof, Needle: "Submit"},
@@ -166,6 +167,7 @@ var rules = map[string]rule{
 	"internal/flow.forge.ClosingIssues":           {NotHeld: inAdapter},
 	"internal/flow.forge.Comment":                 {NotHeld: inAdapter},
 	"internal/flow.forge.Open":                    {NotHeld: inAdapter},
+	"internal/flow.forge.History":                 {Proof: "TestPRHistory_AFailedReadStopsTheStep", Needle: "historyErr"},
 	"internal/forge.Boarder.CardStatus":           {NotHeld: inAdapter},
 	"internal/forge.Syncer.CommitsAhead":          {NotHeld: inAdapter},
 	"internal/forge.ItemReads.Item":               {NotHeld: inAdapter},

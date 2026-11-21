@@ -165,8 +165,9 @@ $(FLOW_RUN_TARGETS): test-run-flow-%:
 coverage:  ## Enforce the coverage gate on coverage.out and the flow profiles (run make test first)
 	go-test-coverage --config=.go-test-coverage.yml --profile=$(FLOW_PROFILES)
 
-smoke: build  ## Run the built binary: --version prints and exits 0
+smoke: build  ## Run the built binary: --version prints and exits 0, and the upload-pack helper of the push answers
 	$(BIN) --version | grep -q '^beehave '
+	$(BIN) --beehave-upload-pack nope / / 2>&1 | grep -q '^beehave upload-pack: '
 	$(REMEDY) --help | grep -q '^usage: remedy '
 
 smoke-agent: build  ## Run examples/local once with the real claude CLI (costs an agent run; not part of check)
@@ -192,6 +193,7 @@ mutation:
 
 # Per-PR run: mutate only the Go lines that differ from BASE, the branch the pull request targets. BASE is required: make mutation-pr BASE=origin/integration/r1
 # Needs git, go, gremlins, jq and timeout (or gtimeout) on the path; MUTATION_TIMEOUT sets the limit, a positive whole number of seconds (default 3600 when the diff changes a non-test Go file in internal/flow or below it, otherwise 1200).
+# Starts gremlins once for each changed folder (a folder below another changed folder is covered by the upper one), so the coverage run reads those packages only. MUTATION_TIMEOUT is one deadline for all starts and also the -timeout of the coverage run.
 # Fails when no mutant applies or one lives. A diff with no Go source change is not applicable and passes. A diff whose changed lines hold no operator that gremlins mutates is "no candidate" and passes.
 mutation-pr:
 	sh scripts/mutation-pr.sh "$(BASE)"

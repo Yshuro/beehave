@@ -167,3 +167,29 @@ func TestValues_AllowListRefusesTheListsThatCannotMatchAPathOfTheItemFolderAndNa
 	require.NoError(t, err, "a brace choice with no .. part, and a comma that a backslash escapes, are plain choices")
 	assert.False(t, workflow.AllowsPath(globs, "other.go"))
 }
+
+func TestDataRecord_EncodesADictOnceAsJSONAndNoneAsNoRecord(t *testing.T) {
+	t.Parallel()
+
+	dict := starlark.NewDict(2)
+	require.NoError(t, dict.SetKey(starlark.String("reds"), starlark.NewList([]starlark.Value{starlark.String("lint-a")})))
+	require.NoError(t, dict.SetKey(starlark.String("base"), starlark.String("main")))
+
+	text, err := workflow.DataRecord(dict)
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"base":"main","reds":["lint-a"]}`, text)
+
+	for name, v := range map[string]starlark.Value{"absent": nil, "None": starlark.None} {
+		text, err = workflow.DataRecord(v)
+		require.NoError(t, err, name)
+		assert.Empty(t, text, name)
+	}
+
+	_, err = workflow.DataRecord(starlark.NewList(nil))
+	require.ErrorContains(t, err, "data must be a dict, not a list")
+
+	bad := starlark.NewDict(1)
+	require.NoError(t, bad.SetKey(starlark.String("x"), starlark.Float(math.NaN())))
+	_, err = workflow.DataRecord(bad)
+	require.ErrorContains(t, err, "a value cannot go into a prompt or a request")
+}

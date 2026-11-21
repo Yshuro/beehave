@@ -144,7 +144,7 @@ File locks come from `github.com/gofrs/flock`. `flow`, `merge` and `store` open 
 
 The composition root builds the list of modules and passes it to `flow.NewEngine` in `flow.Options`. The engine builds its builtin map, its table of step kinds and its tables of signatures and results from that list. Two modules that name the same builtin or the same step kind are a start error.
 
-Today one module, built inside `flow`, holds every builtin. A table in `flow` assigns each recorded step kind to its future module (core, agent, tracker, forge, land, gate, host or round), and each of the eight modules has a version of its recorded steps. The application version holds those eight versions after the build version, such as `+core6.agent10.tracker2.forge4.land8.gate6.host1.round2`. `resume --on-this-build` compares only the modules whose kinds the run recorded. A stored version that ends in the old single version `+star30` stands for every module at version 1.
+Today one module, built inside `flow`, holds every builtin. A table in `flow` assigns each recorded step kind to its future module (core, agent, tracker, forge, land, gate, host or round), and each of the eight modules has a version of its recorded steps. The application version holds those eight versions after the build version, such as `+core7.agent12.tracker2.forge6.land9.gate6.host1.round3`. `resume --on-this-build` compares only the modules whose kinds the run recorded. A stored version that ends in the old single version `+star30` stands for every module at version 1.
 
 ### Layer 2 interfaces
 
@@ -225,7 +225,7 @@ Each item gets a plain folder under the state folder that beehave makes. Release
 
 No step reads git there:
 
-- An agent call records no start commit, and `rewrote` is false.
+- An agent call records no start commit, and `rewrote` and `committed` are false.
 - `pin` and `allow_paths` are refused.
 - A cancel or a release with no engine running reads no git.
 - The builtins `merge` and `preflight`, and a `gate` call with no `run`, refuse the project with a plain message.

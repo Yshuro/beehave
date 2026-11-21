@@ -42,7 +42,7 @@ func (u unconfined) Check() error { return u.checkErr }
 
 func (unconfined) Run(ctx context.Context, _ sandbox.Plan, _ int, cmd sandbox.Command) (int, error) {
 	child := exec.CommandContext(ctx, cmd.Argv[0], cmd.Argv[1:]...) //nolint:gosec // a test runs the command of its own plan
-	child.Dir, child.Env, child.Stdout, child.Stderr = cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr
+	child.Dir, child.Env, child.Stdin, child.Stdout, child.Stderr = cmd.Dir, cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr
 
 	err := child.Run()
 
@@ -116,6 +116,7 @@ func TestChecks_PassForTheOnesAnUnconfinedEnforcerCannotBreakAndFailForTheRest(t
 		{"a plan with no network still connects without a sandbox", noNetwork, true},
 		{"a unix socket outside the plan is reached without a sandbox", unixSocket, true},
 		{"a new top-level file is made without a sandbox", wholeFolder, false},
+		{"the stdin reaches the command without a sandbox", stdin, false},
 	}
 
 	for _, c := range cases {
@@ -149,6 +150,26 @@ func TestWholeFolder_FailsForAnEnforcerThatCannotMakeANewTopLevelEntry(t *testin
 
 	if len(r.errors) != 2 {
 		t.Errorf("the check reported %q, want one failure for the make and one for the remove", r.errors)
+	}
+}
+
+// noInput is an enforcer that runs the command with no standard input, as one that drops the stdin of the command would.
+type noInput struct{ unconfined }
+
+func (n noInput) Run(ctx context.Context, plan sandbox.Plan, port int, cmd sandbox.Command) (int, error) {
+	cmd.Stdin = nil
+
+	return n.unconfined.Run(ctx, plan, port, cmd)
+}
+
+func TestStdin_FailsForAnEnforcerThatDropsTheInputOfTheCommand(t *testing.T) {
+	t.Parallel()
+
+	r := &recorder{t: t}
+	stdin(r, noInput{})
+
+	if len(r.errors) != 1 || !strings.Contains(r.errors[0], "on its stdin") {
+		t.Errorf("the check reported %q, want one failure for the stdin", r.errors)
 	}
 }
 

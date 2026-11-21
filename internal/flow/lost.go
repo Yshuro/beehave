@@ -265,7 +265,7 @@ func (e *Engine) lostDiff(ctx context.Context, in PhaseInput) (string, lostView,
 		return "", view, err
 	}
 
-	out, err := git(ctx, dir, "diff", "--stat", "--stat-count="+strconv.Itoa(diffStatFiles), in.StartHead)
+	out, err := git(ctx, e.deps.Trees.Git(dir), "diff", "--stat", "--stat-count="+strconv.Itoa(diffStatFiles), in.StartHead)
 	if err != nil {
 		return "", viewUnread, fmt.Errorf("read the diff summary of the item folder: %w", err)
 	}
@@ -276,7 +276,7 @@ func (e *Engine) lostDiff(ctx context.Context, in PhaseInput) (string, lostView,
 // lostFolder returns the folder of the lost call with viewDiff when it holds the start mark of the call at the start commit. The folder comes from
 // the same call as the folder of the agent call, so a removed worktree of a round item is made again at its tree start here, without the mark.
 func (e *Engine) lostFolder(ctx context.Context, in PhaseInput) (string, lostView, error) {
-	dir, err := e.deps.Trees.Ensure(ctx, in.Project, in.Item, in.TreeStart)
+	dir, err := e.deps.Trees.Ensure(ctx, in.Project, in.Item, in.TreeStart, in.Base)
 	if err != nil {
 		return "", viewUnread, fmt.Errorf("find the folder of item %s: %w", in.Item, err)
 	}
@@ -285,7 +285,7 @@ func (e *Engine) lostFolder(ctx context.Context, in PhaseInput) (string, lostVie
 		return "", viewOtherTree, nil
 	}
 
-	mark, err := git(ctx, dir, "for-each-ref", "--format=%(objectname)", callStartRef)
+	mark, err := git(ctx, e.deps.Trees.Git(dir), "for-each-ref", "--format=%(objectname)", callStartRef)
 	if err != nil {
 		return "", viewUnread, fmt.Errorf("read the start mark of the item folder: %w", err)
 	}

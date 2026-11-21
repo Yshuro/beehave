@@ -27,7 +27,8 @@ project(
     # vars = {
     #     "people": {"owner": "your-login", "third_party_idle_hours": "24"},  # a role to a login. The entry third_party_idle_hours is text, not a number: the idle hours after which a pull request of a third party counts as stale
     #     "epics": {"bugs": "proj-1"},                  # a queue name to its epic
-    #     "gate_files": [".github/workflows/ci.yml"],   # the workflow files that the list of gate commands comes from
+    #     "gate_files": [".github/workflows/ci.yml"],   # the CI workflow files that the round derives its gate list from; the project then needs gate_steps. A job that can write or reads a secret, and a step that uses an action, are left out of the list and named in the output
+    #     "gate_map": {"make test": ["test"], "go install x@v1": []},  # each derived CI command, exactly as the list prints it (the run text, then its shell, folder, env names, container, continue-on-error and if when set), to the gate_steps that run it, or [] when it is not a check; the round stops when a command has no key, a key is stale or a name is no gate step
     #     "conventions": ["AGENTS.md"],                 # the files to review against
     #     "brief_rules": ["Name the tempting wrong fix"],     # rules for the brief of an agent
     #     "stacked_rules": ["Merge the base pull request first"],  # rules for a pull request that stacks on another
@@ -36,6 +37,7 @@ project(
     #     "token_rules": ["Read a log by its summary lines"],  # token discipline, the dashboard, cross-repository steps and release steps
     #     "changelog": "CHANGELOG.md",                  # the changelog file; the example workflow refuses a merge that leaves it untouched
     #     "mutation_command": ["sh", "scripts/mutation-pr.sh"],  # required by the example: the command of your mutation tool, a list of words. It runs on the build host in the slot class "mutation" (see the host block below), with the base ref as its last word
+    #     "review_skill": "your-review-skill",  # required by the example: the name of the skill that the implement step must call before it reports. The example refuses an implement step whose agent did not call it
     #     "board": {
     #         "number": 3,                  # the number of the GitHub Project (v2) board; required
     #         "started": "In Progress",     # the Status column that the remediation example sets when the draft pull request opens; required

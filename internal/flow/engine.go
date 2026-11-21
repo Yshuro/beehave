@@ -146,7 +146,7 @@ type store struct {
 	log *os.File
 }
 
-// openStore creates the state folder and opens the log file at mode 0600.
+// openStore creates the state folder, resolves it to its real path and opens the log file at mode 0600. Every path of the engine is built from that real path.
 func openStore(opts Options) (store, error) {
 	if err := opts.validate(); err != nil {
 		return store{}, err
@@ -156,12 +156,23 @@ func openStore(opts Options) (store, error) {
 		return store{}, err
 	}
 
-	log, err := os.OpenFile(filepath.Join(opts.StateDir, logFileName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, logFileMode)
+	return openStoreAt(opts.StateDir, filepath.EvalSymlinks)
+}
+
+// openStoreAt opens the log file of a state folder that exists. evalLinks resolves every link of the folder path.
+// The OS compares real paths, so a path with a link in it opens nothing in the sandbox of an agent step.
+func openStoreAt(state string, evalLinks func(string) (string, error)) (store, error) {
+	dir, err := evalLinks(state)
+	if err != nil {
+		return store{}, fmt.Errorf("resolve the state folder %s: %w", state, err)
+	}
+
+	log, err := os.OpenFile(filepath.Clean(filepath.Join(dir, logFileName)), os.O_APPEND|os.O_CREATE|os.O_WRONLY, logFileMode)
 	if err != nil {
 		return store{}, fmt.Errorf("open the log file: %w", err)
 	}
 
-	return store{dir: opts.StateDir, url: stateScheme + filepath.Join(opts.StateDir, databaseFile), log: log}, nil
+	return store{dir: dir, url: stateScheme + filepath.Join(dir, databaseFile), log: log}, nil
 }
 
 // Engine runs the item workflows. Call NewEngine, then Launch, then Run for each item, then Shutdown.
@@ -303,7 +314,7 @@ func claimFolder(dir, version, mode string) (*flock.Flock, error) {
 func newEngine(opts Options, deps Deps, state store, held *flock.Flock, registry step.Registry) *Engine {
 	engine := &Engine{
 		registry: registry, deps: deps, maxConcurrent: opts.MaxConcurrent, perLogin: cmp.Or(opts.PerLogin, config.DefaultPerLogin), maxRunBudget: opts.MaxRunBudget, maxTreeBudget: opts.MaxTreeBudget, reviewPoll: opts.ReviewPoll, reviewLookbackDays: cmp.Or(opts.ReviewLookbackDays, config.DefaultReviewLookbackDays), retention: opts.Retention, keepRuns: opts.KeepRuns, overCap: opts.OverCap, setSchedule: (*Engine).schedulePoll, env: opts.Env, version: applicationVersion(opts.Version), dir: state.dir, log: state.log, lock: held, logger: newLogger(state.log), redact: agent.Redactor(),
-		procs: &groups{path: groupsFile(opts.StateDir)}, tickEnd: make(chan struct{}), progress: &progress{out: opts.Progress},
+		procs: &groups{path: groupsFile(state.dir)}, tickEnd: make(chan struct{}), progress: &progress{out: opts.Progress},
 	}
 	engine.progress.redact = engine.redact
 

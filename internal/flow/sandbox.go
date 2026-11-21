@@ -120,7 +120,7 @@ const (
 	recordedLabel = "label"
 )
 
-// recalledOutputFile reads the output file that the render step recorded. A record made before the path was pinned has none, and the caller keeps the computed path.
+// recalledOutputFile reads the output file that the render step recorded, which a replay keeps. A record made before the path was pinned has none, and the caller keeps the computed path.
 func recalledOutputFile(outputs map[string]any, computed string) string {
 	if file, ok := outputs[recordedOutputFile].(string); ok && file != "" {
 		return file
@@ -153,4 +153,40 @@ func recalledSandbox(outputs map[string]any) (*model.Sandbox, error) {
 	}
 
 	return &box, nil
+}
+
+// recordedPromptData is the name of the output of the render step that holds the data of a call. A call with no data records none.
+// The name sorts after the login and the model, so the clipped line of a dry run still shows both.
+const recordedPromptData = "prompt_data"
+
+// promptData is the recorded data of a call: the file that the recorded prompt names, and the JSON text that the phase writes to it.
+type promptData struct {
+	File string `json:"file"`
+	Text string `json:"text"`
+}
+
+// recordData writes the data of a call and its file as the output of the render step, in the text a replay reads. A call with no data writes nothing.
+func recordData(data promptData) map[string]any {
+	if data.File == "" {
+		return nil
+	}
+
+	raw, _ := json.Marshal(data) //nolint:errcheck // two strings always encode
+
+	return map[string]any{recordedPromptData: string(raw)}
+}
+
+// recalledData reads the data that the render step recorded. A record without it is a call with no data.
+func recalledData(outputs map[string]any) (promptData, error) {
+	raw, ok := outputs[recordedPromptData].(string)
+	if !ok {
+		return promptData{}, nil
+	}
+
+	var data promptData
+	if err := json.Unmarshal([]byte(raw), &data); err != nil {
+		return promptData{}, fmt.Errorf("read the recorded data of the step: %w", err)
+	}
+
+	return data, nil
 }

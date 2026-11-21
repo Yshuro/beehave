@@ -3,10 +3,12 @@ package flow
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,7 +33,12 @@ type fakeCommands struct {
 	before func(ctx context.Context, request CommandRequest) error
 }
 
+// Run refuses a context that is done before the program starts, as exec.Cmd.Start does.
 func (c *fakeCommands) Run(ctx context.Context, request CommandRequest) (CommandOutput, error) {
+	if err := ctx.Err(); err != nil {
+		return CommandOutput{}, err
+	}
+
 	if c.before != nil {
 		if err := c.before(ctx, request); err != nil {
 			return CommandOutput{}, err
@@ -72,9 +79,19 @@ type fakeItems struct {
 	// failFor is an item whose read fails, while the read of every other item works.
 	failFor string
 	err     error
+	// numbersOnly refuses an id that is not an issue number.
+	numbersOnly bool
+	// reads counts the calls of Fields.
+	reads atomic.Int32
 }
 
 func (i *fakeItems) Fields(_ context.Context, _, item string) (map[string]string, error) {
+	i.reads.Add(1)
+
+	if i.numbersOnly && !model.IsDigits(item) {
+		return nil, fmt.Errorf("REFUSE: %q is not an issue number", item)
+	}
+
 	if item != "" && item == i.failFor {
 		return nil, errFake
 	}

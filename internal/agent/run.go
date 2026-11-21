@@ -109,8 +109,10 @@ type Result struct {
 	Text       string
 	Skills     []string
 	Violations []string
-	Limit      *Limit
-	Resumed    bool
+	// Denials lists the tool calls of the run that the permission check of the CLI refused, as its result line reports them. The caller sets it.
+	Denials []Denial
+	Limit   *Limit
+	Resumed bool
 	// GuardMissing is true when the launch named a marker file for its hook (Launch.Loaded) and the file was not there when the run ended: the hook did not load,
 	// so the CLI ran its shell commands with no check. The runner sets it; the caller turns it into a violation.
 	GuardMissing bool
@@ -357,7 +359,10 @@ func argsOf(spec Spec, p Profile, launch Launch, later []string) []string {
 func launchOf(spec Spec, runDir string) Launch {
 	switch {
 	case spec.Sandbox != nil:
-		return spec.Adapter.Sandbox(*spec.Sandbox, spec.Guard, runDir)
+		plan := *spec.Sandbox
+		plan.Edits = !spec.NoEdits
+
+		return spec.Adapter.Sandbox(plan, spec.Guard, runDir)
 	case spec.Guard != "":
 		return spec.Adapter.Guard(spec.Guard, runDir)
 	}

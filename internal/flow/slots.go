@@ -28,7 +28,7 @@ func (e *Engine) queueSlotCommand(run dbos.Context, request CommandRequest) (Com
 		return CommandOutput{}, err
 	}
 
-	in := ExclusiveInput{Kind: kindCommand, Project: request.Project, Item: request.Item, HostKey: hostKeyPrefix + grant.Host, Request: request}
+	in := ExclusiveInput{Kind: kindCommand, Run: workflowID(run), RunItem: request.Item, Project: request.Project, Item: request.Item, HostKey: hostKeyPrefix + grant.Host, Request: request}
 
 	var out ExclusiveOutput
 

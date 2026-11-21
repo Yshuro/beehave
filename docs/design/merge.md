@@ -419,9 +419,11 @@ Five results hold the round. Each has a reason:
 
 The round reads the count of the engine: the `host_losses` of each child value, of the landing and of the sync gate. It keeps the highest as `seen`, and no count of its own. A child that stopped at the limit returns the reason `host-loss` and its count, and its item gets no comment and no hold status. After the answer CONTINUE to a `host-loss` hold, the round asks again only when `seen` is higher than it was at the answer.
 
-A landing that ends `stale` or `head-moved` holds nothing: the same pass goes on to `queue-audit-<n>` on the round base as it is, with the folder of the round still at the sync head, and the next pass syncs again.
+A landing that ends `stale` or `head-moved` holds nothing: the same pass goes on to `round-queue-<n>` and `queue-audit-<n>` on the round base as it is, with the folder of the round still at the sync head, and the next pass syncs again.
 
 A held round starts no sync and no item in a later pass. It gathers and lands the child runs that are open, so it never returns while one is open. A step that stops the run, such as an exit code 2 of `sync-<n>` in a later pass, ends the round with its open runs. With none open, it waits in `round-wait` with a question that names the reason and what the owner does. CONTINUE starts a pass that checks the trunk again. STOP or the timeout returns `{"state": "waiting", "base": ..., "pr": ..., "reason": <reason>}`; the reason is an empty text when no sync held the round.
+
+When no sync held the round and no item can move, the question names each listed item, its state and the step of the owner: `beehave resume <item>` for a failed item, then `beehave cancel <item>` when the resume refuses the run, so the next pass starts a new attempt. A round with no item list gets the count of the rows in each state and the ids of the failed rows. The round starts no new attempt for a failed item on its own.
 
 ### `remedy audit`
 
@@ -514,7 +516,7 @@ A pass is exit code 0. A gate that holds the brief back is exit code 1, with the
 | `remedy handoff <file> [--name <text>] [--transcript <file>] [--cap <tokens>]` | Checks a handoff | A refused handoff | |
 | `remedy authors <file> --email <address> --login <name>` | Checks `<sha> <email> <login>` lines against the identity of the owner | A commit of the owner under another address | A missing identity or an empty file |
 | `remedy spend <transcript> [--hours <n>] [--cap <tokens>]` | Prints the hour table and one row for each lane | A lane over the cap | |
-| `remedy gatelist <file>` | Reads a gate list | | A list that states no usable step |
+| `remedy gatelist [--steps <name>]... [--map <json>] <workflow-file>...` | Derives the gate steps from the run steps of the CI workflow files, and names the steps and jobs that it leaves out | `--steps`, `--map`: the gate step names of the round and the `gate_map` of the project | A file that is not a workflow, files that give no step, a map that does not match the derived commands, a map of another form or given twice, a map with no gate steps |
 | `remedy job <script> --list <file> [--job-dir <folder>]` | Checks a host job against the gate list | A defect in the job | A gate list that cannot be read |
 | `remedy report <file> --head <sha>` | Checks the four tables of a lane report | A defect | |
 

@@ -19,7 +19,6 @@ import (
 	gatepkg "github.com/tobocop2/beehave/internal/gate"
 	"github.com/tobocop2/beehave/internal/model"
 	"github.com/tobocop2/beehave/internal/review"
-	"github.com/tobocop2/beehave/internal/workflow"
 )
 
 func mustRead(t *testing.T, path string) []byte {
@@ -40,10 +39,10 @@ const fullReview = "The scope of this review: the whole pull request"
 func exampleProject() model.Project {
 	return model.Project{
 		Name: testProject, Repo: "o/r", BaseBranch: "main",
-		Vars: roundVars(map[string]any{
+		Vars: with(roundVars(map[string]any{
 			"base": "integration", "owner": "owner", "owner_email": "owner@example.com", "source_checkout": "/own/checkout",
 			"lane_cap": json.Number("3"), "fix_rounds": json.Number("5"), "label": "beehave-round", "steps": exampleSteps(),
-		}),
+		}), map[string]any{"review_skill": exampleSkill}),
 	}
 }
 
@@ -154,7 +153,7 @@ func exampleRigLimited(t *testing.T, verdicts, findings, mechanisms func(review 
 	folder := t.TempDir()
 	require.NoError(t, os.CopyFS(folder, os.DirFS(filepath.Join("..", "..", "examples", "remediation"))))
 
-	skill := exampleSkill(t)
+	skill := exampleSkill
 
 	rig := newAgentRig(t)
 	rig.h.mutation = exampleMutationCommand
@@ -205,11 +204,9 @@ func (rig *agentRig) answerLikeTheExample(skill string, verdicts, findings, mech
 			}
 		}
 
-		if !strings.Contains(request.Prompt, reviewMarker) && slices.Contains(request.Outputs, "regressions") {
-			rig.put(request.OutputFile, `{"regressions":"0"}`)
+		if !strings.Contains(request.Prompt, reviewMarker) {
+			rig.putDeclared(request)
 		}
-
-		putNoParked(rig, request)
 
 		if strings.Contains(request.Prompt, designMarker) {
 			rig.put(promptOutput(request.Prompt), design)
@@ -227,22 +224,58 @@ func promptOutput(prompt string) string {
 	return path
 }
 
-// putNoParked makes the settle agent of the example rig leave no finding open: a request that declares the output `parked` gets an empty list.
-func putNoParked(rig *agentRig, request AgentRequest) {
-	if slices.Contains(request.Outputs, "parked") {
-		rig.put(request.OutputFile, `{"parked":"[]"}`)
+// cleanLaneReport is the report that a lane of the example rig writes: the four tables and the background line. The kind is the lane that wrote it, so a test tells the reports apart.
+func cleanLaneReport(kind string) string {
+	return "# Report of the " + kind + " lane\n\n## Claims\n| Claim | Where | Evidence | Verified at |\n|---|---|---|---|\n| none: " + kind + " | none | none | none |\n\n" +
+		"## Hunks\n| Hunk | Arm | Red test line |\n|---|---|---|\n| none: " + kind + " | none | none |\n\n## Inputs\n| Input class | Base | Head | Test |\n|---|---|---|---|\n| none: " + kind + " | none | none | none |\n\n" +
+		"## Siblings\n| Site | Same behavior | Updated |\n|---|---|---|\n| none: " + kind + " | none | none |\n\nno background commands left\n"
+}
+
+// laneKind names the lane that a request of the example rig starts, by a phrase of its prompt.
+func laneKind(request AgentRequest) string {
+	if strings.Contains(request.Prompt, fixMarker) {
+		return "fix"
 	}
+
+	return "implement"
 }
 
-// exampleSkill is the one skill that the implement step of the example must call. The test reads it from the workflow file, which is the one place that names it.
-func exampleSkill(t *testing.T) string {
-	t.Helper()
+// putDeclared makes a request of the example rig that is no review answer each output it declares with a clean value: a count of none, no parked
+// finding, no red that the lane did not cause and a whole report. The outputs of a review and of the design step are written by their own rules.
+// The file holds no value for any other name, so the engine runs the step again on the missing output while output_tries allows,
+// then fails the run, until this table knows it.
+func (rig *agentRig) putDeclared(request AgentRequest) {
+	clean := map[string]string{"regressions": "0", "parked": "[]", "uncaused": "[]", "report": cleanLaneReport(laneKind(request))}
+	answer := map[string]string{}
 
-	skills := workflow.RequiredSkills(filepath.Join("..", "..", "examples", "remediation", "workflow.star"))
-	require.Len(t, skills, 1, "the example checks for one skill")
+	for _, name := range request.Outputs {
+		value, known := clean[name]
 
-	return skills[0]
+		if known {
+			answer[name] = value
+		}
+	}
+
+	if len(answer) == 0 {
+		return
+	}
+
+	rig.putOutputs(request.OutputFile, answer)
 }
+
+// putOutputs writes the outputs of a fake agent as the JSON object that the agent step reads. An encoding error is kept like a failed write, and run reports it.
+func (rig *agentRig) putOutputs(path string, outputs map[string]string) {
+	text, err := json.Marshal(outputs)
+
+	rig.mu.Lock()
+	rig.failed = append(rig.failed, err)
+	rig.mu.Unlock()
+
+	rig.put(path, string(text))
+}
+
+// exampleSkill is the skill that the project of the example rig names in vars.review_skill, and that the fake agent reports.
+const exampleSkill = "the-review-skill"
 
 // openOf is the output open that a review writes for a list of findings: empty for none, else a line.
 func openOf(findings string) string {
@@ -589,7 +622,7 @@ type packageGate struct {
 	runs       *int
 }
 
-func (packageGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (packageGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 
@@ -646,7 +679,7 @@ type hostDiedGate struct {
 	waits      *int
 }
 
-func (hostDiedGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (hostDiedGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 
@@ -677,7 +710,7 @@ type zeroTestGate struct {
 	runs            *int
 }
 
-func (zeroTestGate) Submit(context.Context, string, string, string, string) (GateJob, error) {
+func (zeroTestGate) Submit(context.Context, string, string, string, string, string) (GateJob, error) {
 	return GateJob{}, nil
 }
 

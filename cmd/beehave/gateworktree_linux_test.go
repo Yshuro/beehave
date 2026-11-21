@@ -15,7 +15,9 @@ import (
 // makes and removes a new top-level file and folder, and every write that would land in a place where a hook runs later is refused: the hooks folder of the
 // git folder, the folder that core.hooksPath names, and the hook folders of the real work folder.
 func TestGateSandbox_TheLandlockEnforcerLetsAGateMakeAnyNewEntryAndNeverReachesTheRealHooks(t *testing.T) {
-	t.Parallel()
+	// The hooks folder comes from the global config: a core.hooksPath in the clone config is a setting that the engine refuses.
+	global := filepath.Join(t.TempDir(), "gitconfig")
+	t.Setenv("GIT_CONFIG_GLOBAL", global)
 
 	if err := landlock.New().Check(); err != nil {
 		t.Skipf("Landlock cannot run on this machine: %v", err)
@@ -23,9 +25,9 @@ func TestGateSandbox_TheLandlockEnforcerLetsAGateMakeAnyNewEntryAndNeverReachesT
 
 	dir := repoWithCommit(t)
 	hooksTarget := t.TempDir()
-	runGit(t, dir, "config", "core.hooksPath", hooksTarget)
+	runGit(t, dir, "config", "--file", global, "core.hooksPath", hooksTarget)
 
-	box := sandboxFor(t, landlock.New(), nil)
+	box := sandboxFor(t, landlock.New(), nil).cloneOf(dir)
 	env := []string{"PATH=/usr/bin:/bin"}
 
 	out, code := box.run(t.Context(), "p", dir, []string{"sh", "-c", "echo x > coverage.out && mkdir bin node_modules && echo y > bin/tool && rm -r bin node_modules coverage.out"}, env, 0)

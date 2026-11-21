@@ -147,7 +147,7 @@ func TestRemoveTree_KeepsTheTreeWhenTheRemoteDoesNotAnswerInTime(t *testing.T) {
 	t.Parallel()
 
 	r := newRepos(t)
-	gitIn(t, r.tree, "config", "protocol.ext.allow", "always")
+	// The fake trees allow the ext transport for the read of the branches; a protocol setting in the clone config is one the engine refuses.
 	gitIn(t, r.tree, "remote", "set-url", "origin", "ext::sleep "+strconv.Itoa(remoteSleepSeconds))
 
 	const limit = 300 * time.Millisecond
@@ -160,6 +160,19 @@ func TestRemoveTree_KeepsTheTreeWhenTheRemoteDoesNotAnswerInTime(t *testing.T) {
 	// A call that ignores the clock limit ends at releaseTimeout, so the slack must stay below it.
 	assert.Less(t, time.Since(started), limit+releaseSlack, "the call ends at the clock limit, not at the default timeout or when the remote answers")
 	assert.DirExists(t, r.tree)
+}
+
+func TestRemoveTree_KeepsTheTreeWhenTheBranchesOfTheRemoteCannotBeRead(t *testing.T) {
+	t.Parallel()
+
+	r := newRepos(t)
+	engine := &Engine{deps: Deps{Trees: fakeTrees{dir: r.tree, headsErr: errFake}}}
+
+	kept, err := engine.removeTree(t.Context(), testProject, testItem)
+
+	require.NoError(t, err)
+	assert.Equal(t, "git could not read the branches of the remote: "+errFake.Error(), kept, "a tip that the remote read did not confirm is unknown")
+	assert.DirExists(t, r.tree, "the release keeps the tree, although the branches it got show its head")
 }
 
 func TestRemoveTree_KeepsTheTreeOnAGitError(t *testing.T) {
@@ -235,6 +248,46 @@ func (l lockedTrees) WithTree(_ context.Context, _, _ string, fn func(dir string
 	*l.unlocks++
 
 	return nil
+}
+
+func (lockedTrees) Git(dir string) proc.Runner { return engineGit(dir) }
+
+func (addressTrees) Git(dir string) proc.Runner { return engineGit(dir) }
+
+func (l lockedTrees) Heads(ctx context.Context, _ string) (string, error) {
+	return git(ctx, engineGit(l.dir), "ls-remote", "--heads", remoteName)
+}
+
+// addressTrees gives one worktree and reads the branches of the remote from the address that the engine holds, as the worktrees of the engine do.
+type addressTrees struct {
+	dir     string
+	address string
+}
+
+func (a addressTrees) WithTree(_ context.Context, _, _ string, fn func(dir string)) error {
+	fn(a.dir)
+
+	return nil
+}
+
+func (a addressTrees) Heads(ctx context.Context, _ string) (string, error) {
+	return git(ctx, engineGit(a.dir), "ls-remote", "--heads", a.address)
+}
+
+func TestRemoveTree_ReadsTheBranchesOfTheRemoteFromTheTreesAndNotFromTheRemoteThatTheCloneNames(t *testing.T) {
+	t.Parallel()
+
+	r := newRepos(t)
+	decoy := filepath.Join(t.TempDir(), "decoy.git")
+	require.NoError(t, os.Mkdir(decoy, 0o700))
+	gitIn(t, decoy, "init", "--bare", "-b", "main")
+	gitIn(t, r.main, "remote", "set-url", "origin", decoy)
+
+	kept, err := ReleaseDeps{Trees: addressTrees{dir: r.tree, address: r.remote}}.removeTree(t.Context(), testProject, testItem)
+
+	require.NoError(t, err)
+	assert.Empty(t, kept, "the release reads the remote at the address of the trees, which holds the head of the item")
+	assert.NoDirExists(t, r.tree)
 }
 
 func TestRemoveTree_RemovesTheWorktreeBeforeItGivesTheLockOfTheCloneBack(t *testing.T) {

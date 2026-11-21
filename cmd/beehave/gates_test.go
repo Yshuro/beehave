@@ -29,8 +29,8 @@ type gateCalls struct {
 }
 
 // gateRunner returns a local runner that answers `git rev-parse` with head, `git status` with the status of calls, and any other program with gate.
-func gateRunner(calls *gateCalls, head, gate model.CommandResult) func(string, string, time.Duration) proc.Runner {
-	return func(binary, dir string, _ time.Duration) proc.Runner {
+func gateRunner(calls *gateCalls, head, gate model.CommandResult) func(string, string, string, time.Duration) proc.Runner {
+	return func(_, binary, dir string, _ time.Duration) proc.Runner {
 		return recording{run: func(args []string) model.CommandResult {
 			calls.binaries = append(calls.binaries, binary)
 			calls.dirs = append(calls.dirs, dir)
@@ -85,7 +85,7 @@ func TestProjectGate_AnAnswerWithoutTheHeadAndTheTreeFailsTheGateBeforeItRuns(t 
 	t.Parallel()
 
 	calls := &gateCalls{}
-	local := func(binary, _ string, _ time.Duration) proc.Runner {
+	local := func(_, binary, _ string, _ time.Duration) proc.Runner {
 		return recording{run: func(args []string) model.CommandResult {
 			calls.binaries = append(calls.binaries, binary)
 
@@ -155,13 +155,32 @@ func TestProjectGate_KeyNamesTheHeadAndTheTreeAndStartsNoGate(t *testing.T) {
 		programs: programs{trees: treeAt("/tree"), local: gateRunner(calls, model.CommandResult{Stdout: "abc123\n"}, model.CommandResult{Stdout: "ok"})},
 	}
 
-	got, err := gate.Key(t.Context(), "p", "1", "")
+	got, err := gate.Key(t.Context(), "p", "1", "", "", "")
 
 	require.NoError(t, err)
 	assert.NotEmpty(t, got.ID)
 	assert.Equal(t, "abc123", got.Head)
 	assert.Equal(t, "tree-of-abc123", got.Tree)
 	assert.NotContains(t, calls.binaries, "sh", "a key never runs the gate")
+}
+
+func TestProjectGate_KeyReadsThePinFileAtTheBaseOfTheCallAndAtTheBaseOfTheProjectWhenTheCallHasNone(t *testing.T) {
+	t.Parallel()
+
+	for base, want := range map[string]string{"integration/s1": "git show origin/integration/s1:.tool-versions", "": "git show origin/main:.tool-versions"} {
+		calls := &gateCalls{}
+		projects := localProject()
+		pinned := projects["p"]
+		pinned.BaseBranch, pinned.PinFile = "main", ".tool-versions"
+		projects["p"] = pinned
+
+		gate := projectGate{projects: projects, programs: programs{trees: treeAt("/tree"), local: gateRunner(calls, model.CommandResult{Stdout: "abc123\n"}, model.CommandResult{Stdout: "gofake 1.0\n"})}}
+
+		_, err := gate.Key(t.Context(), "p", "1", "", base, "")
+
+		require.NoError(t, err)
+		assert.Contains(t, calls.args, []string{"-c", want}, "base %q", base)
+	}
 }
 
 func TestProjectGate_KeyRefusesWhatItCannotReadWithoutRunningTheGate(t *testing.T) {
@@ -184,7 +203,7 @@ func TestProjectGate_KeyRefusesWhatItCannotReadWithoutRunningTheGate(t *testing.
 			calls := &gateCalls{}
 			gate := projectGate{projects: localProject(), programs: programs{trees: treeAt("/tree"), local: gateRunner(calls, test.head, model.CommandResult{})}}
 
-			_, err := gate.Key(t.Context(), test.project, "1", "")
+			_, err := gate.Key(t.Context(), test.project, "1", "", "", "")
 
 			require.ErrorContains(t, err, test.wantErr)
 			assert.NotContains(t, calls.binaries, "sh")
@@ -230,7 +249,7 @@ func TestProjectGate_ATreeThatCannotBeReadFailsTheGateBeforeItRuns(t *testing.T)
 	t.Parallel()
 
 	calls := &gateCalls{}
-	local := func(binary, _ string, _ time.Duration) proc.Runner {
+	local := func(_, binary, _ string, _ time.Duration) proc.Runner {
 		return recording{run: func(args []string) model.CommandResult {
 			calls.binaries = append(calls.binaries, binary)
 
@@ -309,7 +328,7 @@ func TestProjectGate_ASubmittedHostJobIsWaitedOnByItsIDAndNotSubmittedAgain(t *t
 		forge: forgeAt("https://example.test/repo.git"),
 	}
 
-	job, err := gate.Submit(t.Context(), "p", "1", "", "")
+	job, err := gate.Submit(t.Context(), "p", "1", "", "", "")
 
 	require.NoError(t, err)
 	assert.Equal(t, flow.GateJob{ID: "job-1", Head: "abc123", Plan: igate.Plan{Gate: "make check", BuildHost: "cluster", Pins: &igate.PinCheck{}}}, job)
@@ -338,10 +357,10 @@ func TestProjectGate_SubmitRefusesAProjectItCannotFindAndAHostThatRefusesTheJob(
 		forge: forgeAt("https://example.test/repo.git"),
 	}
 
-	_, err := gate.Submit(t.Context(), "unknown", "1", "", "")
+	_, err := gate.Submit(t.Context(), "unknown", "1", "", "", "")
 	require.ErrorIs(t, err, errUnknownProject)
 
-	_, err = gate.Submit(t.Context(), "p", "1", "", "")
+	_, err = gate.Submit(t.Context(), "p", "1", "", "", "")
 	require.ErrorIs(t, err, errFake)
 }
 
@@ -426,25 +445,25 @@ func TestProjectGate_RefusesWhatItCannotRunWithoutRunningTheGate(t *testing.T) {
 func TestProjectGate_ALocalGateThatTheTimeoutKillsIsNotAnExitCode(t *testing.T) {
 	t.Parallel()
 
-	local := func(binary, dir string, timeout time.Duration) proc.Runner {
+	local := func(_, binary, dir string, timeout time.Duration) proc.Runner {
 		return proc.ExecRunner{Binary: binary, Dir: dir, Timeout: timeout}
 	}
 	gate := projectGate{programs: programs{local: local}, timeout: 200 * time.Millisecond}
 
 	started := time.Now()
-	_, code := gate.shell(t.Context(), t.TempDir(), "echo partial; exec sleep 30")
+	_, code := gate.shell(t.Context(), "p", t.TempDir(), "echo partial; exec sleep 30")
 
 	assert.Equal(t, igate.ExitTimedOut, code, "a real kill by the local runner")
 	assert.Less(t, time.Since(started), 20*time.Second)
 
-	_, own := gate.shell(t.Context(), t.TempDir(), "exit 124")
+	_, own := gate.shell(t.Context(), "p", t.TempDir(), "exit 124")
 	assert.Equal(t, 124, own, "a command that exits 124 on its own is a failure, not a timeout")
 }
 
 func TestProjectGate_AStatusThatGitCannotReadEndsTheGate(t *testing.T) {
 	t.Parallel()
 
-	runner := func(binary, _ string, _ time.Duration) proc.Runner {
+	runner := func(_, binary, _ string, _ time.Duration) proc.Runner {
 		return recording{run: func(args []string) model.CommandResult {
 			if binary == "git" && args[0] == "status" {
 				return model.CommandResult{Stderr: "fatal: not a repository\n", ExitCode: 128}
@@ -458,4 +477,29 @@ func TestProjectGate_AStatusThatGitCannotReadEndsTheGate(t *testing.T) {
 	_, err := gate.Run(t.Context(), "p", "1", "", flow.GateJob{})
 
 	require.ErrorContains(t, err, "git status in /tree: fatal: not a repository")
+}
+
+func TestProjectGate_APinBaseNamesTheBranchThatKeyAndSubmitReadThePinFileAt(t *testing.T) {
+	t.Parallel()
+
+	projects := localProject()
+	pinned := projects["p"]
+	pinned.BaseBranch, pinned.PinFile = "main", ".tool-versions"
+	projects["p"] = pinned
+
+	keyCalls, submitCalls := &gateCalls{}, &gateCalls{}
+	programsOf := func(calls *gateCalls) programs {
+		return programs{trees: treeAt("/tree"), local: gateRunner(calls, model.CommandResult{Stdout: "abc123\n"}, model.CommandResult{Stdout: "gofake 1.0\n"})}
+	}
+
+	_, err := projectGate{projects: projects, programs: programsOf(keyCalls)}.Key(t.Context(), "p", "1", "", "", "integration/s1")
+	require.NoError(t, err)
+
+	_, err = projectGate{projects: projects, programs: programsOf(submitCalls)}.Submit(t.Context(), "p", "1", "", "", "integration/s1")
+	require.NoError(t, err)
+
+	want := []string{"-c", "git show origin/integration/s1:.tool-versions"}
+	assert.Contains(t, keyCalls.args, want, "the key reads the pin file at the pin base")
+	assert.Contains(t, submitCalls.args, want, "the job reads the pin file at the pin base")
+	assert.NotContains(t, submitCalls.args, []string{"-c", "git show origin/main:.tool-versions"})
 }

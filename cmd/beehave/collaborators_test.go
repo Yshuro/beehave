@@ -42,7 +42,7 @@ type treeAt string
 
 func (t treeAt) Path(context.Context, string, string) (string, error) { return string(t), nil }
 
-func (t treeAt) Ensure(context.Context, string, string, string) (string, error) {
+func (t treeAt) Ensure(context.Context, string, string, string, string) (string, error) {
 	return string(t), nil
 }
 
@@ -50,7 +50,9 @@ type treeFails struct{}
 
 func (treeFails) Path(context.Context, string, string) (string, error) { return "", errFake }
 
-func (treeFails) Ensure(context.Context, string, string, string) (string, error) { return "", errFake }
+func (treeFails) Ensure(context.Context, string, string, string, string) (string, error) {
+	return "", errFake
+}
 
 func TestWorktrees_PathIsTheFolderThatGitListsAsAWorktree(t *testing.T) {
 	t.Parallel()
@@ -192,6 +194,32 @@ func TestPrograms_ALocalProgramRunsInTheWorktreeAndKeepsItsExitCode(t *testing.T
 	assert.Equal(t, flow.CommandOutput{Stdout: "out", Stderr: "err", RC: 3}, got)
 	assert.Equal(t, proc.ExecRunner{Binary: "make", Dir: "/tree", Timeout: time.Minute, Only: []string{"PATH=/bin"}, Stdin: "the text"}, spec, "the environment of the request replaces the environment of the process")
 	assert.Equal(t, []string{"check"}, args)
+}
+
+func TestPrograms_ARequestWhoseContextIsDoneStartsNoProgram(t *testing.T) {
+	t.Parallel()
+
+	for name, done := range map[string]bool{"a_live_context_runs_it": false, "a_done_context_starts_nothing": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			tree := t.TempDir()
+			marker := filepath.Join(tree, "ran")
+			runs := programs{trees: treeAt(tree), exec: func(spec proc.ExecRunner) proc.Runner { return spec }}
+
+			ctx, cancel := context.WithCancel(t.Context())
+			if done {
+				cancel()
+			}
+			defer cancel()
+
+			_, err := runs.Run(ctx, flow.CommandRequest{Project: "p", Item: "1", Run: []string{"touch", marker}, Timeout: time.Minute})
+			require.NoError(t, err)
+
+			_, statErr := os.Stat(marker)
+			assert.Equal(t, done, os.IsNotExist(statErr), "the real runner starts the program only under a live context")
+		})
+	}
 }
 
 func TestPrograms_ACappedProgramGetsTheCapAndOnlyAForkFailureNamesIt(t *testing.T) {
@@ -415,7 +443,7 @@ func TestNewPrograms_BuildTheHostOfTheProjectOnlyWhenItHasOne(t *testing.T) {
 	_, err = runs.hosts("bare", "")
 	require.ErrorIs(t, err, errNoHost)
 
-	runner := runs.local("sh", t.TempDir(), time.Second)
+	runner := runs.local("bare", "sh", t.TempDir(), time.Second)
 	assert.Equal(t, 0, runner.Run(t.Context(), []string{"-c", "exit 0"}).ExitCode)
 }
 
@@ -484,7 +512,11 @@ func TestNewWorktrees_RunGitInTheFolderAndKeepTheTreesUnderTheStateFolder(t *tes
 
 	assert.Equal(t, filepath.Join(state, "trees"), trees.root)
 	assert.Equal(t, filepath.Join(state, "repos"), trees.repos)
-	assert.Equal(t, 0, trees.git(t.TempDir()).Run(t.Context(), []string{"--version"}).ExitCode)
+	clone := filepath.Join(state, "repos", "p")
+	require.NoError(t, os.MkdirAll(clone, 0o700))
+	runGit(t, clone, "init", "-q")
+	assert.Equal(t, 0, trees.git(clone).Run(t.Context(), []string{"--version"}).ExitCode, "a clone of the repos folder runs git")
+	assert.Equal(t, 128, trees.git(t.TempDir()).Run(t.Context(), []string{"--version"}).ExitCode, "a folder outside the state folder runs no git")
 }
 
 func TestNewWorktrees_EveryGitCallRefusesToPromptForCredentials(t *testing.T) {

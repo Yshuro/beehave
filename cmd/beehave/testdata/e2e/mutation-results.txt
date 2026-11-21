@@ -66,7 +66,7 @@ exec git -C repo checkout -q nocand
 env GREMLINS_REPORT=$WORK/allskipped.json
 exec /bin/sh repo/scripts/mutation-pr.sh main
 ! stdout '^mutation-pr: applied='
-stdout '^mutation-pr: no candidate: no changed line of a\.go holds an operator that gremlins mutates; the report marks all 2 mutant\(s\) of the module skipped$'
+stdout '^mutation-pr: no candidate: no changed line of a\.go holds an operator that gremlins mutates; the report marks all 2 mutant\(s\) of the changed folders skipped$'
 stdout '^mutation-pr: end count=0 printed=0$'
 ! stdout '(?s)^mutation-pr: end .*^mutation-pr: '
 
@@ -76,7 +76,8 @@ stdout '^mutation-pr: end count=0 printed=0$'
 exec git -C repo checkout -q cand
 env GREMLINS_REPORT=$WORK/empty.json
 ! exec /bin/sh repo/scripts/mutation-pr.sh main
-stdout '^mutation-pr: gremlins wrote no report: it found no mutant in the module$'
+stdout '^mutation-pr: gremlins wrote no report: it found no mutant in \.$'
+! stdout 'in the module'
 ! stdout 'no candidate'
 ! stdout '^mutation-pr: end '
 env GREMLINS_REPORT=$WORK/otherpath.json
@@ -144,7 +145,8 @@ exec git -C repo config --unset diff.noprefix
 
 # With diff.noprefix, gremlins reads a file in a subfolder without its first folder, and skips its mutants. So the script
 # gives the git of gremlins a config that keeps the prefixes, after the config that the environment already holds.
-# This fake gremlins reads its own git diff: it keeps the mutant of sub/e.go only when the diff names "b/sub/e.go".
+# The script starts gremlins on the folder sub, so its diff is relative to sub.
+# This fake gremlins reads its own git diff: it keeps the mutant of e.go only when the diff names "b/e.go".
 exec git -C repo checkout -q -b subfolder main
 mkdir repo/sub
 cp cand.go repo/sub/e.go
@@ -358,8 +360,8 @@ fi
 if [ "$GREMLINS_REPORT" = owndiff ]; then
 	[ "$(git config --get e2e.kept)" = yes ] || { echo "the fake gremlins lost the git config of the environment"; exit 98; }
 	state=SKIPPED
-	if git diff --merge-base "$3" | grep -q '^+++ b/sub/e\.go$'; then state=KILLED; fi
-	printf '{"files":[{"file_name":"sub/e.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"%s"}]}]}' "$state" > "$5"
+	if git diff --merge-base "$3" | grep -q '^+++ b/e\.go$'; then state=KILLED; fi
+	printf '{"files":[{"file_name":"e.go","mutations":[{"line":3,"type":"CONDITIONALS_NEGATION","status":"%s"}]}]}' "$state" > "$5"
 	exit 0
 fi
 cp "$GREMLINS_REPORT" "$5"

@@ -3,6 +3,8 @@ package agent_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +13,7 @@ import (
 
 	"github.com/tobocop2/beehave/internal/agent"
 	"github.com/tobocop2/beehave/internal/agent/claude"
+	"github.com/tobocop2/beehave/internal/model"
 )
 
 // noSandbox is an adapter whose profile has no sandbox.
@@ -59,6 +62,24 @@ func TestRunner_ASandboxedRunGetsTheSandboxArgumentsInOneSettingsObject(t *testi
 	assert.Contains(t, args, `"allowedDomains":["api.example.org"]`)
 	assert.Contains(t, args, `"command":"beehave check command"`)
 	assert.Equal(t, 1, countWord(args, "--settings"))
+}
+
+func TestRunner_ASandboxedRunThatMayEditAllowsTheFileToolsInItsWorkFolder(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	for name, noEdits := range map[string]bool{"edits": false, "no_edits": true} {
+		f := boxed(t)
+		f.spec.NoEdits = noEdits
+
+		got := agent.Runner{Version: seen("2.1.330 (Claude Code)\n")}.Run(context.Background(), f.spec)
+
+		require.Equal(t, agent.OutcomeExited, got.Outcome, got.Note)
+
+		rule := `"Edit(/` + f.work + `/**)"`
+		if noEdits {
+			assert.NotContains(t, record(t, f.records, "args"), rule, name)
+		} else {
+			assert.Contains(t, record(t, f.records, "args"), rule, name)
+		}
+	}
 }
 
 func TestRunner_ARunWithNoSandboxGetsNoSandboxArguments(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
@@ -182,6 +203,22 @@ func TestRunner_ASandboxedRunGetsNoProxyVariableNoAgentSocketAndNoGitConfig(t *t
 	assert.Contains(t, env, "GIT_CONFIG_GLOBAL=/dev/null\n")
 	assert.Contains(t, env, "GIT_CONFIG_NOSYSTEM=1\n")
 	assert.Contains(t, env, "CLAUDE_CODE_OAUTH_TOKEN="+token+"\n")
+}
+
+func TestRunner_ASandboxedRunCarriesTheCommitIdentityOfTheEngine(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	f := boxed(t)
+	require.NoError(t, os.WriteFile(filepath.Join(f.records, "mode"), []byte("envfile"), 0o600))
+	f.spec.Sandbox.Identity = agent.GitIdentity{Name: "Engine Owner", Email: "engine@example.com"}
+
+	got := agent.Runner{Version: seen("2.1.316")}.Run(context.Background(), f.spec)
+	require.Equal(t, agent.OutcomeExited, got.Outcome, got.Note)
+
+	env, file := record(t, f.records, "env")+"\n", record(t, f.records, "envfile")+"\n"
+	for _, pair := range []string{"GIT_AUTHOR_NAME=Engine Owner", "GIT_AUTHOR_EMAIL=engine@example.com", "GIT_COMMITTER_NAME=Engine Owner", "GIT_COMMITTER_EMAIL=engine@example.com"} {
+		assert.Contains(t, env, pair+"\n", "the CLI starts with the identity")
+		name, value, _ := strings.Cut(pair, "=")
+		assert.Contains(t, file, "export "+name+"="+model.ShellQuote(value)+"\n", "the env file of the shell holds the identity")
+	}
 }
 
 func TestRunner_ARunWithNoSandboxKeepsTheProxyVariablesAndSetsNoGitVariable(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process

@@ -31,9 +31,14 @@ type hostTrees struct {
 
 func (t hostTrees) Path(context.Context, string, string) (string, error) { return t.dir, t.err }
 
-func (t hostTrees) Ensure(context.Context, string, string, string) (string, error) {
+func (t hostTrees) Ensure(context.Context, string, string, string, string) (string, error) {
 	return t.dir, t.err
 }
+
+// hostFetch is the fetch of the base in the host tests. The repository of the tests already holds the base, so it fetches nothing.
+type hostFetch struct{ err error }
+
+func (f hostFetch) Fetch(context.Context, string) error { return f.err }
 
 // hostForge is the forge of the host tests: the tip of the base, and one pull request in a given state.
 type hostForge struct {
@@ -140,10 +145,11 @@ func hostOver(dir string, f hostForge, treeErr error) batchHost {
 		},
 		programs: programs{
 			trees: hostTrees{dir: dir, err: treeErr},
-			local: func(binary, folder string, timeout time.Duration) proc.Runner {
+			local: func(_, binary, folder string, timeout time.Duration) proc.Runner {
 				return proc.ExecRunner{Binary: binary, Dir: folder, Timeout: timeout}
 			},
 		},
+		base: hostFetch{},
 	}
 }
 
@@ -203,12 +209,12 @@ func TestBatchHost_TipFailsWhenTheFetchFailsAndWhenTheTipIsNotInTheRepository(t 
 	t.Parallel()
 
 	dir := hostRepo(t)
-	hostGit(t, dir, "remote", "remove", "origin")
+	host := hostOver(dir, hostForge{tip: "abc", found: true}, nil)
+	host.base = hostFetch{err: errFake}
 
-	_, err := hostOver(dir, hostForge{tip: "abc", found: true}, nil).Tip(t.Context(), "p", "7", "main")
-	require.ErrorContains(t, err, "git fetch in "+dir)
-
-	hostGit(t, dir, "remote", "add", "origin", ".")
+	_, err := host.Tip(t.Context(), "p", "7", "main")
+	require.ErrorIs(t, err, errFake)
+	require.ErrorContains(t, err, "fetch the base main of project p")
 
 	_, err = hostOver(dir, hostForge{tip: strings.Repeat("e", 40), found: true}, nil).Tip(t.Context(), "p", "7", "main")
 	require.ErrorContains(t, err, "git rev-parse of "+strings.Repeat("e", 40))

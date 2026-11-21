@@ -194,7 +194,7 @@ func (c *Claims) claimRow(ctx context.Context, me, item string) error {
 		}
 	}
 
-	return refuse("claim: could not take #%s after %d attempts; check `beehave claim who %s`", item, attempts, item)
+	return refuse("claim: could not take #%s after %d attempts: the claim store did not record the take. Run the item again", item, attempts)
 }
 
 // yield deals with a holder that won: after one reclaim it refuses with code 3, and before it asks for the reclaim.
