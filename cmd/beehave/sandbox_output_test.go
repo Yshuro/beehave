@@ -174,14 +174,14 @@ func TestSandboxPlan_AWorkFolderWhosePathHoldsAGlobCharacterStopsAStepThatMayEdi
 	}
 }
 
-// deniedClaude is a fake claude whose result line refuses a Write of a hook of the work folder and a Write of hello.txt in it.
+// deniedClaude is a fake claude whose result line refuses edits of four files of the work folder: a hook, hello.txt, .ENV and .envs/dev.yaml.
 const deniedClaude = `#!/bin/sh
 for arg in "$@"; do
   if [ "$arg" = --version ]; then echo "2.1.330 (Claude Code)"; exit 0; fi
 done
 cat > /dev/null
 echo '{"type":"system","subtype":"init","session_id":"s1"}'
-echo '{"type":"result","subtype":"success","session_id":"s1","result":"done","permission_denials":[{"tool_name":"Write","tool_input":{"file_path":"'"$PWD"'/.git/hooks/pre-commit"}},{"tool_name":"Write","tool_input":{"file_path":"'"$PWD"'/hello.txt"}}]}'
+echo '{"type":"result","subtype":"success","session_id":"s1","result":"done","permission_denials":[{"tool_name":"Write","tool_input":{"file_path":"'"$PWD"'/.git/hooks/pre-commit"}},{"tool_name":"Write","tool_input":{"file_path":"'"$PWD"'/hello.txt"}},{"tool_name":"Edit","tool_input":{"file_path":"'"$PWD"'/.ENV"}},{"tool_name":"Write","tool_input":{"file_path":"'"$PWD"'/.envs/dev.yaml"}}]}'
 `
 
 func TestAgents_ARefusedEditThatADenyRuleOfTheSandboxCoversIsMarkedClosed(t *testing.T) {
@@ -201,12 +201,14 @@ func TestAgents_ARefusedEditThatADenyRuleOfTheSandboxCoversIsMarkedClosed(t *tes
 
 	result, err := r.f.agents.Run(t.Context(), req)
 	require.NoError(t, err)
-	require.Len(t, result.Denials, 2, result.Note)
+	require.Len(t, result.Denials, 4, result.Note)
 
 	assert.True(t, strings.HasSuffix(result.Denials[0].Target, "/.git/hooks/pre-commit"), result.Denials[0].Target)
 	assert.True(t, result.Denials[0].Closed, "the closed paths of the work folder deny the hook")
 	assert.True(t, strings.HasSuffix(result.Denials[1].Target, "/hello.txt"), result.Denials[1].Target)
 	assert.False(t, result.Denials[1].Closed, "no deny rule covers a plain file of the work folder")
+	assert.True(t, result.Denials[2].Closed, "the .env pattern covers .ENV, without case: %s", result.Denials[2].Target)
+	assert.True(t, result.Denials[3].Closed, "the .env pattern covers the files of a folder it matches: %s", result.Denials[3].Target)
 }
 
 func TestDeniesWrite_CoversTheDenyPathsAndPatternsOfThePlan(t *testing.T) {
@@ -221,6 +223,7 @@ func TestDeniesWrite_CoversTheDenyPathsAndPatternsOfThePlan(t *testing.T) {
 		"/h/.ssh/id_rsa": true, "/w/.env": true, "/w/a/.env.local": true, "/w/.git/hooks/pre-commit": true,
 		"/w/.claude/settings.json": true, "/w/sub/.claude/settings.local.json": true,
 		"/w/hello.txt": false, "/w/.github/ci.yml": false, "/w/.claude/notes.md": false,
+		"/w/.ENV": true, "/w/.envs/dev.yaml": true, "/w/.claude/settings.json/x": true, "/H/.SSH/id_rsa": true, "/w/.GIT/config": true,
 	} {
 		assert.Equal(t, want, deniesWrite(plan, path), path)
 	}

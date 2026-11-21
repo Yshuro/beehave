@@ -265,8 +265,7 @@ func markClosed(denials []agent.Denial, box *agent.SandboxPlan) []agent.Denial {
 
 // deniesWrite says whether a deny rule of the plan covers a write of path: a credential path or a closed path, or a pattern of either.
 func deniesWrite(plan agent.SandboxPlan, path string) bool {
-	return slices.ContainsFunc(slices.Concat(plan.Deny, plan.DenyWrite), func(denied string) bool { return within(denied, path) }) ||
-		slices.ContainsFunc(slices.Concat(plan.DenyPatterns, plan.DenyWritePatterns), func(pattern string) bool { return doublestar.MatchUnvalidated(pattern, path) })
+	return slices.ContainsFunc(slices.Concat(plan.Deny, plan.DenyWrite, plan.DenyPatterns, plan.DenyWritePatterns), func(rule string) bool { return within(rule, path) })
 }
 
 // credentialPaths returns the absolute credential paths: the engine list expanded under home, the config folder of the runner and the project additions.
@@ -356,14 +355,34 @@ func overlap(full string, protected []string) string {
 	return ""
 }
 
-// within reports whether path is parent or inside it, as the names stand and again with every symbolic link resolved. Names compare without case,
-// because the default disk of the owner may not tell .Git from .git. This is stricter than a case-sensitive disk needs, and it is never looser.
+// within reports whether the rule parent covers path, as the names stand and again with every symbolic link resolved. It is the one test of what a
+// rule of the sandbox covers. A rule covers its own name and each path below it. A rule with a glob character also covers each path that matches it
+// and each path below such a match, as the CLI reads a rule. Names compare without case, because the default disk of the owner may not tell .Git from
+// .git. This is stricter than a case-sensitive disk needs, and it is never looser.
 func within(parent, path string) bool {
 	return inside(parent, path) || inside(shell.RealPath(parent), shell.RealPath(path))
 }
 
 func inside(parent, path string) bool {
-	return nameInside(strings.ToLower(parent), strings.ToLower(path))
+	rule, name := strings.ToLower(parent), strings.ToLower(path)
+
+	return nameInside(rule, name) || matchInside(rule, filepath.Clean(name))
+}
+
+// matchInside reports whether path or a folder above it matches the pattern, by name and with case kept. A pattern that does not parse matches nothing.
+func matchInside(pattern, path string) bool {
+	for {
+		if doublestar.MatchUnvalidated(pattern, path) {
+			return true
+		}
+
+		up := filepath.Dir(path)
+		if up == path {
+			return false
+		}
+
+		path = up
+	}
 }
 
 // nameInside reports whether path is parent or lies below it, by name and with case kept. A child named ..x lies below its parent.

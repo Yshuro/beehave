@@ -511,6 +511,15 @@ func TestWithin_ComparesWholeNamesAndNotPrefixes(t *testing.T) {
 	assert.False(t, within("/a/b", "/a"))
 }
 
+func TestWithin_APatternCoversEachMatchAndThePathsBelowItWithoutCase(t *testing.T) {
+	t.Parallel()
+
+	assert.True(t, within("/a/b*", "/a/bc/d"), "a pattern covers the files under each folder it matches")
+	assert.True(t, within("/a/**/.env*", "/a/x/.ENV"), "a pattern compares without case")
+	assert.True(t, within("/a/[b]", "/a/[b]/c"), "a rule with a glob character also covers its literal name")
+	assert.False(t, within("/a/b*", "/a/c/b"))
+}
+
 func TestNewAgents_FindsTheHomeFolderOfTheOwner(t *testing.T) {
 	t.Parallel()
 
