@@ -141,7 +141,7 @@ func (a agents) specOf(request flow.AgentRequest, runner model.Runner, dir strin
 		Adapter: adapter, Runner: runner, Dir: dir, Prompt: request.Prompt, Env: a.env,
 		Timeout: request.Timeout, IdleTimeout: request.IdleTimeout, Model: request.Model, Resume: request.Resume,
 		MaxTurns: a.maxTurns, MaxBudget: lowerCap(a.maxBudget, request.MaxBudget),
-		Log: tap, OnStart: request.Started, Guard: guard, NoEdits: request.NoEdits,
+		Log: tap, OnStart: request.Started, Guard: guard, NoEdits: request.NoEdits, Write: outputWrites(request),
 	}
 }
 
@@ -166,7 +166,7 @@ func noGuardNote(adapter agent.Adapter, guard string, forbid []model.FindingKind
 		return ""
 	case guard == "":
 		return "The step lists forbid_commands, but beehave cannot find the path of its own program to start the check of the commands. The step did not start."
-	case adapter.Guard(guard, "").Empty():
+	case adapter.Guard(guard, "", nil).Empty():
 		return "The step lists forbid_commands, but the agent CLI of the runner has no hook to refuse a command before it runs. The step did not start."
 	}
 
@@ -257,7 +257,7 @@ func (a agents) protection(request flow.AgentRequest, dir string) shell.Protecti
 
 // boxOf returns the sandbox plan of a step, or nil when the step has no sandbox. A step that cannot start, for want of its guard, its sandbox or a price to check its cost cap, returns the reason.
 func (a agents) boxOf(ctx context.Context, request flow.AgentRequest, runner model.Runner, dir string, adapter agent.Adapter, guard string) (*agent.SandboxPlan, string) {
-	note := cmp.Or(a.unpricedCapNote(adapter, request), noGuardNote(adapter, guard, request.Forbid))
+	note := cmp.Or(a.unpricedCapNote(adapter, request), noGuardNote(adapter, guard, request.Forbid), a.outputNote(request, runner))
 	if note != "" {
 		return nil, note
 	}

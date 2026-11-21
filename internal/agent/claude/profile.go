@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/tobocop2/beehave/internal/agent"
@@ -60,9 +61,15 @@ func (Adapter) Profile() agent.Profile {
 	}
 }
 
-// hookSettings is the settings of one run: a PreToolUse hook on the Bash tool.
-type hookSettings struct {
-	Hooks hookEvents `json:"hooks"`
+// guardSettings is the settings of one run with no sandbox: a PreToolUse hook on the Bash tool, and the allow rules of the output files.
+type guardSettings struct {
+	Hooks       *hookEvents `json:"hooks,omitempty"`
+	Permissions *allowOnly  `json:"permissions,omitempty"`
+}
+
+// allowOnly is the permission rules of a run with no sandbox: allow rules only.
+type allowOnly struct {
+	Allow []string `json:"allow"`
 }
 
 type hookEvents struct {
@@ -80,14 +87,30 @@ type hookHandler struct {
 	OnFailure string `json:"onFailure"`
 }
 
-// Guard returns `--settings` with inline JSON that adds a PreToolUse hook with matcher Bash for this run.
+// Guard returns `--settings` with inline JSON that adds a PreToolUse hook with matcher Bash for this run, when command is not empty.
 // Claude Code merges hook entries across settings sources, so no settings file of the user changes.
 // The hook gets the call as JSON on stdin and blocks the call when it exits with code 2.
 // "onFailure":"block" makes any other failure of the hook (cannot start, other exit code, timeout) block the call too. Claude Code v2.1.295 is the first version that knows the key.
-func (Adapter) Guard(command, _ string) agent.Launch {
-	raw, _ := json.Marshal(hookSettings{Hooks: guardHooks(command)}) //nolint:errcheck,errchkjson // a struct of strings always encodes
+// Each file of write is opened to the file tools by the same rules and working directory as in the sandbox, and the launch is empty when it has no hook and no file.
+func (Adapter) Guard(command, _ string, write []string) agent.Launch {
+	var settings guardSettings
 
-	return agent.Launch{Args: []string{"--settings", string(raw)}}
+	if command != "" {
+		hooks := guardHooks(command)
+		settings.Hooks = &hooks
+	}
+
+	if len(write) > 0 {
+		settings.Permissions = &allowOnly{Allow: outputRules(write)}
+	}
+
+	if settings.Hooks == nil && settings.Permissions == nil {
+		return agent.Launch{}
+	}
+
+	raw, _ := json.Marshal(settings) //nolint:errcheck,errchkjson // a struct of strings always encodes
+
+	return agent.Launch{Args: slices.Concat(addDirs(outputDirs(write)), []string{"--settings", string(raw)})}
 }
 
 // guardHooks is the PreToolUse hook on the Bash tool that runs command.

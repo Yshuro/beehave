@@ -25,7 +25,7 @@ The keys `timeout` and `idle_timeout` of the `agent` call take a duration text, 
 
 ### The OpenCode adapter and its limits
 
-The adapter starts `opencode run --format json` and reads its event stream. The prompt goes on stdin; no message argument follows `run`. The adapter never passes `--auto`, so a file tool that reaches outside the work folder stays refused.
+The adapter starts `opencode run --format json` and reads its event stream. The prompt goes on stdin; no message argument follows `run`. The adapter never passes `--auto`, so a file tool that reaches outside the work folder stays refused, except the folder of the output file of the step: the launch allows it in the config of the run (`OPENCODE_CONFIG_CONTENT`, `external_directory`).
 
 A step author must know these limits:
 

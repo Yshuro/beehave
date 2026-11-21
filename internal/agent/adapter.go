@@ -211,12 +211,16 @@ type Adapter interface {
 	Profile() Profile
 	// ReadUsage returns the usage of one runner of this agent, or a reading that says the agent cannot report it.
 	ReadUsage(ctx context.Context, runner model.Runner) model.Reading
-	// Guard returns the launch that makes the CLI run command before each shell command of one run and refuse the shell command when command exits with code 2.
-	// It returns an empty launch when the CLI has no such option. runDir is the folder of the run: a path in Files is relative to it, and Args or Env can name a file in it.
-	Guard(command, runDir string) Launch
+	// Guard returns the launch of a run with no sandbox. A non-empty command makes the CLI run command before each shell command and refuse the shell command
+	// when command exits with code 2; the launch is empty of a hook when the CLI has no such option. An empty command adds no hook.
+	// write lists the files that the file tools of the run may read and write, each by its exact path (Spec.Write): the launch opens each one, whatever the command.
+	// The launch is empty when command is empty and write is empty.
+	// runDir is the folder of the run: a path in Files is relative to it, and Args or Env can name a file in it.
+	Guard(command, runDir string, write []string) Launch
 	// Sandbox returns the launch that confines the shell of one run to the plan, and nothing else the CLI reads can widen it: no settings file and no MCP server.
 	// A non-empty guard is the hook of Guard, and the launch carries it in the same settings as the sandbox. Only a profile with Sandbox true is asked.
-	Sandbox(plan SandboxPlan, guard, runDir string) Launch
+	// write is the same list as for Guard, and the shell may write those files too.
+	Sandbox(plan SandboxPlan, guard, runDir string, write []string) Launch
 	// Line reads one line of the output of the CLI. It returns the session id and the message text that the line holds, or empty strings.
 	Line(line string) (session, text string)
 	// Calls reads one line of the output of the CLI and returns what it holds. More than one reader asks for the same line (the runner for the turn cap and

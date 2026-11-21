@@ -317,10 +317,33 @@ func CheckLaunch(r Reporter, adapter agent.Adapter) {
 
 	const runDir = "/run/folder"
 
-	checkFiles(r, "guard", adapter.Guard("beehave check command", runDir).Files)
+	write := []string{outputFile}
+	guard := adapter.Guard("beehave check command", runDir, write)
+
+	checkFiles(r, "guard", guard.Files)
+	checkOpens(r, "guard", guard, write)
+	checkOpens(r, "launch with no guard", adapter.Guard("", runDir, write), write)
 
 	if adapter.Profile().Sandbox {
-		checkFiles(r, "sandbox", adapter.Sandbox(agent.SandboxPlan{Work: "/work"}, "beehave check command", runDir).Files)
+		box := adapter.Sandbox(agent.SandboxPlan{Work: "/work"}, "beehave check command", runDir, write)
+
+		checkFiles(r, "sandbox", box.Files)
+		checkOpens(r, "sandbox", box, write)
+	}
+}
+
+// outputFile is the output file that CheckLaunch gives to each launch.
+const outputFile = "/state/outputs/1.step/output.json"
+
+// checkOpens checks that the arguments or the environment of a launch name the folder of each file of write. A launch that never names the folder leaves the
+// file closed to the file tools: the agent then asks for a permission that a run in print mode cannot grant.
+func checkOpens(r Reporter, source string, launch agent.Launch, write []string) {
+	r.Helper()
+
+	seen := strings.Join(slices.Concat(launch.Args, model.EnvPairs(launch.Env)), "\n")
+
+	for _, file := range write {
+		expect(r, strings.Contains(seen, filepath.Dir(file)), "the launch (%s) never names the folder of the output file %s, so the file tools cannot read it", source, file)
 	}
 }
 

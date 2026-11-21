@@ -82,6 +82,19 @@ func TestRunner_ASandboxedRunThatMayEditAllowsTheFileToolsInItsWorkFolder(t *tes
 	}
 }
 
+func TestLaunch_ASandboxedRunOpensItsOutputFileToTheFileTools(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
+	f := boxed(t)
+	f.spec.Write = []string{"/state/outputs/7.review/output.json"}
+
+	got := agent.Runner{Version: seen("2.1.330 (Claude Code)\n")}.Run(context.Background(), f.spec)
+
+	require.Equal(t, agent.OutcomeExited, got.Outcome, got.Note)
+
+	args := record(t, f.records, "args")
+	assert.Contains(t, args, "--add-dir /state/outputs/7.review")
+	assert.Contains(t, args, `"Edit(//state/outputs/7.review/output.json)"`)
+}
+
 func TestRunner_ARunWithNoSandboxGetsNoSandboxArguments(t *testing.T) { //nolint:paralleltest // t.Setenv changes PATH for the process
 	f := newFixture(t, "claude", claude.Name, "")
 
