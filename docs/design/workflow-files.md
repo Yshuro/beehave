@@ -739,7 +739,8 @@ One workflow written in this form, with five prompt files. The method lives in t
 The workflow names no skill. The project names it.
 
 - The project file sets `vars.review_skill`: the name of a skill, such as `"your-review-skill"`. A run with no such key, or a value that is not a text that is not blank, is refused before the first agent starts. The message names the key.
-- After the implement step, the example refuses the item when the agent did not call that skill. The message names the skill and the key.
+- The implement step names the skill in its sandbox, `skills = [project.vars["review_skill"]]`, so the sandboxed agent can load it from the config folder of the runner (see [the skills of a step](sandbox.md#the-skills-of-a-step)).
+- After the implement step, the example refuses the item when the agent did not call that skill, or the CLI answered the call with an error such as `Unknown skill`. The message names the skill and the key.
 - The test is `if project.vars["review_skill"] not in implement.skills:` with a `fail` call in its branch, so a dry run reads the key from the vars of the project and reports that skill from its fake agent.
 
 #### The sweep step of `examples/remediation/`

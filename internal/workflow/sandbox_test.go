@@ -73,9 +73,19 @@ func TestCheck_LeavesANonLiteralSandboxListAndASplatCallToTheRun(t *testing.T) {
 func TestCheck_ReportsASandboxCallWithAnUnknownKeywordOrTheWrongKind(t *testing.T) {
 	t.Parallel()
 
-	assert.Contains(t, problemsOf(t, `sandbox(read = [])`)[0], "sandbox takes no argument read. Use one of: network.")
-	assert.Contains(t, problemsOf(t, `sandbox(allow_write = ["out"])`)[0], "sandbox takes no argument allow_write. Use one of: network.")
+	assert.Contains(t, problemsOf(t, `sandbox(read = [])`)[0], "sandbox takes no argument read. Use one of: network, skills.")
+	assert.Contains(t, problemsOf(t, `sandbox(allow_write = ["out"])`)[0], "sandbox takes no argument allow_write. Use one of: network, skills.")
 	assert.Contains(t, problemsOf(t, `sandbox(network = "api.example.org")`)[0], "network must be a list, not a text.")
+}
+
+func TestCheck_ReportsALiteralSkillThatIsNoFolderName(t *testing.T) {
+	t.Parallel()
+
+	got := problemsOf(t, `sandbox(skills = ["../review", "ok"])`)
+
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0], `sandbox skills lists "../review", which is not the name of a skill`)
+	assert.Empty(t, problemsOf(t, `sandbox(skills = ["review", str(item)])`), "a name the run reads is left to the run")
 }
 
 func TestCheck_ReportsALiteralNetworkEntryThatIsNoDomain(t *testing.T) {

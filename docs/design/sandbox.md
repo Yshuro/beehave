@@ -15,6 +15,17 @@ The default is off. A project opts in with `sandbox = "on"` in its project file.
 | Key | Default | Meaning |
 |---|---|---|
 | `network` | empty list (no network) | The domains that the shell can reach. |
+| `skills` | empty list (no skill of the runner) | The skills of the runner that the agent can load, by the folder name of each skill. |
+
+### The skills of a step
+
+The sandbox loads no settings file, so the agent sees no skill of the runner. A step that needs one names it in `skills`, such as `skills = [project.vars["review_skill"]]`. A name is a folder name: no path, no `..`.
+
+- The engine finds each skill at `<config folder of the runner>/skills/<name>`. If that folder holds no `SKILL.md`, or the runner names no config folder, the step does not start, and the message names the skill and the folder.
+- The Claude adapter copies each named skill into a plugin folder in the run folder, `skills-plugin`, beside a manifest with the name `beehave-skills`. It passes the folder with `--plugin-dir`. The setting sources stay empty, so no other user skill, plugin or hook loads. A folder passed with `--add-dir` does not load its skills, so the adapter does not use that form.
+- The shell can read the plugin folder. The sandbox and the permission rules deny its write. The config folder of the runner stays denied.
+- The CLI names a plugin skill `beehave-skills:<name>`. The adapter records it as `<name>`. A skill of any other plugin keeps its prefix, so it never counts as the named skill.
+- A skill counts as called only when the CLI answers its Skill call with no error. A call that the CLI answers with `Unknown skill` does not count.
 
 The work folder, the temporary folder and the shared git directory of a linked work tree are writable. No other path is. A step has no keyword that opens one.
 

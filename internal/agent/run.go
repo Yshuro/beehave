@@ -258,7 +258,7 @@ func execute(ctx context.Context, spec Spec, p Profile, idle *idleTimer, version
 func launchRun(ctx context.Context, spec Spec, p Profile, binary, runDir string, idle *idleTimer, version versionOf) Result {
 	launch := launchOf(spec, runDir)
 
-	if problem := writeFiles(runDir, launch.Files); problem != "" {
+	if problem := cmp.Or(writeFiles(runDir, launch.Files), copyFolders(runDir, launch.Copies)); problem != "" {
 		return Result{Outcome: OutcomeNotStarted, Note: problem}
 	}
 
@@ -386,6 +386,21 @@ func writeFiles(runDir string, files map[string]string) string {
 
 		if err := os.WriteFile(path, []byte(files[name]), launchFileMode); err != nil {
 			return fmt.Sprintf("cannot write the launch file %q: %v", name, err)
+		}
+	}
+
+	return ""
+}
+
+// copyFolders copies each folder of a launch into runDir, at its local path. It returns why it cannot, or "" when every folder is copied.
+func copyFolders(runDir string, copies map[string]string) string {
+	for _, name := range slices.Sorted(maps.Keys(copies)) {
+		if !filepath.IsLocal(name) {
+			return fmt.Sprintf("the launch of the agent puts the copy %q outside its run folder, so the run does not start.", name)
+		}
+
+		if err := os.CopyFS(filepath.Join(runDir, name), os.DirFS(copies[name])); err != nil {
+			return fmt.Sprintf("cannot copy %s into the run folder, so the run does not start: %v", copies[name], err)
 		}
 	}
 

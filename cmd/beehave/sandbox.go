@@ -32,19 +32,43 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 
 	project := a.projects[request.Project]
 	deny, read := credentialPaths(home, runner.ConfigDir, project.SandboxDeny), expandAll(project.SandboxRead, home)
-
 	git := gitOf(a.projects, request.Project, a.repos).Runner(dir, proc.DefaultTimeout)
 	closed, err := closedPaths(ctx, git, dir, home)
 	identity, write := a.identity(ctx, git), outputWrites(request)
+	skills, missing := skillFolders(request.Sandbox.Skills, runner.ConfigDir, home)
 
-	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), workNote(dir, request.NoEdits), identityNote(identity, dir)); note != "" {
+	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), workNote(dir, request.NoEdits), identityNote(identity, dir), missing); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
 	return agent.SandboxPlan{
-		Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: slices.Concat(withData(read, request.DataFile), write), ReadDirs: slices.Concat(dataFolder(request.DataFile), folders(write)),
+		Skills: skills, Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: slices.Concat(withData(read, request.DataFile), write), ReadDirs: slices.Concat(dataFolder(request.DataFile), folders(write)),
 		Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed, request.DataFile), DenyWritePatterns: hookPatterns(dir), Write: write, Network: request.Sandbox.Network, Identity: identity,
 	}, ""
+}
+
+// skillFile is the file that every skill folder holds.
+const skillFile = "SKILL.md"
+
+// skillFolders returns the folder of each skill that the step names, in the skills folder of the config folder of the runner, or why the step cannot start:
+// the runner names no config folder, or a folder holds no SKILL.md.
+func skillFolders(names []string, configDir, home string) ([]string, string) {
+	folders := make([]string, 0, len(names))
+
+	for _, name := range names {
+		if configDir == "" {
+			return nil, fmt.Sprintf("the step names the skill %s, and its runner names no config folder to find the skill in. The step did not start. Set the config folder of the runner.", name)
+		}
+
+		folder := filepath.Join(expand(configDir, home), "skills", name)
+		if !isFile(filepath.Join(folder, skillFile)) {
+			return nil, fmt.Sprintf("the step names the skill %s, and %s holds no %s. The step did not start. Install the skill there, or remove it from the skills of the sandbox.", name, folder, skillFile)
+		}
+
+		folders = append(folders, folder)
+	}
+
+	return folders, ""
 }
 
 // outputWrites returns the output file of a step that declares outputs, the one path of the state folder that the agent writes, or none.

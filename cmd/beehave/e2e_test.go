@@ -450,8 +450,17 @@ fi
 # The tool calls arrive as assistant lines of the stream, as with the real claude.
 # The fake claude calls the skill that the example requires, so the session reports it.
 # When the file no-skill exists, the fake reports no skill call, as a CLI that does not report them.
+# The result of the call follows on a user line: with the file unknown-skill, the error that the CLI gives for a skill it did not load.
+# With the file plugin-skill, the call names the skill with the prefix of the plugin that the engine builds for a sandboxed step.
+skill=%SKILL%
+if [ -e plugin-skill ]; then skill="beehave-skills:%SKILL%"; fi
 if [ ! -e no-skill ]; then
-  echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"%SKILL%"}}]}}'
+  echo '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"toolu_skill","name":"Skill","input":{"skill":"'"$skill"'"}}]}}'
+  if [ -e unknown-skill ]; then
+    echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_skill","is_error":true,"content":"<tool_use_error>Unknown skill: '"$skill"'</tool_use_error>"}]}}'
+  else
+    echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_skill","content":"Launching skill: '"$skill"'"}]}}'
+  fi
 fi
 # The implementer stages everything, the command that the example forbids.
 if [ "$step" = implement ]; then

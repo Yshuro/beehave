@@ -68,7 +68,7 @@ func (lineAdapter) Calls(line string) agent.Seen {
 	}
 
 	if name, ok := cutPrefix(line, "skill="); ok {
-		seen.Skills = append(seen.Skills, name)
+		seen.Skills, seen.Succeeded = append(seen.Skills, agent.Call{ID: name, Text: name}), append(seen.Succeeded, name)
 	}
 
 	if kind, ok := cutPrefix(line, "stop="); ok {

@@ -1,0 +1,11 @@
+# The implement step loads the review skill from the plugin folder that the engine builds, so the CLI names it with the prefix of that plugin.
+# The call counts as the skill that vars.review_skill names, and the item goes on to the review.
+exec beehave run 7 --workflow flow/workflow.star
+stdout 'item 7 finished'
+grep -count=1 '^implement ' calls.log
+grep '^review ' calls.log
+
+-- plugin-skill --
+-- verdicts --
+approve
+approve
