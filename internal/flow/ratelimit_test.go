@@ -374,10 +374,9 @@ func TestRateLimit_TheCostOfARunThatFailedAtALimitCountsOnce(t *testing.T) {
 	require.NoError(t, err)
 	assert.InDelta(t, 0.7, tree.Cost, 1e-9, "the sum that the tree cap reads")
 
-	days, err := client.Days(DaysSince(time.Now(), 1))
+	days, err := daysFromTheRun(t, client)
 	require.NoError(t, err)
-	require.Len(t, days, 1)
-	assert.InDelta(t, 0.7, days[0].Spent.Cost, 1e-9, "the per-day sum")
+	assert.InDelta(t, 0.7, totalOfDays(days).Spent.Cost, 1e-9, "the per-day sum")
 }
 
 func TestRateLimit_TheTreeSumCountsTheFailedAgentRunOfAChildRun(t *testing.T) {
@@ -436,10 +435,9 @@ func assertTotals(t *testing.T, engine *Engine, client *Client, want float64) {
 	require.NoError(t, err)
 	assert.InDelta(t, want, tree.Cost, 1e-9, "the sum that the tree cap reads")
 
-	days, err := client.Days(DaysSince(time.Now(), 1))
+	days, err := daysFromTheRun(t, client)
 	require.NoError(t, err)
-	require.Len(t, days, 1)
-	assert.InDelta(t, want, days[0].Spent.Cost, 1e-9, "the per-day sum")
+	assert.InDelta(t, want, totalOfDays(days).Spent.Cost, 1e-9, "the per-day sum")
 }
 
 func TestRateLimit_AResumeKeepsTheLimitRecordOfAnEarlierRun(t *testing.T) {
@@ -545,7 +543,7 @@ func TestClient_AStreamOfFailedRunsThatCannotBeReadFailsEveryTotal(t *testing.T)
 	_, err = runAndBelowSpend(engine.ctx, testRun)
 	require.ErrorContains(t, err, "read the cost of the failed agent runs of "+testRun, "the sum of the tree cap")
 
-	_, err = client.Days(DaysSince(time.Now(), 1))
+	_, err = daysFromTheRun(t, client)
 	require.ErrorContains(t, err, "read the cost of the failed agent runs of "+testRun, "the per-day sum")
 }
 

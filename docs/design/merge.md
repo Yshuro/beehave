@@ -423,6 +423,8 @@ A landing that ends `stale` or `head-moved` holds nothing: the same pass goes on
 
 A held round starts no sync and no item in a later pass. It gathers and lands the child runs that are open, so it never returns while one is open. A step that stops the run, such as an exit code 2 of `sync-<n>` in a later pass, ends the round with its open runs. With none open, it waits in `round-wait` with a question that names the reason and what the owner does. CONTINUE starts a pass that checks the trunk again. STOP or the timeout returns `{"state": "waiting", "base": ..., "pr": ..., "reason": <reason>}`; the reason is an empty text when no sync held the round.
 
+When no sync held the round and no item can move, the question names each listed item, its state and the step of the owner: `beehave resume <item>` for a failed item, then `beehave cancel <item>` when the resume refuses the run, so the next pass starts a new attempt. A round with no item list gets the count of the rows in each state and the ids of the failed rows. The round starts no new attempt for a failed item on its own.
+
 ### `remedy audit`
 
 `remedy audit authored <span>` and `remedy audit present <tip> <base>` run `audit`. The audit reads the merges of a range through git, with `-z` path lists.

@@ -524,7 +524,7 @@ func TestRunAgent_TheAgentStepWaitsForTheWriteOfTheLastSessionIdBeforeItReturns(
 		go func() {
 			defer close(returned)
 
-			_, runErr := engine.runAgent(t.Context(), t.Context(), PhaseInput{Item: testItem}, nil)
+			_, runErr := engine.runAgent(t.Context(), t.Context(), &attempt{}, PhaseInput{Item: testItem}, nil)
 			assert.NoError(t, runErr)
 		}()
 

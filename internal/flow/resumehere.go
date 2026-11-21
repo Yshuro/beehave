@@ -78,12 +78,12 @@ func (c *Client) requireSameSteps(item string, last run) error {
 
 	was, readErr := readVersions(stored)
 	if readErr != nil && looksLikeModuleList(stored) {
-		return fmt.Errorf("%w: %s was recorded under a step list that is not valid: %w. Start the item again: beehave run %s", errStranded, last.Status.ID, readErr, item)
+		return fmt.Errorf("%w: %s was recorded under a step list that is not valid: %w. %sStart the item again: beehave run %s", errStranded, last.Status.ID, readErr, endFailedFirst(last, item), item)
 	}
 
 	if readErr != nil {
-		return fmt.Errorf("%w: %s was recorded under %s and this build has %s. A run cannot replay under another step list. Start the item again: beehave run %s",
-			errStranded, last.Status.ID, describeStepList(stored), describeStepList(now), item)
+		return fmt.Errorf("%w: %s was recorded under %s and this build has %s. A run cannot replay under another step list. %sStart the item again: beehave run %s",
+			errStranded, last.Status.ID, describeStepList(stored), describeStepList(now), endFailedFirst(last, item), item)
 	}
 
 	current, _ := parseVersions(now)
@@ -108,8 +108,8 @@ func (c *Client) requireUsedModulesSame(item string, last run, was, current map[
 	}
 
 	if module, changed := changedModule(modulesUsed(names), was, current); changed {
-		return fmt.Errorf("%w: %s recorded steps of the %s module at %s and this build has %s. A run cannot replay under another step list. Start the item again: beehave run %s",
-			errStranded, last.Status.ID, module, describeModule(module, was), describeModule(module, current), item)
+		return fmt.Errorf("%w: %s recorded steps of the %s module at %s and this build has %s. A run cannot replay under another step list. %sStart the item again: beehave run %s",
+			errStranded, last.Status.ID, module, describeModule(module, was), describeModule(module, current), endFailedFirst(last, item), item)
 	}
 
 	return requireSameRoundModule(item, last, was, current)
@@ -127,8 +127,8 @@ func requireReplayableSteps(item string, last run, names []string) error {
 		owner = fmt.Sprintf("an older build recorded it for the %s module, and this build does not record it", module)
 	}
 
-	return fmt.Errorf("%w: %s recorded the step %q, and %s. A run cannot replay under another step list. Start the item again: beehave run %s",
-		errStranded, last.Status.ID, step, owner, item)
+	return fmt.Errorf("%w: %s recorded the step %q, and %s. A run cannot replay under another step list. %sStart the item again: beehave run %s",
+		errStranded, last.Status.ID, step, owner, endFailedFirst(last, item), item)
 }
 
 // requireSameRoundModule refuses a run of a round item when the round module changed. Every round run uses the module, because its version covers the step

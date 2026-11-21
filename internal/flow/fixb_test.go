@@ -206,11 +206,11 @@ func TestGiveBack_ARunThatNeverClaimedHasNothingToRelease(t *testing.T) {
 	engine := harness.engine(t)
 	client := harness.client(t, testVersion)
 
-	require.NoError(t, client.giveBack(testProject, testItem, "item-99-r1"))
-	engine.giveBack(t.Context(), openRun{id: "item-99-r1", in: ItemInput{Item: testItem, Project: testProject}})
+	require.NoError(t, client.giveBack(&attempt{id: "item-99-r1", in: ItemInput{Item: testItem, Project: testProject}}))
+	engine.giveBack(t.Context(), &attempt{id: "item-99-r1", in: ItemInput{Item: testItem, Project: testProject}})
 
 	require.NoError(t, os.MkdirAll(ownerPath(harness.opts.StateDir, "item-98-r1"), ownersMode))
-	require.ErrorContains(t, client.giveBack(testProject, testItem, "item-98-r1"), "read the claim of run item-98-r1")
+	require.ErrorContains(t, client.giveBack(&attempt{id: "item-98-r1", in: ItemInput{Item: testItem, Project: testProject}}), "read the claim of run item-98-r1")
 
 	assert.Empty(t, harness.life.seen())
 }
@@ -484,17 +484,21 @@ func TestCanceledIDs_ReadsOnlyTheRunsThisEngineExecutes(t *testing.T) {
 	waitOn(t, waiting[struct{}]{what: "the agents of the run to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
 	require.NoError(t, client.Cancel(testItem))
 
-	none, err := engine.canceledIDs(nil)
+	none, err := engine.canceledAttempts(nil)
 	require.NoError(t, err)
 	assert.Empty(t, none, "an engine with no local run reads nothing")
 
-	other, err := engine.canceledIDs([]string{"item-99-r1"})
+	other, err := engine.canceledAttempts([]*attempt{{id: "item-99-r1"}})
 	require.NoError(t, err)
 	assert.Empty(t, other, "a canceled run that this engine does not execute is not listed")
 
-	local, err := engine.canceledIDs(engine.cancels.ids())
+	listed := engine.cancels.attempts()
+	require.Len(t, listed, 1)
+	assert.Equal(t, "item-12-r1", listed[0].id)
+
+	local, err := engine.canceledAttempts(listed)
 	require.NoError(t, err)
-	assert.Equal(t, []string{"item-12-r1"}, local)
+	assert.Equal(t, listed, local)
 
 	harness.tick(t)
 

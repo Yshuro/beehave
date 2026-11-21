@@ -742,6 +742,18 @@ The workflow names no skill. The project names it.
 - After the implement step, the example refuses the item when the agent did not call that skill. The message names the skill and the key.
 - The test is `if project.vars["review_skill"] not in implement.skills:` with a `fail` call in its branch, so a dry run reads the key from the vars of the project and reports that skill from its fake agent.
 
+#### The sweep step of `examples/remediation/`
+
+The engine has no cleanup builtin. The project owns the clean command and the workflow runs it as a host command.
+
+- The project file can set `vars.clean_command`: a list of words, such as `["sh", "scripts/clean-lane.sh"]`. A value that is not a list of words that are not blank is refused before the first agent starts. The message names the key.
+- When a lane ends, the child run calls `sweep`. It runs `vars.clean_command` as the step `sweep-clean`, then `docker volume prune -f` as the step `sweep-prune`. Both run with `host`, so they run on the build host.
+- The sweep runs for each end of the lane that returns a value: an approval, a rejection, a hold and a ruling of the owner. It also runs before each of the two `fail` calls of the lane (the skipped review skill and the missing changelog entry).
+- A workflow file cannot catch an error. A lane that a builtin error ends, such as a host that is gone, gets no sweep. A sweep that raises, such as a host lost at the sweep, fails the lane, and the round does not land its head. At a refusal site, a raising sweep replaces the refusal reason with the host error, so the operator reads the host error. A fix needs an engine setting for `command` that returns such a failure as a result. Issue #753 tracks it.
+- With no `vars.clean_command`, the sweep runs the prune only.
+- The sweep does not fail the lane. A failed clean does not skip the prune.
+- The value that the lane returns holds the field `sweep`: one line for each step, `clean: rc=<n>` or `clean: not run, vars.clean_command is not set`, then `prune: rc=<n>`.
+
 #### The mutation step of `examples/remediation/`
 
 The engine has no mutation builtin. The project owns the tool and the workflow runs it as a host command.

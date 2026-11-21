@@ -618,7 +618,7 @@ func (e *Engine) cancelLook(project string, l look) error {
 
 // cancelRun writes the cancel marker of one run and cancels the run with its children.
 func (e *Engine) cancelRun(project string, ref spawnedRun) error {
-	if err := markCancel(e.dir, ref.Run, ItemInput{Item: ref.Item, Project: project}); err != nil {
+	if _, err := markRunCancel(e.ctx, e.dir, ref.Run, ItemInput{Item: ref.Item, Project: project}); err != nil {
 		return err
 	}
 

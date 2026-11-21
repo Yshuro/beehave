@@ -154,6 +154,30 @@ func TestExample_AReportCheckThatCannotRunStopsTheItem(t *testing.T) {
 	assert.Equal(t, -1, agentIndex(base, fullReview))
 }
 
+func TestExample_AReportCheckExitOtherThanZeroOneOrTwoIsADefectOfTheLane(t *testing.T) {
+	t.Parallel()
+
+	for name, rc := range map[string]int{"a crash": 3, "a missing binary": 127} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			base, file := exampleRig(t, func(int) string { return "approve" })
+			rig := newCommittingRig(t, base, implementMarker, fixMarker)
+			replyToReports(rig.agentRig, CommandOutput{RC: rc, Stdout: "remedy: no such command\n"}, CommandOutput{RC: 0})
+
+			result, err := runPipeline(rig.h.engine(t), file)
+			require.NoError(t, err)
+
+			assert.Nil(t, result.Stopped, "only exit code 2 ends the item")
+
+			fixes := fixPrompts(rig.agentRig)
+			require.Len(t, fixes, 1, "the exit code counts as a defect and sends the lane back once")
+			assert.Contains(t, fixes[0], "The report of the lane has a defect. Each line is one finding:\nremedy: no such command")
+			assert.Len(t, reportRuns(rig.agentRig), 2, "the fixed head is checked again")
+		})
+	}
+}
+
 // orderWriter is a tracker writer that notes whether the approval comment of the pull request was posted before a Create call.
 type orderWriter struct {
 	*fakeWriter
@@ -304,6 +328,32 @@ func TestExample_AnUncausedListWithABadEntryFilesNothingAndRefusesTheApproval(t 
 
 			require.ErrorContains(t, err, tc.refusal)
 			assert.Empty(t, writer.created, "the good entry before the bad one is not filed")
+			assert.Empty(t, approvals(rig.h.forge))
+		})
+	}
+}
+
+func TestExample_AnUncausedListThatIsNotJSONIsRefusedWithTheListAndTheLane(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		lists   map[string]string
+		refusal string
+	}{
+		"the implement lane": {map[string]string{"implement": "not json at all"}, `REFUSE: the output uncaused of the implement lane is not valid JSON: "not json at all".`},
+		"a fix lane":         {map[string]string{"implement": "[]", "fix": "[oops"}, `REFUSE: the output uncaused of fix lane 1 is not valid JSON: "[oops".`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			base, file := exampleRig(t, approveAfter(1))
+			rig, writer := uncausedRig(t, base, tc.lists)
+
+			_, err := runPipeline(rig.h.engine(t), file)
+
+			require.ErrorContains(t, err, tc.refusal)
+			assert.NotContains(t, err.Error(), "json.decode", "the raw decoder error is not what the item ends with")
+			assert.Empty(t, writer.created)
 			assert.Empty(t, approvals(rig.h.forge))
 		})
 	}

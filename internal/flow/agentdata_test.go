@@ -334,7 +334,7 @@ func TestAgent_AReplayUnderAnotherStateFolderStops(t *testing.T) {
 func queuePhase(t *testing.T, engine *Engine, in PhaseInput) error {
 	t.Helper()
 
-	engine.holds.add(in.Run, claimHold{renewed: time.Now()})
+	holdClaim(engine, in.Run, claimHold{renewed: time.Now()})
 
 	handle, err := dbos.RunWorkflow(engine.ctx, engine.phase, in, dbos.WithQueue(engine.queue), dbos.WithQueuePartitionKey(in.Login))
 	require.NoError(t, err)

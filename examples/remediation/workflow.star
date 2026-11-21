@@ -357,6 +357,13 @@ def _method_vars(vars):
     if "board" in vars:
         _method_board(vars["board"])
 
+    if "clean_command" in vars:
+        _method_words("clean_command", vars["clean_command"])
+
+def _method_words(key, value):
+    if type(value) != "list" or len(value) == 0 or [word for word in value if not _is_text(word)] != []:
+        _vars_refuse(key, "is %r. Write the command as a list of words that are not blank, for example [\"sh\", \"scripts/clean-lane.sh\"], or leave the key out." % (value,))
+
 def _method_list(key, value):
     if type(value) != "list":
         _vars_refuse(key, "is %r, of type %s. Write a list of text, for example [\"a fact\"]." % (value, type(value)))
@@ -487,7 +494,7 @@ def check_mutation(words, base):
 def lane_report(lane):
     """Checks the report that a lane wrote, as the command step candidate-lane-report, and returns the findings as text. An empty text means the report is whole.
     `remedy report` reads the report from its stdin and judges it against the head of the lane: the four tables, the head and the line about background commands.
-    Exit code 1 gives the defect lines as the findings. Exit code 2 means the check could not run, and it ends the item."""
+    Exit code 2 means the check could not run, and it ends the item. Every other code except 0, such as 1, 3 or 127, is a defect of the lane: its output is the findings, and they send the lane back to a fix."""
     done = command(name = "candidate-lane-report", run = ["remedy", "report", "/dev/stdin", "--head", lane.head_sha], stdin = lane.report, stop_on_rc = [2])
     if done.rc == 0:
         return ""
@@ -542,13 +549,19 @@ def changelog_missing(changelog, base, head, id, fetch = False):
 
     return ""
 
-def uncaused_text(lanes):
-    """The JSON list of the reds that the lanes did not cause: the output `uncaused` of each lane, joined. An entry whose id an earlier lane already listed is left out, so two lanes that report one red file one item.
-    An entry that is no object stays in the list, and file_parked refuses it."""
+def uncaused_text(implement, fixes):
+    """The JSON list of the reds that the lanes did not cause: the output `uncaused` of the implement lane and of each fix lane, joined. An entry whose id an earlier lane already listed is left out, so two lanes that report one red file one item.
+    An entry that is no object stays in the list, and file_parked refuses it. A text that is not JSON is refused with the name of the lane and the text itself."""
     joined = []
     seen = []
-    for lane in lanes:
-        listed = json.decode(lane.uncaused)
+    lanes = [implement] + fixes
+    for place in range(len(lanes)):
+        lane = lanes[place]
+        name = "the implement lane" if place == 0 else "fix lane %d" % place
+        listed = json.decode(lane.uncaused, default = ("invalid",))
+        if type(listed) == "tuple":
+            fail("REFUSE: the output uncaused of %s is not valid JSON: %r. Write [] when the lane found no red that it did not cause" % (name, lane.uncaused))
+
         if type(listed) != "list":
             fail("REFUSE: the output uncaused of a lane is not a JSON list. Write [] when the lane found no red that it did not cause")
 
@@ -916,10 +929,10 @@ def host_hold(seen, acked):
 
     return ""
 
-def round_question(pr, reason, seen):
-    """The question of round-wait: the integration pull request `pr`, the reason that held the round when there is one, and `seen`, the host losses that the round read."""
+def round_question(reason, seen, idle):
+    """The question of round-wait: the reason that held the round when there is one, `seen`, the host losses that the round read, and `idle`, the text that names why no item can move."""
     if reason == "":
-        return "The round has no item it can move. Read the integration pull request %d and answer." % pr
+        return "The round has no item it can move. %s Then answer CONTINUE to check the queue again, or STOP to end the round." % idle
 
     if reason == "host-loss":
         return "The engine counted %d host losses in this round. %s Then answer CONTINUE to go on. The round asks again after a newer loss." % (seen, SYNC_REASONS[reason])
@@ -1011,6 +1024,36 @@ def ready_items(q, round_settings):
     rows = [r for r in q.rows if len(listed) == 0 or r.item in listed]
     return [r.item for r in rank(rows, round_settings["owner"])][:min(q.free, round_settings["lane_cap"])]
 
+# Each reason that a listed item does not move, by the state of its row, with the step of the owner. missing is an item with no row. A ready row shows here only when the items queue has no free slot.
+ITEM_CLAUSES = {
+    "failed": "Listed item {item} is failed: run beehave resume {item}. If the resume refuses the run, run beehave cancel {item}, and the next pass starts a new attempt.",
+    "hold": "Listed item {item} is on hold: take the hold off the item or its pull request.",
+    "done": "Listed item {item} is done.",
+    "running": "Listed item {item} has an open run outside this round: beehave status shows it.",
+    "ready": "Listed item {item} is ready, and the items queue has no free slot.",
+    "missing": "Listed item {item} is not in the queue: it is closed, or it does not carry vars.round.label.",
+}
+
+def idle_reason(q, round_settings):
+    """Returns the text that names why the pass of the queue read `q` moved no item: one clause for each listed item with its state and the step of the owner, or the count of the rows in each state when the round has no item list."""
+    listed = round_settings["items"]
+    if len(listed) == 0:
+        counts = {}
+        for r in q.rows:
+            counts[r.state] = counts.get(r.state, 0) + 1
+
+        head = "The queue has no ready row." if counts.get("ready", 0) == 0 else "The items queue has no free slot."
+        failed = [r.item for r in q.rows if r.state == "failed"]
+        steps = " Failed: %s. Run beehave resume for each, or beehave cancel when the resume refuses the run." % ", ".join(failed) if len(failed) > 0 else ""
+        return "%s Rows: %d ready, %d failed, %d on hold, %d done, %d running.%s" % (head, counts.get("ready", 0), counts.get("failed", 0), counts.get("hold", 0), counts.get("done", 0), counts.get("running", 0), steps)
+
+    rows = {r.item: r.state for r in q.rows}
+    clauses = []
+    for item in listed:
+        clauses.append(ITEM_CLAUSES[rows.get(item, "missing")].format(item = item))
+
+    return " ".join(clauses)
+
 def round(item):
     """The round: one entry for the whole round, with one child run (the entry pipeline) for each item. `item` is the round itself, an id that no tracker row uses.
     A pass is sync-<n> (sync_trunk), round-queue-<n>, queue-audit-<n> on the rows of that read, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
@@ -1068,7 +1111,7 @@ def round(item):
         # No ready row can move and no child run of this round is open.
         integration = round_integration(project, round_settings)
         answer = wait(
-            round_question(integration.pr, held, seen),
+            round_question(held, seen, idle_reason(q, round_settings) if held == "" else ""),
             name = "round-wait",
             timeout = "%dh" % round_settings["wait_hours"],
             to = [round_settings["owner"]],
@@ -1121,13 +1164,35 @@ def item_value(item, head, approved, reason, host_losses):
     and the highest host_losses that a gate of the child read."""
     return {"item": item.id, "head": head, "approved": approved, "reason": reason, "host_losses": host_losses}
 
+def sweep(project):
+    """Runs the sweep of a lane on the build host and returns its result as text: the project command `vars.clean_command` (it deletes the target directory of the lane), then `docker volume prune -f`.
+    A project with no clean command runs the prune only, and the text says so. A failed step shows its exit code in the text. It does not fail the lane, and the prune runs after a failed clean."""
+    words = project.vars.get("clean_command")
+    lines = ["clean: not run, vars.clean_command is not set"]
+    if words != None:
+        clean = command(name = "sweep-clean", run = words, host = "build")
+        lines = ["clean: rc=%d" % clean.rc]
+
+    prune = command(name = "sweep-prune", run = ["docker", "volume", "prune", "-f"], host = "build")
+
+    return "\n".join(lines + ["prune: rc=%d" % prune.rc])
+
 def pipeline(item):
-    """The child entry: the pipeline of one item. The round starts one child for each item with spawn(entry = "pipeline"). It calls no host builtin.
-    It returns item_value to the round, which lands the approved heads in one batch. The child never merges."""
+    """The child entry: the pipeline of one item. The round starts one child for each item with spawn(entry = "pipeline").
+    It returns item_value to the round, which lands the approved heads in one batch. The child never merges.
+    The sweep runs when the lane ends: after each verdict, and before each of the two fail calls of the lane. The value that the lane returns carries the sweep result as `sweep`.
+    A lane that a builtin error ends (a host that is gone) gets no sweep, and a sweep that raises fails the lane: Starlark has no way to catch an error."""
     # The facts of the project file (the plumbing fields and the vars that hold the people, rules, limits, traps and the round settings). The step records them, so a resume keeps the facts the run started with.
     # Each agent of the example gets them as the input `facts`; no agent reads a path for them.
     project = facts()
     round_settings = settings(project)
+    value = _lane(item, project, round_settings)
+    value["sweep"] = sweep(project)
+
+    return value
+
+def _lane(item, project, round_settings):
+    """The steps of one lane, from the intake to the verdict of the review. It returns item_value."""
     base = round_settings["base"]
 
     # Before any agent starts, the pull request of the item must be as the owner left it: not merged, not closed, its branch still on the remote,
@@ -1197,6 +1262,7 @@ def pipeline(item):
 
     # The implementer must run the skill that vars.review_skill names. A runner that reports no skill calls gives an empty list, and the item stops here, before the gate and the review.
     if project.vars["review_skill"] not in implement.skills:
+        sweep(project)
         fail("REFUSE: the implement step did not call the skill %s, which vars.review_skill names. Check that the runner has the skill and reports its calls. %s" % (project.vars["review_skill"], restart_steps(item)))
 
     # The agent of a sandboxed step has no credential, so the engine pushes its head to the branch of the item, the branch of its worktree. This is the first push of the branch in the run:
@@ -1250,7 +1316,7 @@ def pipeline(item):
         return item_value(item, loop.head, False, "host-loss", loop.host_losses)
 
     # Each red that a lane says it did not cause is filed as its own item before any verdict, so no approval exists without the item. A refused filing ends the item with no approval.
-    file_parked(uncaused_text([implement] + loop.lanes), "uncaused")
+    file_parked(uncaused_text(implement, loop.lanes), "uncaused")
 
     # A reject verdict ends the loop with no fix round. The item gets the text of the review as the reason and the hold status.
     # A scoped review can reject before the first gate, so an item that the loop holds reports loop.head, the commit that the loop judged last.
@@ -1316,6 +1382,7 @@ def pipeline(item):
     # `approved` is the verdict of the review, which is not the agent that wrote the code. The batch lands our own pull requests only when it is true.
     missing = changelog_missing(project.vars.get("changelog", ""), base, loop.gate.head, item.id)
     if missing != "":
+        sweep(project)
         fail(missing)
 
     # The approval is on the pull request, with the plan that the review judged the change against. The key makes a replay after a crash post it once.
