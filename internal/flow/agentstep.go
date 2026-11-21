@@ -284,8 +284,9 @@ func (s *script) promptOf(a *agentArgs, name, login string) (string, error) {
 	return rendered.Note, a.recall(rendered.Outputs)
 }
 
-// recall reads the sandbox and the output file that the render step recorded. The output file is the one that the recorded prompt names,
-// whatever the name function gives today. A record made before the path was pinned keeps the computed path. A recorded prompt that names a data file other than
+// recall reads the sandbox and the output file that the render step recorded. A replay keeps the recorded path, and a finished step is not run again.
+// A call that still has to run and declares outputs stops before the agent when the recorded path is not the one file of the folder of its call.
+// A record made before the path was pinned keeps the computed path. A recorded prompt that names a data file other than
 // the file that the phase writes for this item and step stops the call, because the agent would read a file that the engine did not write.
 func (a *agentArgs) recall(outputs map[string]any) (err error) {
 	a.file = recalledOutputFile(outputs, a.file)
@@ -301,8 +302,8 @@ func (a *agentArgs) recall(outputs map[string]any) (err error) {
 
 	a.record = given.Text
 
-	if err = os.MkdirAll(filepath.Dir(a.file), outputsMode); err != nil {
-		return fmt.Errorf("make the folder of the output file: %w", err)
+	if err = a.makeOutputFolder(); err != nil {
+		return err
 	}
 
 	a.box, err = recalledSandbox(outputs)
@@ -361,7 +362,16 @@ func (s *script) prepare(a *agentArgs, name string) (err error) {
 
 	a.file, a.dataFile = outputFile(s.e.dir, s.in.Item, name), a.dataFileOf(s.e.dir, s.in.Item, name)
 
-	if err = os.MkdirAll(filepath.Dir(a.file), outputsMode); err != nil {
+	return a.makeOutputFolder()
+}
+
+// makeOutputFolder makes the folder of the output file of a call that declares outputs. A call with no outputs gets no folder.
+func (a agentArgs) makeOutputFolder() error {
+	if len(a.declared) == 0 {
+		return nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(a.file), outputsMode); err != nil {
 		return fmt.Errorf("make the folder of the output file: %w", err)
 	}
 
@@ -482,11 +492,15 @@ func (s *script) attempts(name string, a agentArgs, in PhaseInput) (stepResult, 
 // A run that a provider limit stopped is followed by a wait for the reset and a rerun inside the same try: a limit spends no output try and no lane.
 // Each phase looks at the caps first, because the limited run can have spent money before the limit stopped it.
 func (s *script) attempt(name string, a agentArgs, in PhaseInput, try int) (stepResult, error) {
-	if err := s.clearOutput(name, a, try); err != nil {
+	in.Severity, in.Call = string(s.severity), name
+
+	if err := s.e.checkOutputFile(in); err != nil {
 		return stepResult{}, err
 	}
 
-	in.Severity, in.Call = string(s.severity), name
+	if err := s.clearOutput(name, a, try); err != nil {
+		return stepResult{}, err
+	}
 
 	ended, err := s.runPastLimits(name, in, try)
 	if err != nil {
@@ -701,8 +715,8 @@ func refusedCall(file string, denial agent.Denial) string {
 	return ""
 }
 
-// commandBounds are the characters on each side of a word of a shell command: a blank, a quote, a redirect or an operator.
-const commandBounds = " \t\n'\"<>;&|()"
+// commandBounds are the characters on each side of a word of a shell command: a blank, a quote, a backtick, a redirect, an operator or the = of a flag.
+const commandBounds = " \t\n'\"`<>;&|()="
 
 // namesPath reports whether a shell command holds path as a whole word, so the command names that file and not a longer path that starts or ends with it.
 func namesPath(command, path string) bool {

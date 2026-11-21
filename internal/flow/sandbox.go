@@ -120,7 +120,7 @@ const (
 	recordedLabel = "label"
 )
 
-// recalledOutputFile reads the output file that the render step recorded. A record made before the path was pinned has none, and the caller keeps the computed path.
+// recalledOutputFile reads the output file that the render step recorded, which a replay keeps. A record made before the path was pinned has none, and the caller keeps the computed path.
 func recalledOutputFile(outputs map[string]any, computed string) string {
 	if file, ok := outputs[recordedOutputFile].(string); ok && file != "" {
 		return file

@@ -53,7 +53,10 @@ func TestRefusedWrites_NamesEachRefusedCallByWhatItDoesToTheOutputFile(t *testin
 		"a command that names it after a longer name": {
 			agent.Denial{Tool: "Bash", Target: "cp " + file + ".bak '" + file + "'"}, refused + "Bash call whose command names it",
 		},
-		"a write of a longer name": {agent.Denial{Tool: "Write", Target: file + ".tmp", Edit: true}, ""},
+		"a command that gives it to a flag with =":  {agent.Denial{Tool: "Bash", Target: "tool --out=" + file}, refused + "Bash call whose command names it"},
+		"a command that holds it in backticks":      {agent.Denial{Tool: "Bash", Target: "echo `cat " + file + "`"}, refused + "Bash call whose command names it"},
+		"a command that holds it in a substitution": {agent.Denial{Tool: "Bash", Target: "echo $(cat " + file + ")"}, refused + "Bash call whose command names it"},
+		"a write of a longer name":                  {agent.Denial{Tool: "Write", Target: file + ".tmp", Edit: true}, ""},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -91,11 +94,11 @@ func TestPhase_AQueuedPhaseWhoseOutputFileIsNotTheFileOfItsCallStartsNoAgent(t *
 	err = queuePhase(t, engine, in)
 
 	require.ErrorContains(t, err, "the agent phase of item 12 names the output file "+flat)
-	require.ErrorContains(t, err, "Start a new run")
+	require.ErrorContains(t, err, "Run beehave cancel 12, then start a new run")
 	assert.Empty(t, harness.agents.seen(), "the agent never gets the outputs folder as a working directory")
 }
 
-func TestPhase_AQueuedPhaseThatDeclaresNoOutputsStartsItsAgentWithNoOutputFile(t *testing.T) {
+func TestPhase_AQueuedPhaseThatDeclaresNoOutputsStartsItsAgent(t *testing.T) {
 	t.Parallel()
 
 	harness := newHarness(t)
@@ -108,5 +111,5 @@ func TestPhase_AQueuedPhaseThatDeclaresNoOutputsStartsItsAgentWithNoOutputFile(t
 	require.NoError(t, json.Unmarshal(stored, &in))
 
 	require.NoError(t, queuePhase(t, engine, in))
-	assert.Len(t, harness.agents.seen(), 1, "a call that declares no outputs starts with no output file")
+	assert.Len(t, harness.agents.seen(), 1, "a call that declares no outputs starts")
 }
