@@ -379,7 +379,7 @@ func TestAgentStep_AnOldOutputFileThatCannotBeRemovedFailsTheStep(t *testing.T) 
 	rig := newAgentRig(t)
 	require.NoError(t, os.MkdirAll(filepath.Join(outputFile(rig.h.opts.StateDir, testItem, aStep), "inside"), 0o700))
 
-	_, err := rig.run(t, agentFlow(""), "Write to {{ .output_file }}\n")
+	_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
 
 	require.ErrorContains(t, err, "remove the old output file")
 	assert.Empty(t, rig.h.agents.seen())
@@ -392,10 +392,23 @@ func TestAgentStep_AFolderForTheOutputFileThatCannotBeMadeFailsTheStep(t *testin
 	require.NoError(t, os.MkdirAll(rig.h.opts.StateDir, 0o700))
 	require.NoError(t, os.WriteFile(filepath.Join(rig.h.opts.StateDir, outputsFolder), nil, 0o600))
 
-	_, err := rig.run(t, agentFlow(""), "Write to {{ .output_file }}\n")
+	_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
 
 	require.ErrorContains(t, err, "make the folder of the output file")
 	assert.Empty(t, rig.h.agents.seen())
+}
+
+func TestAgentStep_ACallWithNoOutputsNeverTouchesTheOutputsFolder(t *testing.T) {
+	t.Parallel()
+
+	rig := newAgentRig(t)
+	require.NoError(t, os.MkdirAll(rig.h.opts.StateDir, 0o700))
+	require.NoError(t, os.WriteFile(filepath.Join(rig.h.opts.StateDir, outputsFolder), nil, 0o600), "a file where the outputs folder would be")
+
+	_, err := rig.run(t, agentFlow(""), "Write to {{ .output_file }}\n")
+
+	require.NoError(t, err)
+	assert.Len(t, rig.h.agents.seen(), 1)
 }
 
 func TestAgentStep_TheOutputFileIsInTheStateFolderAndTheWorktreeStaysClean(t *testing.T) {

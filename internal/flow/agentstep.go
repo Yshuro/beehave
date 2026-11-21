@@ -585,14 +585,15 @@ func (s *script) clearOutput(name string, a agentArgs, in PhaseInput, try int) e
 	return err
 }
 
-// emptyOutput removes the old output file, and makes a new empty one for a call that declares outputs.
+// emptyOutput removes the old output file and makes a new empty one. A call that declares no outputs has no output file and no folder, so it touches nothing.
+// The step stays recorded for such a call, so the step numbers of a run recorded before this rule still replay.
 func (a agentArgs) emptyOutput() error {
-	if err := os.Remove(a.file); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("remove the old output file: %w", err)
-	}
-
 	if len(a.declared) == 0 {
 		return nil
+	}
+
+	if err := os.Remove(a.file); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove the old output file: %w", err)
 	}
 
 	if err := os.WriteFile(a.file, nil, dataMode); err != nil {
