@@ -164,7 +164,7 @@ func TestCalls_ReadTheStreamOfOneRun(t *testing.T) {
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
 		seen := claude.New(nil).Calls(scanner.Text())
-		shell, skills = append(shell, texts(seen.Shell)...), append(skills, seen.Skills...)
+		shell, skills = append(shell, texts(seen.Shell)...), append(skills, texts(seen.Skills)...)
 
 		assert.False(t, seen.Invalid, scanner.Text())
 		assert.Empty(t, seen.Refused, scanner.Text())
@@ -302,5 +302,5 @@ func TestCalls_ASkillCountsOnlyAsAToolUseBlockOfAnAssistantLine(t *testing.T) {
 		assert.Empty(t, claude.New(nil).Calls(line).Skills, line)
 	}
 
-	assert.Equal(t, []string{oracle}, claude.New(nil).Calls(assistant(t, toolUse("Skill", "skill", oracle))).Skills)
+	assert.Equal(t, []string{oracle}, texts(claude.New(nil).Calls(assistant(t, toolUse("Skill", "skill", oracle))).Skills))
 }

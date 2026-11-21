@@ -42,7 +42,8 @@ const (
 )
 
 // Calls reads one stream-json line.
-// It returns the Bash calls of the line with their tool_use ids (at any depth), the Skill calls of an assistant line, and the ids of the calls that a PreToolUse hook refused.
+// It returns the Bash calls of the line with their tool_use ids (at any depth), the Skill calls of an assistant line with their ids, the ids of the
+// results of a user line that report no error, and the ids of the calls that a PreToolUse hook refused.
 // A hook refusal is the tool_result of a call, with is_error set and a text that starts with "PreToolUse:"; the call never ran.
 // It also returns the rate limit or spend limit that the line reports as the reason the provider refused the request, or the reason of a refusal that no wait cures.
 // A line that is not valid JSON is Invalid and holds no call.
@@ -60,7 +61,7 @@ func (Adapter) Calls(line string) agent.Seen {
 
 	return agent.Seen{
 		Cost: costOf(value), Stop: stopOf(value), Failed: failedOf(value), Result: lineType(value) == resultType,
-		Shell: toolCalls(value, bashTool, bashKey, false), Skills: skillNames(value), Refused: refusedIDs(value), Denials: denialsOf(value),
+		Shell: toolCalls(value, bashTool, bashKey, false), Skills: skillCalls(value), Succeeded: succeededIDs(value), Refused: refusedIDs(value), Denials: denialsOf(value),
 		Limit: limit, Denied: denied,
 	}
 }
@@ -237,14 +238,29 @@ func earlier(first, second time.Time) time.Time {
 	return first
 }
 
-// skillNames returns the skill of each Skill call of an assistant line.
-func skillNames(value any) []string {
-	var skills []string
-	for _, call := range toolCalls(value, skillTool, skillKey, true) {
-		skills = append(skills, call.Text)
+// skillCalls returns each Skill call of an assistant line with its id, and the skill by its name without the prefix of the plugin of the engine.
+func skillCalls(value any) []agent.Call {
+	calls := toolCalls(value, skillTool, skillKey, true)
+	for i := range calls {
+		calls[i].Text = plainSkill(calls[i].Text)
 	}
 
-	return skills
+	return calls
+}
+
+// succeededIDs returns the tool_use ids of the tool_result blocks in a user line that report no error.
+func succeededIDs(value any) []string {
+	var ids []string
+
+	for _, block := range contentOf(value, userType) {
+		item, isBlock := block.(map[string]any) // each block is an object or holds no result
+		id, _ := item["tool_use_id"].(string)   //nolint:errcheck // a missing id reads as ""
+		if isBlock && item["type"] == toolResult && item["is_error"] != true && id != "" {
+			ids = append(ids, id)
+		}
+	}
+
+	return ids
 }
 
 // costOf returns the total_cost_usd of a result line, or 0 for any other line and for a cost that is no number of 0 or more.

@@ -363,7 +363,7 @@ func stepSignatures() map[string][]Param {
 
 	return map[string][]Param{
 		agentName:   agentParams(),
-		sandboxName: {ruled("network", KindList, networkRule)},
+		sandboxName: {ruled("network", KindList, networkRule), ruled("skills", KindList, skillsRule)},
 		commandName: {
 			runParam(),
 			opt("host", KindText), opt("stdin", KindText), ruled("env", KindDict, envRule),

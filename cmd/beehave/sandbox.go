@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -32,19 +33,65 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 
 	project := a.projects[request.Project]
 	deny, read := credentialPaths(home, runner.ConfigDir, project.SandboxDeny), expandAll(project.SandboxRead, home)
-
 	git := gitOf(a.projects, request.Project, a.repos).Runner(dir, proc.DefaultTimeout)
 	closed, err := closedPaths(ctx, git, dir, home)
 	identity, write := a.identity(ctx, git), outputWrites(request)
+	skills, missing := skillFolders(request.Sandbox.Skills, runner.ConfigDir, home)
 
-	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), workNote(dir, request.NoEdits), identityNote(identity, dir)); note != "" {
+	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), workNote(dir, request.NoEdits), identityNote(identity, dir), missing); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
 	return agent.SandboxPlan{
-		Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: slices.Concat(withData(read, request.DataFile), write), ReadDirs: slices.Concat(dataFolder(request.DataFile), folders(write)),
+		Skills: skills, Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: slices.Concat(withData(read, request.DataFile), write), ReadDirs: slices.Concat(dataFolder(request.DataFile), folders(write)),
 		Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed, request.DataFile), DenyWritePatterns: hookPatterns(dir), Write: write, Network: request.Sandbox.Network, Identity: identity,
 	}, ""
+}
+
+// skillFile is the file that every skill folder holds.
+const skillFile = "SKILL.md"
+
+// skillFolders returns the folder of each skill that the step names, in the skills folder of the config folder of the runner, or why the step cannot start:
+// the runner names no config folder, or a folder holds no SKILL.md.
+func skillFolders(names []string, configDir, home string) ([]string, string) {
+	folders := make([]string, 0, len(names))
+
+	for _, name := range names {
+		if configDir == "" {
+			return nil, fmt.Sprintf("the step names the skill %s, and its runner names no config folder to find the skill in. The step did not start. Set the config folder of the runner.", name)
+		}
+
+		folder := filepath.Join(expand(configDir, home), "skills", name)
+		if !isFile(filepath.Join(folder, skillFile)) {
+			return nil, fmt.Sprintf("the step names the skill %s, and %s holds no %s. The step did not start. Install the skill there, or remove it from the skills of the sandbox.", name, folder, skillFile)
+		}
+
+		if link := linkIn(folder); link != "" {
+			return nil, fmt.Sprintf("the step names the skill %s, and its folder holds the link %s. A copy of the skill would keep the link, and its target can be outside the skill. The step did not start. Replace the link with the file it points to.", name, link)
+		}
+
+		folders = append(folders, folder)
+	}
+
+	return folders, ""
+}
+
+// linkIn returns the first symbolic link inside a skill folder, or "" for none. The folder itself may be a link: the copy reads through it.
+// A folder that cannot be read is left to the copy: it reads the same tree, and its error stops the launch.
+func linkIn(folder string) string {
+	found := ""
+
+	_ = fs.WalkDir(os.DirFS(folder), ".", func(name string, entry fs.DirEntry, _ error) error { //nolint:errcheck // an unreadable folder fails the copy instead
+		if entry != nil && entry.Type()&fs.ModeSymlink != 0 {
+			found = filepath.Join(folder, name)
+
+			return fs.SkipAll
+		}
+
+		return nil
+	})
+
+	return found
 }
 
 // outputWrites returns the output file of a step that declares outputs, the one path of the state folder that the agent writes, or none.

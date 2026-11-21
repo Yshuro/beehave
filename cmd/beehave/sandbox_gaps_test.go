@@ -13,6 +13,18 @@ import (
 	"github.com/tobocop2/beehave/internal/proc/gitexec"
 )
 
+func TestSandboxPlan_AnAllowWritePatternThatMatchesACredentialPathIsRefused(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+
+	for _, pattern := range []string{"~/.ss*", "~/.s?h"} {
+		_, note := r.writeNote(t, pattern)
+
+		assert.Contains(t, note, "The step did not start", pattern)
+	}
+}
+
 func TestSandboxPlan_AnAllowWriteLinkToAMissingTargetInsideAClosedPathIsRefused(t *testing.T) {
 	t.Parallel()
 
