@@ -180,7 +180,7 @@ func TestRecall_APinnedFileWhoseFolderCannotBeMadeIsAnError(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "blocker")
 	require.NoError(t, os.WriteFile(blocker, nil, 0o600))
 
-	a := agentArgs{}
+	a := agentArgs{declared: []string{"verdict"}}
 	err := a.recall(map[string]any{recordedOutputFile: filepath.Join(blocker, "x.json")})
 
 	require.ErrorContains(t, err, "make the folder of the output file")
