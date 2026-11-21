@@ -133,3 +133,86 @@ func TestOpenStoreAt_AFolderThatCannotBeResolvedNamesTheFolderAndOpensNoLog(t *t
 	require.ErrorContains(t, err, "resolve the state folder "+state+": boom")
 	assert.NoFileExists(t, filepath.Join(state, logFileName), "no log file is opened for a folder that cannot be resolved")
 }
+
+func TestAgentStep_ARefusedWriteIsNamedUnderAnotherSpellingOfTheOutputPath(t *testing.T) {
+	t.Parallel()
+
+	spellings := map[string]func(link, real string) string{
+		"through a link to the state folder": func(link, _ string) string {
+			return filepath.Join(link, outputsFolder, "12.agent_3Aa_231.json")
+		},
+		"with a trailing slash": func(_, real string) string {
+			return filepath.Join(real, outputsFolder, "12.agent_3Aa_231.json") + "/"
+		},
+		"with a dot segment": func(_, real string) string {
+			return filepath.Join(real, outputsFolder) + "/./12.agent_3Aa_231.json"
+		},
+	}
+
+	for name, spell := range spellings {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			rig := newAgentRig(t)
+			real := linkedState(t, rig)
+			denied := spell(filepath.Join(filepath.Dir(real), "link-state"), real)
+			rig.h.agents.result = func(AgentRequest) agent.Result {
+				refused := exited
+				refused.Denials = []agent.Denial{{Tool: "Write", Target: denied}}
+
+				return refused
+			}
+
+			_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
+
+			require.ErrorContains(t, err, "the permission check of the agent CLI refused the Write call that writes it")
+		})
+	}
+}
+
+func TestRefusedWrites_ADeniedPathThatCannotBeResolvedKeepsThePlainMessage(t *testing.T) {
+	t.Parallel()
+
+	file := filepath.Join(t.TempDir(), "out.json")
+	denials := []agent.Denial{
+		{Tool: "Write", Target: filepath.Join(t.TempDir(), "missing-folder", "out.json")},
+		{Tool: "Bash", Target: "echo hi > out.json"},
+		{Tool: "Edit", Target: "out.json"},
+	}
+
+	assert.Empty(t, refusedWrites(file, denials))
+}
+
+func TestRefusedWrites_ARelativePathIsNotTakenAsRelativeToThisProcess(t *testing.T) {
+	t.Parallel()
+
+	here, err := os.Getwd()
+	require.NoError(t, err)
+
+	denials := []agent.Denial{{Tool: "Write", Target: "out.json"}}
+
+	assert.Empty(t, refusedWrites(filepath.Join(here, "out.json"), denials), "the agent does not run in the folder of this process")
+}
+
+func TestRefusedWrites_TheMacStateFolderUnderVarIsTheSameFileAsUnderPrivateVar(t *testing.T) {
+	t.Parallel()
+
+	real, err := filepath.EvalSymlinks("/var/tmp")
+	if err != nil || real == "/var/tmp" {
+		t.Skip("this system has no link from /var to another folder")
+	}
+
+	state, err := os.MkdirTemp("/var/tmp", "spelling")
+	require.NoError(t, err)
+	t.Cleanup(func() { assert.NoError(t, os.RemoveAll(state)) })
+
+	require.NoError(t, os.MkdirAll(filepath.Join(state, outputsFolder), 0o700))
+
+	resolved, err := filepath.EvalSymlinks(state)
+	require.NoError(t, err)
+	require.NotEqual(t, state, resolved, "the two spellings differ")
+
+	denials := []agent.Denial{{Tool: "Write", Target: filepath.Join(state, outputsFolder, "out.json")}}
+
+	assert.Contains(t, refusedWrites(filepath.Join(resolved, outputsFolder, "out.json"), denials), "refused the Write call", "the output folder is there and the file is not")
+}

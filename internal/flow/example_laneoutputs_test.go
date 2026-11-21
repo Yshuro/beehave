@@ -352,6 +352,7 @@ func TestExample_AnUncausedListThatIsNotJSONIsRefusedWithTheListAndTheLane(t *te
 			_, err := runPipeline(rig.h.engine(t), file)
 
 			require.ErrorContains(t, err, tc.refusal)
+			assert.Contains(t, err.Error(), "Write [] when there is nothing to report", "the refusal says what to write")
 			assert.NotContains(t, err.Error(), "json.decode", "the raw decoder error is not what the item ends with")
 			assert.Empty(t, writer.created)
 			assert.Empty(t, approvals(rig.h.forge))

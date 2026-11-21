@@ -668,7 +668,7 @@ func refusedWrites(file string, denials []agent.Denial) string {
 	var tools []string
 
 	for _, denial := range denials {
-		if denial.Target == file {
+		if samePath(denial.Target, file) {
 			tools = append(tools, denial.Tool)
 		}
 	}
@@ -680,6 +680,19 @@ func refusedWrites(file string, denials []agent.Denial) string {
 	slices.Sort(tools)
 
 	return fmt.Sprintf(": the permission check of the agent CLI refused the %s call that writes it", strings.Join(slices.Compact(tools), " and "))
+}
+
+// samePath says whether two paths name the same file. It cleans both and resolves the links of their folders, so the file need not exist.
+func samePath(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
+		return true
+	}
+
+	folderA, errA := filepath.EvalSymlinks(filepath.Dir(a))
+	folderB, errB := filepath.EvalSymlinks(filepath.Dir(b))
+
+	return errA == nil && errB == nil && folderA == folderB && filepath.Base(a) == filepath.Base(b)
 }
 
 // stringOutput returns one declared output of the output file. The second result says what is wrong with it.
