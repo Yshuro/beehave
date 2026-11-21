@@ -374,3 +374,61 @@ func TestIntegration_NoLabelFlagGivesTheDefaultLabel(t *testing.T) {
 	require.Len(t, world.created, 1)
 	assert.Equal(t, config.DefaultPRLabel, world.created[0].Label)
 }
+
+func TestIntegration_ABranchOfAnotherRoundWhoseNameStartsLikeThisOneIsARowAndNotASync(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{
+		found:  []model.PullRequest{{Number: 7, State: state("OPEN"), Body: "old"}},
+		merged: []model.PullRequest{branchPull(20, "a sync of round s10", "sync/integration/s10/abcd1234"), syncPull(734, trunk)},
+	}
+
+	code, _, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+
+	body := writtenBody(t, world)
+	assert.Contains(t, body, "| #20 | a sync of round s10 |", "the prefix of a round ends with a slash, so s10 is no sync of s1")
+	assert.Contains(t, body, "## Syncs with the trunk (1 pull request)\n\n#734\n")
+}
+
+func TestIntegration_TheListOfMergedPullRequestsIsAskedForTheRoundBranch(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{found: []model.PullRequest{{Number: 7, State: state("OPEN"), Body: "old"}}}
+
+	code, _, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+
+	var asked []string
+
+	for _, args := range world.listed {
+		if slices.Contains(args, "merged") {
+			asked = args
+		}
+	}
+
+	require.NotEmpty(t, asked, "the merged list was read")
+	at := slices.Index(asked, "--base")
+	require.GreaterOrEqual(t, at, 0, "the merged list is filtered by a base")
+	assert.Equal(t, roundBranch, asked[at+1], "the base is the round branch, so no other pull request of the repository is listed")
+}
+
+func TestIntegration_AHeadBranchThatOnlyEndsInDigitsIsARowAndNamesNoIssue(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{
+		found:  []model.PullRequest{{Number: 7, State: state("OPEN"), Body: "old"}},
+		merged: []model.PullRequest{branchPull(12, "fix the queue", "fix-101"), branchPull(13, "add the wait", "101-fix")},
+	}
+
+	code, _, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+
+	body := writtenBody(t, world)
+	assert.Contains(t, body, "| #12 | fix the queue |")
+	assert.Contains(t, body, "| #13 | add the wait |")
+	assert.NotContains(t, body, "Closes", "only a branch of digits is the id of an issue")
+}
