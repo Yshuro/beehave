@@ -11,6 +11,7 @@ import (
 
 	"github.com/tobocop2/beehave/examples/remediation/tools/recount"
 	"github.com/tobocop2/beehave/examples/remediation/tools/remedy"
+	"github.com/tobocop2/beehave/internal/config"
 	"github.com/tobocop2/beehave/internal/model"
 )
 
@@ -116,7 +117,7 @@ func TestIntegration_CreatesThePullRequestWhenNoneExistsWithTheMergedRowsInItsBo
 	require.Equal(t, remedy.ExitPass, code, errOut)
 	assert.Equal(t, "pr=21 state=OPEN\n", out)
 	require.Len(t, world.created, 1)
-	assert.Equal(t, model.NewPull{Head: roundBranch, Base: trunk, Title: world.created[0].Title, Body: world.created[0].Body}, world.created[0])
+	assert.Equal(t, model.NewPull{Head: roundBranch, Base: trunk, Title: world.created[0].Title, Body: world.created[0].Body, Label: config.DefaultPRLabel}, world.created[0])
 	assert.Equal(t, recount.Tally{Rows: 2}, recount.Count(world.created[0].Body))
 	assert.Empty(t, recount.Check(world.created[0].Title, world.created[0].Body))
 	assert.Contains(t, world.created[0].Body, "| #12 | fix the queue |")
@@ -371,4 +372,28 @@ func TestIntegration_AForgeThatCannotWriteIsARefusal(t *testing.T) {
 	assert.Equal(t, remedy.ExitRefused, code)
 	assert.Empty(t, out)
 	assert.Contains(t, errOut, "remedy integration:")
+}
+
+func TestIntegration_TheLabelFlagIsTheLabelOfTheOpenedPullRequest(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{nextPR: 21}
+
+	code, _, errOut := run(t, roundDeps(world), append(integrationArgs("0"), "--label", "made-by-beehave")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+	require.Len(t, world.created, 1)
+	assert.Equal(t, "made-by-beehave", world.created[0].Label)
+}
+
+func TestIntegration_NoLabelFlagGivesTheDefaultLabel(t *testing.T) {
+	t.Parallel()
+
+	world := &roundWorld{nextPR: 21}
+
+	code, _, errOut := run(t, roundDeps(world), integrationArgs("0")...)
+
+	require.Equal(t, remedy.ExitPass, code, errOut)
+	require.Len(t, world.created, 1)
+	assert.Equal(t, config.DefaultPRLabel, world.created[0].Label)
 }
