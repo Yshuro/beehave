@@ -166,7 +166,7 @@ func reviewRules() []rule {
 		{"review_rules", "compare EVERY changed cell with the BASE", only},
 		{"review_rules", "The matrix harness and the build of the base belong to the item", only},
 		{"review_rules", "Read every review body and every inline comment", only},
-		{"review_rules", "List the gate steps that ran at the head you review", only},
+		{"review_rules", "This step is given no gate result, so state no gate result as fact", only},
 		{"review_rules", "Condition 4, every item, unasked", only},
 		{"review_rules", "MERGE-BASE content against head content", only},
 		{"review_rules", "Plant an AWS key pair as a positive control", only},
@@ -458,16 +458,28 @@ func TestPrompts_NoPromptOfAStepThatCommitsTellsTheAgentToPush(t *testing.T) {
 	}
 }
 
-// readsBuildHost reports whether the parse tree holds the field chain .facts.build_host, in an action, a condition or a range.
-func readsBuildHost(node parse.Node) bool {
-	if field, ok := node.(*parse.FieldNode); ok {
-		return slices.Equal(field.Ident, []string{"facts", "build_host"})
+// namesBuildHost reports whether a leaf of the template tree names build_host: a field, a variable field, a chained field or a string argument such as `index .facts "build_host"`.
+func namesBuildHost(node parse.Node) bool {
+	switch n := node.(type) {
+	case *parse.FieldNode:
+		return slices.Contains(n.Ident, "build_host")
+	case *parse.VariableNode:
+		return slices.Contains(n.Ident, "build_host")
+	case *parse.ChainNode:
+		return slices.Contains(n.Field, "build_host")
+	case *parse.StringNode:
+		return n.Text == "build_host"
+	default:
+		return false
 	}
-
-	return slices.ContainsFunc(childNodes(node), readsBuildHost)
 }
 
-// childNodes lists the nodes that a template node holds: the body of a list, the pipe of an action, the commands of a pipe and the parts of a branch.
+// readsBuildHost reports whether a template tree names build_host anywhere that a value is read: an action, a condition, a range, a with, a template call or an argument.
+func readsBuildHost(node parse.Node) bool {
+	return namesBuildHost(node) || slices.ContainsFunc(childNodes(node), readsBuildHost)
+}
+
+// childNodes lists the nodes that a template node holds: the body of a list, the pipe of an action or a template call, the commands of a pipe, the operand of a chain and the parts of a branch.
 func childNodes(node parse.Node) []parse.Node {
 	switch n := node.(type) {
 	case *parse.ListNode:
@@ -478,10 +490,22 @@ func childNodes(node parse.Node) []parse.Node {
 		return n.Nodes
 	case *parse.ActionNode:
 		return []parse.Node{n.Pipe}
+	case *parse.TemplateNode:
+		return []parse.Node{n.Pipe}
 	case *parse.PipeNode:
 		return commandNodes(n.Cmds)
 	case *parse.CommandNode:
 		return n.Args
+	case *parse.ChainNode:
+		return []parse.Node{n.Node}
+	default:
+		return branchNodes(node)
+	}
+}
+
+// branchNodes lists the pipe and the two bodies of an if, a range or a with.
+func branchNodes(node parse.Node) []parse.Node {
+	switch n := node.(type) {
 	case *parse.IfNode:
 		return []parse.Node{n.Pipe, n.List, n.ElseList}
 	case *parse.RangeNode:
@@ -503,25 +527,57 @@ func commandNodes(commands []*parse.CommandNode) []parse.Node {
 	return nodes
 }
 
+// parseTemplate parses prompt text into every tree it defines. Unknown functions are allowed: the test reads the tree and does not run it.
+func parseTemplate(t *testing.T, text string) map[string]*parse.Tree {
+	t.Helper()
+
+	tree := parse.New("p")
+	tree.Mode = parse.SkipFuncCheck
+	trees := map[string]*parse.Tree{}
+
+	_, err := tree.Parse(text, "{{", "}}", trees)
+	require.NoError(t, err)
+
+	return trees
+}
+
+// templateReadsBuildHost reports whether any tree that the text defines reads build_host.
+func templateReadsBuildHost(t *testing.T, text string) bool {
+	t.Helper()
+
+	for _, tree := range parseTemplate(t, text) {
+		if readsBuildHost(tree.Root) {
+			return true
+		}
+	}
+
+	return false
+}
+
 // The engine runs the gate and the mutation run, and the sandbox of an agent step denies the build host, so no prompt reads the build host fact.
+// The test reads the parse tree, so every form that renders the host is refused: a field, an index, a with, a variable, a chain and a template call.
 func TestPrompts_NoPromptReadsTheBuildHost(t *testing.T) {
 	t.Parallel()
 
-	parsed := func(text string) *parse.Tree {
-		tree := parse.New("p")
-		tree.Mode = parse.SkipFuncCheck
-
-		_, err := tree.Parse(text, "{{", "}}", map[string]*parse.Tree{})
-		require.NoError(t, err)
-
-		return tree
+	forms := map[string]string{
+		"field":    "Host: `{{ .facts.build_host }}`.",
+		"if":       "{{ if .facts.build_host }}x{{ else }}y{{ end }}",
+		"range":    "{{ range .facts.build_host }}x{{ end }}",
+		"index":    `{{ index .facts "build_host" }}`,
+		"with":     "{{ with .facts }}{{ .build_host }}{{ end }}",
+		"variable": "{{ $f := .facts }}{{ $f.build_host }}",
+		"chain":    "{{ (index . \"facts\").build_host }}",
+		"template": `{{ define "h" }}{{ .facts.build_host }}{{ end }}{{ template "h" . }}`,
+		"pipe":     `{{ index .facts "build_host" | printf "%s" }}`,
 	}
 
-	for _, control := range []string{"Host: `{{ .facts.build_host }}`.", "{{ if .facts.build_host }}x{{ else }}y{{ end }}", "{{ range .facts.build_host }}x{{ end }}"} {
-		require.True(t, readsBuildHost(parsed(control).Root), "the walk finds the read in %q", control)
+	for name, form := range forms {
+		require.True(t, templateReadsBuildHost(t, form), "the walk finds the %s form: %s", name, form)
 	}
 
-	require.False(t, readsBuildHost(parsed("Repo `{{ .facts.repo }}`.").Root), "the walk ignores another fact")
+	for _, clean := range []string{"Repo `{{ .facts.repo }}`.", `{{ index .facts.vars "gate_files" }}`, "The build_host key is a fact."} {
+		require.False(t, templateReadsBuildHost(t, clean), "the walk ignores %s", clean)
+	}
 
 	entries, err := fs.ReadDir(os.DirFS("prompts"), ".")
 	require.NoError(t, err)
@@ -531,6 +587,32 @@ func TestPrompts_NoPromptReadsTheBuildHost(t *testing.T) {
 		raw, err := fs.ReadFile(os.DirFS("prompts"), entry.Name())
 		require.NoError(t, err)
 
-		assert.False(t, readsBuildHost(parsed(string(raw)).Root), "prompts/%s reads the build host fact", entry.Name())
+		assert.False(t, templateReadsBuildHost(t, string(raw)), "prompts/%s reads the build host fact", entry.Name())
+	}
+}
+
+// The sandbox of an agent step denies the build host, so no prompt orders a command there. The patterns are the host orders of the base prompts.
+func TestPrompts_NoPromptOrdersACommandOnTheBuildHost(t *testing.T) {
+	t.Parallel()
+
+	orders := regexp.MustCompile(`(?i)on the build host|jobs folder of the host|check .df. on the build host`)
+
+	for _, control := range []string{
+		"Run every build, test and lint on the build host. Never run one on this machine.",
+		"**Before EVERY build, check `df` on the build host.**",
+		"Job scripts live in a jobs folder of the host (`jobs/<lane>/`).",
+	} {
+		require.True(t, orders.MatchString(control), "the pattern finds the order in %q", control)
+	}
+
+	entries, err := fs.ReadDir(os.DirFS("prompts"), ".")
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	for _, entry := range entries {
+		raw, err := fs.ReadFile(os.DirFS("prompts"), entry.Name())
+		require.NoError(t, err)
+
+		assert.False(t, orders.MatchString(squash(string(raw))), "prompts/%s orders a command on the build host", entry.Name())
 	}
 }

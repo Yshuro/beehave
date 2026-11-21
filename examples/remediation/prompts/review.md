@@ -51,12 +51,9 @@ sees a known difference**: two builds that must differ in a named cell, and that
 **The matrix harness and the build of the base belong to the item.** Their paths are in the item's
 rulings file when an earlier lane built them: check the tree hash of the build, and write only your own
 CASES on the harness. When the file names none, build them one time, keep them, and report the paths.
-Run a probe whose inputs are independent as one process for each input, up to the idle cores of the
-host, inside the slot of your job.
+Run a probe whose inputs are independent as one process for each input.
 **Read every review body and every inline comment**, timestamps first, including `Suppressed comments (N)`.
-Pin the head at the start, at the gate and at the end.
-**List the gate steps that ran at the head you review, with the job that ran each, and name every step of the gate list of the round that did not run at that head.**
-
+Pin the head at the start and at the end.
 ## Condition 4, every item, unasked
 
 Worktree at the head, `detect-secrets` per file, **MERGE-BASE content against head content**, the difference
@@ -75,7 +72,7 @@ write the handoff and stop. Do not start the next step, and do not stop in the m
 
 ## The gate
 
-**The engine runs the gate and the mutation run for each candidate.** Read their results at the head you review. Run no gate step yourself, and write no job script for one.
+**The engine runs the gate and the mutation run for each candidate.** This step is given no gate result, so state no gate result as fact. Run no gate step yourself, and write no job script for one.
 **A result counts only with the number of tests that ran.** Write "10 of 10 runs passed, <n> tests in each run",
 never "10 of 10". A run with 0 tests is not a pass.
 **Capture the exit code before any pipe**: `cmd > out 2>&1; rc=$?; grep ... out`. After a pipe, `$?` is the exit code of the last stage.

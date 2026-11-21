@@ -83,7 +83,7 @@ func TestExampleProfile_AProjectWithABuildHostSendsNoCommandThereAndTheEngineRun
 	require.Contains(t, text, "Make the first commit when the change is green")
 }
 
-func TestExampleProfile_AProjectWithNoBuildHostAndNoForgeBuildsHereAndPushesNothing(t *testing.T) {
+func TestExampleProfile_AProjectWithNoBuildHostAndNoForgePushesNothingAndNamesNoHost(t *testing.T) {
 	t.Parallel()
 
 	text := implementPrompt(t, model.Project{}, nil)
