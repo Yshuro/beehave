@@ -493,8 +493,10 @@ type sessionTap struct {
 	session string
 	text    string
 	shell   []agent.Call
-	skills  []string
+	skills  []agent.Call
 	refused map[string]bool
+	// succeeded holds the ids of the calls whose result reported no error.
+	succeeded map[string]bool
 	// denials are the tool calls that the permission check of the CLI refused, from the result line.
 	denials []agent.Denial
 	// dropped counts the lines that the runner cut for length. invalid counts the lines that the adapter cannot read. ended is true after the line that ends the run.
@@ -517,7 +519,7 @@ type sessionTap struct {
 
 // newSessionTap returns a tap that estimates the cost of a run from the price table, and gives each new session id to named, when named is set.
 func newSessionTap(adapter agent.Adapter, prices agent.Prices, named func(session string)) *sessionTap {
-	return &sessionTap{adapter: adapter, refused: map[string]bool{}, prices: prices, named: named}
+	return &sessionTap{adapter: adapter, refused: map[string]bool{}, succeeded: map[string]bool{}, prices: prices, named: named}
 }
 
 // The violation lines that say the check did not see the whole output of the run.
@@ -567,15 +569,21 @@ func (t *sessionTap) see(line string) {
 	seen := t.adapter.Calls(line)
 	t.shell, t.skills = append(t.shell, seen.Shell...), append(t.skills, seen.Skills...)
 
-	for _, id := range seen.Refused {
-		t.refused[id] = true
-	}
+	mark(t.refused, seen.Refused)
+	mark(t.succeeded, seen.Succeeded)
 
 	t.addEnd(seen)
 	t.addCost(seen)
 
 	if seen.Invalid {
 		t.invalid++
+	}
+}
+
+// mark adds each id to the set.
+func mark(set map[string]bool, ids []string) {
+	for _, id := range ids {
+		set[id] = true
 	}
 }
 
@@ -636,11 +644,20 @@ func (t *sessionTap) incomplete() []string {
 	return lines
 }
 
+// skillCalls returns the skill of each skill call whose result reported no error, so a skill that did not load is left out.
 func (t *sessionTap) skillCalls() []string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	return slices.Clone(t.skills)
+	var skills []string
+
+	for _, call := range t.skills {
+		if t.succeeded[call.ID] {
+			skills = append(skills, call.Text)
+		}
+	}
+
+	return skills
 }
 
 // spent returns the cost of the run: the dollars that the result line reported, else streamed (the sum of the dollars that single lines reported, which the

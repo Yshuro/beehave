@@ -40,6 +40,16 @@ func TestCheckNetwork_AcceptsDomainNamesAndRefusesEverythingElse(t *testing.T) {
 	}
 }
 
+func TestCheckSkills_AcceptsAFolderNameAndRefusesAPath(t *testing.T) {
+	t.Parallel()
+
+	require.NoError(t, model.CheckSkills([]string{"your-review-skill", "review_2", "v1.2"}))
+
+	for _, bad := range []string{"", ".", "..", "a/b", `a\b`, "/abs", ".hidden", "-dash", "has space", "beehave-skills:review"} {
+		require.ErrorContains(t, model.CheckSkills([]string{bad}), "is not the name of a skill", bad)
+	}
+}
+
 func TestCheckAllowWrite_RefusesAnEmptyPathAndAParentReference(t *testing.T) {
 	t.Parallel()
 

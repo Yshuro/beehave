@@ -73,7 +73,7 @@ func (a fakeAdapter) Calls(line string) agent.Seen {
 	}
 
 	if a.invent {
-		return agent.Seen{Shell: []agent.Call{{Text: "ls"}}, Skills: []string{"s"}, Limit: &agent.Limit{Kind: agent.LimitRate}}
+		return agent.Seen{Shell: []agent.Call{{Text: "ls"}}, Skills: []agent.Call{{Text: "s"}}, Limit: &agent.Limit{Kind: agent.LimitRate}}
 	}
 
 	if a.denies {

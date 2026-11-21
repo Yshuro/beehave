@@ -1,0 +1,10 @@
+# The CLI answers the Skill call of the implement step with Unknown skill: the skill did not load. The call does not count, and the item stops.
+! exec beehave run 7 --workflow flow/workflow.star
+stderr 'did not call the skill'
+grep -count=1 '^implement ' calls.log
+! grep '^review ' calls.log
+
+-- unknown-skill --
+-- verdicts --
+approve
+approve

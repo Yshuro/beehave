@@ -71,6 +71,22 @@ func TestExample_AProjectThatNamesAnotherSkillPassesWhenItsAgentCallsIt(t *testi
 	assert.Positive(t, rig.h.gate.calls, "the item reached the gate")
 }
 
+func TestExample_TheSandboxOfTheImplementStepNamesTheReviewSkillOfTheProject(t *testing.T) {
+	t.Parallel()
+
+	rig, file := exampleRig(t, func(int) string { return "approve" })
+	rig.project.Vars["review_skill"] = ownSkill
+
+	_, err := runPipeline(rig.h.engine(t), file)
+	require.Error(t, err, "the agent called only the old skill")
+
+	require.Len(t, rig.h.agents.requests, 2, "the plan step and the implement step")
+	require.NotNil(t, rig.h.agents.requests[1].Sandbox)
+	assert.Equal(t, []string{ownSkill}, rig.h.agents.requests[1].Sandbox.Skills, "the implement step can load the skill that its check requires")
+	require.NotNil(t, rig.h.agents.requests[0].Sandbox)
+	assert.Empty(t, rig.h.agents.requests[0].Sandbox.Skills, "the plan step names no skill")
+}
+
 func TestExample_AProjectWithNoUsableReviewSkillIsRefusedBeforeAnyAgentStarts(t *testing.T) {
 	t.Parallel()
 
