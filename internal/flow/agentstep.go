@@ -202,16 +202,22 @@ func protectPaths(v starlark.Value, forbid []model.FindingKind) ([]string, error
 	return paths, workflow.Protection(forbid, paths)
 }
 
-// outputFile is the path where the agent of a step writes its declared outputs. It is in the state folder of the engine, named by item and step,
-// so the file never dirties the worktree of the item. A dot or a separator in a name is escaped, so two pairs of item and step never share a file.
+// outputFile is the path where the agent of a step writes its declared outputs: the one file of a folder of its own in the outputs folder of the state
+// folder, so the file never dirties the worktree of the item and the sandbox can name that folder as a working directory and open no other output file.
 func outputFile(state, item, step string) string {
-	return stepFile(state, outputsFolder, item, step)
+	return filepath.Join(callFolder(state, outputsFolder, item, step), "output.json")
 }
 
 // dataFile is the path where the phase of a step writes the data of the call: the one file of a folder of its own in the inputs folder of the state folder,
 // so the sandbox can name that folder as a working directory and open no other file.
 func dataFile(state, item, step string) string {
-	return filepath.Join(state, inputsFolder, model.SafeName(item)+"."+model.SafeName(step), "data.json")
+	return filepath.Join(callFolder(state, inputsFolder, item, step), "data.json")
+}
+
+// callFolder is the folder of one item and step in a folder of the state folder. A dot or a separator in a name is escaped, so two pairs of item and step
+// never share a folder.
+func callFolder(state, folder, item, step string) string {
+	return filepath.Join(state, folder, model.SafeName(item)+"."+model.SafeName(step))
 }
 
 // dataFileOf is the data file of the call, or "" for a call with no data.
@@ -221,11 +227,6 @@ func (a agentArgs) dataFileOf(state, item, step string) string {
 	}
 
 	return dataFile(state, item, step)
-}
-
-// stepFile is the JSON file of one item and step in a folder of the state folder.
-func stepFile(state, folder, item, step string) string {
-	return filepath.Join(state, folder, model.SafeName(item)+"."+model.SafeName(step)+".json")
 }
 
 // agent runs an agent call. The prompt is rendered once and recorded as the note of the first step, so a replay never reads the prompt file again.
@@ -667,23 +668,64 @@ func writtenObject(file string, denials []agent.Denial) (map[string]any, string)
 	return written, ""
 }
 
-// refusedWrites says which tools the permission check of the agent CLI refused when they called to write file, or returns "".
+// refusedWrites says which calls on file the permission check of the agent CLI refused, each by what it does to the file, or returns "".
 func refusedWrites(file string, denials []agent.Denial) string {
-	var tools []string
+	var calls []string
 
 	for _, denial := range denials {
-		if samePath(denial.Target, file) {
-			tools = append(tools, denial.Tool)
+		if call := refusedCall(file, denial); call != "" {
+			calls = append(calls, call)
 		}
 	}
 
-	if len(tools) == 0 {
+	if len(calls) == 0 {
 		return ""
 	}
 
-	slices.Sort(tools)
+	slices.Sort(calls)
 
-	return fmt.Sprintf(": the permission check of the agent CLI refused the %s call that writes it", strings.Join(slices.Compact(tools), " and "))
+	return ": the permission check of the agent CLI refused the " + strings.Join(slices.Compact(calls), " and the ")
+}
+
+// refusedCall names a refused call by what it does to file: a write, a read, or a command that names it. A call that does not touch file has no name.
+func refusedCall(file string, denial agent.Denial) string {
+	switch {
+	case samePath(denial.Target, file) && denial.Edit:
+		return denial.Tool + " call that writes it"
+	case samePath(denial.Target, file):
+		return denial.Tool + " call that reads it"
+	case namesPath(denial.Target, file):
+		return denial.Tool + " call whose command names it"
+	}
+
+	return ""
+}
+
+// commandBounds are the characters on each side of a word of a shell command: a blank, a quote, a redirect or an operator.
+const commandBounds = " \t\n'\"<>;&|()"
+
+// namesPath reports whether a shell command holds path as a whole word, so the command names that file and not a longer path that starts or ends with it.
+func namesPath(command, path string) bool {
+	for at := strings.Index(command, path); at >= 0; at = nextIndex(command, path, at) {
+		end := at + len(path)
+		before, after := at == 0 || strings.ContainsRune(commandBounds, rune(command[at-1])), end == len(command) || strings.ContainsRune(commandBounds, rune(command[end]))
+
+		if before && after {
+			return true
+		}
+	}
+
+	return false
+}
+
+// nextIndex returns the index of the next path in command after the one at at, or -1.
+func nextIndex(command, path string, at int) int {
+	next := strings.Index(command[at+1:], path)
+	if next < 0 {
+		return -1
+	}
+
+	return at + 1 + next
 }
 
 // refusedEdits says which files of the work folder the agent CLI refused to edit, though the step may edit them and no deny rule covers them, with what the CLI
