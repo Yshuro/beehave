@@ -22,7 +22,8 @@ import (
 
 // sandboxPlan makes the plan for the sandbox of one run, or returns the reason why the step cannot start with it.
 // The shell may read the work folder, the shared git directories of a linked work tree, the read paths of the project, the data file and the output file of the step, and nothing else under the home folder.
-// Outside the work folder, the agent may write only the output file of a step that declares outputs. The folders of the data file and the output file are its working directories.
+// Outside the work folder, the agent may write only the output file of a step that declares outputs. The run spec carries that file, so every launch opens it, and the adapter adds it to the sandbox.
+// The folder of the data file is a working directory.
 // The credential paths come from the engine list, the project file and the config folder of the runner. The .env files of the work folder, at any depth
 // and whether or not they exist yet, are denied by a pattern that the CLI matches when the file is used. The commits carry the git identity of the engine at the work folder.
 func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runner model.Runner, dir string) (agent.SandboxPlan, string) {
@@ -43,8 +44,8 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 	}
 
 	return agent.SandboxPlan{
-		Skills: skills, Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: slices.Concat(withData(read, request.DataFile), write), ReadDirs: slices.Concat(dataFolder(request.DataFile), folders(write)),
-		Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed, request.DataFile), DenyWritePatterns: hookPatterns(dir), Write: write, Network: request.Sandbox.Network, Identity: identity,
+		Skills: skills, Work: dir, GitDirs: sharedGitDirs(a.repos, dir), Read: withData(read, request.DataFile), ReadDirs: dataFolder(request.DataFile),
+		Deny: deny, DenyPatterns: envPatterns(dir), DenyWrite: writeDenies(dir, closed, request.DataFile), DenyWritePatterns: hookPatterns(dir), Network: request.Sandbox.Network, Identity: identity,
 	}, ""
 }
 
@@ -101,17 +102,6 @@ func outputWrites(request flow.AgentRequest) []string {
 	}
 
 	return []string{request.OutputFile}
-}
-
-// folders returns the folder of each output file as a working directory of the step. The engine gives each call a folder that holds its output file
-// alone, so the file tools can read that file before they write it, and the CLI still blocks the read of every other output file.
-func folders(files []string) []string {
-	out := make([]string, 0, len(files))
-	for _, file := range files {
-		out = append(out, filepath.Dir(file))
-	}
-
-	return out
 }
 
 // gitIdentity returns the user.name and the user.email that the git of the engine reads in the repository of git.

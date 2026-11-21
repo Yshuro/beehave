@@ -25,7 +25,7 @@ import (
 // lineAdapter is an adapter whose output lines are "session=<id>" and "text=<message>".
 type lineAdapter struct{ agent.Adapter }
 
-func (lineAdapter) Guard(command, _ string) agent.Launch {
+func (lineAdapter) Guard(command, _ string, _ []string) agent.Launch {
 	return agent.Launch{Args: []string{"--hook", command}}
 }
 
@@ -35,7 +35,7 @@ func (lineAdapter) Profile() agent.Profile { return agent.Profile{BudgetFlag: "-
 // noHookAdapter is an adapter whose CLI has no hook.
 type noHookAdapter struct{ lineAdapter }
 
-func (noHookAdapter) Guard(string, string) agent.Launch { return agent.Launch{} }
+func (noHookAdapter) Guard(string, string, []string) agent.Launch { return agent.Launch{} }
 
 func (lineAdapter) Line(line string) (string, string) {
 	if id, ok := cutPrefix(line, "session="); ok {

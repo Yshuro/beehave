@@ -62,10 +62,10 @@ func assertOnlyWriteGrant(t *testing.T, settings outputSettings, file string, cl
 	t.Helper()
 
 	assert.Empty(t, settings.Sandbox.Filesystem.AllowWrite, "no allowWrite entry: the Edit allow rule is the one route")
-	assert.Equal(t, []string{"Edit(/" + file + ")"}, settings.Permissions.Allow, "the one grant is the output file by its exact path")
+	assert.Equal(t, []string{"Read(/" + file + ")", "Edit(/" + file + ")"}, settings.Permissions.Allow, "the one grant is the output file by its exact path, to read and to edit")
 
 	for _, rule := range settings.Permissions.Allow {
-		path := strings.TrimSuffix(strings.TrimPrefix(rule, "Edit(/"), ")")
+		path := strings.TrimSuffix(strings.TrimPrefix(strings.TrimPrefix(rule, "Read(/"), "Edit(/"), ")")
 		assert.False(t, strings.ContainsAny(path, `*?[\`), "a write grant holds no glob character: %s", rule)
 
 		for _, other := range closed {
@@ -88,7 +88,7 @@ func TestSandboxPlan_AStepWithOutputsAndNoEditsGetsSettingsThatAllowItsOutputFil
 	require.NotNil(t, r.f.spec.Sandbox)
 	assert.True(t, r.f.spec.NoEdits, "edits stay off")
 
-	settings := settingsOfArgs(t, claude.New(nil).Sandbox(*r.f.spec.Sandbox, "", t.TempDir()).Args)
+	settings := settingsOfArgs(t, claude.New(nil).Sandbox(*r.f.spec.Sandbox, "", t.TempDir(), r.f.spec.Write).Args)
 
 	assertOnlyWriteGrant(t, settings, file, sibling, file+".tmp", outputs, r.work, filepath.Join(r.work, "a.go"))
 	assert.False(t, within(r.work, sibling), "the sibling is outside the work folder, which the sandbox opens by default")
@@ -105,7 +105,7 @@ func TestSandboxPlan_AStepThatDeclaresNoOutputsOpensNoPathForWrite(t *testing.T)
 	require.NoError(t, err)
 	require.NotNil(t, r.f.spec.Sandbox)
 
-	settings := settingsOfArgs(t, claude.New(nil).Sandbox(*r.f.spec.Sandbox, "", t.TempDir()).Args)
+	settings := settingsOfArgs(t, claude.New(nil).Sandbox(*r.f.spec.Sandbox, "", t.TempDir(), r.f.spec.Write).Args)
 	assert.Empty(t, settings.Sandbox.Filesystem.AllowWrite)
 	assert.Empty(t, settings.Permissions.Allow)
 }

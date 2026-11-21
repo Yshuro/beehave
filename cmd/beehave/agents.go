@@ -141,7 +141,7 @@ func (a agents) specOf(request flow.AgentRequest, runner model.Runner, dir strin
 		Adapter: adapter, Runner: runner, Dir: dir, Prompt: request.Prompt, Env: a.env,
 		Timeout: request.Timeout, IdleTimeout: request.IdleTimeout, Model: request.Model, Resume: request.Resume,
 		MaxTurns: a.maxTurns, MaxBudget: lowerCap(a.maxBudget, request.MaxBudget),
-		Log: tap, OnStart: request.Started, Guard: guard, NoEdits: request.NoEdits,
+		Log: tap, OnStart: request.Started, Guard: guard, NoEdits: request.NoEdits, Write: outputWrites(request),
 	}
 }
 
@@ -166,7 +166,7 @@ func noGuardNote(adapter agent.Adapter, guard string, forbid []model.FindingKind
 		return ""
 	case guard == "":
 		return "The step lists forbid_commands, but beehave cannot find the path of its own program to start the check of the commands. The step did not start."
-	case adapter.Guard(guard, "").Empty():
+	case adapter.Guard(guard, "", nil).Empty():
 		return "The step lists forbid_commands, but the agent CLI of the runner has no hook to refuse a command before it runs. The step did not start."
 	}
 

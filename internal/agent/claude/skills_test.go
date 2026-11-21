@@ -74,7 +74,7 @@ func TestSandbox_APlanWithSkillsPassesAPluginFolderThatHoldsOnlyThoseSkills(t *t
 	p := plan()
 	p.Skills = []string{"/home/o/login/skills/review", "/home/o/login/skills/oracle"}
 
-	launch := claude.New(nil).Sandbox(p, "", "/run")
+	launch := claude.New(nil).Sandbox(p, "", "/run", nil)
 	flags, settings := settingsOf(t, launch.Args)
 
 	assert.Equal(t, []string{"--setting-sources", "", "--strict-mcp-config", "--disallowedTools", "WebFetch", "WebSearch", "--add-dir", "/run/skills-plugin", "--plugin-dir", "/run/skills-plugin"}, flags,
@@ -107,7 +107,7 @@ func TestSandbox_APlanWithSkillsPassesAPluginFolderThatHoldsOnlyThoseSkills(t *t
 func TestSandbox_APlanWithNoSkillsPassesNoPluginFolder(t *testing.T) {
 	t.Parallel()
 
-	launch := claude.New(nil).Sandbox(plan(), "", "/run")
+	launch := claude.New(nil).Sandbox(plan(), "", "/run", nil)
 
 	assert.NotContains(t, launch.Args, "--plugin-dir")
 	assert.Empty(t, launch.Copies)
