@@ -922,10 +922,10 @@ def host_hold(seen, acked):
 
     return ""
 
-def round_question(pr, reason, seen):
-    """The question of round-wait: the integration pull request `pr`, the reason that held the round when there is one, and `seen`, the host losses that the round read."""
+def round_question(reason, seen, idle):
+    """The question of round-wait: the reason that held the round when there is one, `seen`, the host losses that the round read, and `idle`, the text that names why no item can move."""
     if reason == "":
-        return "The round has no item it can move. Read the integration pull request %d and answer." % pr
+        return "The round has no item it can move. %s Then answer CONTINUE to check the queue again, or STOP to end the round." % idle
 
     if reason == "host-loss":
         return "The engine counted %d host losses in this round. %s Then answer CONTINUE to go on. The round asks again after a newer loss." % (seen, SYNC_REASONS[reason])
@@ -1017,6 +1017,36 @@ def ready_items(q, round_settings):
     rows = [r for r in q.rows if len(listed) == 0 or r.item in listed]
     return [r.item for r in rank(rows, round_settings["owner"])][:min(q.free, round_settings["lane_cap"])]
 
+# Each reason that a listed item does not move, by the state of its row, with the step of the owner. missing is an item with no row. A ready row shows here only when the items queue has no free slot.
+ITEM_CLAUSES = {
+    "failed": "Listed item {item} is failed: run beehave resume {item}. If the resume refuses the run, run beehave cancel {item}, and the next pass starts a new attempt.",
+    "hold": "Listed item {item} is on hold: take the hold off the item or its pull request.",
+    "done": "Listed item {item} is done.",
+    "running": "Listed item {item} has an open run outside this round: beehave status shows it.",
+    "ready": "Listed item {item} is ready, and the items queue has no free slot.",
+    "missing": "Listed item {item} is not in the queue: it is closed, or it does not carry vars.round.label.",
+}
+
+def idle_reason(q, round_settings):
+    """Returns the text that names why the pass of the queue read `q` moved no item: one clause for each listed item with its state and the step of the owner, or the count of the rows in each state when the round has no item list."""
+    listed = round_settings["items"]
+    if len(listed) == 0:
+        counts = {}
+        for r in q.rows:
+            counts[r.state] = counts.get(r.state, 0) + 1
+
+        head = "The queue has no ready row." if counts.get("ready", 0) == 0 else "The items queue has no free slot."
+        failed = [r.item for r in q.rows if r.state == "failed"]
+        steps = " Failed: %s. Run beehave resume for each, or beehave cancel when the resume refuses the run." % ", ".join(failed) if len(failed) > 0 else ""
+        return "%s Rows: %d ready, %d failed, %d on hold, %d done, %d running.%s" % (head, counts.get("ready", 0), counts.get("failed", 0), counts.get("hold", 0), counts.get("done", 0), counts.get("running", 0), steps)
+
+    rows = {r.item: r.state for r in q.rows}
+    clauses = []
+    for item in listed:
+        clauses.append(ITEM_CLAUSES[rows.get(item, "missing")].format(item = item))
+
+    return " ".join(clauses)
+
 def round(item):
     """The round: one entry for the whole round, with one child run (the entry pipeline) for each item. `item` is the round itself, an id that no tracker row uses.
     A pass is sync-<n> (sync_trunk), round-queue-<n>, queue-audit-<n> on the rows of that read, the cap, round-spawn-<n>, round-gather-<n> (until any run ends) and round-land-<n>. The round never returns while a child run is open, but a step that stops the run, such as an exit code 2 of a sync check, ends it with the open runs.
@@ -1074,7 +1104,7 @@ def round(item):
         # No ready row can move and no child run of this round is open.
         integration = round_integration(project, round_settings)
         answer = wait(
-            round_question(integration.pr, held, seen),
+            round_question(held, seen, idle_reason(q, round_settings) if held == "" else ""),
             name = "round-wait",
             timeout = "%dh" % round_settings["wait_hours"],
             to = [round_settings["owner"]],
