@@ -77,6 +77,9 @@ type script struct {
 	// value is the JSON text that the entry function of a run that spawn started returned.
 	value json.RawMessage
 
+	// reused holds the ids of the runs that spawn returned and did not start: a run that finished with success is reused, and another run is its parent.
+	reused []string
+
 	// hostStarted is true once a host_up call of this run launched the host. host_teardown stops no other host.
 	hostStarted bool
 
