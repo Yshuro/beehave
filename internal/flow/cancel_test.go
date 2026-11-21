@@ -75,6 +75,31 @@ func TestCancel_WithNoEngineTheCancelReleasesTheClaimItself(t *testing.T) {
 	assert.Equal(t, 1, countOf(harness.life.seen(), "release"))
 }
 
+func TestCancel_WithNoEngineAReleaseThatFailsReportsItAndKeepsTheCancelMarker(t *testing.T) {
+	t.Parallel()
+
+	harness := newHarness(t)
+	harness.agents.gate = make(chan struct{})
+
+	engine, err := NewEngine(t.Context(), harness.opts, harness.deps())
+	require.NoError(t, err)
+	require.NoError(t, engine.Launch())
+
+	_ = runInBackground(engine, testItem)
+	waitOn(t, waiting[struct{}]{what: "the agent to start", run: runOfEngine(t, engine), read: func() (struct{}, bool, error) { return struct{}{}, harness.agents.running() == 1, nil }})
+	shutdownOpeningGate(t, engine, harness.agents.gate)
+
+	harness.life.mu.Lock()
+	harness.life.failing["release"] = true
+	harness.life.mu.Unlock()
+
+	client := harness.client(t, testVersion)
+
+	require.ErrorIs(t, client.Cancel(testItem), errFake, "the cancel reports the release of the claim that failed")
+	assert.Equal(t, 1, countOf(harness.life.seen(), "release"))
+	assert.True(t, fileExists(cancelPath(engine.dir, testRun)), "a release that failed removed the cancel marker, so no later start gives the item back")
+}
+
 func TestShutdown_AnInterruptLeavesTheRunOpenAndTheNextRunContinuesIt(t *testing.T) {
 	t.Parallel()
 
