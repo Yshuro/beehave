@@ -546,7 +546,8 @@ def decode_output(text, what, empty):
     """Decodes the JSON text of an agent output. `what` names the output in a refusal, and `empty` is the value to write when there is nothing to report. A text that is not JSON is refused with `what` and the first 200 characters of the text."""
     decoded = json.decode(text, default = ("invalid",))
     if type(decoded) == "tuple":
-        shown = text if len(text) <= 200 else text[:200] + "..."
+        points = list(text.codepoints())
+        shown = text if len(points) <= 200 else "".join(points[:200]) + "..."
         fail("REFUSE: %s is not valid JSON: %r. Write %s when there is nothing to report" % (what, shown, empty))
 
     return decoded
