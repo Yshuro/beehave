@@ -168,3 +168,24 @@ func TestExampleFiling_ABadFindingFilesNothingAndTheRunFailsWithTheReason(t *tes
 		})
 	}
 }
+
+func TestExampleFiling_ParkedTextThatIsNotJSONIsRefusedWithTheSettleOutputAndTheItem(t *testing.T) {
+	t.Parallel()
+
+	_, writer, outcome := parkedRig(t, "not json at all")
+
+	require.ErrorContains(t, outcome.err, `REFUSE: the output parked of the settle step of item `+testItem+` is not valid JSON: "not json at all".`)
+	assert.NotContains(t, outcome.err.Error(), "json.decode", "the raw decoder error is not what the item ends with")
+	assert.Empty(t, writer.created)
+}
+
+func TestExampleFiling_ParkedTextThatIsNotJSONIsQuotedUpToALimit(t *testing.T) {
+	t.Parallel()
+
+	long := strings.Repeat("x", 500)
+
+	_, _, outcome := parkedRig(t, long)
+
+	require.ErrorContains(t, outcome.err, "is not valid JSON: "+`"`+strings.Repeat("x", 100))
+	assert.NotContains(t, outcome.err.Error(), long, "a long text is cut")
+}

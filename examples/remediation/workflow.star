@@ -542,6 +542,15 @@ def changelog_missing(changelog, base, head, id, fetch = False):
 
     return ""
 
+def decode_output(text, what, empty):
+    """Decodes the JSON text of an agent output. `what` names the output in a refusal, and `empty` is the value to write when there is nothing to report. A text that is not JSON is refused with `what` and the first 200 characters of the text."""
+    decoded = json.decode(text, default = ("invalid",))
+    if type(decoded) == "tuple":
+        shown = text if len(text) <= 200 else text[:200] + "..."
+        fail("REFUSE: %s is not valid JSON: %r. Write %s when there is nothing to report" % (what, shown, empty))
+
+    return decoded
+
 def uncaused_text(implement, fixes):
     """The JSON list of the reds that the lanes did not cause: the output `uncaused` of the implement lane and of each fix lane, joined. An entry whose id an earlier lane already listed is left out, so two lanes that report one red file one item.
     An entry that is no object stays in the list, and file_parked refuses it. A text that is not JSON is refused with the name of the lane and the text itself."""
@@ -551,10 +560,7 @@ def uncaused_text(implement, fixes):
     for place in range(len(lanes)):
         lane = lanes[place]
         name = "the implement lane" if place == 0 else "fix lane %d" % place
-        listed = json.decode(lane.uncaused, default = ("invalid",))
-        if type(listed) == "tuple":
-            fail("REFUSE: the output uncaused of %s is not valid JSON: %r. Write [] when the lane found no red that it did not cause" % (name, lane.uncaused))
-
+        listed = decode_output(lane.uncaused, "the output uncaused of " + name, "[]")
         if type(listed) != "list":
             fail("REFUSE: the output uncaused of a lane is not a JSON list. Write [] when the lane found no red that it did not cause")
 
@@ -569,12 +575,12 @@ def uncaused_text(implement, fixes):
     return json.encode(joined)
 
 def file_parked(parked, output = "parked"):
-    """Files one issue for each finding that the review loop leaves open. `parked` is the output of the settle step, or the joined outputs `uncaused` of the lanes: a JSON list. `output` names it in a refusal.
+    """Files one issue for each finding that the review loop leaves open. `parked` is the output of the settle step, or the joined outputs `uncaused` of the lanes: a JSON list. `output` names it in a refusal, and a text that is not JSON is refused with that name and the start of the text.
     Each finding has an id (words in lower case joined by hyphens, the same for the same finding), a title, a body in the template of the repository,
     `found` (how the finding was found, with the commit and the exact command), a severity of P0 to P3, and `operator` (true when an operator hits it in normal use).
     The issue has no assignee, so the queue can give it out. The key is the id of the finding: a resume that files again returns the issue that exists.
     Every finding is checked before the first issue is filed, so a bad entry files nothing."""
-    findings = json.decode(parked)
+    findings = decode_output(parked, "the output " + output, "[]")
     if type(findings) != "list":
         fail("REFUSE: the output %s is not a JSON list. Write [] when no finding stays open" % output)
 
@@ -1314,7 +1320,7 @@ def pipeline(item):
         push(name = "push-settle", branch = item.id, head = settle.head_sha, expect = loop.head)
 
         # Each finding that the owner parked stays open after the last round: it gets its own issue, so it is not lost with the pull request.
-        file_parked(settle.parked)
+        file_parked(settle.parked, "parked of the settle step of item " + item.id)
 
         return item_value(item, settle.head_sha, False, "settled", loop.host_losses)
 
