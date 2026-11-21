@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -144,6 +145,56 @@ func TestSandboxPlan_AStateFileWhosePathHoldsAGlobCharacterStopsTheStep(t *testi
 		require.NoError(t, err)
 		assert.Equal(t, agent.OutcomeNotStarted, result.Outcome, "a data file: %s", folder)
 	}
+}
+
+func TestAgentRun_AStepWithNoSandboxAndAnOutputFileWhosePathHoldsAGlobCharacterOrACredentialPathStops(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+
+	for _, folder := range []string{"st*te", "st?te", "st[a]te", `st\ate`} {
+		req := outputRequest(filepath.Join(r.home, folder, "outputs", "7.json"))
+		req.Sandbox = nil
+
+		result, err := r.f.agents.Run(t.Context(), req)
+
+		require.NoError(t, err)
+		assert.Equal(t, agent.OutcomeNotStarted, result.Outcome, folder)
+		assert.Contains(t, result.Note, "The file "+req.OutputFile+" of the state folder holds a glob character", folder)
+	}
+
+	req := outputRequest(filepath.Join(r.home, ".ssh", "outputs", "7.json"))
+	req.Sandbox = nil
+
+	result, err := r.f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
+	assert.Contains(t, result.Note, "overlaps the credential path "+filepath.Join(r.home, ".ssh"))
+}
+
+func TestAgentRun_AStepWithNoSandboxAndNoHomeFolderStillChecksTheGlobCharacterOfItsOutputFile(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	r.f.agents.home = func() (string, error) { return "", errors.New("no home") }
+
+	req := outputRequest(filepath.Join(r.home, "st*te", "outputs", "7.json"))
+	req.Sandbox = nil
+
+	result, err := r.f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
+	assert.Contains(t, result.Note, "holds a glob character")
+
+	req = outputRequest(filepath.Join(r.home, "state", "outputs", "7.json"))
+	req.Sandbox = nil
+
+	result, err = r.f.agents.Run(t.Context(), req)
+
+	require.NoError(t, err)
+	assert.NotEqual(t, agent.OutcomeNotStarted, result.Outcome, result.Note)
 }
 
 func TestSandboxPlan_AWorkFolderWhosePathHoldsAGlobCharacterStopsAStepThatMayEdit(t *testing.T) {

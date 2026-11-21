@@ -36,10 +36,10 @@ func (a agents) sandboxPlan(ctx context.Context, request flow.AgentRequest, runn
 	deny, read := credentialPaths(home, runner.ConfigDir, project.SandboxDeny), expandAll(project.SandboxRead, home)
 	git := gitOf(a.projects, request.Project, a.repos).Runner(dir, proc.DefaultTimeout)
 	closed, err := closedPaths(ctx, git, dir, home)
-	identity, write := a.identity(ctx, git), outputWrites(request)
+	identity := a.identity(ctx, git)
 	skills, missing := skillFolders(request.Sandbox.Skills, runner.ConfigDir, home)
 
-	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, slices.Concat([]string{request.DataFile}, write)...), workNote(dir, request.NoEdits), identityNote(identity, dir), missing); note != "" {
+	if note := cmp.Or(refusedNote(err), readNote(read, home, deny), stateNote(deny, request.DataFile), workNote(dir, request.NoEdits), identityNote(identity, dir), missing); note != "" {
 		return agent.SandboxPlan{}, note
 	}
 
@@ -93,6 +93,24 @@ func linkIn(folder string) string {
 	})
 
 	return found
+}
+
+// outputNote says why the output file of a step cannot be opened to the file tools, or returns "" when it can. Every launch opens that file by a rule, so the
+// check runs for every step, with or without a sandbox. Without a home folder the credential paths are not known, and only the glob check runs;
+// a sandboxed step then stops in the plan for want of the home folder.
+func (a agents) outputNote(request flow.AgentRequest, runner model.Runner) string {
+	write := outputWrites(request)
+	if len(write) == 0 {
+		return ""
+	}
+
+	var deny []string
+
+	if home, err := a.home(); err == nil {
+		deny = credentialPaths(home, runner.ConfigDir, a.projects[request.Project].SandboxDeny)
+	}
+
+	return stateNote(deny, write...)
 }
 
 // outputWrites returns the output file of a step that declares outputs, the one path of the state folder that the agent writes, or none.
