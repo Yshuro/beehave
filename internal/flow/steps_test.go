@@ -77,7 +77,8 @@ func TestClient_StepsOfAFinishedRunShowEachStepWithTheFieldsThatDecideTheFlow(t 
 		assert.Equal(t, "done", line.State, line.Name)
 		assert.False(t, line.Started.IsZero(), line.Name)
 		assert.False(t, line.Ended.IsZero(), line.Name)
-		assert.GreaterOrEqual(t, line.Seconds, 0.0, line.Name)
+		require.NotNil(t, line.Seconds, line.Name)
+		assert.GreaterOrEqual(t, *line.Seconds, 0.0, line.Name)
 	}
 
 	work := view.Steps[3]
@@ -121,7 +122,8 @@ func TestClient_StepsOfARunInItsAgentStepShowTheStepAsRunningWithItsElapsedTime(
 	assert.Equal(t, "running", last.State)
 	assert.True(t, last.Ended.IsZero())
 	assert.False(t, last.Started.IsZero())
-	assert.GreaterOrEqual(t, last.Seconds, 0.0)
+	require.NotNil(t, last.Seconds)
+	assert.GreaterOrEqual(t, *last.Seconds, 0.0)
 
 	for _, line := range view.Steps[:len(view.Steps)-1] {
 		assert.Equal(t, "done", line.State, line.Name)
@@ -553,9 +555,56 @@ func TestStepLines_AnOpenRunThatRecordedNoStepForItsWorkShowsAStepInProgress(t *
 	assert.Equal(t, unrecordedStep, lines[1].Name)
 	assert.Equal(t, "running", lines[1].State)
 	assert.Equal(t, ended, lines[1].Started)
-	assert.InDelta(t, 60.0, lines[1].Seconds, 0.001)
+	require.NotNil(t, lines[1].Seconds)
+	assert.InDelta(t, 60.0, *lines[1].Seconds, 0.001)
 	assert.Len(t, stepLines(records, runDone, false, ended), 1, "a finished run shows no step in progress")
 	assert.Empty(t, stepLines(nil, runRunning, true, ended), "a run with no record has no start for a step")
+}
+
+func TestStepLines_AnOpenRunWhoseLastRecordIsAnOpenChildShowsAStepInProgressWithNoStartAndNamesTheChild(t *testing.T) {
+	t.Parallel()
+
+	began := time.Now().Add(-time.Minute)
+	records := []dbos.StepInfo{
+		{StepName: "spawn:fan#1", StartedAt: began, CompletedAt: began.Add(time.Second)},
+		{StepName: "item", StartedAt: began.Add(time.Second), ChildWorkflowID: "item-22-r1", CompletedAt: began.Add(2 * time.Second)},
+		{StepName: "item", StartedAt: began.Add(time.Second), ChildWorkflowID: "item-21-r1"},
+	}
+
+	lines := stepLines(records, runRunning, true, began.Add(time.Minute))
+
+	require.Len(t, lines, 4)
+	assert.Nil(t, lines[2].Seconds, "a child record with no end has no duration")
+	assert.Equal(t, unrecordedStep, lines[3].Name)
+	assert.True(t, lines[3].Started.IsZero(), "the last record has no end, so the step has no start")
+	assert.Nil(t, lines[3].Seconds)
+	assert.Equal(t, []string{"item-21-r1"}, lines[3].WaitsOn, "only the child that has not ended is waited on")
+}
+
+func TestSpanSeconds_ReportsNoSpanForAMissingTimeOrAnEndBeforeTheStart(t *testing.T) {
+	t.Parallel()
+
+	start := time.Date(2026, 11, 20, 9, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name       string
+		start, end time.Time
+		want       *float64
+	}{
+		{name: "no_start", end: start},
+		{name: "no_end", start: start},
+		{name: "end_before_start", start: start, end: start.Add(-time.Second)},
+		{name: "span", start: start, end: start.Add(90 * time.Second), want: new(90.0)},
+		{name: "equal_times", start: start, end: start, want: new(0.0)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			assert.Equal(t, tt.want, spanSeconds(tt.start, tt.end))
+		})
+	}
 }
 
 func TestStepLines_AWaitingGateIsNamedFromItsTipRecordAndAnOtherRecordFromItself(t *testing.T) {

@@ -67,7 +67,7 @@ func runLine(view flow.RunSteps) string {
 
 // stepLine describes one step: its name, start time, duration and outcome, then the fields that decide the flow. A field the step lacks is left out.
 func stepLine(step flow.StepLine) string {
-	columns := []string{step.Name, step.Started.Format(time.RFC3339), spanOf(step.Seconds), step.State}
+	columns := []string{step.Name, startOf(step.Started), spanOf(step.Seconds), step.State}
 
 	if fields := stepFields(step); len(fields) > 0 {
 		columns = append(columns, strings.Join(fields, " "))
@@ -109,8 +109,10 @@ func stepFields(step flow.StepLine) []string {
 	return appendProblems(fields, step)
 }
 
-// appendProblems adds the word for an output that could not be read, and the error of the step.
+// appendProblems adds the children that the step waits for, the word for an output that could not be read, and the error of the step.
 func appendProblems(fields []string, step flow.StepLine) []string {
+	fields = appendText(fields, "waits_on", strings.Join(step.WaitsOn, ","))
+
 	if step.OutputUnreadable {
 		fields = append(fields, "output_unreadable")
 	}
@@ -150,9 +152,22 @@ func gateSteps(steps []flow.GateStep) string {
 	return "steps=" + strings.Join(parts, ",")
 }
 
-// spanOf writes a duration in whole seconds, or in milliseconds when it is under one second.
-func spanOf(seconds float64) string {
-	span := time.Duration(seconds * float64(time.Second))
+// startOf writes the start time of a step, and nothing for a step that has no recorded start.
+func startOf(started time.Time) string {
+	if started.IsZero() {
+		return ""
+	}
+
+	return started.Format(time.RFC3339)
+}
+
+// spanOf writes a duration in whole seconds, or in milliseconds when it is under one second. It writes nothing for a step that has no duration.
+func spanOf(seconds *float64) string {
+	if seconds == nil {
+		return ""
+	}
+
+	span := time.Duration(*seconds * float64(time.Second))
 	if span >= time.Second {
 		return span.Round(time.Second).String()
 	}

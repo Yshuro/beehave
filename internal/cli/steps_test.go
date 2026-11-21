@@ -15,21 +15,23 @@ func intPtr(n int) *int { return &n }
 
 func boolPtr(b bool) *bool { return &b }
 
+func secs(seconds float64) *float64 { return &seconds }
+
 // stepsView is a finished step, a failed step and a step that runs.
 func stepsView() flow.RunSteps {
 	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 
 	return flow.RunSteps{Run: "item-14-r1", State: "running", Steps: []flow.StepLine{
 		{
-			Name: "agent:work#1", State: "done", Started: start, Ended: start.Add(15 * time.Minute), Seconds: 900,
+			Name: "agent:work#1", State: "done", Started: start, Ended: start.Add(15 * time.Minute), Seconds: secs(900),
 			ExitCode: intPtr(0), Verdict: "approve", Head: "61e7998",
 		},
 		{
-			Name: "gate:g#1", State: "done", Started: start.Add(15 * time.Minute), Ended: start.Add(22 * time.Minute), Seconds: 408,
+			Name: "gate:g#1", State: "done", Started: start.Add(15 * time.Minute), Ended: start.Add(22 * time.Minute), Seconds: secs(408),
 			Passed: boolPtr(false), Gate: []flow.GateStep{{Name: "command", Status: "pass"}, {Name: "tests", Status: "fail"}},
 		},
-		{Name: "command:c#1", State: "failed", Started: start.Add(22 * time.Minute), Ended: start.Add(22 * time.Minute), Seconds: 0.25, Error: "the lint\nprogram is missing"},
-		{Name: "agent:fix#1", State: "running", Started: start.Add(23 * time.Minute), Seconds: 125, Stop: "turns"},
+		{Name: "command:c#1", State: "failed", Started: start.Add(22 * time.Minute), Ended: start.Add(22 * time.Minute), Seconds: secs(0.25), Error: "the lint\nprogram is missing"},
+		{Name: "agent:fix#1", State: "running", Started: start.Add(23 * time.Minute), Seconds: secs(125), Stop: "turns"},
 	}}
 }
 
@@ -57,7 +59,7 @@ func TestStatus_AnAgentLineSaysWhenTheAgentRewroteTheHistory(t *testing.T) {
 	rig := newRig(t)
 	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
-		{Name: "agent:fix#1", State: "done", Started: start, Ended: start, Head: "9bbc2f5", Rewrote: true},
+		{Name: "agent:fix#1", State: "done", Started: start, Ended: start, Seconds: secs(0), Head: "9bbc2f5", Rewrote: true},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
@@ -66,14 +68,30 @@ func TestStatus_AnAgentLineSaysWhenTheAgentRewroteTheHistory(t *testing.T) {
 	assert.Equal(t, "agent:fix#1\t2026-10-31T09:00:00Z\t0s\tdone\thead=9bbc2f5 rewrote=yes\nrun\tdone\n", stdout)
 }
 
+func TestStatus_AStepWithNoStartOrNoDurationPrintsEmptyColumnsAndNamesTheChildItWaitsOn(t *testing.T) {
+	t.Parallel()
+
+	rig := newRig(t)
+	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
+	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "running", Steps: []flow.StepLine{
+		{Name: "item", State: "done", Started: start},
+		{Name: "step in progress", State: "running", WaitsOn: []string{"item-21-r1", "item-22-r1"}},
+	}}
+
+	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
+
+	require.Equal(t, 0, code, stderr)
+	assert.Equal(t, "item\t2026-10-31T09:00:00Z\t\tdone\nstep in progress\t\t\trunning\twaits_on=item-21-r1,item-22-r1\nrun\trunning\n", stdout)
+}
+
 func TestStatus_AnAgentLineOfARunNamesItsKindAsTheLaneLedger(t *testing.T) {
 	t.Parallel()
 
 	rig := newRig(t)
 	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
-		{Name: "agent:work#1", State: "done", Started: start, Ended: start, Label: "fix 2/6", ExitCode: intPtr(0)},
-		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Label: "review 2/6", ExitCode: intPtr(0)},
+		{Name: "agent:work#1", State: "done", Started: start, Ended: start, Seconds: secs(0), Label: "fix 2/6", ExitCode: intPtr(0)},
+		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Seconds: secs(0), Label: "review 2/6", ExitCode: intPtr(0)},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
@@ -95,8 +113,8 @@ func TestStatus_AnAgentLineShowsItsLoginAndItsModelInTextAndJSON(t *testing.T) {
 	rig := newRig(t)
 	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
-		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Label: "review", Login: "oc", Model: "m-seen", ExitCode: intPtr(0)},
-		{Name: "agent:work#1", State: "done", Started: start, Ended: start, Login: "pool-1", ExitCode: intPtr(0)},
+		{Name: "agent:look#1", State: "done", Started: start, Ended: start, Seconds: secs(0), Label: "review", Login: "oc", Model: "m-seen", ExitCode: intPtr(0)},
+		{Name: "agent:work#1", State: "done", Started: start, Ended: start, Seconds: secs(0), Login: "pool-1", ExitCode: intPtr(0)},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
@@ -119,8 +137,8 @@ func TestStatus_AnItemListsItsLanesAcrossItsRunsOneLineEach(t *testing.T) {
 	rig := newRig(t)
 	start := time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC)
 	rig.steering.lanes = flow.ItemLanes{Item: "14", Lanes: []flow.LaneLine{
-		{Run: "item-14-r1", StepLine: flow.StepLine{Name: "agent:work#1", State: "done", Started: start, Label: "fix 1/5", ExitCode: intPtr(0)}},
-		{Run: "item-14-r2", StepLine: flow.StepLine{Name: "agent:work#1", State: "done", Started: start, Label: "fix 2/5", ExitCode: intPtr(0)}},
+		{Run: "item-14-r1", StepLine: flow.StepLine{Name: "agent:work#1", State: "done", Started: start, Seconds: secs(0), Label: "fix 1/5", ExitCode: intPtr(0)}},
+		{Run: "item-14-r2", StepLine: flow.StepLine{Name: "agent:work#1", State: "done", Started: start, Seconds: secs(0), Label: "fix 2/5", ExitCode: intPtr(0)}},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "--item", "14")
@@ -172,7 +190,7 @@ func TestStatus_APassingGateShowsPassAndAnEmptyStepList(t *testing.T) {
 
 	rig := newRig(t)
 	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
-		{Name: "gate:g#1", State: "done", Started: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC), Seconds: 3, Passed: boolPtr(true)},
+		{Name: "gate:g#1", State: "done", Started: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC), Seconds: secs(3), Passed: boolPtr(true)},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
@@ -187,7 +205,7 @@ func TestStatus_AFailedGateShowsEveryLaterStepAsUnknown(t *testing.T) {
 	rig := newRig(t)
 	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
 		{
-			Name: "gate:g#1", State: "done", Started: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC), Seconds: 3,
+			Name: "gate:g#1", State: "done", Started: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC), Seconds: secs(3),
 			Passed: boolPtr(false), Gate: []flow.GateStep{{Name: "command", Status: "fail"}, {Name: "tests", Status: "unknown"}},
 		},
 	}}
@@ -203,7 +221,7 @@ func TestStatus_AStepWhoseOutputCannotBeReadSaysSo(t *testing.T) {
 
 	rig := newRig(t)
 	rig.steering.view = flow.RunSteps{Run: "item-14-r1", State: "done", Steps: []flow.StepLine{
-		{Name: "command:c#1", State: "done", Started: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC), Seconds: 1, OutputUnreadable: true},
+		{Name: "command:c#1", State: "done", Started: time.Date(2026, 10, 31, 9, 0, 0, 0, time.UTC), Seconds: secs(1), OutputUnreadable: true},
 	}}
 
 	code, stdout, stderr := rig.execute(t.Context(), "status", "item-14-r1")
