@@ -372,8 +372,8 @@ const e2eClaude = `#!/bin/sh
 # When the file obey-hook exists, the fake obeys --settings as Claude Code does: it runs the hook command of the settings before each Bash call.
 # A hook that exits with code 2 blocks the call: the fake adds a line to blocked.log and prints the tool_result of the refusal.
 # The implement step also makes one Bash call for each line of the file cmds, when it exists.
-# When the file edit-file exists, the implement step writes edited.txt with the Write tool. As with the real claude in print mode,
-# the write is refused unless the start arguments hold --permission-mode acceptEdits: the fake adds a line to refused.log and prints the tool_result of the refusal.
+# When the file edit-file exists, the implement step writes edited.txt with the Write tool. As with the documented mode acceptEdits of the real claude
+# in a run with no sandbox, the write is refused unless the start arguments hold --permission-mode acceptEdits: the fake adds a line to refused.log and prints the tool_result of the refusal.
 # When the file hang-session exists, the call that blocks first names the session of that file in an init line and writes the transcript of the session:
 # the prompt, under the transcript folder of the login. A call with --resume <id> adds its prompt to resumed.log.
 # A resumed call whose prompt names no step (the continue prompt) reads the prompt of the session from its transcript, as the real claude continues a session that holds its brief.
