@@ -3,6 +3,7 @@ package claude
 import (
 	"cmp"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -64,6 +65,9 @@ func (Adapter) Calls(line string) agent.Seen {
 	}
 }
 
+// editTools are the file tools that write their target.
+func editTools() []string { return []string{"Edit", "Write", "NotebookEdit"} }
+
 // denialsOf returns the permission_denials of a result line: the tool of each refused call and its file_path, notebook_path or command.
 func denialsOf(value any) []agent.Denial {
 	if lineType(value) != resultType {
@@ -84,7 +88,7 @@ func denialsOf(value any) []agent.Denial {
 		command, _ := input[bashKey].(string)          //nolint:errcheck // a missing command reads as ""
 
 		if tool != "" {
-			denials = append(denials, agent.Denial{Tool: tool, Target: cmp.Or(path, notebook, command)})
+			denials = append(denials, agent.Denial{Tool: tool, Target: cmp.Or(path, notebook, command), Edit: slices.Contains(editTools(), tool)})
 		}
 	}
 

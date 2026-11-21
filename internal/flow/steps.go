@@ -50,10 +50,12 @@ type StepLine struct {
 	Started time.Time `json:"started,omitzero"`
 	// Ended is the zero time while the step runs.
 	Ended time.Time `json:"ended,omitzero"`
-	// Seconds is how long the step took, or how long it has run when it is not over.
-	Seconds  float64 `json:"duration_seconds"`
-	Error    string  `json:"error,omitempty"`
-	ExitCode *int    `json:"exit_code,omitempty"`
+	// Seconds is how long the step took, or how long it has run when it is not over. It is nil when the records give no start, or no end that is not before the start.
+	Seconds *float64 `json:"duration_seconds,omitempty"`
+	// WaitsOn holds the runs of the children that the step in progress waits for.
+	WaitsOn  []string `json:"waits_on,omitempty"`
+	Error    string   `json:"error,omitempty"`
+	ExitCode *int     `json:"exit_code,omitempty"`
 	// Label is the label keyword of an agent step: a free text. It is empty for a step that is not an agent and for an agent call that sets none.
 	Label string `json:"label,omitempty"`
 	// Login is the runner that an agent step ran on: the pool pick, or the runner that the call named. An agent that an older version recorded has none.
@@ -345,7 +347,7 @@ func callLine(group []dbos.StepInfo, name string) StepLine {
 	base, _, _ := strings.Cut(name, "/")
 	last := group[len(group)-1]
 	line := StepLine{Name: base, State: stepDone, Started: group[0].StartedAt, Ended: last.CompletedAt}
-	line.Seconds = line.Ended.Sub(line.Started).Seconds()
+	line.Seconds = spanSeconds(line.Started, line.Ended)
 
 	for _, record := range group {
 		line.absorb(record)
@@ -520,7 +522,10 @@ func unfinishedLine(records, pending []dbos.StepInfo, state RunState, open bool,
 			return nil
 		}
 
-		return []StepLine{runningLine(unrecordedStep, records[len(records)-1].CompletedAt, now)}
+		line := runningLine(unrecordedStep, records[len(records)-1].CompletedAt, now)
+		line.WaitsOn = openChildren(records)
+
+		return []StepLine{line}
 	}
 
 	line := callLine(pending, openName(pending))
@@ -529,7 +534,7 @@ func unfinishedLine(records, pending []dbos.StepInfo, state RunState, open bool,
 	// A run that has records is never queued, so an open run is running.
 	if line.State != stepFailed {
 		line.Ended = time.Time{}
-		line.State, line.Seconds = string(state), now.Sub(line.Started).Seconds()
+		line.State, line.Seconds = string(state), spanSeconds(line.Started, now)
 	}
 
 	return []StepLine{line}
@@ -537,7 +542,31 @@ func unfinishedLine(records, pending []dbos.StepInfo, state RunState, open bool,
 
 // runningLine is the line of a step that runs and has recorded nothing yet.
 func runningLine(name string, started, now time.Time) StepLine {
-	return StepLine{Name: name, State: stepRunning, Started: started, Seconds: now.Sub(started).Seconds()}
+	return StepLine{Name: name, State: stepRunning, Started: started, Seconds: spanSeconds(started, now)}
+}
+
+// spanSeconds is the time from start to end in seconds. It is nil when either time is the zero time or the end is before the start: no such span is a fact.
+func spanSeconds(start, end time.Time) *float64 {
+	if start.IsZero() || end.IsZero() || end.Before(start) {
+		return nil
+	}
+
+	seconds := end.Sub(start).Seconds()
+
+	return &seconds
+}
+
+// openChildren lists the runs of the child workflow records that have not ended: the children that an open run waits for.
+func openChildren(records []dbos.StepInfo) []string {
+	var runs []string
+
+	for _, record := range records {
+		if record.ChildWorkflowID != "" && record.CompletedAt.IsZero() {
+			runs = append(runs, record.ChildWorkflowID)
+		}
+	}
+
+	return runs
 }
 
 // openName names the call that the records belong to, from the first record that carries the name of the call. A gate that waits for its queue has no such record.

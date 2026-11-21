@@ -146,6 +146,89 @@ func TestSandboxPlan_AStateFileWhosePathHoldsAGlobCharacterStopsTheStep(t *testi
 	}
 }
 
+func TestSandboxPlan_AWorkFolderWhosePathHoldsAGlobCharacterStopsAStepThatMayEdit(t *testing.T) {
+	t.Parallel()
+
+	for _, folder := range []string{"w*b", "w?b", "w[ab]", `w\b`} {
+		r := newSandboxRig(t)
+		work := filepath.Join(filepath.Dir(r.work), folder)
+		require.NoError(t, os.MkdirAll(work, 0o700))
+		runGit(t, work, "init", "-q")
+		r.f.agents.trees = treeAt(work)
+
+		req := request()
+		req.Sandbox = &model.Sandbox{}
+
+		result, err := r.f.agents.Run(t.Context(), req)
+
+		require.NoError(t, err)
+		assert.Equal(t, agent.OutcomeNotStarted, result.Outcome, folder)
+		assert.Contains(t, result.Note, "The work folder "+work+" holds a glob character, "+folder[1:2], folder)
+
+		req.NoEdits = true
+
+		result, err = r.f.agents.Run(t.Context(), req)
+
+		require.NoError(t, err)
+		assert.Equal(t, agent.OutcomeExited, result.Outcome, "a step that may not edit gets no rule of its work folder: %s: %s", folder, result.Note)
+	}
+}
+
+// deniedClaude is a fake claude whose result line refuses edits of four files of the work folder: a hook, hello.txt, .ENV and .envs/dev.yaml.
+const deniedClaude = `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = --version ]; then echo "2.1.330 (Claude Code)"; exit 0; fi
+done
+cat > /dev/null
+echo '{"type":"system","subtype":"init","session_id":"s1"}'
+echo '{"type":"result","subtype":"success","session_id":"s1","result":"done","permission_denials":[{"tool_name":"Write","tool_input":{"file_path":"'"$PWD"'/.git/hooks/pre-commit"}},{"tool_name":"Write","tool_input":{"file_path":"'"$PWD"'/hello.txt"}},{"tool_name":"Edit","tool_input":{"file_path":"'"$PWD"'/.ENV"}},{"tool_name":"Write","tool_input":{"file_path":"'"$PWD"'/.envs/dev.yaml"}}]}'
+`
+
+func TestAgents_ARefusedEditThatADenyRuleOfTheSandboxCoversIsMarkedClosed(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	bin := t.TempDir()
+	require.NoError(t, exectest.Write(filepath.Join(bin, "claude"), deniedClaude))
+
+	r.f.agents.adapter = func(model.Agent) agent.Adapter { return claude.New(nil) }
+	r.f.agents.run = agent.Runner{}.Run
+	r.f.agents.env = map[string]string{"PATH": bin + ":/bin:/usr/bin"}
+	require.NoError(t, os.Mkdir(filepath.Join(r.home, "login"), 0o700))
+
+	req := request()
+	req.Sandbox, req.Resume = &model.Sandbox{}, ""
+
+	result, err := r.f.agents.Run(t.Context(), req)
+	require.NoError(t, err)
+	require.Len(t, result.Denials, 4, result.Note)
+
+	assert.True(t, strings.HasSuffix(result.Denials[0].Target, "/.git/hooks/pre-commit"), result.Denials[0].Target)
+	assert.True(t, result.Denials[0].Closed, "the closed paths of the work folder deny the hook")
+	assert.True(t, strings.HasSuffix(result.Denials[1].Target, "/hello.txt"), result.Denials[1].Target)
+	assert.False(t, result.Denials[1].Closed, "no deny rule covers a plain file of the work folder")
+	assert.True(t, result.Denials[2].Closed, "the .env pattern covers .ENV, without case: %s", result.Denials[2].Target)
+	assert.True(t, result.Denials[3].Closed, "the .env pattern covers the files of a folder it matches: %s", result.Denials[3].Target)
+}
+
+func TestDeniesWrite_CoversTheDenyPathsAndPatternsOfThePlan(t *testing.T) {
+	t.Parallel()
+
+	plan := agent.SandboxPlan{
+		Deny: []string{"/h/.ssh"}, DenyPatterns: []string{"/w/.env*", "/w/**/.env*"},
+		DenyWrite: []string{"/w/.git"}, DenyWritePatterns: []string{"/w/.claude/settings*.json", "/w/**/.claude/settings*.json"},
+	}
+
+	for path, want := range map[string]bool{
+		"/h/.ssh/id_rsa": true, "/w/.env": true, "/w/a/.env.local": true, "/w/.git/hooks/pre-commit": true,
+		"/w/.claude/settings.json": true, "/w/sub/.claude/settings.local.json": true,
+		"/w/hello.txt": false, "/w/.github/ci.yml": false, "/w/.claude/notes.md": false,
+		"/w/.ENV": true, "/w/.envs/dev.yaml": true, "/w/.claude/settings.json/x": true, "/H/.SSH/id_rsa": true, "/w/.GIT/config": true,
+	} {
+		assert.Equal(t, want, deniesWrite(plan, path), path)
+	}
+}
+
 // settingsClaude is a fake claude that obeys the write grants of --settings as Claude Code does. It reads each Edit allow rule as a pattern, as
 // Claude Code does, and grants a write by the shell or by the Write tool to a path that a rule matches: Claude Code merges the paths of the Edit allow
 // rules into the write paths of the sandbox. It copies the settings to settings.json in the work folder and tries the file and the sibling that the
@@ -223,5 +306,5 @@ func TestAgents_TheFakeAgentWritesItsOutputFileUnderTheRealSandboxSettings(t *te
 	require.NoError(t, err)
 	assert.Equal(t, "shell wrote "+file+"\ntool wrote "+file+"\nshell refused "+sibling+"\ntool refused "+sibling+"\n", string(log))
 	assert.NoFileExists(t, sibling)
-	assert.Equal(t, []agent.Denial{{Tool: "Write", Target: sibling}}, result.Denials, "the result carries the refused Write call")
+	assert.Equal(t, []agent.Denial{{Tool: "Write", Target: sibling, Edit: true}}, result.Denials, "the result carries the refused Write call")
 }

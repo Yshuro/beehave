@@ -25,3 +25,5 @@ beehave run <item>
 ```
 
 The second command needs a workflow file and, when the config holds more than one project, a project. See `/beehave:run`.
+
+If the resume refuses the run, tell the user to run `beehave run <item>` instead: the cancel has already ended the old run, so the run starts a new attempt.
