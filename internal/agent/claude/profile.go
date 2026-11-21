@@ -41,7 +41,8 @@ func TokenFix(entry string) string {
 // Profile returns the command line and the login variables of Claude Code.
 // Print mode cannot ask for permission, so a call that needs it is refused. "--allowedTools Bash" runs shell commands; the PreToolUse hook of Guard
 // stays the check for the forbidden kinds. "--permission-mode acceptEdits" (EditArgs, left out for a step with edits = False) accepts the file tools
-// inside the work folder and refuses them outside it. It does not fence Bash: a shell command can write outside the work folder unless forbid_commands refuses it.
+// inside the work folder and refuses them outside it, except in a sandboxed run, where the CLI forces the mode default and the Edit allow rule of the
+// work folder opens the file tools (Sandbox). It does not fence Bash: a shell command can write outside the work folder unless forbid_commands refuses it.
 // The prompt arrives on stdin, so the list after --allowedTools takes no prompt by mistake.
 func (Adapter) Profile() agent.Profile {
 	return agent.Profile{ //nolint:gosec // the token variable name, not a credential
