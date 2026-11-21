@@ -418,7 +418,7 @@ func TestAgentStep_TheOutputFileIsInTheStateFolderAndTheWorktreeStaysClean(t *te
 	assert.JSONEq(t, `{"verdict":"ok"}`, string(written))
 }
 
-func TestOutputFile_ASeparatorOrADotInAnItemOrAStepNeverMakesTwoPairsShareAFile(t *testing.T) {
+func TestOutputFile_ASeparatorOrADotInAnItemOrAStepNeverMakesTwoPairsShareAFolder(t *testing.T) {
 	t.Parallel()
 
 	state := t.TempDir()
@@ -427,10 +427,10 @@ func TestOutputFile_ASeparatorOrADotInAnItemOrAStepNeverMakesTwoPairsShareAFile(
 	for _, pair := range [][2]string{{"a/b", "c"}, {"a", "b/c"}, {"a.b", "c"}, {"a", "b.c"}, {"..", "a#1"}, {"a", "a#1"}} {
 		path := outputFile(state, pair[0], pair[1])
 
-		assert.Equal(t, filepath.Join(state, outputsFolder), filepath.Dir(path), "one folder holds every output file")
-		assert.False(t, seen[path], "%v shares a file", pair)
+		assert.Equal(t, filepath.Join(state, outputsFolder), filepath.Dir(filepath.Dir(path)), "the outputs folder holds the folder of every call")
+		assert.False(t, seen[filepath.Dir(path)], "%v shares a folder", pair)
 
-		seen[path] = true
+		seen[filepath.Dir(path)] = true
 	}
 }
 
@@ -443,7 +443,7 @@ func TestOutputFile_TheVerdictPathHoldsOnlyLettersDigitsAndFewMarks(t *testing.T
 	rel, err := filepath.Rel(state, path)
 	require.NoError(t, err)
 	assert.Regexp(t, `^[A-Za-z0-9._/-]+$`, rel)
-	assert.Equal(t, outputsFolder, filepath.Dir(rel), "one folder holds every output file")
+	assert.Equal(t, outputsFolder, filepath.Dir(filepath.Dir(rel)), "the outputs folder holds the folder of every call")
 }
 
 func TestAgentStep_APinOnAFolderThatIsNotARepositoryFailsTheStep(t *testing.T) {
@@ -541,7 +541,7 @@ func TestAgentStep_AMissingOutputFileNamesTheRefusedWriteOfThatFile(t *testing.T
 	rig := newAgentRig(t)
 	rig.h.agents.result = func(request AgentRequest) agent.Result {
 		denied := exited
-		denied.Denials = []agent.Denial{{Tool: "Bash", Target: "rm -rf /"}, {Tool: "Write", Target: request.OutputFile}, {Tool: "Write", Target: request.OutputFile + ".tmp"}}
+		denied.Denials = []agent.Denial{{Tool: "Bash", Target: "rm -rf /"}, {Tool: "Write", Target: request.OutputFile, Edit: true}, {Tool: "Write", Target: request.OutputFile + ".tmp", Edit: true}}
 
 		return denied
 	}

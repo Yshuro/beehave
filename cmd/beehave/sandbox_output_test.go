@@ -81,7 +81,7 @@ func TestSandboxPlan_AStepWithOutputsAndNoEditsGetsSettingsThatAllowItsOutputFil
 
 	r := newSandboxRig(t)
 	outputs := filepath.Join(r.home, ".local", "state", "beehave", "outputs")
-	file, sibling := filepath.Join(outputs, "1.agent_3Async-review-1_231.json"), filepath.Join(outputs, "1.agent_3Aimplement_231.json")
+	file, sibling := filepath.Join(outputs, "1.agent_3Async-review-1_231", "output.json"), filepath.Join(outputs, "1.agent_3Aimplement_231", "output.json")
 
 	_, err := r.f.agents.Run(t.Context(), outputRequest(file))
 	require.NoError(t, err)
@@ -286,7 +286,9 @@ func TestAgents_TheFakeAgentWritesItsOutputFileUnderTheRealSandboxSettings(t *te
 	require.NoError(t, os.MkdirAll(outputs, 0o700))
 	require.NoError(t, os.Mkdir(filepath.Join(r.home, "login"), 0o700))
 
-	file, sibling := filepath.Join(outputs, "1.agent_3Async-review-1_231.json"), filepath.Join(outputs, "1.agent_3Aimplement_231.json")
+	file, sibling := filepath.Join(outputs, "1.agent_3Async-review-1_231", "output.json"), filepath.Join(outputs, "1.agent_3Aimplement_231", "output.json")
+	require.NoError(t, os.Mkdir(filepath.Dir(file), 0o700))
+	require.NoError(t, os.Mkdir(filepath.Dir(sibling), 0o700))
 	req := outputRequest(file)
 	req.Prompt = "write=" + file + "\nsibling=" + sibling + "\n"
 
