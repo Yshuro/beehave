@@ -416,3 +416,68 @@ func TestNestedSpawn_AnEngineThatStartsWithALowerCapReplaysTheSpawnOfARunAtDepth
 	require.NoError(t, receive(t, done).err)
 	assert.Equal(t, []string{"leaf"}, h.commands.ranBy("24"), "the run at depth 3 ran once")
 }
+
+// queueOldRoot queues the run of testItem on the items queue, as a build before the roots queue did.
+func queueOldRoot(t *testing.T, client *Client) {
+	t.Helper()
+
+	in, err := pinnedInput(testItem, testProject, writeFlow(t, chainFlow("l2")))
+	require.NoError(t, err)
+
+	_, err = dbos.Enqueue[ItemResult](client.flow, itemsQueueName, itemName, in, dbos.WithEnqueueWorkflowID(runID(testItem, 1)), dbos.WithEnqueueApplicationVersion(client.version))
+	require.NoError(t, err)
+}
+
+func TestNestedSpawn_ARootThatAnOlderBuildQueuedOnItemsRunsAndResumesOnThisBuild(t *testing.T) {
+	t.Parallel()
+
+	t.Run("queued while no engine ran", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+		require.NoError(t, h.engine(t).Shutdown())
+
+		client := h.client(t, testVersion)
+		queueOldRoot(t, client)
+
+		engine := h.engine(t)
+		_, err := client.JoinRun(t.Context(), testItem, testProject, writeFlow(t, chainFlow("l2")))
+
+		require.NoError(t, err)
+
+		_, root := inputOf(t, engine, testItem)
+		assert.Equal(t, itemsQueueName, root.QueueName, "the root keeps the queue it was queued on")
+		assert.Equal(t, []string{"leaf"}, h.commands.ranBy("24"))
+	})
+
+	t.Run("failed, then resumed", func(t *testing.T) {
+		t.Parallel()
+
+		h := newHarness(t)
+
+		var healed atomic.Bool
+
+		h.commands.before = func(_ context.Context, request CommandRequest) error {
+			if request.Item == "23" && !healed.Load() {
+				return errFake
+			}
+
+			return nil
+		}
+
+		engine := h.engine(t)
+		client := h.client(t, testVersion)
+		queueOldRoot(t, client)
+		waitOn(t, condition(func() bool { return childStatus(t, engine, testItem) == dbos.WorkflowStatusError }))
+		require.NoError(t, engine.Shutdown())
+		healed.Store(true)
+
+		require.NoError(t, client.Resume(testItem))
+
+		h.engine(t)
+		_, err := client.JoinRun(t.Context(), testItem, testProject, writeFlow(t, chainFlow("l2")))
+
+		require.NoError(t, err)
+		assert.Contains(t, h.commands.ranBy(testItem), "after", "the root ends")
+	})
+}
