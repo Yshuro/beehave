@@ -147,7 +147,7 @@ func TestSandboxPlan_AStateFileWhosePathHoldsAGlobCharacterStopsTheStep(t *testi
 	}
 }
 
-func TestAgentRun_AStepWithNoSandboxAndAnOutputFileWhosePathHoldsAGlobCharacterOrACredentialPathStops(t *testing.T) {
+func TestAgentRun_AStepWithNoSandboxAndAnOutputFileWhosePathHoldsAGlobCharacterStops(t *testing.T) {
 	t.Parallel()
 
 	r := newSandboxRig(t)
@@ -162,15 +162,20 @@ func TestAgentRun_AStepWithNoSandboxAndAnOutputFileWhosePathHoldsAGlobCharacterO
 		assert.Equal(t, agent.OutcomeNotStarted, result.Outcome, folder)
 		assert.Contains(t, result.Note, "The file "+req.OutputFile+" of the state folder holds a glob character", folder)
 	}
+}
 
+func TestAgentRun_AStepWithNoSandboxStartsWithItsOutputFileInACredentialPath(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
 	req := outputRequest(filepath.Join(r.home, ".ssh", "outputs", "7.json"))
 	req.Sandbox = nil
 
 	result, err := r.f.agents.Run(t.Context(), req)
 
 	require.NoError(t, err)
-	assert.Equal(t, agent.OutcomeNotStarted, result.Outcome)
-	assert.Contains(t, result.Note, "overlaps the credential path "+filepath.Join(r.home, ".ssh"))
+	assert.NotEqual(t, agent.OutcomeNotStarted, result.Outcome, result.Note)
+	assert.Equal(t, []string{req.OutputFile}, r.f.spec.Write)
 }
 
 func TestAgentRun_AStepWithNoSandboxAndNoHomeFolderStillChecksTheGlobCharacterOfItsOutputFile(t *testing.T) {

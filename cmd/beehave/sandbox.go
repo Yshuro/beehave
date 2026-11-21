@@ -96,8 +96,9 @@ func linkIn(folder string) string {
 }
 
 // outputNote says why the output file of a step cannot be opened to the file tools, or returns "" when it can. Every launch opens that file by a rule, so the
-// check runs for every step, with or without a sandbox. Without a home folder the credential paths are not known, and only the glob check runs;
-// a sandboxed step then stops in the plan for want of the home folder.
+// glob check runs for every step, with or without a sandbox. The credential check runs for a sandboxed step only: there the rule would open a path the
+// sandbox denies. A step with no sandbox can already read every path, and its rule names the one file. Without a home folder the credential paths
+// are not known, and only the glob check runs; a sandboxed step then stops in the plan for want of the home folder.
 func (a agents) outputNote(request flow.AgentRequest, runner model.Runner) string {
 	write := outputWrites(request)
 	if len(write) == 0 {
@@ -106,7 +107,7 @@ func (a agents) outputNote(request flow.AgentRequest, runner model.Runner) strin
 
 	var deny []string
 
-	if home, err := a.home(); err == nil {
+	if home, err := a.home(); err == nil && request.Sandbox != nil {
 		deny = credentialPaths(home, runner.ConfigDir, a.projects[request.Project].SandboxDeny)
 	}
 
