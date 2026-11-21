@@ -100,22 +100,9 @@ func (s *script) spawn(b *starlark.Builtin, args starlark.Tuple, kwargs []starla
 		return nil, err
 	}
 
-	s.reused = append(s.reused, reusedRuns(plan)...)
+	s.spawned = append(s.spawned, plan...)
 
 	return runsValue(plan), nil
-}
-
-// reusedRuns lists the ids of the runs of a plan that it does not start.
-func reusedRuns(plan []spawnedRun) []string {
-	var ids []string
-
-	for _, one := range plan {
-		if !one.Start {
-			ids = append(ids, one.Run)
-		}
-	}
-
-	return ids
 }
 
 // childRuns reads the arguments of a gather call and refuses a run that this run did not spawn.
@@ -128,20 +115,10 @@ func (s *script) childRuns(b *starlark.Builtin, args starlark.Tuple, kwargs []st
 	return call, refs, s.checkChildren(refs)
 }
 
-// checkChildren refuses a run that this run did not spawn. The row of a run holds the id of its parent, and a run that spawn reused is the one other child of this run.
+// checkChildren refuses a run that no spawn call of this run returned. It reads no store: the plan of each spawn is a recorded step, so a replay of this run lists the same runs.
 func (s *script) checkChildren(refs []spawnedRun) error {
-	self, err := dbos.GetWorkflowID(s.ctx)
-	if err != nil {
-		return fmt.Errorf("read the id of the run of item %s: %w", s.in.Item, err)
-	}
-
-	rows, err := s.e.rowsOf(refs)
-	if err != nil {
-		return err
-	}
-
 	for _, ref := range refs {
-		if row, found := rows[ref.Run]; found && row.ParentWorkflowID != self && !slices.Contains(s.reused, ref.Run) {
+		if !slices.ContainsFunc(s.spawned, func(one spawnedRun) bool { return one.Item == ref.Item && one.Run == ref.Run }) {
 			return fmt.Errorf("run %s is not a child of this run. Pass the runs that spawn returned", ref.Run)
 		}
 	}
