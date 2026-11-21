@@ -345,7 +345,7 @@ func TestNestedSpawn_ACancelOfAMiddleRunCancelsTheRunsBelowItAndNothingAbove(t *
 	assert.Equal(t, dbos.WorkflowStatusError, root.Status, "the root fails and is not canceled")
 }
 
-// failAt runs the chain to depth 3 with item fails failing, shuts the engine down and heals the item.
+// failAt runs flow with every command of the item fails failing, shuts the engine down and heals the item.
 func failAt(t *testing.T, h *harness, flow, fails string) {
 	t.Helper()
 
@@ -380,4 +380,39 @@ func TestNestedSpawn_AnEngineThatStartsWithALowerCapStillRunsARunThatWaitsAtDept
 
 	require.NoError(t, receive(t, done).err)
 	assert.Contains(t, h.commands.ranBy(testItem), "after", "the root ends")
+}
+
+// failAfterSpawn is a chain where item 23, at depth 2, runs the command post after its child 24 at depth 3 ended.
+const failAfterSpawn = `def l4(item):
+    command(name = "leaf", run = ["leaf"])
+
+def l3(item):
+    gather(spawn(items = ["24"], entry = "l4"))
+    command(name = "post", run = ["post"])
+
+def l2(item):
+    r = gather(spawn(items = ["23"], entry = "l3")).results[0]
+    if not r.ok:
+        fail(r.error)
+
+def main(item):
+    r = gather(spawn(items = ["21"], entry = "l2")).results[0]
+    if not r.ok:
+        fail(r.error)
+    command(name = "after", run = ["after"])
+`
+
+func TestNestedSpawn_AnEngineThatStartsWithALowerCapReplaysTheSpawnOfARunAtDepthTwo(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	failAt(t, h, failAfterSpawn, "23")
+
+	require.NoError(t, h.client(t, testVersion).Resume(testItem))
+
+	h.opts.MaxSpawnDepth = 1
+	done := runInBackground(h.engine(t), testItem)
+
+	require.NoError(t, receive(t, done).err)
+	assert.Equal(t, []string{"leaf"}, h.commands.ranBy("24"), "the run at depth 3 ran once")
 }

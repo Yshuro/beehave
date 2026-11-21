@@ -420,8 +420,8 @@ func (e *Engine) register(opts Options) error {
 	)
 }
 
-// deepestKept returns the depth of the deepest item run that can run again: one that is open, or canceled or failed and so open to a resume.
-// A project file that lowered max_spawn_depth must not leave such a run on a queue that no worker reads.
+// deepestKept returns the depth of the children of the deepest item run that can run again: one that is open, or canceled or failed and so open to a resume.
+// A project file that lowered max_spawn_depth must not leave such a run on a queue that no worker reads, and the replay of its spawn names the queue of its children.
 func (e *Engine) deepestKept() (int, error) {
 	// The depth comes from the input: a canceled row has lost its queue name.
 	states := dbos.WithFilterStatus(dbos.WorkflowStatusPending, dbos.WorkflowStatusEnqueued, dbos.WorkflowStatusCancelled, dbos.WorkflowStatusError)
@@ -436,7 +436,7 @@ func (e *Engine) deepestKept() (int, error) {
 	// A run whose input does not decode cannot run again, so it needs no queue.
 	for _, row := range rows {
 		if in, err := (run{Status: row}).input(); err == nil {
-			deepest = max(deepest, in.Depth)
+			deepest = max(deepest, in.Depth+1)
 		}
 	}
 
