@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
@@ -419,4 +420,45 @@ func TestQueueLoop_AFailedChildIsHeldAndTheLoopGoesOn(t *testing.T) {
 	assert.Contains(t, r.w.notes[0], "|21|")
 	assert.Contains(t, r.w.notes[0], "The run of this item failed")
 	assert.Equal(t, 1, r.agents.callsOf("21"), "a failed item does not start again")
+}
+
+// A failed pass with a run still open and nothing ready to start has nothing to protect: no run starts into a shared cause, so the loop does not sleep.
+func TestQueueLoop_AFailedPassWithNothingToStartDoesNotSleep(t *testing.T) {
+	t.Parallel()
+
+	r := newLoopRig(t, queueItem("21", model.SeverityP0), queueItem("22", model.SeverityP1))
+
+	var engine *Engine
+
+	// Item 22 stays open until the loop has held item 21, so the pass after the failure has an open run and nothing to start.
+	r.agents.setAct(func(ctx context.Context, item string) error {
+		if item == "21" {
+			return errFake
+		}
+
+		deadline := time.Now().Add(30 * time.Second)
+
+		for time.Now().Before(deadline) && ctx.Err() == nil {
+			steps, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
+			if err == nil && hasStep(steps, "item_status:hold-0-21#1") {
+				return nil
+			}
+
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		return errFake
+	})
+
+	engine = r.engine(t)
+	t.Cleanup(func() { require.NoError(t, engine.Shutdown()) })
+
+	_, err := engine.RunFile(testItem, testProject, r.file)
+	require.NoError(t, err)
+
+	steps, err := dbos.GetWorkflowSteps(engine.ctx, testRun)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, []string{"21", "22"}, r.agents.started())
+	assert.Equal(t, []string{testProject + "|21|hold"}, r.w.statuses, "only item 21 failed")
+	assert.Equal(t, 0, countSteps(steps, "sleep:pause-"), "the pass after the failure starts nothing, so it does not sleep")
 }
