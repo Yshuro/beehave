@@ -49,7 +49,7 @@ The file stays in the state folder. The temporary folders are shared by every ru
 
 The engine resolves the state folder to its real path once, when it opens the folder, so the output file, the data file, the prompt and the grant all hold one spelling. The sandbox compares real paths, so a grant that holds a link opens nothing.
 
-On Linux, the sandbox ignores a write path that does not exist when the run starts. Before each try, the engine removes the old output file and makes a new empty one, so the exact grant names a file that exists. An empty output file counts as no output file.
+On Linux, the sandbox ignores a write path that does not exist when the run starts. Before each try of a call that declares outputs, the engine removes the old output file and makes a new empty one, so the exact grant names a file that exists. An empty output file counts as no output file.
 
 ### Forge data for a sandboxed step
 
