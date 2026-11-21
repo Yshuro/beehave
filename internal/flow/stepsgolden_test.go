@@ -61,6 +61,7 @@ var goldenShapes = map[string][]string{
 		"preflight: code,ok,reason,stop",
 		"push: head",
 		"queue: free,pulls,rows",
+		"sleep: slept",
 		"spawn: runs",
 		"wait: answer,answers,timed_out",
 		"write: key,rc,skipped,stderr,stdout",
@@ -82,7 +83,7 @@ var goldenKinds = map[string][]string{
 	"star30": {
 		"agent", "command", "earlier_calls", "env", "facts", "gate", "gather", "host_teardown", "host_up",
 		"item_comment", "item_create", "item_read", "item_status", "login", "now",
-		"pr_comment", "pr_history", "pr_open", "pr_state", "preflight", "push", "queue", "scope", "spawn", "wait", "write",
+		"pr_comment", "pr_history", "pr_open", "pr_state", "preflight", "push", "queue", "scope", "sleep", "spawn", "wait", "write",
 	},
 }
 

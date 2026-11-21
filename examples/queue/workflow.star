@@ -2,12 +2,13 @@
 # Run it with `beehave run <item> --workflow workflow.star`, where the item is a parent that has no work of its own.
 # Set OWNER_LOGIN before the run. It names your own login on the forge; an open pull request by another login claims the item.
 # Set BASE before the run. It names the integration branch that receives the pull requests.
+# Set PAUSE_AFTER_FAILURE to the time that the loop sleeps after a pass that saw a failed run, such as "2m". The default is "30s".
 #
 # Each pass does four things:
 #   1. queue() reads the items and the pull requests again. A merge in an earlier pass shows here, so an item that the merge unblocked is ready now.
 #   2. spawn starts the ready items that fit in the free slots. A held item is never ready, and a failed item is never ready.
 #   3. gather(until = "any") waits until at least one open run ends. The other runs keep their slots, so one item that loops does not stop the rest.
-#   4. The loop removes the ended runs from its list, and it holds each failed item with a comment.
+#   4. The loop removes the ended runs from its list, holds each failed item with a comment, and sleeps after a pass that saw a failure.
 # The loop ends when no item is ready and no run is open.
 #
 # One login runs one agent step at a time on each queue: a step with edits = False can run beside a step that edits on the same login. The pick of a login prefers a login with no agent step running or queued, so the items spread over your logins. The parent run holds no login. With one login, the items run one at a time.
@@ -71,3 +72,7 @@ def main(item):
             if not e.ok:
                 item_comment(name = "fail-%d-%s" % (n, e.item), id = e.item, key = "failed", text = "The run of this item failed: " + e.error)
                 item_status(name = "hold-%d-%s" % (n, e.item), id = e.item, status = "hold")
+
+        # A failure often has a shared cause, such as a provider outage. A durable sleep keeps the loop from starting more runs into it, and a restart during the sleep waits only for the time left.
+        if any([not e.ok for e in ended]):
+            sleep(env("PAUSE_AFTER_FAILURE", default = "30s"), name = "pause-%d" % n)
