@@ -191,6 +191,68 @@ func TestNestedSpawn_ResumeOnThisBuildReachesTheRunsAtDepthTwoAndThree(t *testin
 	}
 }
 
+// raiseBelow is a root that spawns item 20, and item 20 gathers the items 21, 22 and 23 at depth 2 with fail = "raise".
+const raiseBelow = `def worker(item):
+    command(name = "w", run = ["w"])
+
+def mid(item):
+    gather(spawn(items = ["21", "22", "23"], entry = "worker"), fail = "raise")
+
+def main(item):
+    r = gather(spawn(items = ["20"], entry = "mid")).results[0]
+    if not r.ok:
+        fail(r.error)
+    command(name = "after", run = ["after"])
+`
+
+func TestNestedSpawn_ResumeOnThisBuildPutsTheRunsAtDepthTwoThatARaiseCanceledBackOnTheirQueue(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.opts.MaxConcurrent, h.opts.MaxReviewConcurrent = 3, 3
+	h.flowIs(t, raiseBelow)
+
+	var healed, once atomic.Bool
+
+	started := make(chan struct{}) // closed when a sibling of the failed run works
+
+	h.commands.before = func(ctx context.Context, request CommandRequest) error {
+		switch {
+		case healed.Load():
+			return nil
+		case request.Item == "22":
+			receive(t, started)
+
+			return errFake
+		case request.Item == "21" || request.Item == "23":
+			if once.CompareAndSwap(false, true) {
+				close(started)
+			}
+
+			receive(t, ctx.Done())
+
+			return ctx.Err()
+		}
+
+		return nil
+	}
+
+	engine := h.engine(t)
+	_, err := engine.Run(testItem, testProject)
+	require.Error(t, err)
+	require.NoError(t, engine.Shutdown())
+	healed.Store(true)
+
+	other := h.client(t, otherBuild)
+	require.NoError(t, other.ResumeOnThisBuild(testItem))
+
+	h.opts.Version = otherBuild
+	done := runInBackground(h.engine(t), testItem)
+
+	require.NoError(t, receive(t, done).err)
+	assert.Contains(t, h.commands.ranBy(testItem), "after", "the root ends on the new build")
+}
+
 func TestNestedSpawn_ACancelOfTheRootCancelsTheRunAtDepthTwo(t *testing.T) {
 	t.Parallel()
 
