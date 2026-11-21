@@ -1,8 +1,10 @@
 package flow
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/dbos-inc/dbos-transact-golang/dbos"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,4 +65,34 @@ func TestGather_TheCheckOfChildrenReportsARunIdItCannotRead(t *testing.T) {
 	err := (&script{e: engine, ctx: engine.ctx, in: ItemInput{Item: testItem}}).checkChildren([]spawnedRun{{Item: "21", Run: "item-21-r1"}})
 
 	require.ErrorContains(t, err, "read the id of the run of item 12")
+}
+
+func TestGather_TheCheckOfChildrenReportsAReadOfTheRunsThatFailed(t *testing.T) {
+	t.Parallel()
+
+	engine := newHarness(t).opened(t)
+	stopped := newHarness(t).engine(t)
+
+	require.NoError(t, stopped.Shutdown())
+
+	check := func(ctx dbos.Context, in ItemInput) (string, error) {
+		s := &script{e: &Engine{ctx: stopped.ctx}, ctx: ctx, in: in}
+
+		err := s.checkChildren([]spawnedRun{{Item: "21", Run: "item-21-r1"}})
+		if err == nil {
+			return "", errors.New("the check did not fail")
+		}
+
+		return err.Error(), nil
+	}
+
+	dbos.RegisterWorkflow(engine.ctx, check, dbos.WithWorkflowName(itemName))
+	require.NoError(t, dbos.Launch(engine.ctx))
+
+	handle, err := dbos.RunWorkflow(engine.ctx, check, ItemInput{Item: testItem, Project: testProject}, dbos.WithWorkflowID(testRun))
+	require.NoError(t, err)
+
+	words, err := handle.GetResult()
+	require.NoError(t, err)
+	assert.Contains(t, words, "read the runs of the spawned items")
 }
