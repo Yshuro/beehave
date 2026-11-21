@@ -572,3 +572,33 @@ func TestSandboxPlan_TheFolderOfTheDataFileIsTheOnlyWorkingDirectoryThatIsAdded(
 	require.NoError(t, err)
 	assert.Empty(t, r.f.spec.Sandbox.ReadDirs, "a step with no data file adds no folder")
 }
+
+func TestSandboxPlan_TheFolderOfTheOutputFileOfTheCallIsAReadDirectoryAndNoSiblingCallIs(t *testing.T) {
+	t.Parallel()
+
+	r := newSandboxRig(t)
+	outputs := filepath.Join(r.home, ".local", "state", "beehave", "outputs")
+	file, sibling := filepath.Join(outputs, "7.agent_3Aplan_231", "output.json"), filepath.Join(outputs, "8.agent_3Aplan_231")
+	r.touch(t, file)
+	r.touch(t, filepath.Join(sibling, "output.json"))
+
+	req := request()
+	req.Sandbox, req.OutputFile, req.Outputs = &model.Sandbox{}, file, []string{"regressions"}
+
+	_, err := r.f.agents.Run(t.Context(), req)
+	require.NoError(t, err)
+
+	plan := r.f.spec.Sandbox
+	assert.Equal(t, []string{filepath.Dir(file)}, plan.ReadDirs, "the folder of the one output file is a working directory of the call")
+	assert.NotContains(t, plan.ReadDirs, sibling, "the folder of another call stays closed")
+	assert.NotContains(t, plan.ReadDirs, outputs, "never the outputs folder")
+	assert.Contains(t, plan.Read, file, "the shell reads the output file")
+	assert.Equal(t, []string{file}, plan.Write, "the write rule stays the exact file")
+	assert.NotContains(t, plan.DenyWrite, filepath.Dir(file), "the folder of the output file is not read only")
+
+	req.Outputs = nil
+	_, err = r.f.agents.Run(t.Context(), req)
+	require.NoError(t, err)
+	assert.Empty(t, r.f.spec.Sandbox.ReadDirs, "a call that declares no outputs adds no folder")
+	assert.NotContains(t, r.f.spec.Sandbox.Read, file, "a call that declares no outputs reads no output file")
+}

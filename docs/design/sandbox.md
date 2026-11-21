@@ -39,17 +39,17 @@ A step with the `data` keyword gets one file in the state folder (see [Agent run
 
 ### The output file
 
-A step that declares `outputs` writes them to one file in the state folder, `<state>/outputs/<item>.<step>.json`. The plan opens that one file for write, by its exact path, and nothing else outside the work folder. The adapter writes the path as one `Edit` allow rule with no `/**` tail. The Write tool obeys the rule, and Claude Code merges its path into the write paths of the sandbox, so the shell can write the file too. The adapter sets no `allowWrite` list. A step with `edits = False` runs in the default permission mode, which refuses every other write of the file tools, so the agent still edits no file of the work folder. The outputs folder and the state folder stay closed, so a step cannot write the output of another step or the state of the engine. An output file inside a credential path stops the step.
+A step that declares `outputs` writes them to one file in the state folder. The file is the only file of a folder of its own, `<state>/outputs/<item>.<step>/output.json`. The plan adds the file to the read paths and passes its folder to the CLI with `--add-dir`, which makes it a working directory. The Write tool of Claude Code refuses to overwrite a file that the session has not read, and `blockReadsOutsideWorkingDirectories` refuses the Read of a file outside the working directories, so the output file must be in one. The folder holds no other file, so the CLI still blocks the read of the output of every other call, and the plan never adds the outputs folder. A phase that declares outputs and names an output file other than the one the engine derives for the item and the step, such as the file of a run recorded at an older build, starts no agent and says to start a new run. The plan opens that one file for write, by its exact path, and nothing else outside the work folder. The adapter writes the path as one `Edit` allow rule with no `/**` tail. The Write tool obeys the rule, and Claude Code merges its path into the write paths of the sandbox, so the shell can write the file too. The adapter sets no `allowWrite` list. A step with `edits = False` runs in the default permission mode, which refuses every other write of the file tools, so the agent still edits no file of the work folder. The outputs folder and the state folder stay closed, so a step cannot write the output of another step or the state of the engine. An output file inside a credential path stops the step.
 
 Claude Code does not escape the paths of its rules. So a data file or an output file whose path holds a glob character (`*`, `?`, `[` or `\`) stops the step, because its rule would open more than the one file.
 
-If the agent ends with no output file, the error names each tool whose write of that file the permission check of the CLI refused, by a rule or by the permission mode. The adapter reads these calls from the `permission_denials` list of the result line.
+If the agent ends with no output file, the error names each call on that file that the permission check of the CLI refused, by a rule or by the permission mode: a file tool that writes it, a file tool that reads it, and a shell call whose command names it as a whole word. The adapter reads these calls from the `permission_denials` list of the result line.
 
 The file stays in the state folder. The temporary folders are shared by every run, so one step could write the output of another there. The work folder is tracked by git, so the file would dirty the tree of the item. The Write tool refuses a path in either folder without an allow rule.
 
 The engine resolves the state folder to its real path once, when it opens the folder, so the output file, the data file, the prompt and the grant all hold one spelling. The sandbox compares real paths, so a grant that holds a link opens nothing.
 
-On Linux, the sandbox ignores a write path that does not exist when the run starts. Before each try of a call that declares outputs, the engine removes the old output file and makes a new empty one, so the exact grant names a file that exists. An empty output file counts as no output file.
+On Linux, the sandbox ignores a write path that does not exist when the run starts. Before each try of a call that declares outputs, the engine removes the old output file and makes a new empty one, so the exact grant names a file that exists. An empty output file counts as no output file. Because the file exists, the Write tool asks for a Read of it first, and the folder of the output file, a working directory, lets that Read through.
 
 ### Forge data for a sandboxed step
 
@@ -73,7 +73,7 @@ It passes one `--settings` JSON that holds the sandbox object, the permission ru
 ### The sandbox object and the permission rules
 
 - The sandbox object sets `enabled`, `failIfUnavailable` and `allowUnsandboxedCommands: false`.
-- The base denies the home folder. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory, the `sandbox_read` paths, the env file and the data file of the step. Outside the home folder, the sandbox reads every path that is not a credential path.
+- The base denies the home folder. `denyRead` holds `~/`. `allowRead` holds only the work folder, the shared git directory, the `sandbox_read` paths, the env file, the data file and the output file of the step. Outside the home folder, the sandbox reads every path that is not a credential path.
 - The network list sets `allowedDomains` with `strictAllowlist`.
 - The permission rules set `blockReadsOutsideWorkingDirectories`, deny the write of the data folder, and deny `WebFetch` and `WebSearch`. For a step with outputs, they allow `Edit` of the output file alone.
 

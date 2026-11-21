@@ -39,7 +39,7 @@ func TestAgentStep_AStateFolderThatIsALinkGivesTheAgentTheRealPathOfTheOutputFil
 	_, err := rig.run(t, outputsFlow("1"), "Write to {{ .output_file }}\n")
 	require.NoError(t, err)
 
-	want := filepath.Join(target, outputsFolder, "12.agent_3Aa_231.json")
+	want := filepath.Join(target, outputsFolder, "12.agent_3Aa_231", "output.json")
 	requests := rig.h.agents.seen()
 	require.Len(t, requests, 1)
 	assert.Equal(t, want, requests[0].OutputFile, "the request holds the real path, so the sandbox grant opens the file")
@@ -53,7 +53,7 @@ func TestAgentStep_ARefusedWriteIsNamedWhenTheStateFolderIsALink(t *testing.T) {
 	target := linkedState(t, rig)
 	rig.h.agents.result = func(AgentRequest) agent.Result {
 		denied := exited
-		denied.Denials = []agent.Denial{{Tool: "Write", Target: filepath.Join(target, outputsFolder, "12.agent_3Aa_231.json")}}
+		denied.Denials = []agent.Denial{{Tool: "Write", Target: filepath.Join(target, outputsFolder, "12.agent_3Aa_231", "output.json"), Edit: true}}
 
 		return denied
 	}
@@ -139,13 +139,13 @@ func TestAgentStep_ARefusedWriteIsNamedUnderAnotherSpellingOfTheOutputPath(t *te
 
 	spellings := map[string]func(link, real string) string{
 		"through a link to the state folder": func(link, _ string) string {
-			return filepath.Join(link, outputsFolder, "12.agent_3Aa_231.json")
+			return filepath.Join(link, outputsFolder, "12.agent_3Aa_231", "output.json")
 		},
 		"with a trailing slash": func(_, real string) string {
-			return filepath.Join(real, outputsFolder, "12.agent_3Aa_231.json") + "/"
+			return filepath.Join(real, outputsFolder, "12.agent_3Aa_231", "output.json") + "/"
 		},
 		"with a dot segment": func(_, real string) string {
-			return filepath.Join(real, outputsFolder) + "/./12.agent_3Aa_231.json"
+			return filepath.Join(real, outputsFolder) + "/./12.agent_3Aa_231/output.json"
 		},
 	}
 
@@ -158,7 +158,7 @@ func TestAgentStep_ARefusedWriteIsNamedUnderAnotherSpellingOfTheOutputPath(t *te
 			denied := spell(filepath.Join(filepath.Dir(real), "link-state"), real)
 			rig.h.agents.result = func(AgentRequest) agent.Result {
 				refused := exited
-				refused.Denials = []agent.Denial{{Tool: "Write", Target: denied}}
+				refused.Denials = []agent.Denial{{Tool: "Write", Target: denied, Edit: true}}
 
 				return refused
 			}
@@ -212,7 +212,7 @@ func TestRefusedWrites_TheMacStateFolderUnderVarIsTheSameFileAsUnderPrivateVar(t
 	require.NoError(t, err)
 	require.NotEqual(t, state, resolved, "the two spellings differ")
 
-	denials := []agent.Denial{{Tool: "Write", Target: filepath.Join(state, outputsFolder, "out.json")}}
+	denials := []agent.Denial{{Tool: "Write", Target: filepath.Join(state, outputsFolder, "out.json"), Edit: true}}
 
 	assert.Contains(t, refusedWrites(filepath.Join(resolved, outputsFolder, "out.json"), denials), "refused the Write call", "the output folder is there and the file is not")
 }
