@@ -86,9 +86,7 @@ type permissions struct {
 func (Adapter) Sandbox(plan agent.SandboxPlan, guard, runDir string, write []string) agent.Launch {
 	envPath := filepath.Join(runDir, envFile)
 	skills := skillsPlugin(plan.Skills, runDir)
-	plan.Read = slices.Concat(plan.Read, write)
-	plan.ReadDirs = slices.Concat(plan.ReadDirs, outputDirs(write))
-	plan = skills.confine(plan)
+	plan = skills.confine(readOutput(plan, write))
 	settings := settingsOf(plan, envPath, write)
 
 	if guard != "" {
@@ -107,6 +105,14 @@ func (Adapter) Sandbox(plan agent.SandboxPlan, guard, runDir string, write []str
 		Files:  skills.withFiles(map[string]string{envFile: exports(plan.GitEnv())}),
 		Copies: skills.copies,
 	}
+}
+
+// readOutput returns the plan with each output file readable by the shell, and its folder a working directory.
+func readOutput(plan agent.SandboxPlan, write []string) agent.SandboxPlan {
+	plan.Read = slices.Concat(plan.Read, write)
+	plan.ReadDirs = slices.Concat(plan.ReadDirs, outputDirs(write))
+
+	return plan
 }
 
 // addDirs returns the --add-dir flag with each folder, which the CLI takes as a working directory, or no argument for no folder.
