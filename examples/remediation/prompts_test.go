@@ -4,8 +4,10 @@ import (
 	"io/fs"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
+	"text/template/parse"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -91,12 +93,9 @@ func evidenceRules() []rule {
 		{"precedence_rules", "A precedence test needs a LOSING field", []string{implement, fix, review}},
 		{"precedence_rules", "Enumerate a duplicated CLAIM by its substance", []string{implement, fix, review}},
 		{"precedence_rules", "Key every snapshot on the FULL PATH", []string{implement, fix, review}},
-		{"gate_step_rules", "The gate steps come from the gate list of the round", workAndReview()},
-		{"gate_step_rules", "prints `STEP_RESULT name=<name> rc=<n>`", workAndReview()},
-		{"gate_step_rules", "A step you leave out prints `GATE-SKIP <name>: <reason>`", workAndReview()},
-		{"gate_step_rules", "A missing tool is verified in the job", workAndReview()},
-		{"gate_step_rules", "print `GATE-VOID <name>: pin <x>, ran <y>`", workAndReview()},
-		{"gate_step_rules", "One failing test counts once", workAndReview()},
+		{"gate_step_rules", "Run the tests that the change touches by name, in the work folder", workLanes()},
+		{"gate_step_rules", "The engine runs the gate and the mutation run for each candidate", workAndReview()},
+		{"gate_step_rules", "Run no gate step yourself, and write no job script for one", workAndReview()},
 		{"gate_step_rules", "A result counts only with the number of tests that ran", workAndReview()},
 	}
 }
@@ -123,9 +122,8 @@ func shellRules() []rule {
 	return []rule{
 		{"handoff_first_rules", "Never pass a script string to a shell", workAndReview()},
 		{"handoff_first_rules", "A loop that needs POSIX word splitting", workAndReview()},
-		{"build_host_rules", "Put no delete in any command you run", workAndReview()},
-		{"build_host_rules", "never `sed -i.bak`", workAndReview()},
-		{"build_host_rules", "Before EVERY build, check `df` on the build host", workAndReview()},
+		{"shell_rules", "Put no delete in any command you run", workAndReview()},
+		{"shell_rules", "never `sed -i.bak`", workAndReview()},
 		{"long_jobs_rules", "Never end your turn waiting on a job you started yourself", workAndReview()},
 		{"long_jobs_rules", "Before you end, stop each background command you started", workAndReview()},
 		{"long_jobs_rules", "Wait loops have a timeout", workAndReview()},
@@ -177,24 +175,12 @@ func reviewRules() []rule {
 
 func gateEvidenceRules() []rule {
 	return []rule{
-		{"gate_evidence", "A red that the base tree has too is not counted", workAndReview()},
-		{"gate_evidence", "A mutation run is its own job after the gate", workAndReview()},
 		{"gate_evidence", "Capture the exit code before any pipe", workAndReview()},
 		{"gate_evidence", "gives its stdin to every command inside it", workAndReview()},
 		{"gate_evidence", "A regeneration is evidence for its own tree only", workAndReview()},
-		{"gate_evidence", "becomes a full run in two cases", workAndReview()},
 		{"gate_evidence", "assert the loop count against the input count", workAndReview()},
 		{"gate_evidence", "search the diff for `TODO` and `FIXME`", workLanes()},
 		{"gate_evidence", "names its author, as `TODO(name)`", workLanes()},
-	}
-}
-
-func hostAndDiskRules() []rule {
-	return []rule{
-		{"host_disk_rules", "Disk is per lane", workAndReview()},
-		{"host_disk_rules", "live in a jobs folder of the host", workAndReview()},
-		{"host_disk_rules", "so that the orchestrator deletes it at once", workAndReview()},
-		{"host_disk_rules", "Sweep dangling docker volumes as a backstop", workAndReview()},
 	}
 }
 
@@ -262,7 +248,6 @@ func laneBoundaryRules() []rule {
 	return []rule{
 		{"lane_boundaries", "Each lane has one item, one worktree, one branch and one pull request", workLanes()},
 		{"lane_boundaries", "Never merge, never comment on the forge, and never file an issue", workLanes()},
-		{"lane_boundaries", "Run every build, test and lint on the build host", workLanes()},
 		{"lane_boundaries", "Never touch the worktree of another lane", workLanes()},
 	}
 }
@@ -424,7 +409,7 @@ func TestPrompts_HoldEveryRuleOfTheBriefText(t *testing.T) {
 
 	texts := loadPrompts(t, append(everyLane(), takeReview, queue)...)
 
-	groups := [][]rule{acceptanceRules(), reportRules(), evidenceRules(), designRules(), shellRules(), compiledAndUnionRules(), reviewRules(), gateEvidenceRules(), hostAndDiskRules(), reviewFormatRules(), briefRules(), mergeRules(), laneLayoutRules(), reviewFramingRules(), laneBoundaryRules(), skillOrderRules(), briefChoiceRules(), baseRedRules(), disjointnessRules(), queueScopeRules(), overtakenRules(), stackedBranchRules()}
+	groups := [][]rule{acceptanceRules(), reportRules(), evidenceRules(), designRules(), shellRules(), compiledAndUnionRules(), reviewRules(), gateEvidenceRules(), reviewFormatRules(), briefRules(), mergeRules(), laneLayoutRules(), reviewFramingRules(), laneBoundaryRules(), skillOrderRules(), briefChoiceRules(), baseRedRules(), disjointnessRules(), queueScopeRules(), overtakenRules(), stackedBranchRules()}
 
 	held, counted := 0, 0
 
@@ -434,7 +419,7 @@ func TestPrompts_HoldEveryRuleOfTheBriefText(t *testing.T) {
 	}
 
 	// One phrase for each mapped or added row of the proof table that has a phrase of its own: a dropped phrase fails here.
-	assert.Equal(t, 175, counted)
+	assert.Equal(t, 163, counted)
 	assert.Positive(t, held)
 }
 
@@ -470,5 +455,69 @@ func TestPrompts_NoPromptOfAStepThatCommitsTellsTheAgentToPush(t *testing.T) {
 		for line := range strings.Lines(string(raw)) {
 			assert.False(t, tells.MatchString(line), "prompts/%s.md tells the agent to push: %s", name, line)
 		}
+	}
+}
+
+// readsBuildHost reports whether the parse tree holds the field chain .facts.build_host, in an action, a condition or a range.
+func readsBuildHost(node parse.Node) bool {
+	switch n := node.(type) {
+	case *parse.ListNode:
+		if n == nil {
+			return false
+		}
+
+		return slices.ContainsFunc(n.Nodes, readsBuildHost)
+	case *parse.ActionNode:
+		return readsBuildHost(n.Pipe)
+	case *parse.PipeNode:
+		if n == nil {
+			return false
+		}
+
+		return slices.ContainsFunc(n.Cmds, func(c *parse.CommandNode) bool { return readsBuildHost(c) })
+	case *parse.CommandNode:
+		return slices.ContainsFunc(n.Args, readsBuildHost)
+	case *parse.FieldNode:
+		return slices.Equal(n.Ident, []string{"facts", "build_host"})
+	case *parse.IfNode:
+		return readsBuildHost(n.Pipe) || readsBuildHost(n.List) || readsBuildHost(n.ElseList)
+	case *parse.RangeNode:
+		return readsBuildHost(n.Pipe) || readsBuildHost(n.List) || readsBuildHost(n.ElseList)
+	case *parse.WithNode:
+		return readsBuildHost(n.Pipe) || readsBuildHost(n.List) || readsBuildHost(n.ElseList)
+	default:
+		return false
+	}
+}
+
+// The engine runs the gate and the mutation run, and the sandbox of an agent step denies the build host, so no prompt reads the build host fact.
+func TestPrompts_NoPromptReadsTheBuildHost(t *testing.T) {
+	t.Parallel()
+
+	parsed := func(text string) *parse.Tree {
+		tree := parse.New("p")
+		tree.Mode = parse.SkipFuncCheck
+
+		_, err := tree.Parse(text, "{{", "}}", map[string]*parse.Tree{})
+		require.NoError(t, err)
+
+		return tree
+	}
+
+	for _, control := range []string{"Host: `{{ .facts.build_host }}`.", "{{ if .facts.build_host }}x{{ else }}y{{ end }}", "{{ range .facts.build_host }}x{{ end }}"} {
+		require.True(t, readsBuildHost(parsed(control).Root), "the walk finds the read in %q", control)
+	}
+
+	require.False(t, readsBuildHost(parsed("Repo `{{ .facts.repo }}`.").Root), "the walk ignores another fact")
+
+	entries, err := fs.ReadDir(os.DirFS("prompts"), ".")
+	require.NoError(t, err)
+	require.NotEmpty(t, entries)
+
+	for _, entry := range entries {
+		raw, err := fs.ReadFile(os.DirFS("prompts"), entry.Name())
+		require.NoError(t, err)
+
+		assert.False(t, readsBuildHost(parsed(string(raw)).Root), "prompts/%s reads the build host fact", entry.Name())
 	}
 }
