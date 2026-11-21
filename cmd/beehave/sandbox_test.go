@@ -64,7 +64,6 @@ func TestSandboxPlan_TheIdentityIsTheGitIdentityOfTheEngineAtTheWorktree(t *test
 
 	r := newSandboxRig(t)
 	r.f.agents.identity = newAgents(config.Config{}, flow.Options{StateDir: filepath.Dir(filepath.Dir(r.work))}, treeAt(r.work), newAdapters(nil, nil, nil)).identity
-	runGit(t, r.work, "init", "-q")
 	runGit(t, r.work, "config", "user.email", "worktree@example.com")
 
 	req := request()
@@ -203,7 +202,6 @@ func TestSandboxPlan_AnAllowWritePathMayNotReopenGitTheAgentSettingsOrAHooksFold
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 
 	r := newSandboxRig(t)
-	runGit(t, r.work, "init", "-q")
 	runGit(t, r.work, "config", "--file", global, "core.hooksPath", "ci/hooks")
 
 	for _, bad := range []string{
@@ -227,7 +225,6 @@ func TestSandboxPlan_TheClosedPathsOfTheWorkFolderAreDeniedForWriteAndKeepTheirF
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 
 	r := newSandboxRig(t)
-	runGit(t, r.work, "init", "-q")
 	runGit(t, r.work, "config", "--file", global, "core.hooksPath", "ci/hooks")
 
 	req := request()
@@ -247,7 +244,6 @@ func TestSandboxPlan_ACloneWhoseConfigNamesAHooksFolderStartsNoStep(t *testing.T
 	t.Parallel()
 
 	r := newSandboxRig(t)
-	runGit(t, r.work, "init", "-q")
 	runGit(t, r.work, "config", "core.hooksPath", "ci/hooks")
 
 	req := request()
@@ -264,6 +260,10 @@ func TestSandboxPlan_ACloneWhoseConfigNamesAHooksFolderStartsNoStep(t *testing.T
 
 func TestSandboxPlan_ACloneWhoseGitConfigCannotBeReadStartsNoStepAndTheNoteNamesTheRead(t *testing.T) {
 	t.Parallel()
+
+	if os.Geteuid() == 0 {
+		t.Skip("root reads every file")
+	}
 
 	r := newSandboxRig(t)
 	require.NoError(t, os.Chmod(filepath.Join(r.work, ".git", "config"), 0))
@@ -347,7 +347,6 @@ func TestHooksPath_ReadsTheFolderThatCoreHooksPathNames(t *testing.T) {
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
 
 	r := newSandboxRig(t)
-	runGit(t, r.work, "init", "-q")
 
 	hooks := func() string {
 		path, err := hooksPath(t.Context(), r.git(), r.work, r.home)

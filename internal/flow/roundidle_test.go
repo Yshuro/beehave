@@ -307,7 +307,7 @@ func TestFailedError_NamesTheResumeAndTheCancel(t *testing.T) {
 	assert.ErrorContains(t, err, "Run beehave resume 12 to continue it from the last finished step. To start a new attempt instead, run beehave cancel 12")
 }
 
-func TestRoundIdle_TheRefusalOfANewRunAfterAFailedOneNamesTheCancel(t *testing.T) {
+func TestEngine_RunRefusesANewRunAfterAFailedOneAndNamesTheCancel(t *testing.T) {
 	t.Parallel()
 
 	_, engine, _ := failedOnOtherBuild(t)
@@ -317,7 +317,7 @@ func TestRoundIdle_TheRefusalOfANewRunAfterAFailedOneNamesTheCancel(t *testing.T
 	assert.ErrorContains(t, runErr, "beehave cancel "+testItem)
 }
 
-func TestRoundIdle_TheResumeRefusalOfAFailedRunNamesTheCancelAtEachSiteThatRefuses(t *testing.T) {
+func TestClient_ResumeOnThisBuildRefusalOfAFailedRunNamesTheCancelAtEachSiteThatRefuses(t *testing.T) {
 	t.Parallel()
 
 	sentence := "End the failed run first: beehave cancel " + testItem + ". Start the item again: beehave run " + testItem
